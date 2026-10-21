@@ -138,3 +138,6 @@ The review's C1–C3, in full there. In short:
 
 **Also into Part 6b:** raise the macOS suite's timeout from 30 to 45 minutes. A degraded macOS runner needed about 36
 (run `39676219682`: compile 15 m 46 s, against 7 normally).
+
+**The first CI run of `windows-installer` passed** (job `119539225487`): 36 checks, both controls red then green. Part
+6a2's conditions stand as written (review addendum).
