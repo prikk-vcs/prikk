@@ -32,6 +32,19 @@ jobs:
         with:
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Fetch dependencies for every target
         # release-policy's boundary check runs `cargo metadata --locked --offline`, which resolves
         # the graph for ALL targets — including deps a host-only build never fetches (e.g. bumpalo,
@@ -69,6 +82,19 @@ jobs:
         with:
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Fetch dependencies for every target
         run: cargo fetch --locked
       - name: Release policy
@@ -92,6 +118,19 @@ jobs:
         with:
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Fetch dependencies for every target
         # release-policy's boundary check runs `cargo metadata --locked --offline`, which resolves
         # the graph for ALL targets — including deps a host-only build never fetches (e.g. bumpalo,
@@ -121,6 +160,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Build
@@ -143,6 +195,19 @@ jobs:
         with:
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Fetch dependencies for every target
         # DC-81 addendum-2 B1: without this, boundary::tests::workspace_and_product_boundaries_hold
         # fails — that test runs `cargo metadata --locked --offline`, which needs every target's
@@ -177,6 +242,19 @@ jobs:
         with:
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Fetch dependencies for every target
         # DC-81 addendum-2 B1's finding, confirmed to apply identically here (see lines 20/40/83):
         # without this, boundary::tests::workspace_and_product_boundaries_hold fails.
@@ -214,6 +292,19 @@ jobs:
           printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
           chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       # DC-89: a realistic small project's worth of history, not a single genesis commit -- still
@@ -295,6 +386,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -384,6 +488,19 @@ jobs:
           printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
           chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -448,6 +565,19 @@ jobs:
           printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
           chmod 600 .ci-keys/author.seed .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -509,6 +639,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -557,6 +700,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -603,6 +759,19 @@ jobs:
           printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
           chmod 600 .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
@@ -646,6 +815,19 @@ jobs:
           printf '111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000' > .ci-keys/maintainer.seed
           chmod 600 .ci-keys/maintainer.seed
       - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
       - name: Build
         run: cargo build -p prikk --locked
       - uses: actions/download-artifact@v8
