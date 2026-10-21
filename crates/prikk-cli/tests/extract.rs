@@ -417,6 +417,8 @@ fn extract_refuses_both_ref_and_claim() {
             "heads/main",
             "--claim",
             &"0".repeat(64),
+            "--format",
+            "json",
             out.to_str().unwrap(),
         ])
         .output()
@@ -427,6 +429,272 @@ fn extract_refuses_both_ref_and_claim() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // 0.54.0 step 3 Part 5d: a usage error (exit 2) prints no `refusal-v1` document, even under
+    // `--format json`.
+    assert_eq!(output.status.code(), Some(2), "a usage error exits 2");
+    assert!(
+        stdout(&output).is_empty(),
+        "a usage error prints no stdout at all, refusal-v1 document included: {}",
+        stdout(&output)
+    );
 
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `refusal-v1` (0.54.0 step 3 Part 5d): this project's first machine-readable refusal document.
+/// Asserts its exact shape -- `schema_version`, `command`, `refusal`, `reason`, `message` -- and
+/// that stderr and the exit code are unchanged from before this round.
+fn assert_refusal_json(
+    output: &Output,
+    expected_refusal: &str,
+    expected_reason: Option<&str>,
+    message_contains: &str,
+) {
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(1), "a refusal exits 1, not 2");
+    let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stderr_text.contains(message_contains),
+        "stderr must still carry the ordinary message: {stderr_text}"
+    );
+    let report = stdout(output);
+    let json = support::json::parse(&report);
+    assert_eq!(
+        json.get("schema_version").as_str(),
+        "refusal-v1",
+        "{report}"
+    );
+    assert_eq!(json.get("command").as_str(), "extract", "{report}");
+    assert_eq!(json.get("refusal").as_str(), expected_refusal, "{report}");
+    match expected_reason {
+        Some(reason) => assert_eq!(json.get("reason").as_str(), reason, "{report}"),
+        None => assert!(json.get("reason").is_null(), "{report}"),
+    }
+    assert!(
+        json.get("message").as_str().contains(message_contains),
+        "{report}"
+    );
+    // The JSON `message` is the exact stderr text (the handoff's own wording), modulo `main.rs`'s
+    // own generic `"error: "` framing (`eprintln!("error: {}", err.message())`) applied uniformly
+    // to every command's error, not something `extract`'s own refusal text ever included itself --
+    // the JSON carries `CliError::message()`'s own text, the same text stderr's one `error: ` line
+    // wraps.
+    let stderr_message = stderr_text
+        .trim_end()
+        .strip_prefix("error: ")
+        .unwrap_or(stderr_text.trim_end());
+    assert_eq!(json.get("message").as_str(), stderr_message, "{report}");
+}
+
+/// `point-not-found` (0.54.0 step 3 Part 5d): an explicit `--ref` naming a branch that was never
+/// created.
+#[test]
+fn extract_refuses_point_not_found_with_refusal_v1() {
+    let repo = support::unique_repo("extract-refusal-point-not-found");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-refusal-point-not-found-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = extract(&repo, "heads/nope", &out, &["--format", "json"]);
+    assert_refusal_json(&output, "point-not-found", None, "does not exist");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `claim-not-found` (0.54.0 step 3 Part 5d, item 4 first bullet): an id that names no object at
+/// all -- was `integrity error` before this round, now `Precondition`, classified `claim-not-found`.
+#[test]
+fn extract_refuses_claim_not_found_with_refusal_v1() {
+    let repo = support::unique_repo("extract-refusal-claim-not-found");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-refusal-claim-not-found-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = support::prikk(&repo)
+        .args([
+            "extract",
+            "--claim",
+            &"ab".repeat(32),
+            "--format",
+            "json",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_refusal_json(&output, "claim-not-found", None, "does not exist");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `not-a-claim` (0.54.0 step 3 Part 5d, item 4 second bullet): a real object of another type (a
+/// `Block` id) named by `--claim` -- used to read `object type mismatch` straight from
+/// `read_typed`'s own shared default, now caught at `prepare_extract_plan_for_claim`'s own call
+/// site and reclassified.
+#[test]
+fn extract_refuses_a_block_id_as_claim_not_a_claim_with_refusal_v1() {
+    let repo = support::unique_repo("extract-refusal-not-a-claim");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let tree_output = support::prikk(&repo)
+        .args(["tree", "--ref", "heads/main", "--format", "json"])
+        .output()
+        .unwrap();
+    support::ok(&tree_output, "tree");
+    let listing = support::json::parse(&stdout(&tree_output));
+    let block_id = listing.get("target_block_id").as_str().to_string();
+
+    let out = support::unique_repo("extract-refusal-not-a-claim-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = support::prikk(&repo)
+        .args([
+            "extract",
+            "--claim",
+            &block_id,
+            "--format",
+            "json",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_refusal_json(&output, "not-a-claim", None, "is not a recognition claim");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// `destination-exists`/`temporary-sibling-exists`/`over-max-files`/`over-max-bytes`, each carrying
+/// `refusal-v1` (0.54.0 step 3 Part 5d) -- the write-safety and limit refusals already pinned above
+/// for their stderr text, now also checked for their JSON document.
+#[test]
+fn extract_refusal_ids_for_the_write_safety_and_limit_refusals() {
+    let repo = support::unique_repo("extract-refusal-ids-sweep");
+    support::init(&repo);
+    std::fs::write(repo.join("a.txt"), b"hello\n").unwrap();
+    std::fs::write(repo.join("b.txt"), b"world\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    // destination-exists
+    let out_existing = support::unique_repo("extract-refusal-ids-existing-out"); // already exists
+    let output = extract(&repo, "heads/main", &out_existing, &["--format", "json"]);
+    assert_refusal_json(
+        &output,
+        "destination-exists",
+        None,
+        "refusing to extract into an existing path",
+    );
+
+    // temporary-sibling-exists
+    let out_sibling = support::unique_repo("extract-refusal-ids-sibling-out");
+    std::fs::remove_dir_all(&out_sibling).unwrap();
+    let sibling = out_sibling.with_file_name(format!(
+        "{}.prikk-extract-tmp",
+        out_sibling.file_name().unwrap().to_str().unwrap()
+    ));
+    let _ = std::fs::remove_dir_all(&sibling);
+    std::fs::create_dir(&sibling).unwrap();
+    let output = extract(&repo, "heads/main", &out_sibling, &["--format", "json"]);
+    assert_refusal_json(
+        &output,
+        "temporary-sibling-exists",
+        None,
+        "temporary sibling",
+    );
+    let _ = std::fs::remove_dir_all(&sibling);
+
+    // over-max-files
+    let out_files = support::unique_repo("extract-refusal-ids-max-files-out");
+    std::fs::remove_dir_all(&out_files).unwrap();
+    let output = extract(
+        &repo,
+        "heads/main",
+        &out_files,
+        &["--max-files", "1", "--format", "json"],
+    );
+    assert_refusal_json(&output, "over-max-files", None, "over --max-files 1");
+
+    // over-max-bytes
+    let out_bytes = support::unique_repo("extract-refusal-ids-max-bytes-out");
+    std::fs::remove_dir_all(&out_bytes).unwrap();
+    let output = extract(
+        &repo,
+        "heads/main",
+        &out_bytes,
+        &["--max-bytes", "5", "--format", "json"],
+    );
+    assert_refusal_json(&output, "over-max-bytes", None, "over --max-bytes 5");
+
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_dir_all(&out_existing);
+}
+
+/// `largest_file_bytes`/`claim_parent_block_id` (0.54.0 step 3 Part 5d, items 1-2): always present.
+/// A ref point has no claim parent (`null`); the largest single file's own length is reported
+/// alongside the total, in both the JSON report and the plain-text one (`--plan-only`'s own
+/// `largest file: N bytes` wording).
+#[test]
+fn extract_report_always_carries_largest_file_bytes_and_claim_parent_block_id() {
+    let repo = support::unique_repo("extract-new-fields");
+    support::init(&repo);
+    std::fs::write(repo.join("small.txt"), b"hi\n").unwrap();
+    std::fs::write(
+        repo.join("large.txt"),
+        b"a bigger file than the other one\n",
+    )
+    .unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let out = support::unique_repo("extract-new-fields-out");
+    std::fs::remove_dir_all(&out).unwrap();
+    let output = extract(&repo, "heads/main", &out, &["--format", "json"]);
+    support::ok(&output, "extract --format json");
+    let report = stdout(&output);
+    let json = support::json::parse(&report);
+    assert!(json.get("claim_parent_block_id").is_null(), "{report}");
+    assert!(
+        report.contains("\"largest_file_bytes\": 33"),
+        "large.txt is 33 bytes: {report}"
+    );
+
+    let out_plan_only = support::unique_repo("extract-new-fields-plan-only-out");
+    std::fs::remove_dir_all(&out_plan_only).unwrap();
+    let output = extract(&repo, "heads/main", &out_plan_only, &["--plan-only"]);
+    support::ok(&output, "extract --plan-only");
+    let report = stdout(&output);
+    assert!(
+        report.contains("largest file: 33 bytes"),
+        "--plan-only's own text form: {report}"
+    );
+    assert!(
+        report.contains("claim parent block: <none>"),
+        "a ref point has no claim parent: {report}"
+    );
+
+    let out_text = support::unique_repo("extract-new-fields-text-out");
+    std::fs::remove_dir_all(&out_text).unwrap();
+    let output = extract(&repo, "heads/main", &out_text, &[]);
+    support::ok(&output, "extract");
+    let report = stdout(&output);
+    assert!(
+        report.contains("largest file: 33 bytes"),
+        "the ordinary text report: {report}"
+    );
+    assert!(
+        report.contains("claim parent block: <none>"),
+        "a ref point has no claim parent, in the ordinary text report too: {report}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_dir_all(&out);
+    let _ = std::fs::remove_dir_all(&out_plan_only);
+    let _ = std::fs::remove_dir_all(&out_text);
 }
