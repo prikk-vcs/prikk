@@ -69,7 +69,28 @@
   the write itself; worth stating plainly since it is meant as a size-first report. `--format json`'s own point
   is now carried under one fixed key, `point` (with a new `point_kind` field for `"ref"`/`"block"`/
   `"claim"`), the same key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` already use,
-  rather than a dynamic key.
+  rather than a dynamic key. **Part 5d** completes `extract-report-v1` and adds this project's first
+  machine-readable refusal document. `largest_file_bytes` (the single largest entry's own byte length) is
+  now always present, in the JSON report and in `--plan-only`'s text (`largest file: N bytes`); so is
+  `claim_parent_block_id` (`null` unless `point_kind` is `"claim"`, in which case it names the block the
+  claim's own patches would be sealed onto — distinct from `target_block_id`, the block the claim
+  *recognizes*; no command printed a claim's own parent before this round). Under `--format json`, every
+  refusal that exits `1` (never a usage error, exit `2`, which prints no document) now also writes one
+  `refusal-v1` JSON document to stdout — stderr's own text and every exit code are entirely unchanged —
+  naming one of eleven stable ids (`over-max-bytes`, `over-max-files`, `destination-exists`,
+  `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
+  `claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `damaged-repository`,
+  `io-failure`), exhaustive by construction (an enum with one variant per id, matched with no wildcard, so
+  a twelfth refusal cannot go unclassified). `no-checkpoint-in-reach` alone also carries a `reason`,
+  naming which of three conditions the admitted-anchor search found in reach — `signer-not-adopted`, a
+  recorded checkpoint whose signer this repository has not adopted; `not-recorded`, a checkpoint in reach
+  never recorded by `verify`/`seal`; or `no-checkpoint`, none at all — new plumbing through
+  `AnchorTrust::admit`'s own `NotUsable` answer and the pre-walk's own search, not merely a relabeling.
+  Two refusals are also reclassified: an unknown claim id, which used to read `integrity error`, and a
+  block id passed as `--claim`, which used to read `object type mismatch` straight from `read_typed`'s own
+  shared default — both are now `Precondition`, named `claim-not-found`/`not-a-claim`, without changing
+  `read_typed` itself. `refusal-v1` is `extract`'s own document today, designed as this project's reusable
+  form for a JSON refusal, for other commands to adopt when next touched.
 - **`prikk received remove <remotes/…> [--plan-only]`** (0.54.0 step 3 Part 5, B2a): removes one
   received ref's own pointer — the ref itself, not what it reached — from the container `bundle
   import`/`archive import` write and `cat`/`tree`/`checkout`/`extract` read at a bare `remotes/…`

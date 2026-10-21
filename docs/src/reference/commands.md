@@ -186,16 +186,21 @@ whole write is atomic (a temporary sibling, then one no-replace rename), and eve
 synced before it, so a crash never leaves a target with missing or partial content. `provisional: yes|no`
 says whether an admitted anchor was actually found and used, or the replay fell back to genesis instead.
 
-**`--plan-only`** reports the point's own file count, total bytes and `provisional`, and writes nothing at
-all — no target, no temporary sibling. **`--max-bytes N`/`--max-files N`** refuse the whole point, by
-name, before the first byte is written — learning the point's own total size this way costs what it costs
-(each file not already resident is read once to measure it), the same cost a real write already pays; the
-*pre-walk's* own bound (refusing a point whose nearest admitted snapshot is unreachably far back) is the
-separate, cheap guard against unbounded history depth, checked before a single Patch or Blob is read,
-never relaxed by these flags. **`--format json`** (`extract-report-v1`) carries `file_count`, `total_bytes`,
-`provisional`, `written` (whether this call actually wrote the target), `point` (the ref name or the
-block/claim id given, the one fixed key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` both
-use), `point_kind` (`"ref"`, `"block"`, or `"claim"`), and `target_block_id` — the same hand-rolled,
+**`--plan-only`** reports the point's own file count, total bytes, `largest file: N bytes` and
+`provisional`, and writes nothing at all — no target, no temporary sibling. **`--max-bytes N`/`--max-files
+N`** refuse the whole point, by name, before the first byte is written — learning the point's own total
+size this way costs what it costs (each file not already resident is read once to measure it), the same
+cost a real write already pays; the *pre-walk's* own bound (refusing a point whose nearest admitted
+snapshot is unreachably far back) is the separate, cheap guard against unbounded history depth, checked
+before a single Patch or Blob is read, never relaxed by these flags. **`--format json`** (`extract-report-v1`,
+completed 0.54.0 step 3 Part 5d) carries `file_count`, `total_bytes`, `largest_file_bytes` (the single
+largest entry's own byte length, always present, the same number the text form's `largest file: N bytes`
+line gives), `provisional`, `written` (whether this call actually wrote the target), `point` (the ref name or
+the block/claim id given, the one fixed key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1`
+both use), `point_kind` (`"ref"`, `"block"`, or `"claim"`), `target_block_id`, and `claim_parent_block_id`
+(always present; `null` unless `point_kind` is `"claim"`, in which case it is the claim's own declared
+parent — the block its own patches would be sealed *onto*, not `target_block_id`, which is the block the
+claim *recognizes*; no command printed a claim's parent before this round) — the same hand-rolled,
 `schema_version`-named convention those commands already use. **`--claim <claim-id>`** (mutually exclusive
 with `--ref`) previews a pending `RecognitionClaim` — the same id `sync seal --claim` takes — as if its
 own patches were sealed onto its own declared parent, without sealing anything: useful to inspect what a
@@ -212,6 +217,29 @@ equivalent planning step (about 1.1–1.3x, measured), but that planning cost is
 shared, dominant cost every path pays: streaming the point's own largest file once. See
 [Current State](current-state.md) for the measured figures, both the planning-only comparison and the
 whole command. See [Reading a point](../guide/tree-and-cat.md).
+
+**`refusal-v1`: a machine-readable refusal document (0.54.0 step 3 Part 5d).** Under `--format json`,
+*every* refusal `extract` exits `1` for — never a usage error, exit `2`, which prints no document — writes
+exactly one JSON document to **stdout** (never stderr; stderr's own text and the exit code are entirely
+unchanged by this):
+
+```json
+{"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
+```
+
+`refusal` is one of eleven stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`destination-exists`, `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
+`claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `damaged-repository`, `io-failure`.
+`reason` is set only for `no-checkpoint-in-reach`, naming which of three conditions the admitted-anchor
+search found in reach, the first that applies: `signer-not-adopted` (a recorded checkpoint whose signer
+this repository has not adopted — adopt the key), `not-recorded` (a checkpoint in reach, never recorded by
+`verify`/`seal` — run `verify`), or `no-checkpoint` (none at all — `--allow-full-replay`). Every other id
+carries `reason: null`. `message` is the identical text `CliError::message()` already puts on stderr — the
+JSON document never paraphrases it.
+
+**This is this project's own, reusable form for a JSON refusal** — `refusal-v1` is `extract`'s own
+document today, but its shape (`schema_version`, `command`, `refusal`, `reason`, `message`) is designed as
+a precedent other commands adopt when next touched, not a one-off specific to `extract`.
 
 **Removing a received pointer: `received remove`.** `received remove <remotes/…> [--plan-only]`
 removes one received ref's own pointer from the received-index container — the same container
