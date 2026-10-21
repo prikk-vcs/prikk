@@ -617,33 +617,52 @@ pub(crate) fn apply_candidate_patches(
 }
 
 /// Fold exactly one already-sealed patch id onto an existing lifecycle state and carried
-/// `TextCache` (RFC 142, stikk 020: `show`'s per-patch block resolution). The same
-/// `apply_patch_ids` fold every other replay path uses, called with a one-element slice so a
-/// caller can take a snapshot of `state` *between* patches -- no existing block-at-a-time helper
-/// exposes that granularity (`apply_one_block`/`apply_one_block_carrying_text` fold a whole
-/// block's `patch_ids` at once, and are `pub(in crate::lifecycle_cache)` besides).
+/// `TextCache` (RFC 142, stikk 020; 0.54.0 Part 5c: now with the same materialize-and-retry
+/// fallback [`apply_queued_patch_envelopes`] already gives the unsealed queue -- see
+/// [`apply_state_effect_with_materialize_fallback`]'s own doc). The same `apply_patch_ids`-shaped
+/// fold every other replay path uses (through [`apply_patch_ids_with_materialize_fallback`]),
+/// called with a one-element slice so a caller can take a snapshot of `state` *between* patches.
 ///
-/// `StoreBackedResolver::new` with `require_schema_one = false`, not `::new_format2`/`true` the
-/// way [`apply_candidate_patches`] above resolves blobs: this call site stands in for the block's
-/// own patches inside the *existing* block-state derivation (`replay_chain_with_appended_patches`
-/// below, what `lifecycle_state_at` already calls), which has always used the plain resolver --
-/// reusing `apply_candidate_patches`'s schema-gated one here would silently narrow which object
-/// schema versions a sealed block's `show` can resolve a node-addressed path against.
-pub(crate) fn apply_one_patch(
+/// `StoreBackedResolver::new` with `require_schema_one = false`, not `::new_format2`/`true` the way
+/// [`apply_candidate_patches`] above resolves blobs: this stands in for the block's own patches
+/// inside the *existing* block-state derivation (`lifecycle_state_at`), which has always used the
+/// plain resolver.
+///
+/// `sealed_lineage` is the block's own parent lineage -- `(parent_block_id,
+/// lineage_horizon(parent_block_id))` -- or `None` for a root block with no parent.
+pub(crate) fn apply_one_patch_with_materialize_fallback(
+    layout: Option<&crate::foundation::layout::RepositoryLayout>,
     reader: &impl ObjectReader,
     patch_id: ObjectId,
     state: &mut NodeLifecycleState,
     text_cache: &mut TextCache,
-) -> Result<(), LifecycleReplayError> {
+    sealed_lineage: Option<(ObjectId, ObjectId)>,
+) -> prikk_error::Result<()> {
     let blob_resolver = StoreBackedResolver::new(reader);
-    apply_patch_ids(
+    apply_patch_ids_with_materialize_fallback(
+        MaterializeFallbackContext {
+            layout,
+            sealed_lineage,
+        },
         reader,
         std::slice::from_ref(&patch_id),
         &blob_resolver,
         state,
         text_cache,
-        false,
     )
+}
+
+/// `layout` + `sealed_lineage` together (0.54.0 Part 5c): bundled into one parameter so
+/// [`apply_state_effect_with_materialize_fallback`]/[`apply_patch_ids_with_materialize_fallback`]
+/// stay under clippy's argument-count lint. Small and `Copy`, so passing it by value costs nothing.
+#[derive(Clone, Copy)]
+struct MaterializeFallbackContext<'a> {
+    /// `None` only for a caller with no repository (a test's in-memory store): the anchor-first
+    /// path (RFC 136 increment 2c) is then skipped and the fallback is a full replay.
+    layout: Option<&'a crate::foundation::layout::RepositoryLayout>,
+    /// `(baseline_block_id, horizon_id)` -- `None` when there is no earlier sealed lineage to
+    /// materialize from at all (a root block's own first patches, or a `Genesis` queue baseline).
+    sealed_lineage: Option<(ObjectId, ObjectId)>,
 }
 
 /// Fold a sequence of not-yet-sealed queued patch envelopes (DC-66) onto an already-resolved
@@ -686,55 +705,130 @@ pub(crate) fn apply_queued_patch_envelopes(
                 effect::apply_rename_run(state, &run)?;
                 continue;
             }
-            match apply_state_effect(state, text_cache, &operation.kind, &blob_resolver) {
-                Ok(()) => {}
-                Err(LifecycleReplayError::MissingBlobForLifecycleEffect { blob_id }) => {
-                    let DecodedOperationKind::EditText { node_id, .. } = &operation.kind else {
-                        return Err(LifecycleReplayError::MissingBlobForLifecycleEffect {
-                            blob_id,
-                        }
-                        .into());
-                    };
-                    let Some((baseline_block_id, horizon_id)) = sealed_lineage else {
-                        return Err(PrikkError::Integrity(format!(
-                            "queued patch {patch_id} edits node {node_id:?} whose content blob \
-                             {blob_id} is missing, and no sealed lineage exists to materialize it \
-                             from"
-                        )));
-                    };
-                    // RFC 136 increment 2c: from the nearest replay-verified anchor when there is one (its text
-                    // must hash to `blob_id`, the content this node has), otherwise a full replay, as before.
-                    // `layout` is `None` only for a caller with no repository (a test's in-memory store).
-                    let text = match layout {
-                        Some(layout) => super::materialize_edited_text_anchored(
-                            layout,
-                            reader,
-                            baseline_block_id,
-                            horizon_id,
-                            *node_id,
-                            blob_id,
-                        )?,
-                        None => super::materialize_edited_text(
-                            reader,
-                            baseline_block_id,
-                            horizon_id,
-                            *node_id,
-                        )?,
-                    }
-                    .ok_or_else(|| {
-                        PrikkError::Integrity(format!(
-                            "queued patch {patch_id} edits node {node_id:?} whose content blob \
-                             {blob_id} is missing and could not be materialized from sealed history"
-                        ))
-                    })?;
-                    text_cache.insert(*node_id, text);
-                    apply_state_effect(state, text_cache, &operation.kind, &blob_resolver)?;
-                }
-                Err(other) => return Err(other.into()),
-            }
+            apply_state_effect_with_materialize_fallback(
+                MaterializeFallbackContext {
+                    layout,
+                    sealed_lineage,
+                },
+                reader,
+                patch_id,
+                state,
+                text_cache,
+                &operation.kind,
+                &blob_resolver,
+            )?;
         }
     }
     Ok(())
+}
+
+/// [`apply_patch_ids`] with the same materialize-and-retry fallback as
+/// [`apply_queued_patch_envelopes`] (0.54.0 Part 5c): `show`'s block path, through
+/// [`apply_one_patch_with_materialize_fallback`], needs the identical rebuild the unsealed queue
+/// already had, not a second copy of it. The per-operation fallback itself lives in
+/// [`apply_state_effect_with_materialize_fallback`], shared by both this function and
+/// `apply_queued_patch_envelopes`'s own loop above; only the outer shape (iterating patch ids,
+/// decoding each, collecting rename runs) is repeated here -- one reading patches from the object
+/// store by id, the other from raw `WalRecord` envelopes that have no object yet to read.
+fn apply_patch_ids_with_materialize_fallback<R: BlobKindResolver + BlobContentResolver>(
+    fallback: MaterializeFallbackContext<'_>,
+    reader: &impl ObjectReader,
+    patch_ids: &[ObjectId],
+    blob_resolver: &R,
+    state: &mut NodeLifecycleState,
+    text_cache: &mut TextCache,
+) -> prikk_error::Result<()> {
+    for patch_id in patch_ids {
+        let operations = read_patch_operations(reader, *patch_id, false)?;
+        let mut iter = operations.iter().peekable();
+        while let Some(operation) = iter.next() {
+            if matches!(operation.kind, DecodedOperationKind::RenamePath { .. }) {
+                // RFC 144 §4j / increment 2: resolve the whole run together, node before path --
+                // never one RenamePath at a time (see `effect::apply_rename_run`'s own doc comment).
+                let run = effect::collect_rename_run(&mut iter, operation)?;
+                effect::apply_rename_run(state, &run)?;
+                continue;
+            }
+            apply_state_effect_with_materialize_fallback(
+                fallback,
+                reader,
+                *patch_id,
+                state,
+                text_cache,
+                &operation.kind,
+                blob_resolver,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply one decoded operation's lifecycle state effect (`apply_state_effect`), and on
+/// `MissingBlobForLifecycleEffect` for an `EditText` operation specifically, materialize the
+/// node's sealed text from history and retry the operation exactly once (DC-65's rebuild) --
+/// `apply_state_effect` only mutates `state`/`text_cache` after it has fully resolved the text, so
+/// a failed first attempt is side-effect-free and the retry is safe.
+///
+/// **The one fallback, used by two folds** (0.54.0 Part 5c): before this round,
+/// `apply_queued_patch_envelopes`'s own loop carried this catch/materialize/retry inline, and
+/// `show`'s block path had no equivalent -- a block whose own `EditText` needed the preimage text
+/// an *earlier* patch produced but never separately stored failed outright (`lifecycle replay:
+/// blob … required for a state effect is missing`, the second consecutive edit of a file onward;
+/// measured by reverting the fix and re-running `show::tests::
+/// show_resolves_every_block_in_a_chain_of_five_consecutive_text_edits`). Shared now, through
+/// `apply_queued_patch_envelopes`'s own loop and [`apply_patch_ids_with_materialize_fallback`].
+///
+/// `sealed_lineage` is `(baseline_block_id, horizon_id)`, `None` when there is no earlier sealed
+/// lineage to materialize from. `layout` is `None` only for a caller with no repository (a test's
+/// in-memory store) -- the anchor-first path (RFC 136 increment 2c) is then skipped.
+fn apply_state_effect_with_materialize_fallback<R: BlobKindResolver + BlobContentResolver>(
+    fallback: MaterializeFallbackContext<'_>,
+    reader: &impl ObjectReader,
+    patch_id: ObjectId,
+    state: &mut NodeLifecycleState,
+    text_cache: &mut TextCache,
+    operation_kind: &DecodedOperationKind,
+    blob_resolver: &R,
+) -> prikk_error::Result<()> {
+    match apply_state_effect(state, text_cache, operation_kind, blob_resolver) {
+        Ok(()) => Ok(()),
+        Err(LifecycleReplayError::MissingBlobForLifecycleEffect { blob_id }) => {
+            let DecodedOperationKind::EditText { node_id, .. } = operation_kind else {
+                return Err(LifecycleReplayError::MissingBlobForLifecycleEffect { blob_id }.into());
+            };
+            let Some((baseline_block_id, horizon_id)) = fallback.sealed_lineage else {
+                return Err(PrikkError::Integrity(format!(
+                    "patch {patch_id} edits node {node_id:?} whose content blob {blob_id} is \
+                     missing, and no sealed lineage exists to materialize it from"
+                )));
+            };
+            // RFC 136 increment 2c: from the nearest replay-verified anchor when there is one (its
+            // text must hash to `blob_id`), otherwise a full replay.
+            let text = match fallback.layout {
+                Some(layout) => super::materialize_edited_text_anchored(
+                    layout,
+                    reader,
+                    baseline_block_id,
+                    horizon_id,
+                    *node_id,
+                    blob_id,
+                )?,
+                None => {
+                    super::materialize_edited_text(reader, baseline_block_id, horizon_id, *node_id)?
+                }
+            }
+            .ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "patch {patch_id} edits node {node_id:?} whose content blob {blob_id} is \
+                     missing and could not be materialized from sealed history"
+                ))
+            })?;
+            text_cache.insert(*node_id, text);
+            apply_state_effect(state, text_cache, operation_kind, blob_resolver)?;
+            Ok(())
+        }
+        Err(other) => Err(other.into()),
+    }
 }
 
 /// Read and decode a patch's operations directly from an in-memory envelope, mapping every failure to

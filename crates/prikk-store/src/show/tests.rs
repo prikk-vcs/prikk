@@ -181,11 +181,12 @@ fn create_raw_file(
 }
 
 /// stikk 020, "the end must agree": after folding every one of `block_id`'s own patches onto its
-/// parent's state (the identical two primitives `show`'s own `Block` arm uses --
-/// `super::block_starting_state` and [`crate::lifecycle_cache::replay::apply_one_patch`]), the
-/// result must equal `lifecycle_state_at(block_id)`'s own state -- computed independently, by the
-/// *existing*, unmodified full-lineage replay that never calls either of those two. A control on
-/// the test suite (per the ruling), not a runtime check.
+/// parent's state (the identical primitives `show`'s own `Block` arm uses --
+/// `super::block_starting_state` and
+/// [`crate::lifecycle_cache::replay::apply_one_patch_with_materialize_fallback`], 0.54.0 Part 5c),
+/// the result must equal `lifecycle_state_at(block_id)`'s own state -- computed independently, by
+/// the *existing*, unmodified full-lineage replay that never calls either of those two. A control
+/// on the test suite (per the ruling), not a runtime check.
 fn assert_fold_to_end_matches_lifecycle_state_at(layout: &RepositoryLayout, block_id: ObjectId) {
     let object_store = crate::object_store::ObjectReadSnapshot::open(layout).unwrap();
     let envelope =
@@ -193,14 +194,23 @@ fn assert_fold_to_end_matches_lifecycle_state_at(layout: &RepositoryLayout, bloc
             .unwrap()
             .unwrap();
     let block = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
-    let mut state = super::block_starting_state(&object_store, block_id, &block).unwrap();
+    let (mut state, parent_id) =
+        super::block_starting_state(&object_store, block_id, &block).unwrap();
+    let sealed_lineage = parent_id.map(|parent_id| {
+        (
+            parent_id,
+            crate::merge::evidence::lineage_horizon(&object_store, parent_id).unwrap(),
+        )
+    });
     let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
     for patch_id in &block.patch_ids {
-        crate::lifecycle_cache::replay::apply_one_patch(
+        crate::lifecycle_cache::replay::apply_one_patch_with_materialize_fallback(
+            Some(layout),
             &object_store,
             *patch_id,
             &mut state,
             &mut text_cache,
+            sealed_lineage,
         )
         .unwrap();
     }
@@ -1574,6 +1584,363 @@ fn show_queued_equals_sealed_for_every_patch_in_a_three_patch_block() {
     );
 
     assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.54.0 Part 5c: the real `EditText` fields a block's own sealed patch carries, read directly
+/// from the object store, independently of `show`'s own decode path -- `patch_from_envelope` and
+/// `show_operation` call the identical `decode_patch_operations` this reads through, so this is not
+/// a from-scratch reimplementation of decoding, only a second, independent call to it, used to check
+/// `show`'s reported operation against the patch's own stored bytes rather than only against itself.
+fn real_edit_text_fields(
+    object_store: &crate::object_store::ObjectReadSnapshot,
+    patch_id: ObjectId,
+) -> (Vec<u8>, Vec<u8>) {
+    let envelope =
+        crate::object_store::ObjectReader::read_typed(object_store, patch_id, ObjectType::Patch)
+            .unwrap()
+            .unwrap();
+    let operations = crate::patch_replay::decode::decode_patch_operations(
+        &envelope.canonical_payload,
+        envelope.schema_version,
+    )
+    .unwrap();
+    let [operation] = operations.as_slice() else {
+        panic!("expected exactly one operation in patch {patch_id}, got {operations:?}");
+    };
+    match &operation.kind {
+        crate::patch_replay::decode::DecodedOperationKind::EditText {
+            old_span_text,
+            replacement_text,
+            ..
+        } => (old_span_text.clone(), replacement_text.clone()),
+        other => panic!("expected EditText, got {other:?}"),
+    }
+}
+
+/// A chain of `n` consecutive sealed `EditText`s of one file, each edit's own preimage the prior
+/// edit's own output -- never separately stored as a fresh `Blob` (DC-65's by-design gap: only
+/// `CreateFile` writes one) -- built for real: genesis (`CreateFile`), then one further sealed
+/// block per entry in `versions` (each entry is the file's full content after that edit). Returns
+/// every block id in the chain, oldest (genesis) first, so `n + 1` ids for `n` edits.
+fn edit_chain(
+    layout: &RepositoryLayout,
+    root: &std::path::Path,
+    path: &str,
+    versions: &[&[u8]],
+) -> Vec<ObjectId> {
+    let (genesis_version, edit_versions) = versions
+        .split_first()
+        .expect("fixture: at least a genesis version");
+    generation(layout, path, genesis_version, "genesis");
+    let mut block_ids = vec![current_block_id(layout)];
+    for (index, version) in edit_versions.iter().enumerate() {
+        std::fs::write(root.join(path), version).unwrap();
+        commit(layout, &format!("edit {index}"));
+        seal(layout);
+        block_ids.push(current_block_id(layout));
+    }
+    block_ids
+}
+
+/// Item 1: a chain of (at least) five consecutive sealed text edits of one file. Before this
+/// round's fix, `show <block-id>` failed outright on every block in this chain from the edit whose
+/// own preimage was itself an earlier, unstored edit's own output onward (`lifecycle replay: blob
+/// … required for a state effect is missing`) -- confirmed by temporarily reverting the fix and
+/// re-running this exact test (see this test's own doc below); `prikk verify` was never affected,
+/// since the stored history itself was always sound (this is `show`'s own read-path bug, not a
+/// store defect).
+///
+/// **Checkpoints suppressed** (`without_checkpoints_for_test`): without this, genesis (parentless)
+/// is *always* a checkpoint (`checkpoint_due` trivially returns `true` for a `None` parent,
+/// `block_state.rs`), so every block in a short chain like this one would have a replay-verified
+/// snapshot within reach and `materialize_edited_text_anchored`'s anchor-first branch (RFC 136
+/// increment 2c) would resolve every edit, never falling through to the plain full-replay fallback.
+/// Suppressing checkpoints here means no block in this chain ever carries a snapshot, so
+/// `anchored_text::anchored_texts` always returns `None` (its own walk reaches genesis, finds no
+/// snapshot there either, and `derivation_parent` on a parentless root ends the walk with nothing
+/// found) and every materialization in this test exercises the plain, unanchored
+/// `materialize_edited_text` fallback -- the chain-across-a-checkpoint sibling test below is where
+/// the anchor-first branch itself is exercised.
+///
+/// **Red, demonstrated by reverting the fix, not by a second code path in this file**: with
+/// `apply_one_patch_with_materialize_fallback`'s call in `show.rs` reverted back to the pre-fix
+/// `apply_one_patch(&object_store, *patch_id, &mut state, &mut text_cache)` (no fallback, no
+/// `sealed_lineage` computed), this exact test fails at block index 2 (the second edit, zero-indexed
+/// after genesis) onward with `PrikkError::Integrity` wrapping exactly
+/// `lifecycle replay: blob <id> required for a state effect is missing` -- measured by hand while
+/// writing this test, reported in this round's own report rather than asserted here as a second,
+/// parallel "old code" implementation (there is only one `show`, and this test exercises it as
+/// shipped).
+#[test]
+fn show_resolves_every_block_in_a_chain_of_five_consecutive_text_edits() {
+    let root = unique_temp_dir("show-edit-chain");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+
+    let versions: Vec<Vec<u8>> = (0..6)
+        .map(|index| format!("content before marker{index} after\n").into_bytes())
+        .collect();
+    let version_refs: Vec<&[u8]> = versions.iter().map(Vec::as_slice).collect();
+
+    let uses_before = crate::lifecycle_cache::anchored_text::anchored_text_uses_for_test();
+    let block_ids = crate::block_state::without_checkpoints_for_test(|| {
+        edit_chain(&layout, &root, "a.txt", &version_refs)
+    });
+    // genesis + 5 edits = 6 blocks.
+    assert_eq!(block_ids.len(), 6, "fixture: 5 edits after genesis");
+
+    let object_store = crate::object_store::ObjectReadSnapshot::open(&layout).unwrap();
+    for payload in block_ids.iter().map(|&block_id| {
+        let envelope = crate::object_store::ObjectReader::read_typed(
+            &object_store,
+            block_id,
+            ObjectType::Block,
+        )
+        .unwrap()
+        .unwrap();
+        prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap()
+    }) {
+        assert!(
+            payload.snapshot_blob_ref.is_none(),
+            "fixture precondition: checkpoints suppressed, no block in this chain carries a snapshot"
+        );
+    }
+
+    // Block 0 is genesis (`CreateFile`), not an edit -- confirm it renders, then check every edit
+    // block (1..=5).
+    let (genesis_block_id, edit_block_ids) = block_ids
+        .split_first()
+        .expect("fixture: genesis plus at least one edit");
+    let genesis_patches = show(&layout, *genesis_block_id).unwrap();
+    let [genesis_patch] = genesis_patches.as_slice() else {
+        panic!("expected exactly one patch, got {genesis_patches:?}");
+    };
+    let [genesis_op] = genesis_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", genesis_patch.operations);
+    };
+    assert_eq!(genesis_op.kind, "create-file");
+
+    for &block_id in edit_block_ids {
+        let patches = show(&layout, block_id).unwrap_or_else(|err| {
+            panic!(
+                "show({block_id}) must succeed -- every block in this chain is a real sealed \
+                 edit, and `verify` (checked separately below) agrees the stored history is sound: \
+                 {err}"
+            )
+        });
+        let [patch] = patches.as_slice() else {
+            panic!("expected exactly one patch in block {block_id}, got {patches:?}");
+        };
+        let [operation] = patch.operations.as_slice() else {
+            panic!("expected one operation, got {:?}", patch.operations);
+        };
+        assert_eq!(operation.kind, "edit-text");
+        let (real_old, real_replacement) = real_edit_text_fields(&object_store, patch.patch_id);
+        match &operation.content {
+            ShowOperationContent::EditText {
+                old_span_text,
+                replacement_text,
+            } => {
+                assert_eq!(
+                    old_span_text, &real_old,
+                    "block {block_id}: show's own old_span_text must match the real sealed \
+                     patch's own bytes"
+                );
+                assert_eq!(
+                    replacement_text, &real_replacement,
+                    "block {block_id}: show's own replacement_text must match the real sealed \
+                     patch's own bytes"
+                );
+            }
+            other => panic!("expected EditText, got {other:?}"),
+        }
+        assert_eq!(
+            operation.paths,
+            vec![ShowPathResolution::Path("a.txt".to_string())]
+        );
+        assert_fold_to_end_matches_lifecycle_state_at(&layout, block_id);
+    }
+
+    // The store itself was always sound throughout -- this is a `show` read-path bug, not damage.
+    let verification = crate::verify_repository(&layout).unwrap();
+    assert!(
+        !verification.has_stage_failure() && !verification.has_item_failure(),
+        "verify must pass: the stored history in this fixture was never damaged: {verification:?}"
+    );
+
+    assert_eq!(
+        crate::lifecycle_cache::anchored_text::anchored_text_uses_for_test() - uses_before,
+        0,
+        "fixture precondition: with checkpoints suppressed, no block carries a snapshot, so the \
+         anchor-first branch (RFC 136 increment 2c) can never fire -- every materialization in this \
+         test must have gone through the plain, unanchored full-replay fallback \
+         (`materialize_edited_text`), which is specifically what this test demonstrates works"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Item 1's own checkpoint-crossing sibling: a text edit, then a rename, then a text edit, across a
+/// real replay-verified checkpoint (RFC 136 increment 2c). Unlike the plain chain above, checkpoints
+/// are **not** suppressed here -- genesis (parentless) is always a checkpoint
+/// (`checkpoint_due`/`block_state.rs` trivially returns `true` for a `None` parent), and `seal_block`
+/// records it into the replay-verified set (`verified_blocks.rs`) the moment it is sealed, so by the
+/// time the second edit needs to materialize its own preimage, a real, nearby, replay-verified
+/// snapshot is already in reach. This is the shape where `materialize_edited_text_anchored`'s
+/// anchor-first branch actually answers, not only its full-replay fallback -- confirmed directly
+/// below via `anchored_text_uses_for_test`'s own counter, not assumed from the fixture's shape alone.
+///
+/// The rename in the middle exercises the anchor-carry's own node-identity tracking
+/// (`materialize_wanted_text_forward`): the wanted node's text is carried forward by node id through
+/// every block after the anchor, a `RenamePath` among them, which has no content effect and is
+/// simply passed over -- the same "tracked by node identity rather than path" property `extract`'s own
+/// anchor-first read already relies on (0.54.0 step 3's own CHANGELOG entry).
+#[test]
+fn show_resolves_a_text_edit_across_a_replay_verified_checkpoint_and_a_rename() {
+    let root = unique_temp_dir("show-edit-chain-checkpoint");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+
+    let node_id = NodeId::from_bytes([0x5A; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"version zero\n");
+    let genesis_block_id = current_block_id(&layout);
+
+    // Fixture precondition, not the mechanism under test: genesis really is a recorded checkpoint.
+    let object_store = crate::object_store::ObjectReadSnapshot::open(&layout).unwrap();
+    let genesis_envelope = crate::object_store::ObjectReader::read_typed(
+        &object_store,
+        genesis_block_id,
+        ObjectType::Block,
+    )
+    .unwrap()
+    .unwrap();
+    let genesis_payload =
+        prikk_object::BlockPayload::decode_canonical(&genesis_envelope.canonical_payload).unwrap();
+    assert!(
+        genesis_payload.snapshot_blob_ref.is_some(),
+        "fixture precondition: genesis (parentless) is always a checkpoint"
+    );
+    assert!(
+        crate::verified_blocks::load_verified_blocks(&layout).contains(&genesis_block_id),
+        "fixture precondition: sealing genesis records it into the replay-verified record"
+    );
+
+    // Edit 1: preimage is genesis's own real, stored blob -- resolvable with or without this
+    // round's fix, no materialization needed.
+    std::fs::write(root.join("a.txt"), b"version one\n").unwrap();
+    commit(&layout, "edit 1");
+    seal(&layout);
+    let edit1_block_id = current_block_id(&layout);
+
+    // Rename: no content change. `RenamePath` is not reachable through ordinary `commit` (this
+    // file's own module doc) -- raw-appended, with the real worktree file renamed to match so a
+    // later ordinary commit does not read this as a delete-then-create.
+    std::fs::rename(root.join("a.txt"), root.join("b.txt")).unwrap();
+    append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::RenamePath(RenamePath {
+                node_id,
+                old_path: "a.txt".to_string(),
+                new_path: "b.txt".to_string(),
+            }),
+        }],
+    );
+    seal(&layout);
+    let rename_block_id = current_block_id(&layout);
+
+    // Edit 2, at the renamed path: preimage is edit 1's own output -- never separately stored
+    // (DC-65), and this is the one that needs materialization.
+    let uses_before = crate::lifecycle_cache::anchored_text::anchored_text_uses_for_test();
+    std::fs::write(root.join("b.txt"), b"version two\n").unwrap();
+    commit(&layout, "edit 2");
+    seal(&layout);
+    let edit2_block_id = current_block_id(&layout);
+    // Fresh snapshot: `object_store` above was opened before edit 1/the rename/edit 2 were sealed,
+    // and `ObjectReadSnapshot::open` is a point-in-time index snapshot -- it would not see any of
+    // their own objects.
+    let object_store = crate::object_store::ObjectReadSnapshot::open(&layout).unwrap();
+
+    let patches1 = show(&layout, edit1_block_id).unwrap();
+    let [edit1_patch] = patches1.as_slice() else {
+        panic!("expected exactly one patch, got {patches1:?}");
+    };
+    let [edit1_op] = edit1_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", edit1_patch.operations);
+    };
+    assert_eq!(edit1_op.kind, "edit-text");
+    assert_eq!(
+        edit1_op.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())]
+    );
+
+    let patches_rename = show(&layout, rename_block_id).unwrap();
+    let [rename_patch] = patches_rename.as_slice() else {
+        panic!("expected exactly one patch, got {patches_rename:?}");
+    };
+    let [rename_op] = rename_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", rename_patch.operations);
+    };
+    assert_eq!(rename_op.kind, "rename-path");
+    assert_eq!(
+        rename_op.paths,
+        vec![
+            ShowPathResolution::Path("a.txt".to_string()),
+            ShowPathResolution::Path("b.txt".to_string()),
+        ]
+    );
+
+    let patches2 = show(&layout, edit2_block_id).unwrap_or_else(|err| {
+        panic!(
+            "show({edit2_block_id}) must succeed -- its own EditText's preimage is edit 1's \
+             unstored output, materializable from genesis's own replay-verified checkpoint, \
+             carried forward through edit 1 and the rename: {err}"
+        )
+    });
+    let [edit2_patch] = patches2.as_slice() else {
+        panic!("expected exactly one patch, got {patches2:?}");
+    };
+    let [edit2_op] = edit2_patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", edit2_patch.operations);
+    };
+    assert_eq!(edit2_op.kind, "edit-text");
+    assert_eq!(
+        edit2_op.paths,
+        vec![ShowPathResolution::Path("b.txt".to_string())],
+        "edit 2 resolves at its own, post-rename path"
+    );
+    let (real_old, real_replacement) = real_edit_text_fields(&object_store, edit2_patch.patch_id);
+    match &edit2_op.content {
+        ShowOperationContent::EditText {
+            old_span_text,
+            replacement_text,
+        } => {
+            assert_eq!(old_span_text, &real_old);
+            assert_eq!(replacement_text, &real_replacement);
+        }
+        other => panic!("expected EditText, got {other:?}"),
+    }
+
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, edit1_block_id);
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, rename_block_id);
+    assert_fold_to_end_matches_lifecycle_state_at(&layout, edit2_block_id);
+
+    assert!(
+        crate::lifecycle_cache::anchored_text::anchored_text_uses_for_test() > uses_before,
+        "edit 2's own materialization must have gone through the anchor-first branch -- genesis \
+         is a real, nearby, replay-verified checkpoint, not only the full-replay fallback"
+    );
+
+    let verification = crate::verify_repository(&layout).unwrap();
+    assert!(
+        !verification.has_stage_failure() && !verification.has_item_failure(),
+        "verify must pass: the stored history in this fixture was never damaged: {verification:?}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

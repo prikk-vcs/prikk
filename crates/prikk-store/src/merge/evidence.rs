@@ -131,7 +131,17 @@ fn resolve_target(
     })
 }
 
-fn lineage_horizon(object_store: &impl ObjectReader, baseline: ObjectId) -> Result<ObjectId> {
+/// `pub(crate)` (0.54.0 Part 5c): `show`'s block path needs the raw horizon id itself, not only
+/// `lifecycle_state_at`'s derived state -- it materializes an unstored `EditText` result from the
+/// block's own parent lineage (DC-65's rebuild), which takes `(baseline_block_id, horizon_id)` as a
+/// pair. RFC 131's narrowing (see [`lifecycle_state_at`]'s own doc comment) kept this private
+/// because the one caller it had then only ever needed the derived state; a second, different
+/// caller needing the id itself is a real reason to widen, not a reason to grow a second
+/// private-to-this-file horizon walk elsewhere.
+pub(crate) fn lineage_horizon(
+    object_store: &impl ObjectReader,
+    baseline: ObjectId,
+) -> Result<ObjectId> {
     let mut visited = BTreeSet::new();
     let mut current = baseline;
     loop {
@@ -157,14 +167,15 @@ fn lineage_horizon(object_store: &impl ObjectReader, baseline: ObjectId) -> Resu
 }
 
 /// RFC 142 §3's narrow boundary: `show` needs `lineage_horizon` + `replay_derived_state` to
-/// resolve a node-addressed operation's path at a sealed block, but `lineage_horizon` stays
-/// private to this file and `replay_derived_state`/`ReplayDerivedLifecycleState` stay at their
-/// existing `pub(crate)` visibility (RFC 131 narrowed internals two days before this one; widening
-/// them back out would work directly against that). This is the one new function instead — same
-/// shape as RFC 140's `enumerate_queued_patches`, which called `resolve_folded_worktree_baseline`
-/// directly rather than exporting it further. One replay per call: callers resolve as many node
-/// ids as they need against the single returned value ("resolve once per invocation, not once per
-/// operation").
+/// resolve a node-addressed operation's path at a sealed block, but `replay_derived_state`/
+/// `ReplayDerivedLifecycleState` stay at their existing `pub(crate)` visibility (RFC 131 narrowed
+/// internals two days before this one; widening them back out would work directly against that).
+/// This is the one new function instead — same shape as RFC 140's `enumerate_queued_patches`,
+/// which called `resolve_folded_worktree_baseline` directly rather than exporting it further. One
+/// replay per call: callers resolve as many node ids as they need against the single returned
+/// value ("resolve once per invocation, not once per operation"). **`lineage_horizon` itself is
+/// now also `pub(crate)`** (0.54.0 Part 5c): a second caller needs the raw horizon id, not this
+/// function's derived state — see `lineage_horizon`'s own doc comment.
 pub(crate) fn lifecycle_state_at(
     object_store: &impl ObjectReader,
     block_id: ObjectId,

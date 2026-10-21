@@ -9,11 +9,18 @@
 //! the block's own patches in canonical order **up to and including that patch** (stikk 020); at a
 //! queued patch, against the folded worktree baseline truncated at that patch (the
 //! queued-patch-paths handoff) -- the same per-operation fold either way (`apply_state_effect`),
-//! through two different drivers (`apply_patch_ids` for a sealed block, `apply_queued_patch_envelopes`
-//! for the queue, DC-65's materialize-and-retry included), one replay per invocation, not one per
-//! operation, and identical before and after `seal` by construction. Only a **bare sealed patch
-//! id**, with no block or queue to resolve against, reports every node-addressed operation
-//! unresolved.
+//! through two different drivers (`apply_patch_ids_with_materialize_fallback` for a sealed block,
+//! `apply_queued_patch_envelopes` for the queue), sharing one materialize-and-retry fallback
+//! (DC-65) for an `EditText` whose preimage text an earlier edit produced but never separately
+//! stored (0.54.0 Part 5c -- a sealed block's own fold did not share this fallback before, and
+//! failed outright from the second consecutive edit of a file onward -- the first edit's own
+//! preimage is always a real, stored `CreateFile` blob, never unstored, so only the *second* edit
+//! onward ever needs this fallback at all; measured directly by reverting the fix and re-running
+//! `show::tests::show_resolves_every_block_in_a_chain_of_five_consecutive_text_edits`, not assumed),
+//! one replay per invocation, not one per operation, and identical before and after `seal` by
+//! construction. Only a **bare
+//! sealed patch id**, with no block or queue to resolve against, reports every node-addressed
+//! operation unresolved.
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -23,8 +30,8 @@ use prikk_object::{
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
-use crate::lifecycle_cache::replay::{TextCache, apply_one_patch};
-use crate::merge::evidence::{lifecycle_state_at, mainline_or_sole_parent};
+use crate::lifecycle_cache::replay::{TextCache, apply_one_patch_with_materialize_fallback};
+use crate::merge::evidence::{lifecycle_state_at, lineage_horizon, mainline_or_sole_parent};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
@@ -213,11 +220,25 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     match envelope.object_type {
         ObjectType::Block => {
             let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-            let mut state = block_starting_state(&object_store, id, &block)?;
+            let (mut state, parent_id) = block_starting_state(&object_store, id, &block)?;
+            // 0.54.0 Part 5c: the block's own sealed lineage, for the materialize-and-retry
+            // fallback below -- `None` for a root block (no parent, so no earlier sealed lineage
+            // to materialize an unstored `EditText` result from at all).
+            let sealed_lineage = match parent_id {
+                Some(parent_id) => Some((parent_id, lineage_horizon(&object_store, parent_id)?)),
+                None => None,
+            };
             let mut text_cache = TextCache::new();
             let mut patches = Vec::with_capacity(block.patch_ids.len());
             for patch_id in &block.patch_ids {
-                apply_one_patch(&object_store, *patch_id, &mut state, &mut text_cache)?;
+                apply_one_patch_with_materialize_fallback(
+                    Some(layout),
+                    &object_store,
+                    *patch_id,
+                    &mut state,
+                    &mut text_cache,
+                    sealed_lineage,
+                )?;
                 patches.push(show_patch(&object_store, *patch_id, Some(&state))?);
             }
             Ok(patches)
@@ -230,22 +251,31 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
 }
 
 /// The starting state a block's own patches fold onto, not the fold itself -- `show()`'s own loop
-/// applies the block's patches afterward, one at a time, via `apply_one_patch` (RFC 142, stikk
-/// 020). The mainline parent's state for a `Merge` block, the sole parent's for `Normal`, empty
-/// for `Root` -- the identical policy `lineage_horizon` already walks, shared through
-/// [`mainline_or_sole_parent`] rather than re-derived. This is not a second implementation of
-/// block-state derivation: `lifecycle_state_at(block_id)` already derives a block's own end state
-/// internally, in one pass over this same parent chain; calling it on the *parent* here gives
-/// everything up to but not including this block, a narrower call to the existing one, not a new
-/// one.
+/// applies the block's patches afterward, one at a time, via
+/// `apply_one_patch_with_materialize_fallback` (RFC 142, stikk 020; 0.54.0 Part 5c). The mainline
+/// parent's state for a `Merge` block, the sole parent's for `Normal`, empty for `Root` -- the
+/// identical policy `lineage_horizon` already walks, shared through [`mainline_or_sole_parent`]
+/// rather than re-derived. This is not a second implementation of block-state derivation:
+/// `lifecycle_state_at(block_id)` already derives a block's own end state internally, in one pass
+/// over this same parent chain; calling it on the *parent* here gives everything up to but not
+/// including this block, a narrower call to the existing one, not a new one.
+///
+/// Also returns the parent id itself (`None` for a `Root` block) -- `show()`'s own caller needs it
+/// to compute the block's own `sealed_lineage` (0.54.0 Part 5c: `(parent_id,
+/// lineage_horizon(parent_id))`), the materialize-and-retry fallback's own input. Returning it here
+/// rather than re-deriving it a second time keeps `mainline_or_sole_parent(block)` called exactly
+/// once for this block.
 fn block_starting_state(
     object_store: &impl ObjectReader,
     block_id: ObjectId,
     block: &BlockPayload,
-) -> Result<NodeLifecycleState> {
+) -> Result<(NodeLifecycleState, Option<ObjectId>)> {
     match mainline_or_sole_parent(block) {
-        Some(None) => Ok(NodeLifecycleState::new()),
-        Some(Some(parent_id)) => Ok(lifecycle_state_at(object_store, parent_id)?.state().clone()),
+        Some(None) => Ok((NodeLifecycleState::new(), None)),
+        Some(Some(parent_id)) => Ok((
+            lifecycle_state_at(object_store, parent_id)?.state().clone(),
+            Some(parent_id),
+        )),
         None => Err(PrikkError::UnsupportedObjectType(format!(
             "show requires a block whose state is its parent's state plus its own patches; \
              block {block_id} has {} parents",
