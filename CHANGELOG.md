@@ -138,6 +138,21 @@
   target already succeeded. Fixed by a
   `[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]` section naming the `.zip` asset
   and `pkg-fmt = "zip"`; confirmed green with the same dry-run command.
+- **`prikk show <block-id>`, in both its text and `--format json` output, failed with `lifecycle
+  replay: blob … required for a state effect is missing` on the second consecutive `EditText` of the
+  same file, and every one after** (0.54.0 Part 5c; measured directly by reverting the fix and
+  re-running the regression test this round adds — the first edit's own preimage is always a real,
+  stored `CreateFile` blob, so the gap could never show up any earlier than the second edit).
+  `show`'s own block-reading path folded a block's patches over its parent's state starting from an
+  empty text cache, with no rebuild of text
+  that an earlier edit produced but never separately stored — a deliberate storage optimization
+  elsewhere in this codebase: `EditText` never writes a fresh `Blob` object, only the file's
+  original `CreateFile` does. The queue's own equivalent fold already carried this rebuild; `show`'s
+  sealed-block fold did not. Introduced at `052e6c45` (0.52.0, stikk 020); shipped in both 0.52.0
+  and 0.53.0. **The stored history itself was always sound** — nothing was lost or corrupted, and
+  `prikk verify` was never affected: it already exited `0`, correctly, the whole time. This was a
+  read-path bug in `show` alone, now fixed by sharing the queue's own materialize-and-retry fallback
+  with `show`'s own sealed-block fold.
 
 ### Changed
 
