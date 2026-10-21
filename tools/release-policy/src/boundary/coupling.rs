@@ -198,7 +198,7 @@ const LOWER_LAYER: [&str; 37] = [
 /// not a two-sided partition -- these five modules may be reached only by each other (the
 /// subsystem's own internal wiring is unrestricted: `bundle` is called from `archive` and
 /// `patch_exchange`, `patch_exchange` from `seal_from_accepted` and `sync_negotiation`, by design,
-/// confirmed against the real graph by [`tests::the_real_tree_has_no_exchange_subsystem_violation`]),
+/// confirmed against the real graph by `tests::the_real_tree_has_no_exchange_subsystem_violation`),
 /// by [`EXCHANGE_ALLOWED_CALLERS`] (today, only `doctor`'s one need,
 /// `archive::interrupted_import_short_id`, read at its call site, `doctor.rs:836`), and by test code
 /// (`test_gates`, which is `#[cfg(test)]` at its own `mod` declaration in `lib.rs` and so is never a

@@ -38,7 +38,7 @@ pub(crate) struct Run {
 }
 
 /// Run `gh run list --repo <repo> --commit <sha> --workflow ci.yml --json databaseId,status,conclusion,url,event,headBranch
-/// --limit 20` and return its parsed rows. A separate function from [`check`] so a test can feed it fixed JSON instead of
+/// --limit 20` and return its parsed rows. A separate function from [`run`] so a test can feed it fixed JSON instead of
 /// shelling out. `event` and `headBranch` travel from `gh` itself -- filtering happens in Rust, in [`runs_on_release_branch`],
 /// not by asking `gh` for fewer rows, so a test can see and exercise the filter directly.
 fn list_ci_runs(repo: &str, sha: &str) -> Result<Vec<Run>> {
