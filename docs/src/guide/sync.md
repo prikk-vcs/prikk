@@ -84,6 +84,15 @@ sealing one accepted claim under its own maintainer key got the sender's block a
 ids. A sender's tag and the receiver's adopted tag are different objects: `adopt-tag` writes a tag object
 and `RefState` of its own, naming the same target block.
 
+**An `accept` interrupted partway never leaves a dangling reference.** `accept` writes under one
+lock, held continuously from the first write to the last, in a fixed order: patches and blobs first
+(content-addressed and idempotent, so a replayed `accept` writes nothing new for anything already
+present), then AUTHOR key material, then claims and tags last. Claims and tags are what every other
+command treats as "this was accepted," so if `accept` is interrupted partway through, part of the
+artifact may already be sitting in the object store, but nothing yet points at it as accepted — there
+is no reference naming content that was never stored. Running the exact same `accept` again simply
+continues it to completion: the content already written is skipped, not rewritten.
+
 **One id, several signers, in format 7.** After the receiver has sealed the sender's patches as above,
 importing the sender's bundle of that ref merges: each shared object keeps one stored copy carrying both
 maintainers' signatures, and the import reports `objects gaining signatures: N`. The same happens in the

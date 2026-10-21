@@ -44,6 +44,14 @@ replaying the history before that block produces the same files: only replay pro
   as empty, deleting it is always safe, and a line written into it by hand makes no snapshot trusted, because a
   block must also carry a verifying signature by an adopted key. Without it, every snapshot materialization is
   provisional and every worktree write replays from genesis, until `seal` or `verify` records the blocks again.
+  `verify` adds every block its own replay confirmed to this record regardless of what else that run found —
+  even a run that exits `1` on a publication-trust failure still records what it replayed. So adopting the
+  maintainer key afterward is enough on its own: the record already has the block, the adopted-key check beside
+  it is re-evaluated fresh every time rather than frozen into what was recorded, and no second `verify` run is
+  needed before the checkpoint becomes usable. The record is keyed to the repository's own relative layout, not
+  to an absolute path, so moving the repository's directory leaves it intact. A fresh receive or a freshly
+  restored repository has simply never had `seal` or `verify` run against it locally, so the file starts empty
+  rather than resetting — neither operation clears it.
 - **Where it shows.** `prikk status` prints `provisional worktree: materialized from the snapshot of
   <block> on <ref>; not replay-verified — run prikk verify`, `status --format json` carries
   `provisional_worktree`, and `prikk doctor` lists `PRIKK-DOCTOR-PROVISIONAL-WORKTREE`.

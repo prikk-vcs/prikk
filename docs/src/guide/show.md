@@ -91,6 +91,12 @@ baseline truncated at that patch (the table above) — plus a `queued: yes` line
 sealed patch alike). An id found in neither place is a precondition (exit `1`) that names both places
 and where each kind of id is listed; it is not reported as damage.
 
+Three things are easy to conflate, and `show` only ever speaks to the first: `queued` here means
+committed to *this* repository's own local active WAL — not yet sealed, and never anything received
+from elsewhere; `sync pending` means a patch `sync accept` has already verified and stored from an
+exchange artifact, but not yet sealed into a block; and [`log`](history.md) means sealed, permanent
+history. All three are distinct states a patch passes through, never the same thing twice.
+
 **A rename names every signer.** A patch may carry several AUTHOR signatures (format 7: another
 signer's copy of the same patch merges in). A rename reports every one: prose lists them all on its
 `asserted by` line, and JSON carries `author_key_ids`, every signer in canonical order (key id bytes).
