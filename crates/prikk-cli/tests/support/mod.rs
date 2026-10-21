@@ -112,6 +112,23 @@ pub fn isolated_key_dir(repo: &Path) -> PathBuf {
 /// One empty config home per repository (or one per process for a command with no repository).
 /// Empty on purpose: the default state a test should see is "no keys anywhere", and anything else
 /// is set explicitly by the test that needs it.
+///
+/// **0.54.0 Part G1, item 5: deliberately left without [`TestDirGuard`]'s per-call cleanup,** unlike
+/// [`unique_repo_guarded`] below. This cache is keyed by `repo` and shared for the rest of the *process*'s
+/// life (every `cargo test` worker thread the harness assigns further tests to after this one, if
+/// it reuses the thread), not scoped to one call or even reliably to one test -- there is no single
+/// point in this function where "the caller is done with this directory" is knowable, since the
+/// value handed back is read again by every later call with the same key, inside or outside the
+/// test that created it. A guard dropped at the end of this function's own call would delete the
+/// directory the very first time it is created, before the cache (or the real caller) ever uses it.
+/// Reaping these at thread-exit via a `thread_local` was considered and rejected: `cargo test`'s
+/// harness catches a panicking test's unwind itself (to keep running the rest of the suite), so by
+/// the time a thread-local's own `Drop` runs at thread exit, the unwind that panic caused has long
+/// since finished and `std::thread::panicking()` would already read `false` -- exactly the "keep on
+/// panic" signal this round needs, silently lost. Left as the OS-reaped, process-lifetime fixture it
+/// has always been; a correct per-test reap here needs the test itself to hold the owning value for
+/// its own duration, which `isolate_key_environment_for`'s call shape does not give it without a
+/// wider restructuring this round's budget does not cover -- named here, not silently dropped.
 fn isolated_config_home(repo: Option<&Path>) -> PathBuf {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -162,11 +179,78 @@ pub fn unique_suffix() -> String {
     format!("{}-{nanos}-{sequence}", std::process::id())
 }
 
+/// 0.54.0 Part G1, item 5: a scratch directory this one call owns for the rest of the test's
+/// lifetime. Dereferences to [`Path`], so a caller can use it almost everywhere a `&Path` or
+/// `AsRef<Path>` is expected without change; an API that wants an owned `PathBuf` (`Into<PathBuf>`,
+/// `.clone()`, a local wrapper function with its own `-> PathBuf` signature) needs `.to_path_buf()`
+/// at the call site, which this crate's hundreds of existing `unique_repo` callers do not carry
+/// today -- see [`unique_repo`]'s own doc for why this type is offered as a second, opt-in function
+/// rather than `unique_repo`'s own new return type.
+///
+/// On drop: removed, unless the dropping thread is unwinding from a panic
+/// (`std::thread::panicking()` -- true exactly while a test's own assertion failure is unwinding
+/// through this value's enclosing scope, the documented use for that function) or `PRIKK_TEST_KEEP`
+/// is set in the environment, either of which keeps the directory for a human to look at.
+pub struct TestDirGuard(PathBuf);
+
+impl TestDirGuard {
+    fn new(dir: PathBuf) -> Self {
+        Self(dir)
+    }
+}
+
+impl std::ops::Deref for TestDirGuard {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TestDirGuard {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TestDirGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Drop for TestDirGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() || std::env::var_os("PRIKK_TEST_KEEP").is_some() {
+            return;
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// **Kept returning a plain [`PathBuf`], unchanged.** Tried, this round, as a `TestDirGuard` return
+/// instead: `cargo check --tests` then found dozens of existing call sites across this crate's test
+/// files that cannot take a guard without their own edit -- a local wrapper function with its own
+/// explicit `-> PathBuf` signature that just returns what this function gave it, a `.clone()`
+/// (`TestDirGuard` is deliberately not `Clone`: cloning would either duplicate the directory or let
+/// two guards race to remove the same one), and a value passed by move into an API bound by
+/// `Into<PathBuf>` rather than `AsRef<Path>` (`RepositoryLayout::open`'s own signature; `Deref`
+/// coercion does not satisfy `Into`). That is a wide, real-behavior-risking surface for one round
+/// under a no-product-behavior-change mandate, so the return type here stays as it always was; new
+/// tests that want the cleanup may call [`unique_repo_guarded`] instead, and existing call sites are
+/// named as this round's own bounded finding (`.git-exclude/review-request/0.54.0-g1-report.md`),
+/// not silently left unexamined.
 pub fn unique_repo(tag: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push(format!("prikk-cli-dc67-{tag}-{}", unique_suffix()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// [`unique_repo`], but returning the owning [`TestDirGuard`] for a test written (or rewritten) to
+/// want it -- the same directory-naming scheme, so a test moving from one to the other changes
+/// nothing on disk.
+pub fn unique_repo_guarded(tag: &str) -> TestDirGuard {
+    TestDirGuard::new(unique_repo(tag))
 }
 
 pub const AUTHOR_KEY_ID: &str = "dc67-test-author";
@@ -200,8 +284,10 @@ pub fn maintainer_public_key_hex() -> String {
 /// refused by the reader, and every such test would have had to learn why.
 ///
 /// Memoised per hex value: a binary that signs a hundred times writes one file per distinct key, not
-/// one per call. The files live in the process's temp directory and are left for the OS to reap,
-/// like every other fixture here.
+/// one per call. **Left without a cleanup guard, for the same reason [`isolated_config_home`]'s own
+/// doc comment gives in full: this cache is shared for the rest of the process's life, keyed by
+/// `seed_hex`, and no call site here is "the last one that needs it."** The files live in the
+/// process's temp directory and are left for the OS to reap.
 pub fn seed_file(seed_hex: &str) -> PathBuf {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};

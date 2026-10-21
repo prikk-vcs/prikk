@@ -306,11 +306,72 @@ pub(crate) fn init_format_6_repository(
 
 /// DC-84: routed through `unique_suffix()` below, which is the only part that actually guarantees
 /// collision-freedom under thread contention.
+///
+/// **Kept returning a plain [`std::path::PathBuf`]** (0.54.0 Part G1, item 5): this one function is
+/// the shared creator behind roughly 1,100 call sites across more than 130 files in this crate --
+/// the ones the round's own measurement found leaving 162 folders behind per `--lib` run, when an
+/// early `?`/`assert!` skips a test's own trailing `let _ = std::fs::remove_dir_all(root);` line.
+/// Changing this function's own return type to an owning guard was considered and rejected as this
+/// round's own scope: every one of those ~1,100 call sites would need to be read individually to
+/// confirm a guard's `Deref`/`AsRef<Path>` coercion is enough for it (several hundred already call
+/// `remove_dir_all` on the returned value directly, by move, which a non-`Copy` guard changes the
+/// meaning of even where it still compiles), which does not fit this round's budget without a real
+/// risk of silently changing a test's own behaviour under a no-product-behaviour-change mandate.
+/// [`unique_temp_dir_guarded`] below offers the same directory-naming scheme behind a
+/// [`TestDirGuard`] for a test written (or rewritten) to want the cleanup; existing callers are
+/// unchanged and are this round's own named, bounded finding
+/// (`.git-exclude/review-request/0.54.0-g1-report.md`).
 pub(crate) fn unique_temp_dir(name: &str) -> std::path::PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("prikk-pr014-{name}-{}", unique_suffix()));
     assert!(std::fs::create_dir_all(&path).is_ok());
     path
+}
+
+/// A scratch directory a test owns for its own lifetime: removed on drop, unless the dropping
+/// thread is unwinding from a panic (`std::thread::panicking()`, true exactly while a failing
+/// test's own assertion is unwinding through this value's enclosing scope) or `PRIKK_TEST_KEEP` is
+/// set, either of which keeps it for a human to look at. Dereferences to [`std::path::Path`], so
+/// most existing uses of a plain path (`&dir`, `dir.join(...)`, anything taking `AsRef<Path>`) need
+/// no change; an API wanting an owned `PathBuf` needs `.to_path_buf()` at the call site. The
+/// crate-local twin of `prikk-cli`'s own `tests/support/mod.rs::TestDirGuard` -- duplicated rather
+/// than shared, since the two live in different crates with no existing shared test-utility crate
+/// between them, and each is small enough that the duplication itself carries no real risk.
+pub(crate) struct TestDirGuard(std::path::PathBuf);
+
+impl std::ops::Deref for TestDirGuard {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TestDirGuard {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TestDirGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Drop for TestDirGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() || std::env::var_os("PRIKK_TEST_KEEP").is_some() {
+            return;
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// [`unique_temp_dir`], but returning the owning [`TestDirGuard`] -- the same directory-naming
+/// scheme, so a test moving from one to the other changes nothing on disk.
+#[allow(dead_code)] // offered for a future test to adopt; no call site exists yet in this round.
+pub(crate) fn unique_temp_dir_guarded(name: &str) -> TestDirGuard {
+    TestDirGuard(unique_temp_dir(name))
 }
 
 /// DC-84: renamed from `monotonic_suffix`, which was wrong — it returned a wall-clock nanosecond
