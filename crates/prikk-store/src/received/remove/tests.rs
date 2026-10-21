@@ -398,6 +398,103 @@ fn end_to_end_remove_then_restore_round_trips_verifys_own_trust_failure() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// 0.54.0 step 3 Part 5b's own C2 (i): removal over a *deduced* live slot (the generation log is
+/// lost after one ordinary write landed in the now-live slot -- the identical recipe `compact.rs`'s
+/// own `a_crash_at_the_truncate_still_restores_the_deduced_compactions_save_received_index` uses
+/// for this same container) behaves identically to the sound-parity case already covered above: a
+/// plain, uncrashed run removes the target pointer (leaving the surviving one untouched), and a
+/// recovery-log restore of that run returns the pre-removal state byte for byte -- both slots and
+/// the generation log, not merely the pointer read-path.
+#[test]
+fn removes_an_existing_pointer_over_a_deduced_live_slot() {
+    let root = unique_temp_dir("received-remove-deduced-sanity");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let trusted = signer(0x51);
+    adopt(&layout, &trusted);
+    let mut store = FileObjectStore::new(layout.clone());
+    let block1 = write_root_block(&mut store, &trusted, 0x67);
+    write_received_fixture_pointer(
+        &layout,
+        &mut store,
+        "remotes/heads/main",
+        None,
+        block1,
+        &trusted,
+    );
+    crate::compact_received_index(&layout).unwrap(); // ordinary: the log now records a live slot
+    let block2 = write_root_block(&mut store, &trusted, 0x68);
+    write_received_fixture_pointer(
+        &layout,
+        &mut store,
+        "remotes/heads/topic",
+        None,
+        block2,
+        &trusted,
+    ); // a write landing in the now-live slot
+    std::fs::write(layout.received_index_generation_log_path(), b"").unwrap(); // lose the record
+
+    let before_slot_a = std::fs::read(layout.received_index_slot_path(ContainerSlot::A)).unwrap();
+    let before_slot_b = std::fs::read(layout.received_index_slot_path(ContainerSlot::B)).unwrap();
+    let before_generation_log = std::fs::read(layout.received_index_generation_log_path()).unwrap();
+
+    let report = remove_received_pointer(&layout, "remotes/heads/main").unwrap(); // deduced: this removal is the first durable record
+    assert_eq!(report.entries_before, 2);
+    assert_eq!(report.entries_after, 1);
+    assert!(report.removed.is_some());
+    assert!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/main")
+            .unwrap()
+            .is_none(),
+        "the target pointer must be gone after removal"
+    );
+    assert!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/topic")
+            .unwrap()
+            .is_some(),
+        "the surviving pointer must be untouched by the removal"
+    );
+
+    let listing = crate::recovery_log::recovery_list(&layout).unwrap();
+    let run_id = listing
+        .entries
+        .first()
+        .expect("the removal must have saved at least one recovery-log entry, deduced or not")
+        .id
+        .clone();
+    assert!(
+        listing.entries.iter().all(|entry| entry.id == run_id),
+        "both of this run's own saves must share one run id"
+    );
+
+    let restored = crate::recovery_log::recovery_restore(&layout, &run_id, false).unwrap();
+    assert!(restored.refusal.is_none(), "{:?}", restored.refusal);
+    assert!(restored.written);
+
+    assert_eq!(
+        std::fs::read(layout.received_index_slot_path(ContainerSlot::A)).unwrap(),
+        before_slot_a,
+        "slot A must come back byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(layout.received_index_slot_path(ContainerSlot::B)).unwrap(),
+        before_slot_b,
+        "slot B must come back byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(layout.received_index_generation_log_path()).unwrap(),
+        before_generation_log,
+        "the generation log must come back byte-identical too"
+    );
+    assert!(
+        crate::received::read_received_pointer(&layout, "remotes/heads/main")
+            .unwrap()
+            .is_some(),
+        "the restore must bring the removed pointer back"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// 0.54.0 step 3 Part 5's own kill sweep, to 3B's standard
 /// (`commit_boundary::witness::tests::m6_commit_kill_sweep_recovers_at_every_write_ordinal` is the
 /// model this mirrors): fire the shared failpoint mechanism at every ordinal of every required
@@ -405,11 +502,28 @@ fn end_to_end_remove_then_restore_round_trips_verifys_own_trust_failure() {
 /// the target-slot truncate/append, the generation-log append), and after each fired crash,
 /// confirm (a) `verify`/`doctor` report nothing beyond a resync-covered torn tail, (b) a plain
 /// retry of `received remove` reaches the identical end state as an uncrashed reference run, and
-/// (c) a recovery-log restore (on a fresh, separately crashed fixture) restores the pre-removal
-/// state. "Count fired ordinals only" (the handoff's own words): the loop below stops arming a
+/// (c) 0.54.0 step 3 Part 5b's own addition: on a *fresh, separately crashed* fixture, a
+/// recovery-log restore of the crashed run's own id -- not a retry -- either (a) returns the
+/// pre-removal state byte for byte, or (b) refuses and changes nothing, in which case a plain
+/// retry followed by a restore of the *original* run's id then returns the pre-removal state byte
+/// for byte. "Count fired ordinals only" (the handoff's own words): the loop below stops arming a
 /// family the moment an ordinal no longer fires (the identical `still_armed` break the M6 sweep
 /// uses), so `fired_total` only ever counts ordinals this operation's own write sequence actually
 /// reached.
+///
+/// Run twice -- once over a sound generation log (the live slot is read, not deduced), once over a
+/// deduced one -- 0.54.0 step 3 Part 5b's own C2. The deduced fixture below is the identical recipe
+/// `compact.rs`'s own
+/// `a_crash_at_the_truncate_still_restores_the_deduced_compactions_save_received_index` uses for
+/// this same container, adapted to this module's own signed, verify-clean pointers: write one
+/// pointer, run an ordinary compaction once (the log now records a live slot), write a second
+/// pointer (landing in the now-live slot), then lose the generation log. The removal under test
+/// then targets the *first* pointer, so the post-removal buffer is non-empty (the second pointer's
+/// own record survives the reduction) -- the one way this suite's own fixtures can produce a
+/// genuinely torn target-slot state at all: the single-pointer sound fixture's own post-removal
+/// buffer is always empty, so its truncate-to-empty already *is* the post-removal state, and a
+/// crash anywhere in its write sequence always lands on either the pre- or the post-removal state,
+/// never a third, torn one.
 #[test]
 fn kill_sweep_recovers_at_every_write_ordinal() {
     use crate::foundation::fsutil::{
@@ -418,7 +532,7 @@ fn kill_sweep_recovers_at_every_write_ordinal() {
 
     const MAX_ORDINAL: usize = 20;
 
-    fn build_fixture(label: &str) -> (RepositoryLayout, std::path::PathBuf) {
+    fn build_sound_fixture(label: &str) -> (RepositoryLayout, std::path::PathBuf) {
         let root = unique_temp_dir(label);
         let layout = RepositoryLayout::init(root.clone()).unwrap();
         let trusted = signer(0x51);
@@ -436,93 +550,349 @@ fn kill_sweep_recovers_at_every_write_ordinal() {
         (layout, root)
     }
 
-    // Fixture sanity: an uncrashed reference run actually removes the pointer.
-    {
-        let (layout, root) = build_fixture("received-remove-kill-reference");
-        remove_received_pointer(&layout, "remotes/heads/main").unwrap();
-        assert!(
-            crate::received::read_received_pointer(&layout, "remotes/heads/main")
-                .unwrap()
-                .is_none()
+    fn build_deduced_fixture(label: &str) -> (RepositoryLayout, std::path::PathBuf) {
+        let root = unique_temp_dir(label);
+        let layout = RepositoryLayout::init(root.clone()).unwrap();
+        let trusted = signer(0x51);
+        adopt(&layout, &trusted);
+        let mut store = FileObjectStore::new(layout.clone());
+        let block1 = write_root_block(&mut store, &trusted, 0x65);
+        write_received_fixture_pointer(
+            &layout,
+            &mut store,
+            "remotes/heads/main",
+            None,
+            block1,
+            &trusted,
         );
-        let _ = std::fs::remove_dir_all(root);
+        crate::compact_received_index(&layout).unwrap(); // ordinary: the log now records a live slot
+        let block2 = write_root_block(&mut store, &trusted, 0x66);
+        write_received_fixture_pointer(
+            &layout,
+            &mut store,
+            "remotes/heads/topic",
+            None,
+            block2,
+            &trusted,
+        ); // a write landing in the now-live slot
+        std::fs::write(layout.received_index_generation_log_path(), b"").unwrap(); // lose the record
+        (layout, root)
     }
 
-    let mut fired_total = 0_usize;
-    let mut per_family = Vec::new();
+    /// A byte-precise snapshot of every file this operation's own write sequence can touch, so
+    /// C1's own (a)/(b) check can compare against it exactly. `pointer` is a `Result`, not an
+    /// unwrapped value: a *crashed* snapshot (outcome (b), between the real target-slot write
+    /// completing and the real generation-log append completing, deduced parity only) can itself
+    /// read as `AmbiguousGenerationLog` -- captured as data here, like every other byte, rather
+    /// than unwrapped and panicking on the very state this check exists to describe.
+    struct Snapshot {
+        pointer: std::result::Result<Option<crate::received::ReceivedPointer>, String>,
+        slot_a: Vec<u8>,
+        slot_b: Vec<u8>,
+        generation_log: Vec<u8>,
+    }
+    fn snapshot(layout: &RepositoryLayout, ref_name: &str) -> Snapshot {
+        Snapshot {
+            pointer: crate::received::read_received_pointer(layout, ref_name)
+                .map_err(|error| error.to_string()),
+            slot_a: std::fs::read(layout.received_index_slot_path(ContainerSlot::A)).unwrap(),
+            slot_b: std::fs::read(layout.received_index_slot_path(ContainerSlot::B)).unwrap(),
+            generation_log: std::fs::read(layout.received_index_generation_log_path()).unwrap(),
+        }
+    }
+    fn assert_matches(
+        layout: &RepositoryLayout,
+        ref_name: &str,
+        expected: &Snapshot,
+        context: &str,
+    ) {
+        assert_eq!(
+            crate::received::read_received_pointer(layout, ref_name)
+                .map_err(|error| error.to_string()),
+            expected.pointer,
+            "{context}: the received pointer must match"
+        );
+        assert_eq!(
+            std::fs::read(layout.received_index_slot_path(ContainerSlot::A)).unwrap(),
+            expected.slot_a,
+            "{context}: slot A must match byte for byte"
+        );
+        assert_eq!(
+            std::fs::read(layout.received_index_slot_path(ContainerSlot::B)).unwrap(),
+            expected.slot_b,
+            "{context}: slot B must match byte for byte"
+        );
+        assert_eq!(
+            std::fs::read(layout.received_index_generation_log_path()).unwrap(),
+            expected.generation_log,
+            "{context}: the generation log must match byte for byte"
+        );
+    }
 
-    for point in [
-        TestFailPoint::AppendWrite,
-        TestFailPoint::RequiredFileSync,
-        TestFailPoint::MutableFileSync,
-        TestFailPoint::Truncate,
-    ] {
-        let mut fired_count = 0_usize;
-        for ordinal in 0..MAX_ORDINAL {
-            let (layout, root) =
-                build_fixture(&format!("received-remove-kill-{point:?}-{ordinal}"));
+    type FixtureBuilder = fn(&str) -> (RepositoryLayout, std::path::PathBuf);
 
-            fail_after_for_test(point, ordinal);
-            let crashed = remove_received_pointer(&layout, "remotes/heads/main");
-            let still_armed = failpoint_armed_for_test();
-            clear_failpoint_for_test();
+    let ref_name = "remotes/heads/main";
+    let fixtures: [(&str, FixtureBuilder); 2] = [
+        ("sound", build_sound_fixture),
+        ("deduced", build_deduced_fixture),
+    ];
 
-            if still_armed {
-                let _ = std::fs::remove_dir_all(&root);
-                break;
-            }
-            fired_count += 1;
-            fired_total += 1;
+    for (parity, build_fixture) in fixtures {
+        // Fixture sanity: an uncrashed reference run actually removes the pointer.
+        {
+            let (layout, root) = build_fixture(&format!("received-remove-kill-reference-{parity}"));
+            remove_received_pointer(&layout, ref_name).unwrap();
+            assert!(
+                crate::received::read_received_pointer(&layout, ref_name)
+                    .unwrap()
+                    .is_none()
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
 
-            // (b) a plain retry reaches the identical end state as an uncrashed reference run.
-            let retry = if crashed.is_ok() {
-                None
-            } else {
-                Some(remove_received_pointer(&layout, "remotes/heads/main"))
-            };
-            if matches!(&retry, Some(Err(PrikkError::LockConflict(_)))) {
-                if let Ok(held) = crate::unlock::list_held_locks(&layout) {
-                    for lock in &held {
-                        let _ = crate::unlock::clear_lock(&layout, &lock.path);
+        let mut fired_total = 0_usize;
+        let mut per_family = Vec::new();
+        // C1's own outcome tally, per parity -- see the report for the "no run saved yet" case,
+        // a degenerate instance of outcome (a) folded in here rather than treated as a silent
+        // third shape (a judgment call, named in the report).
+        let mut outcome_a_restored = 0_usize;
+        let mut outcome_a_untouched = 0_usize;
+        let mut outcome_b_refused_then_retried = 0_usize;
+
+        for point in [
+            TestFailPoint::AppendWrite,
+            TestFailPoint::RequiredFileSync,
+            TestFailPoint::MutableFileSync,
+            TestFailPoint::Truncate,
+        ] {
+            let mut fired_count = 0_usize;
+            for ordinal in 0..MAX_ORDINAL {
+                let (layout, root) = build_fixture(&format!(
+                    "received-remove-kill-{parity}-{point:?}-{ordinal}"
+                ));
+
+                fail_after_for_test(point, ordinal);
+                let crashed = remove_received_pointer(&layout, ref_name);
+                let still_armed = failpoint_armed_for_test();
+                clear_failpoint_for_test();
+
+                if still_armed {
+                    let _ = std::fs::remove_dir_all(&root);
+                    break;
+                }
+                fired_count += 1;
+                fired_total += 1;
+
+                // (b) a plain retry reaches the identical end state as an uncrashed reference run
+                // -- unchanged from before this round, kept alongside C1's own addition below.
+                let retry = if crashed.is_ok() {
+                    None
+                } else {
+                    Some(remove_received_pointer(&layout, ref_name))
+                };
+                if matches!(&retry, Some(Err(PrikkError::LockConflict(_)))) {
+                    if let Ok(held) = crate::unlock::list_held_locks(&layout) {
+                        for lock in &held {
+                            let _ = crate::unlock::clear_lock(&layout, &lock.path);
+                        }
                     }
                 }
-            }
-            let retry = retry
-                .map(|r| r.or_else(|_| remove_received_pointer(&layout, "remotes/heads/main")));
+                let retry =
+                    retry.map(|r| r.or_else(|_| remove_received_pointer(&layout, ref_name)));
 
-            let retry_ok_or_already_gone = crashed.is_ok()
-                || matches!(&retry, Some(Ok(_)))
-                || matches!(
-                    &retry,
-                    Some(Err(err)) if err.to_string().contains("nothing to remove")
-                );
+                // C2's own discovery: once the live slot is deduced rather than recorded, a crash
+                // that lands after the real target-slot write completes but before the real
+                // generation-log append does leaves *both* slots a self-consistent but differing
+                // history -- genuinely ambiguous, not a torn tail, so a plain retry cannot resolve
+                // it (`resolve_or_deduce` correctly refuses rather than guess). This never arises
+                // over a sound generation log (the resolver trusts the recorded slot directly,
+                // never folding both). The recovery-log restore this operation's own save always
+                // makes possible is the real way out here, exactly as it is for C1: it returns the
+                // pre-removal state, at which point the generation log is sound again, and the
+                // retry after that completes normally.
+                let retry = match retry {
+                    Some(Err(PrikkError::AmbiguousGenerationLog(_))) => {
+                        let listing = crate::recovery_log::recovery_list(&layout).unwrap();
+                        if let Some(run_id) = listing.entries.first().map(|entry| entry.id.clone())
+                        {
+                            let _ = crate::recovery_log::recovery_restore(&layout, &run_id, false);
+                        }
+                        let after_restore = remove_received_pointer(&layout, ref_name);
+                        let after_restore =
+                            if matches!(&after_restore, Err(PrikkError::LockConflict(_))) {
+                                if let Ok(held) = crate::unlock::list_held_locks(&layout) {
+                                    for lock in &held {
+                                        let _ = crate::unlock::clear_lock(&layout, &lock.path);
+                                    }
+                                }
+                                remove_received_pointer(&layout, ref_name)
+                            } else {
+                                after_restore
+                            };
+                        Some(after_restore)
+                    }
+                    other => other,
+                };
 
-            let verification = crate::verify_repository(&layout);
-            let verify_clean = verification
-                .as_ref()
-                .map(|v| !v.has_stage_failure() && !v.has_item_failure())
-                .unwrap_or(false);
-            let pointer_gone =
-                crate::received::read_received_pointer(&layout, "remotes/heads/main")
+                let retry_ok_or_already_gone = crashed.is_ok()
+                    || matches!(&retry, Some(Ok(_)))
+                    || matches!(
+                        &retry,
+                        Some(Err(err)) if err.to_string().contains("nothing to remove")
+                    );
+
+                let verification = crate::verify_repository(&layout);
+                let verify_clean = verification
+                    .as_ref()
+                    .map(|v| !v.has_stage_failure() && !v.has_item_failure())
+                    .unwrap_or(false);
+                let pointer_gone = crate::received::read_received_pointer(&layout, ref_name)
                     .map(|p| p.is_none())
                     .unwrap_or(false);
 
-            assert!(
-                verify_clean && retry_ok_or_already_gone && pointer_gone,
-                "{point:?}@{ordinal}: did not recover cleanly (crashed={crashed:?}, \
-                 verify_clean={verify_clean} ({verification:?}), retry={retry:?}, \
-                 pointer_gone={pointer_gone})"
-            );
-            let _ = std::fs::remove_dir_all(&root);
+                assert!(
+                    verify_clean && retry_ok_or_already_gone && pointer_gone,
+                    "{parity}/{point:?}@{ordinal}: did not recover cleanly (crashed={crashed:?}, \
+                     verify_clean={verify_clean} ({verification:?}), retry={retry:?}, \
+                     pointer_gone={pointer_gone})"
+                );
+                let _ = std::fs::remove_dir_all(&root);
+
+                // (c) C1's own addition: a fresh, separately crashed fixture, restored via the
+                // recovery log directly rather than retried.
+                let (restore_layout, restore_root) = build_fixture(&format!(
+                    "received-remove-kill-restore-{parity}-{point:?}-{ordinal}"
+                ));
+                let before = snapshot(&restore_layout, ref_name);
+
+                fail_after_for_test(point, ordinal);
+                let restore_crashed = remove_received_pointer(&restore_layout, ref_name);
+                let restore_still_armed = failpoint_armed_for_test();
+                clear_failpoint_for_test();
+                assert!(
+                    !restore_still_armed,
+                    "{parity}/{point:?}@{ordinal}: fired on the retry-based fixture above but not \
+                     on this freshly built one for the restore check"
+                );
+
+                let listing = crate::recovery_log::recovery_list(&restore_layout).unwrap();
+                if listing.entries.is_empty() {
+                    // The crash landed before even the first of this run's two recovery-log saves
+                    // became durable -- nothing was yet saved, and since both real destructive
+                    // writes happen only after both saves, nothing real was touched either: the
+                    // ambient state already *is* the pre-removal state, with no run id to restore
+                    // at all.
+                    assert!(
+                        restore_crashed.is_err(),
+                        "{parity}/{point:?}@{ordinal}: no recovery entry was saved, but the run \
+                         reported success: {restore_crashed:?}"
+                    );
+                    assert_matches(
+                        &restore_layout,
+                        ref_name,
+                        &before,
+                        &format!("{parity}/{point:?}@{ordinal} (no recovery run saved yet)"),
+                    );
+                    outcome_a_untouched += 1;
+                    let _ = std::fs::remove_dir_all(&restore_root);
+                    continue;
+                }
+                let run_id = listing.entries[0].id.clone();
+                assert!(
+                    listing.entries.iter().all(|entry| entry.id == run_id),
+                    "{parity}/{point:?}@{ordinal}: both of this run's own saves must share one \
+                     run id: {listing:?}"
+                );
+
+                let crashed_snapshot = snapshot(&restore_layout, ref_name);
+                let restored =
+                    crate::recovery_log::recovery_restore(&restore_layout, &run_id, false).unwrap();
+                let can_restore = restored.refusal.is_none()
+                    && restored.conditions.iter().all(|condition| condition.holds);
+
+                if can_restore {
+                    // Outcome (a): the restore returns the pre-removal state byte for byte.
+                    assert!(
+                        restored.written,
+                        "{parity}/{point:?}@{ordinal}: a restorable plan must actually write: \
+                         {restored:?}"
+                    );
+                    assert_matches(
+                        &restore_layout,
+                        ref_name,
+                        &before,
+                        &format!("{parity}/{point:?}@{ordinal} outcome (a)"),
+                    );
+                    outcome_a_restored += 1;
+                } else {
+                    // Outcome (b): the restore refuses and changes nothing; a plain retry, then a
+                    // restore of the *original* run id, reaches the pre-removal state byte for
+                    // byte.
+                    assert!(
+                        !restored.written,
+                        "{parity}/{point:?}@{ordinal}: a refused plan must not write: {restored:?}"
+                    );
+                    assert_matches(
+                        &restore_layout,
+                        ref_name,
+                        &crashed_snapshot,
+                        &format!("{parity}/{point:?}@{ordinal} outcome (b), refused restore"),
+                    );
+
+                    let retry2 = remove_received_pointer(&restore_layout, ref_name);
+                    let retry2 = if matches!(&retry2, Err(PrikkError::LockConflict(_))) {
+                        if let Ok(held) = crate::unlock::list_held_locks(&restore_layout) {
+                            for lock in &held {
+                                let _ = crate::unlock::clear_lock(&restore_layout, &lock.path);
+                            }
+                        }
+                        remove_received_pointer(&restore_layout, ref_name)
+                    } else {
+                        retry2
+                    };
+                    assert!(
+                        retry2.is_ok(),
+                        "{parity}/{point:?}@{ordinal}: outcome (b)'s own retry must succeed: \
+                         {retry2:?}"
+                    );
+
+                    let restored_again =
+                        crate::recovery_log::recovery_restore(&restore_layout, &run_id, false)
+                            .unwrap();
+                    assert!(
+                        restored_again.refusal.is_none()
+                            && restored_again
+                                .conditions
+                                .iter()
+                                .all(|condition| condition.holds)
+                            && restored_again.written,
+                        "{parity}/{point:?}@{ordinal}: outcome (b)'s own restore, after the \
+                         retry, must now succeed: {restored_again:?}"
+                    );
+                    assert_matches(
+                        &restore_layout,
+                        ref_name,
+                        &before,
+                        &format!("{parity}/{point:?}@{ordinal} outcome (b), restore after retry"),
+                    );
+                    outcome_b_refused_then_retried += 1;
+                }
+                let _ = std::fs::remove_dir_all(&restore_root);
+            }
+            per_family.push(format!(
+                "{point:?}: armed {MAX_ORDINAL}, fired {fired_count}"
+            ));
         }
-        per_family.push(format!(
-            "{point:?}: armed {MAX_ORDINAL}, fired {fired_count}"
-        ));
+        assert!(
+            fired_total >= 1,
+            "{parity}: the sweep must genuinely fire at least once; it fired {fired_total} times \
+             across {per_family:?}"
+        );
+        eprintln!(
+            "B2a kill sweep ({parity}): {fired_total} ordinals fired and recovered, \
+             {per_family:?}; C1 restore outcomes: (a) actively restored = {outcome_a_restored}, \
+             (a) no run saved yet = {outcome_a_untouched}, (b) refused then retried = \
+             {outcome_b_refused_then_retried}"
+        );
     }
-    assert!(
-        fired_total >= 1,
-        "the sweep must genuinely fire at least once; it fired {fired_total} times across \
-         {per_family:?}"
-    );
-    eprintln!("B2a kill sweep: {fired_total} ordinals fired and recovered, {per_family:?}");
 }
