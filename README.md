@@ -70,10 +70,12 @@ promise before 1.0 — see
 [how prikk releases](./docs/src/reference/release-compatibility.md#how-prikk-releases).
 
 **Separately from that product-level promise, the Rust library crates below (`prikk-store` and the
-rest) are never the supported interface, before or after 1.0.** They exist so `prikk`'s own binary can
-depend on them and so their types are reachable from documentation; their APIs may change in any
-release with no deprecation period. The `prikk` CLI's own output — stdout/stderr text and `--format
-json` — is the supported interface.
+rest) have no stability promise in v0.** They exist so `prikk`'s own binary can depend on them and so
+their types are reachable from documentation. The `prikk` CLI's own output — stdout/stderr text and
+`--format json` — is the interface to build on. Whether the library API ever gains its own stability
+promise is a decision made at 1.0, on its own RFC — see
+[release, versioning, and compatibility](./docs/src/reference/release-compatibility.md#core-caveats)
+for the project's current policy in full.
 
 The [install guide](./docs/src/guide/install.md) covers pinning a version, verifying checksums by
 hand, building from source, uninstalling, and the per-platform detail; the [platform support
