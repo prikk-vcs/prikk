@@ -368,7 +368,13 @@ These apply to all work above and are not restated in each handoff.
    release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13). Use a writable `TMPDIR`:
    an existing one if set, else the system temp directory, and the repository-local `.git-exclude/tmp` only where neither is
    writable (amended 2026-10-06: a deep checkout path can push a Unix socket path past `SUN_LEN`, so the repository-local
-   directory is not the default). `scripts/gates.py` makes this choice and prints which one it used.
+   directory is not the default). `scripts/gates.py` makes this choice and prints which one it used. **This deliberately keeps
+   two different things on two different storage classes (0.54.0 Part G1, item 1): `TMPDIR` -- where this amendment's "system
+   temp directory" choice already lands on a memory-backed `tmpfs` on a machine configured that way -- holds only short-lived
+   test and gate scratch space, which benefits from memory speed and is cheap to lose; `target/` is never affected by this
+   choice and always stays on ordinary disk, because a debug build's `target/` (tens of gigabytes) can exceed a `tmpfs`
+   sized for scratch space, not build output. The split matters for both reasons at once: disk space for the large, durable
+   artifact, and speed for the small, disposable one.**
 
    **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 14 gates below
    (the twelve above, plus the two cross-target Clippy rows next), each under an R1 scope when

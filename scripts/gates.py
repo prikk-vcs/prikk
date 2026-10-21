@@ -36,37 +36,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # for it on that subcommand.
 DOC_ENV = {"RUSTDOCFLAGS": "-D rustdoc::private_intra_doc_links"}
 
-# rfcs/EXECUTION-ORDER.md §6 rule 9, in the order that rule states them, plus its own amendment's two
-# cross-target rows at the end -- run every time now, not only when a diff touches `#[cfg(target_os)]`
-# code (the amendment's own reasoning: running them costs little, and making them conditional already
-# let a Windows failure through twice, 0.49.0 step 5 D8).
+# rfcs/EXECUTION-ORDER.md §6 rule 9. 0.54.0 Part G1, item 3 reordered this list, cheapest and
+# least-dependent-on-a-build first: `fmt` (no compile at all), `git-diff-check` and `audit` (no
+# compile of this workspace's own code), the release-policy checks (compile one small tool crate,
+# `prikk-release-policy`, not the workspace), then the three Clippy passes (each a full compile),
+# `doc`, and finally the three full test suites -- the slowest gates, and the ones most likely to
+# still be red while an earlier, cheaper gate would already have caught the same mistake for less.
+# `audit` is not named anywhere in the handoff's own ordering sentence (`fmt, diff check, the
+# policy checks, clippy (all three), doc, then the suites`); it is placed here, with the other
+# fast, compilation-free checks and ahead of the policy checks that do compile a crate, as this
+# round's own placement call -- see the report this round produced
+# (`.git-exclude/review-request/0.54.0-g1-report.md`) for that call stated explicitly, in case the
+# intended order was something else.
 GATES = [
     ("fmt", ["cargo", "fmt", "--all", "--", "--check"], None),
-    (
-        "clippy",
-        [
-            "cargo",
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--all-features",
-            "--locked",
-            "--",
-            "-D",
-            "warnings",
-        ],
-        None,
-    ),
-    ("test", ["cargo", "test", "--workspace", "--locked"], None),
-    ("test-msrv", ["cargo", "+1.85.0", "test", "--workspace", "--locked"], None),
-    (
-        "check-msrv",
-        ["cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--locked"],
-        None,
-    ),
     ("git-diff-check", ["git", "diff", "--check"], None),
     ("audit", ["cargo", "audit", "--no-fetch"], None),
-    ("doc", ["cargo", "doc", "--workspace", "--no-deps"], DOC_ENV),
     (
         "release-policy-check",
         ["cargo", "run", "--locked", "-p", "prikk-release-policy", "--", "check"],
@@ -85,6 +70,21 @@ GATES = [
     (
         "size-check",
         ["cargo", "run", "--locked", "-p", "prikk-release-policy", "--", "size-check"],
+        None,
+    ),
+    (
+        "clippy",
+        [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
         None,
     ),
     (
@@ -119,6 +119,14 @@ GATES = [
             "-D",
             "warnings",
         ],
+        None,
+    ),
+    ("doc", ["cargo", "doc", "--workspace", "--no-deps"], DOC_ENV),
+    ("test", ["cargo", "test", "--workspace", "--locked"], None),
+    ("test-msrv", ["cargo", "+1.85.0", "test", "--workspace", "--locked"], None),
+    (
+        "check-msrv",
+        ["cargo", "+1.85.0", "check", "--workspace", "--all-targets", "--locked"],
         None,
     ),
 ]
