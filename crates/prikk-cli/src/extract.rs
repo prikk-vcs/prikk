@@ -525,11 +525,20 @@ fn print_provisional_line(provisional: bool) {
     // admitted anchor was found and used, or the replay fell back to genesis because none was (for
     // a ref/block point, `AnchorTrust` under `AnchorSite::Extract`; for a claim, the identical rule
     // under `AnchorSite::ExtractClaim`, through `derive_next_state_for_candidate`).
+    //
+    // 0.54.0 Part 5c: the `provisional: yes` line used to close with `checkout`'s own "run `prikk
+    // verify` before committing" -- wrong here, since `extract` writes into a brand-new external
+    // directory, never this repository, and has no commit step at all for `verify` to precede. The
+    // extract that just ran is already complete and correct whether or not it was provisional;
+    // `verify` only pays forward, by recording a checkpoint a later extract near this point can
+    // anchor on instead of replaying from genesis again.
     if provisional {
         println!(
             "provisional: yes -- no replay-verified, adopted-key checkpoint was found within this \
              repository's trusted distance of this point; every file was replayed from genesis \
-             instead; run `prikk verify` before committing"
+             instead. This extract already completed correctly regardless -- there is no commit \
+             step here to run `prikk verify` before. Running it would only record a checkpoint, \
+             so a later read near this point replays less"
         );
     } else {
         println!(
