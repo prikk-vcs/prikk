@@ -194,12 +194,19 @@ jobs:
       # why (reference-check's shell-command scanner cannot parse real control-flow shell syntax,
       # and the actual script text lives in templates/*.sh.txt, outside its scanned file set).
       # Checksummed the same way every other asset in this job is.
+      #
+      # Windows installer/uninstaller handoff v1 Part 6a, item 1: `generate()` now also writes
+      # install.ps1/uninstall.ps1 (same call, no separate step needed) -- checksummed here with
+      # sha256sum, the same tool as the `.sh` pair, since this job runs on ubuntu-latest regardless
+      # of which script's checksum it is computing.
       - name: Generate installer scripts
         run: cargo run -p prikk-release-policy --locked -- generate-installer dist
       - name: Checksum installer scripts
         run: |
           ( cd dist && sha256sum install.sh > install.sh.sha256 )
           ( cd dist && sha256sum uninstall.sh > uninstall.sh.sha256 )
+          ( cd dist && sha256sum install.ps1 > install.ps1.sha256 )
+          ( cd dist && sha256sum uninstall.ps1 > uninstall.ps1.sha256 )
 
       # $TAG and the repository slug are written out as the literal tokens the scanner sees
       # (procedure.rs's gh() match), not templated — the tag itself cannot be enumerated in
@@ -210,4 +217,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 --repo prikk-vcs/prikk --title "$TAG" --notes-file release-notes.md
+        run: gh release create "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo prikk-vcs/prikk --title "$TAG" --notes-file release-notes.md

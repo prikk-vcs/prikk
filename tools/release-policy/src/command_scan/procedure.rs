@@ -78,8 +78,38 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
         "Compress-Archive" => windows_compress_archive(tail),
         "Set-Content" => windows_set_content(tail),
         "Add-Content" => windows_add_content(tail),
+        // Windows installer/uninstaller handoff v1 Part 6a, item 5: the new `windows-installer`
+        // CI job's own test-invocation steps. `powershell`/`pwsh` can each execute arbitrary
+        // script content, so -- like `tar`/`rustc`/`gh` above -- they need an exact-match tail,
+        // not blanket approval; all the actual branching logic lives in
+        // `scripts/windows-installer-test.ps1` itself, a `.ps1` file outside
+        // `scannable_reference_file`'s scanned set, not in this workflow's own `run:` line.
+        "powershell" => windows_installer_test_powershell(tail),
+        "pwsh" => windows_installer_test_pwsh(tail),
         _ => inert_head(head),
     }
+}
+
+fn windows_installer_test_powershell(tail: &[String]) -> bool {
+    tail == [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts/windows-installer-test.ps1",
+        "-DistDir",
+        "dist",
+    ]
+}
+
+fn windows_installer_test_pwsh(tail: &[String]) -> bool {
+    tail == [
+        "-NoProfile",
+        "-File",
+        "scripts/windows-installer-test.ps1",
+        "-DistDir",
+        "dist",
+    ]
 }
 
 fn windows_new_item(tail: &[String]) -> bool {
@@ -224,6 +254,12 @@ fn gh_release_create(tail: &[String]) -> bool {
                 // else in this glob list.
                 "dist/*.sh",
                 "dist/*.sh.sha256",
+                // Windows installer/uninstaller handoff v1 Part 6a, item 1: install.ps1/
+                // uninstall.ps1 and their checksums, generated and checksummed by the same
+                // "Generate installer scripts"/"Checksum installer scripts" steps as the `.sh`
+                // pair above.
+                "dist/*.ps1",
+                "dist/*.ps1.sha256",
             ]
         && repo_flag == "--repo"
         && repo == "prikk-vcs/prikk"

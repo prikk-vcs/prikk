@@ -298,6 +298,67 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: cargo test --workspace --locked --no-fail-fast
 
+  # Windows installer/uninstaller handoff v1 Part 6a, item 5: the first real execution of
+  # install.ps1/uninstall.ps1 anywhere -- building the same release zip + checksum release.yml's
+  # own Windows packaging step builds, then exercising the generated scripts' happy path (install,
+  # confirm `prikk --version` from a genuinely new process via a reconstructed PATH, uninstall) and
+  # all three red-then-green controls the handoff requires, under both Windows PowerShell 5.1 and
+  # PowerShell 7 (`scripts/windows-installer-test.ps1` holds the actual branching logic -- a `.ps1`
+  # file is outside this project's own strict shell-command grammar, the same reason
+  # `scripts/gates.py` is a `.py` file rather than a `.sh` one). A workflow change, so the
+  # architect reads this job's own run on CI, per the handoff's working rule.
+  windows-installer:
+    name: Windows installer/uninstaller test
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compiler version
+        id: rustc-version
+        shell: bash
+        run: echo "version=$(rustc -V)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo registry and git dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc-version.outputs.version }}-
+      # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp -- see windows-mutation's own
+      # comment for the measurement that justifies this, applied here to the same kind of step
+      # (building and then running the `prikk` binary).
+      - name: Build (x86_64-pc-windows-msvc)
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: cargo build -p prikk --release --target x86_64-pc-windows-msvc --locked
+      # Identical shape to release.yml's own "Package (x86_64-pc-windows-msvc)" step -- same zip,
+      # same checksum line, so this job proves the generated installer against the same artifact a
+      # real release actually publishes. The build-info.txt lines release.yml also writes are
+      # skipped here: nothing below reads them.
+      - name: Package (x86_64-pc-windows-msvc)
+        run: |
+          New-Item -ItemType Directory -Force -Path stage, dist
+          Copy-Item target/x86_64-pc-windows-msvc/release/prikk.exe stage/prikk.exe
+          Copy-Item LICENSE stage/LICENSE
+          Compress-Archive -Path stage/prikk.exe, stage/LICENSE -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip
+          Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.zip.sha256 -Value "$((Get-FileHash dist/prikk-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower())  prikk-x86_64-pc-windows-msvc.zip" -NoNewline
+      - name: Generate installer scripts
+        run: cargo run -p prikk-release-policy --locked -- generate-installer dist
+      - name: Test install.ps1/uninstall.ps1 (Windows PowerShell 5.1)
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-installer-test.ps1 -DistDir dist
+      - name: Test install.ps1/uninstall.ps1 (PowerShell 7)
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: pwsh -NoProfile -File scripts/windows-installer-test.ps1 -DistDir dist
+
   # A fixture repository is authored on Linux and handed to the non-linux-verify job below, which
   # proves the read-only command set actually runs elsewhere — criterion 2 asks for this
   # demonstrated, not merely a successful compile. (Mutation is no longer Linux-only — DC-81 added

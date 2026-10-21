@@ -282,7 +282,7 @@ fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
         "tar -C stage -czf dist/prikk-aarch64-unknown-linux-gnu.tar.gz prikk LICENSE",
         "rustc -vV >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt",
         "rustc -vV >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt",
-        "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
+        "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
     ] {
         for scan in [scan_shell(command), scan_yaml(&format!("- run: {command}"))] {
             assert!(scan.errors.is_empty(), "{command}: {:?}", scan.errors);
@@ -298,8 +298,8 @@ fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
         "rustc evil.rs -o /tmp/evil",
         "gh api repos/prikk-vcs/prikk --method DELETE",
         "gh workflow run publish.yml",
-        "gh release create \"$OTHER_TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
-        "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 --repo other/repo --title \"$TAG\" --notes-file release-notes.md",
+        "gh release create \"$OTHER_TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
+        "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo other/repo --title \"$TAG\" --notes-file release-notes.md",
         // RFC 107 Stage 2: the old two-glob asset list (before the `.zip`/`.zip.sha256` fix) must
         // now be rejected too -- it is what silently dropped the Windows artifact
         // (`RFC-107-stage-2-report-ruling-v1.md` §5).
@@ -309,6 +309,10 @@ fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
         // shape stops being accepted" precedent RFC 107 Stage 2 already established above for the
         // two-glob case.
         "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
+        // Windows installer/uninstaller handoff v1 Part 6a, item 1: the seven-glob shape (before
+        // this round's own `.ps1`/`.ps1.sha256` addition) must now be rejected too -- the same
+        // "old shape stops being accepted" precedent as the two prior entries above.
+        "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
     ] {
         assert!(!scan_shell(command).errors.is_empty(), "{command}");
         assert!(
