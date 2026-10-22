@@ -189,3 +189,16 @@ CI, with 124 checks, both engines (13 runs each under 5.1 and 7.6) and about a m
   execution policy for a saved `install.ps1`;
 - `install.sh`'s Windows refusal pointing to `install.ps1`;
 - the macOS suite timeout, 30 → 45 minutes.
+
+## Progress, 2026-10-22 (afternoon): Part 6b accepted; Part 6 complete; two docs commits held for the release
+
+**Part 6b is accepted** (review `0.54.0-step-3-part-6b-review-v1`). **Part 6 is complete.**
+- **The landing page's tabs, tested by the architect in headless Chromium** with the platform emulated: Windows →
+  Windows tab; Linux, macOS and unknown → macOS/Linux; ArrowRight, Home and End all correct; without JavaScript, both
+  commands show.
+- **Held for the release:** `docs.yml` publishes on push, and `install.ps1` is in no release yet (it returns 404 today).
+  The landing page (`c87da024`) and the install guide (`9d34f257`) therefore wait on the local branch
+  `hold/0.54.0-windows-docs`. **Release prep cherry-picks both onto `main` just before the tag,** and tightens the
+  fallback detection to `/\bWin(dows|32|64)\b/`.
+- **Pushed now:** `install.sh`'s refusal, the macOS timeout and the CHANGELOG entry (`49873b5a`, `79362e6b`,
+  `b9570af5`).
