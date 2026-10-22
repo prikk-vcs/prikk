@@ -10,6 +10,7 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
                 || publication(tail).is_some()
                 || release_notes_procedure(tail)
                 || generate_installer_procedure(tail)
+                || generate_aur_procedure(tail)
                 || ci_status_check_procedure(tail)
                 || policy_gate_procedure(tail)
                 || tail
@@ -65,7 +66,7 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
                         "dist/prikk-x86_64-pc-windows-msvc.build-info.txt",
                     ]
         }
-        "gh" => gh_release_create(tail),
+        "gh" => gh_release_create(tail) || gh_release_download(tail),
         // RFC 107 Stage 2: the Windows package step's PowerShell cmdlets. Each is exact-match for
         // the same `tar`/`rustc`/`gh` reason -- `Copy-Item`, `Compress-Archive`, and the rest can
         // all reach outside `dist`/`stage` under some argument shape. Confirmed against the real
@@ -86,6 +87,20 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
         // `scannable_reference_file`'s scanned set, not in this workflow's own `run:` line.
         "powershell" => windows_installer_test_powershell(tail),
         "pwsh" => windows_installer_test_pwsh(tail),
+        // 0.54.0 step 3 Part 7a: `aur-build.yml`/`release.yml`'s new AUR packaging jobs.
+        // `pacman`/`useradd`/`chown`/`su`/`gh` (release download)/`git` can each execute another
+        // program (a package's own install scripts, a login shell, an arbitrary PKGBUILD, a
+        // commit hook) under some argument shape, so -- like `tar`/`rustc`/`gh` above -- every one
+        // gets an exact-match tail, never blanket approval.
+        "pacman" => aur_pacman(tail),
+        "useradd" => tail == ["-m", "builduser"],
+        // The lexer's `token_separator` splits on `:` (outside quotes), so
+        // "builduser:builduser" tokenizes as two separate tokens, not one -- confirmed directly
+        // against the real scanner, not assumed, before settling on this tail shape.
+        "chown" => tail == ["-R", "builduser", "builduser", "dist/aur"],
+        "su" => aur_su(tail),
+        "git" => aur_git(tail),
+        "rm" => tail == ["-f", "key.pem"],
         _ => inert_head(head),
     }
 }
@@ -322,6 +337,126 @@ fn generate_installer_procedure(tail: &[String]) -> bool {
         "generate-installer",
         "dist",
     ]
+}
+
+/// `gh release download $TAG --dir dist --repo prikk-vcs/prikk --pattern *.tar.gz --pattern
+/// *.tar.gz.sha256` (`aur-build.yml`'s dry-run / existing-release path, 0.54.0 step 3 Part 7a):
+/// mirrors `gh_release_create`'s own shape-matching -- every token fixed except the one free-
+/// varying `$TAG`, required identical to itself since there is only one position here (unlike
+/// `gh_release_create`'s tag-and-title pair).
+fn gh_release_download(tail: &[String]) -> bool {
+    tail == [
+        "release",
+        "download",
+        "$TAG",
+        "--dir",
+        "dist",
+        "--repo",
+        "prikk-vcs/prikk",
+        "--pattern",
+        "*.tar.gz",
+        "--pattern",
+        "*.tar.gz.sha256",
+    ]
+}
+
+/// `cargo run -p prikk-release-policy --locked -- generate-aur $TAG dist` (`aur-build.yml`, 0.54.0
+/// step 3 Part 7a): mirrors `release_notes_procedure`'s own shape-matching for the identical
+/// reason -- the release tag cannot be enumerated in advance, so every other token is fixed and
+/// the tag is free to vary.
+fn generate_aur_procedure(tail: &[String]) -> bool {
+    tail == [
+        "run",
+        "-p",
+        "prikk-release-policy",
+        "--locked",
+        "--",
+        "generate-aur",
+        "$TAG",
+        "dist",
+    ]
+}
+
+/// `pacman -Syu --noconfirm --needed base-devel git rust gnupg github-cli` (`aur-build.yml`'s one
+/// root-level dependency-install step, 0.54.0 step 3 Part 7a). No free-varying token -- the
+/// package set this job needs is fixed, so this is a literal exact match, like
+/// `generate_installer_procedure`'s.
+fn aur_pacman(tail: &[String]) -> bool {
+    tail == [
+        "-Syu",
+        "--noconfirm",
+        "--needed",
+        "base-devel",
+        "git",
+        "rust",
+        "gnupg",
+        "github-cli",
+    ]
+}
+
+/// `su builduser -c "<command>"` (`aur-build.yml`, 0.54.0 step 3 Part 7a): five exact invocations,
+/// one per build-user step this job runs (import the maintainer key, then `--printsrcinfo` and a
+/// real build for each of `prikk`/`prikk-bin`). The quoted `-c` argument is one opaque token to
+/// this scanner either way (`lexer.rs`'s quote-tracking does not recurse into a double-quoted
+/// string's own contents) -- exact-matching the whole string, the same treatment
+/// `windows_set_content` already gives a `$(...)`-embedded PowerShell subexpression of comparable
+/// complexity, is what keeps the full command text reviewable in this file's own diff, even though
+/// the scanner itself does not parse what is inside the quotes.
+fn aur_su(tail: &[String]) -> bool {
+    tail == [
+        "builduser",
+        "-c",
+        "curl -fsSL https://github.com/nabbisen.gpg | gpg --import",
+    ] || tail
+        == [
+            "builduser",
+            "-c",
+            "makepkg -D dist/aur/prikk --printsrcinfo > dist/aur/prikk/.SRCINFO",
+        ]
+        || tail == ["builduser", "-c", "makepkg -D dist/aur/prikk --noconfirm"]
+        || tail
+            == [
+                "builduser",
+                "-c",
+                "makepkg -D dist/aur/prikk-bin --printsrcinfo > dist/aur/prikk-bin/.SRCINFO",
+            ]
+        || tail
+            == [
+                "builduser",
+                "-c",
+                "makepkg -D dist/aur/prikk-bin --noconfirm",
+            ]
+}
+
+/// `git clone`/`git -C <dir> add|diff|commit|push` (`release.yml`'s `aur-push` job, 0.54.0 step 3
+/// Part 7a): ten exact invocations, written out per package (`aur-prikk`/`aur-prikk-bin`) in full
+/// rather than templated, the same DC-70 B1 precedent `tar`'s own per-target entries above follow.
+/// The one free-varying token is `$TAG`, inside each commit message, matched literally the same
+/// way `release_notes_procedure`'s `$TAG` is.
+fn aur_git(tail: &[String]) -> bool {
+    // The lexer's `token_separator` splits on `:` (outside quotes), so `ssh://aur@...` tokenizes
+    // as "ssh" then "//aur@..." -- two tokens, not one -- confirmed directly against the real
+    // scanner, not assumed, before settling on this tail shape.
+    tail == [
+        "clone",
+        "ssh",
+        "//aur@aur.archlinux.org/prikk.git",
+        "aur-prikk",
+    ] || tail
+        == [
+            "clone",
+            "ssh",
+            "//aur@aur.archlinux.org/prikk-bin.git",
+            "aur-prikk-bin",
+        ]
+        || tail == ["-C", "aur-prikk", "add", "PKGBUILD", ".SRCINFO"]
+        || tail == ["-C", "aur-prikk-bin", "add", "PKGBUILD", ".SRCINFO"]
+        || tail == ["-C", "aur-prikk", "diff", "--cached", "--quiet"]
+        || tail == ["-C", "aur-prikk-bin", "diff", "--cached", "--quiet"]
+        || tail == ["-C", "aur-prikk", "commit", "-m", "prikk $TAG"]
+        || tail == ["-C", "aur-prikk-bin", "commit", "-m", "prikk-bin $TAG"]
+        || tail == ["-C", "aur-prikk", "push"]
+        || tail == ["-C", "aur-prikk-bin", "push"]
 }
 
 /// RFC 141 §2.4, closed: the four steps CI's `policy` job must run, each as one whole `run:` script
