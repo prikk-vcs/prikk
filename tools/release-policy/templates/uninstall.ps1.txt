@@ -113,9 +113,19 @@ $removedPathEntry = $false
 if (Test-Path -Path $markerPath -PathType Leaf) {
   $rawPath = Get-RawUserPathEntry
   if ($rawPath.Value) {
-    $entries = $rawPath.Value -split ';' | Where-Object { $_ -ne '' }
+    # Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C1): wrapped in @(...), for the
+    # same reason as install.ps1's identical split/filter above (see that script's own comment for
+    # the full about_Arrays citation). This one happened to work today only by luck of `-join`, which
+    # rejoins a bare scalar into a one-character-shorter string indistinguishable from a one-element
+    # array's own `-join` output when $entries holds exactly the installer's own single entry -- but
+    # relying on that is fragile, so it is fixed the same way for the same reason.
+    $entries = @($rawPath.Value -split ';' | Where-Object { $_ -ne '' })
     if ($entries -contains $installDir) {
-      $kept = $entries | Where-Object { $_ -ne $installDir }
+      # Same fix, same reason: `Where-Object` can unwrap to a scalar when exactly one entry survives
+      # the filter (for example, uninstalling the one and only PATH entry) and $kept -join ';' on a
+      # scalar still produces the right string by coincidence, but $kept should be an array on its
+      # own terms, not by accident of what -join happens to do with a non-collection input.
+      $kept = @($entries | Where-Object { $_ -ne $installDir })
       Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind
       $removedPathEntry = $true
       Write-Host "prikk-uninstall: removed the PATH entry for $installDir"
