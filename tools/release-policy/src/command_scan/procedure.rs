@@ -100,7 +100,16 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
         "chown" => tail == ["-R", "builduser", "builduser", "dist/aur"],
         "su" => aur_su(tail),
         "git" => aur_git(tail),
-        "rm" => tail == ["-f", "key.pem"],
+        // `rm -f ${{ github.workspace }}/key.pem` (0.54.0 step 3 Part 7a2 review, C2+C4): the
+        // cleanup step's path changed from the bare relative `key.pem` to the absolute
+        // `github.workspace`-qualified path C2 requires. The lexer does not evaluate GitHub
+        // Actions' `${{ }}` expression syntax -- it is plain shell text to this scanner -- so the
+        // expression tokenizes as its own pieces: `token_separator` splits on whitespace, leaving
+        // "${{" and "github.workspace" and "}}/key.pem" as separate words, and `normalize_token`
+        // then trims the matched `{`/`}` characters from each word's ends (the same trim that
+        // reduces a trailing "." elsewhere in this file), leaving "$", "github.workspace", and
+        // "/key.pem" -- confirmed directly against the real scanner, not assumed.
+        "rm" => tail == ["-f", "$", "github.workspace", "/key.pem"],
         _ => inert_head(head),
     }
 }
@@ -428,11 +437,12 @@ fn aur_su(tail: &[String]) -> bool {
             ]
 }
 
-/// `git clone`/`git -C <dir> add|diff|commit|push` (`release.yml`'s `aur-push` job, 0.54.0 step 3
-/// Part 7a): ten exact invocations, written out per package (`aur-prikk`/`aur-prikk-bin`) in full
-/// rather than templated, the same DC-70 B1 precedent `tar`'s own per-target entries above follow.
-/// The one free-varying token is `$TAG`, inside each commit message, matched literally the same
-/// way `release_notes_procedure`'s `$TAG` is.
+/// `git clone`/`git -C <dir> add|diff|push`, plus `git -c user.name=... -c user.email=... -C <dir>
+/// commit` (`release.yml`'s `aur-push` job, 0.54.0 step 3 Part 7a, commit shape updated in Part
+/// 7a2 per review condition C3): ten exact invocations, written out per package
+/// (`aur-prikk`/`aur-prikk-bin`) in full rather than templated, the same DC-70 B1 precedent
+/// `tar`'s own per-target entries above follow. The one free-varying token is `$TAG`, inside each
+/// commit message, matched literally the same way `release_notes_procedure`'s `$TAG` is.
 fn aur_git(tail: &[String]) -> bool {
     // The lexer's `token_separator` splits on `:` (outside quotes), so `ssh://aur@...` tokenizes
     // as "ssh" then "//aur@..." -- two tokens, not one -- confirmed directly against the real
@@ -453,8 +463,42 @@ fn aur_git(tail: &[String]) -> bool {
         || tail == ["-C", "aur-prikk-bin", "add", "PKGBUILD", ".SRCINFO"]
         || tail == ["-C", "aur-prikk", "diff", "--cached", "--quiet"]
         || tail == ["-C", "aur-prikk-bin", "diff", "--cached", "--quiet"]
-        || tail == ["-C", "aur-prikk", "commit", "-m", "prikk $TAG"]
-        || tail == ["-C", "aur-prikk-bin", "commit", "-m", "prikk-bin $TAG"]
+        // `-c user.name=... -c user.email=... -C <dir> commit -m <message>` (0.54.0 step 3 Part
+        // 7a2 review, C3): identity passed per-invocation, not through a prior global
+        // `git config` call, because the runner carries no git identity and a plain `git commit`
+        // exits 128 ("Author identity unknown"). The owner chose the identity 2026-10-22: `prikk
+        // release workflow <19984221+nabbisen@users.noreply.github.com>`.
+        //
+        // Each `-c key=value` is one token, not two or three: the lexer attaches everything from
+        // `user.` up to the closing quote to a single token with no separator in between,
+        // including the space inside `"prikk release workflow"` (quotes are stripped, not token
+        // boundaries) -- confirmed directly against the real scanner (`command_scan::tests`)
+        // before settling on this shape, the same empirical approach the `:`-splitting
+        // discoveries elsewhere in this file used.
+        || tail
+            == [
+                "-c",
+                "user.name=prikk release workflow",
+                "-c",
+                "user.email=19984221+nabbisen@users.noreply.github.com",
+                "-C",
+                "aur-prikk",
+                "commit",
+                "-m",
+                "prikk $TAG",
+            ]
+        || tail
+            == [
+                "-c",
+                "user.name=prikk release workflow",
+                "-c",
+                "user.email=19984221+nabbisen@users.noreply.github.com",
+                "-C",
+                "aur-prikk-bin",
+                "commit",
+                "-m",
+                "prikk-bin $TAG",
+            ]
         || tail == ["-C", "aur-prikk", "push"]
         || tail == ["-C", "aur-prikk-bin", "push"]
 }

@@ -44,6 +44,12 @@ pub(super) fn inert_head(token: &str) -> bool {
             // `chmod` belongs in this list by the same test as every entry above it -- it changes
             // a mode and cannot execute another program under any arguments.
             | "chmod"
+            // 0.54.0 step 3 Part 7a2 review, C4: `aur-push`'s "Write the AUR deploy key" step
+            // runs `umask 077` before writing the key file, so the file is mode 600 from its
+            // first byte rather than briefly inheriting the runner's default umask. `umask` is a
+            // shell builtin that changes the calling shell's own default-permission mask; like
+            // `chmod` above, it cannot execute another program under any arguments.
+            | "umask"
             | "sha256sum"
             // RFC 107 Stage 2: macOS's checksum tool -- `sha256sum` is not confirmed present on
             // the runner image, `shasum` is base-OS regardless
