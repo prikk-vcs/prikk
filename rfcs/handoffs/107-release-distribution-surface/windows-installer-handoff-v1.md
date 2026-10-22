@@ -160,3 +160,21 @@ The review's C1–C5, in full there. In short:
 5. **C5:** write the marker before the PATH registry write.
 
 **Then Part 6b** (with its items above, and the macOS timeout).
+
+## Progress, 2026-10-22 (later still): Part 6a3 cut off by the job's limit; Part 6a4
+
+**Part 6a3 is pushed** (`56117f52`). Its CI run reached 38 `PASS` and 0 `FAIL` before the 20-minute limit cut it off
+during Control 5 (review `0.54.0-step-3-part-6a3-review-v1`).
+- **Control 4's red runs are proven.**
+- **The time goes to the test's own server teardown:** `Stop-Job` cannot interrupt `HttpListener.GetContext()`, so it
+  waits about 2 minutes per server.
+
+## Part 6a4 — the fixture server stops in seconds (about 30 min, report `0.54.0-step-3-part-6a4-report.md`)
+
+1. **C1:** the fixture server stops within seconds (for example, a `GET /__stop` the loop recognises, then
+   `Wait-Job -Timeout 10`). Log each scenario's elapsed seconds.
+2. **C2:** the job timeout follows the measured two-pass runtime, with about 2× margin.
+3. **C3:** the run completes both passes: Control 5's three shapes green, and the second pass logs
+   `running under PowerShell 7.x`. The architect reads that run.
+
+**Then Part 6b.**
