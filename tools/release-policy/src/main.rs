@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod aur;
 mod boundary;
 mod ci_status_check;
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::aur;
 use crate::boundary;
 use crate::ci_status_check;
 use crate::error::{Error, Result};
@@ -23,6 +24,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         "produce-release-evidence" => produce_release_evidence_command(&root, rest),
         "release-notes" => release_notes_command(&root, rest),
         "generate-installer" => generate_installer_command(rest),
+        "generate-aur" => generate_aur_command(rest),
         "ci-status-check" => ci_status_check_command(rest),
         "-h" | "--help" | "help" if rest.is_empty() => {
             println!("{}", usage());
@@ -173,6 +175,18 @@ fn generate_installer_command(arguments: &[String]) -> Result<()> {
     installer::generate(std::path::Path::new(dist_dir))
 }
 
+/// `generate-aur <tag> <dist-dir>`: mirrors `release-notes`'s own two-argument shape (`tag`,
+/// `dist-dir`), not `generate-installer`'s one-argument shape, because unlike the universal
+/// installer scripts (version-agnostic, default "latest"), the AUR PKGBUILDs need a specific
+/// release's own identity (`pkgver`) and its already-published `.sha256` checksums -- the same two
+/// things `release-notes` already needs `dist_dir` for (0.54.0 step 3 Part 7a report).
+fn generate_aur_command(arguments: &[String]) -> Result<()> {
+    let [tag, dist_dir] = arguments else {
+        return Err(Error::new(usage()));
+    };
+    aur::generate(tag, std::path::Path::new(dist_dir))
+}
+
 fn parse_json_mode(arguments: &[String], self_test_allowed: bool) -> Result<bool> {
     let mut self_test = false;
     let mut index = 0;
@@ -201,5 +215,5 @@ fn repository_root() -> Result<PathBuf> {
 }
 
 fn usage() -> &'static str {
-    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check|size-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>"
+    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check|size-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>\n       prikk-release-policy generate-aur <tag> <dist-dir>"
 }
