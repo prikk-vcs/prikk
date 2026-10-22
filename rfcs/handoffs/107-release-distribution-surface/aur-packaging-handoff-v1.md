@@ -110,3 +110,24 @@ The report lists these steps for the owner, exactly:
 
 - The architect reviews and pushes, reads the dry run, and reads both AUR jobs in the 0.54.0 release run.
 - **The architect then confirms the AUR pages show 0.54.0.**
+
+## Progress, 2026-10-22: Part 7a reviewed; `aur-build` accepted, `aur-push` needs Part 7a2
+
+**Review:** `.git-exclude/reviewed/0.54.0-step-3-part-7a-review-v1.md`. Pushed at `37b430a2`.
+- **The dry run for `0.53.0` is green on CI** (run `39715772469`: the signed tag `Passed`, and both packages built).
+- **Its control is red** (run `39715780143`, with the key import skipped: `FAILED (unknown public key …)`).
+
+**Next: Part 7a2,** about 45 minutes. It has five conditions, C1–C5, all in the review:
+- **C1:** `.SRCINFO` is missing from the artifact, because the upload skips hidden files.
+- **C2:** the ssh key and `known_hosts` are relative paths, which `git -C` moves.
+- **C3:** commits have no author on the runner. **The owner decided the identity on 2026-10-22:**
+  `prikk release workflow <19984221+nabbisen@users.noreply.github.com>`.
+- **C4:** the key file is created with mode 600 from the start.
+- **C5:** a local control for `aur-push`'s step sequence, shown red and then green.
+
+Report: `0.54.0-step-3-part-7a2-report.md`.
+
+**Then Part 7b.** Its `install.md` section and its landing-page line are committed on `hold/0.54.0-windows-docs`, not
+`main`: the AUR packages are placeholders until the 0.54.0 release runs `aur-push`. Its CHANGELOG entry goes on
+`main`. The Arch section tells users to import the release key before `paru -S prikk`, because the key is on no public
+keyserver.
