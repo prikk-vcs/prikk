@@ -203,7 +203,12 @@ jobs:
     # 0.54.0 Part G1c item 2: since Part G1's own dev-profile opt-level change for the workspace's
     # own crates, this job runs 16-18 minutes on GitHub's 3-core macOS runners -- too thin a margin
     # against the old 20-minute limit -- was 20.
-    timeout-minutes: 30
+    # Windows installer/uninstaller handoff v1 Part 6b: raised 30 -> 45. Unlike the
+    # windows-installer job's own timeout further below in this file, this one IS a real
+    # measurement: a degraded macOS runner needed about 36 minutes (run `39676219682`: compile
+    # 15 m 46 s, against 7 normally). 45 keeps real margin over that observed run without assuming
+    # every future run degrades the same amount.
+    timeout-minutes: 45
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
