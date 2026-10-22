@@ -160,6 +160,13 @@ jobs:
 
       # Only PKGBUILD and .SRCINFO -- never the built package, the compiled binary, or anything
       # under src/`pkg/` -- `aur-push` (release.yml) only ever needs these two files per package.
+      #
+      # `include-hidden-files: true` (0.54.0 step 3 Part 7a2 review, C1): `upload-artifact@v7`
+      # skips dot-files by default, and `.SRCINFO` is one. The dry run (`39715772469`) caught this
+      # directly -- the uploaded artifact held only the two PKGBUILDs, two files, not four;
+      # `if-no-files-found: error` did not catch it because two of the four glob paths still
+      # matched something. Without this flag, `aur-push`'s first `cp` would fail on the missing
+      # `.SRCINFO`.
       - uses: actions/upload-artifact@v7
         with:
           name: aur-packages
@@ -169,3 +176,4 @@ jobs:
             dist/aur/prikk-bin/PKGBUILD
             dist/aur/prikk-bin/.SRCINFO
           if-no-files-found: error
+          include-hidden-files: true
