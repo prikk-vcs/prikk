@@ -36,9 +36,24 @@ $ErrorActionPreference = 'Stop'
 $script:FailureCount = 0
 $enginePath = (Get-Process -Id $PID).Path
 
+# Part 6a4 (review 0.54.0-step-3-part-6a3-review-v1, condition C1): prints how long the PREVIOUS
+# section took, right before announcing the next one -- a Get-Date diff against the module-scope
+# timestamp this function itself sets on every call, the same $script: pattern $script:FailureCount
+# already uses in this file. This is deliberately simple (no profiling framework): the point is
+# only that the next real CI log shows plainly that the old per-server ~2-minute gaps (condition
+# C1, Stop-StaticFileServer below) are gone, not a precise timing tool. Because the script's own
+# "Summary" section (near the end of this file) is itself announced via this same function, that
+# call's own elapsed-time line reports Control 5's own section time -- so the final section's
+# elapsed time is printed "right before the Summary output" for free, with no separate case needed.
+$script:LastSectionTime = $null
 function Write-Section([string]$Title) {
+  if ($null -ne $script:LastSectionTime) {
+    $elapsedSeconds = ((Get-Date) - $script:LastSectionTime).TotalSeconds
+    Write-Host ("  (previous section took {0:N1}s)" -f $elapsedSeconds) -ForegroundColor DarkGray
+  }
   Write-Host ""
   Write-Host "==== $Title ====" -ForegroundColor Cyan
+  $script:LastSectionTime = Get-Date
 }
 
 function Assert-True([bool]$Condition, [string]$Message) {
@@ -56,12 +71,21 @@ function Assert-True([bool]$Condition, [string]$Message) {
 # "http://localhost:<port>/" (not a wildcard host) does not require administrator rights or a URL
 # ACL reservation on Windows -- a documented HttpListener exception, not something this script
 # measured here.
+# Part 6a4 (review 0.54.0-step-3-part-6a3-review-v1, condition C1): the loop now recognises a
+# GET /__stop request and breaks out of its own `while ($listener.IsListening)` loop right away,
+# instead of relying solely on `Stop-StaticFileServer`'s old `Stop-Job`, which cannot interrupt the
+# blocking `$listener.GetContext()` call below and so waited out PowerShell's own ~2-minute
+# forced-stop grace period for every server this script starts (confirmed per-server cost in the
+# review: "Control 4, with several servers, took 8 minutes" for its four servers). Both exit paths
+# out of the loop -- the new `/__stop` break and the pre-existing `catch { break }` -- now also
+# stop and close the listener explicitly, which the pre-6a4 code never did on either path.
 function Start-StaticFileServer([string]$Directory, [int]$Port) {
   $job = Start-Job -ScriptBlock {
     param($Directory, $Port)
     $listener = New-Object System.Net.HttpListener
     $listener.Prefixes.Add("http://localhost:$Port/")
     $listener.Start()
+    $stopRequested = $false
     while ($listener.IsListening) {
       try {
         $context = $listener.GetContext()
@@ -69,24 +93,60 @@ function Start-StaticFileServer([string]$Directory, [int]$Port) {
         break
       }
       $requestPath = $context.Request.Url.AbsolutePath.TrimStart('/')
-      $filePath = Join-Path $Directory $requestPath
-      if (Test-Path -Path $filePath -PathType Leaf) {
-        $bytes = [System.IO.File]::ReadAllBytes($filePath)
-        $context.Response.ContentLength64 = $bytes.Length
-        $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      if ($requestPath -eq '__stop') {
+        $context.Response.StatusCode = 200
+        $context.Response.OutputStream.Close()
+        $stopRequested = $true
       } else {
-        $context.Response.StatusCode = 404
+        $filePath = Join-Path $Directory $requestPath
+        if (Test-Path -Path $filePath -PathType Leaf) {
+          $bytes = [System.IO.File]::ReadAllBytes($filePath)
+          $context.Response.ContentLength64 = $bytes.Length
+          $context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+        } else {
+          $context.Response.StatusCode = 404
+        }
+        $context.Response.OutputStream.Close()
       }
-      $context.Response.OutputStream.Close()
+      if ($stopRequested) {
+        break
+      }
     }
+    $listener.Stop()
+    $listener.Close()
   } -ArgumentList $Directory, $Port
   Start-Sleep -Milliseconds 750
-  return $job
+  # Part 6a4, condition C1: the caller needs the port back too, to address the `/__stop` request
+  # below -- every call site in this file only ever passes this return value straight through,
+  # opaquely, into Stop-StaticFileServer (confirmed by grep against every Start-/Stop-
+  # StaticFileServer call site in this file; none of them inspect it directly), so widening it from
+  # the raw $job to this small hashtable changes nothing at any call site.
+  return @{ Job = $job; Port = $Port }
 }
 
-function Stop-StaticFileServer($Job) {
-  Stop-Job -Job $Job -ErrorAction SilentlyContinue | Out-Null
-  Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue | Out-Null
+# Part 6a4 (review 0.54.0-step-3-part-6a3-review-v1, condition C1): sends the stop signal first --
+# wrapped in try/catch, since the server may already be gone, or this request may itself race the
+# server's own shutdown; either way the Wait-Job/Stop-Job fallback below still has to run -- then
+# waits up to 10 seconds (chosen as "a short timeout" per the review's own wording: long enough for
+# a healthy stop, which should only ever need one HTTP round-trip plus the job's own exit, short
+# enough that a stuck server still bounds out in seconds, not PowerShell's own ~2-minute default)
+# before falling back to the pre-6a4 Stop-Job/Remove-Job as a safety net in case the stop signal
+# did not land. Elapsed time is logged unconditionally, so the next real CI run is the direct
+# evidence that this fix (stop-signal + short wait) is what closed the per-server gap, not merely
+# that the gap looks smaller after the fact.
+function Stop-StaticFileServer($Server) {
+  $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  try {
+    $null = Invoke-WebRequest -Uri "http://localhost:$($Server.Port)/__stop" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+  } catch {
+    # The server may already be gone, or this request raced its own shutdown -- either is fine;
+    # the Wait-Job/Stop-Job fallback below still runs and still bounds the wait.
+  }
+  Wait-Job -Job $Server.Job -Timeout 10 | Out-Null
+  Stop-Job -Job $Server.Job -ErrorAction SilentlyContinue | Out-Null
+  Remove-Job -Job $Server.Job -Force -ErrorAction SilentlyContinue | Out-Null
+  $stopwatch.Stop()
+  Write-Host ("  Stop-StaticFileServer: port {0} stopped in {1:N1}s" -f $Server.Port, $stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 }
 
 # Proves a Windows PATH change took effect for a genuinely new process, not merely the already-
