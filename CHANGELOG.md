@@ -125,6 +125,12 @@
   expanded string; the install directory is added to the user `PATH` without prompting, and a marker
   file gates `uninstall.ps1`'s removal of that entry to only the one this installer itself added.
   Proven on CI under both Windows PowerShell 5.1 and PowerShell 7.
+- **`prikk`/`prikk-bin` on the AUR** (0.54.0 step 3 Part 7, AUR packaging handoff v1): published and kept current
+  automatically by the release workflow's `aur-build`/`aur-push` jobs, one PKGBUILD generated and pushed per tagged
+  release, never hand-maintained. `prikk` builds from the signed source tag, and `makepkg` refuses to build unless
+  the tag's PGP signature verifies against the project's own key — so a compromised AUR push alone cannot make
+  `paru -S prikk` build from unsigned source. `prikk-bin` installs the prebuilt binary instead, checksum-verified
+  only, no key needed.
 
 ### Security
 
