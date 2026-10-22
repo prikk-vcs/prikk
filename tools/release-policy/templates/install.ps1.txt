@@ -252,7 +252,18 @@ try {
   $rawPath = Get-RawUserPathEntry
   $pathEntries = @()
   if ($rawPath.Value) {
-    $pathEntries = $rawPath.Value -split ';' | Where-Object { $_ -ne '' }
+    # Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C1): wrapped in @(...). Without
+    # it, a user PATH with exactly one entry made this pipeline unwrap to a bare string, not a
+    # one-element array -- about_Arrays's own "array subexpression operator" section states plainly:
+    # "The array sub-expression operator creates an array from the statements inside it. Whatever
+    # the statement inside the operator produces, the operator places it in an array. Even if there
+    # is zero or one object." The same page's own worked example shows this exact shape: piping a
+    # one-match Where-Object result to a bare variable leaves `$result.GetType().FullName` as
+    # `System.String`, not an array, and its own text says "If you want `$result` to be an array of
+    # strings, you need to declare the variable as an array." $pathEntries then being a scalar made
+    # `$pathEntries + $installDir` below (line ~267) a string concatenation with no separator instead
+    # of an array append, corrupting a one-entry PATH into one merged entry.
+    $pathEntries = @($rawPath.Value -split ';' | Where-Object { $_ -ne '' })
   }
   $alreadyOnPath = $pathEntries -contains $installDir
 
@@ -265,11 +276,17 @@ try {
     # *unexpanded* existing entries above is correct either way: it never needs to match or produce
     # a %VAR%-style entry of its own.
     $newPath = ($pathEntries + $installDir) -join ';'
+    # Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C5): the marker is written BEFORE
+    # the PATH registry write, not after. Today, a failure between the two leaves our entry in PATH
+    # with no marker, so uninstall never removes it. Reversed, the worst case is a marker with no
+    # entry, and uninstall then removes nothing, which is harmless. uninstall.ps1's own order (remove
+    # the PATH entry first, then the marker) is already the safe one for the same reason, in reverse:
+    # a failed uninstall can simply be re-run, so it is left unchanged.
+    Set-Content -Path $markerPath -Value "This file records that install.ps1 added $installDir to this user's PATH.`r`nuninstall.ps1 reads it to decide whether to remove that PATH entry.`r`nDelete it only if you understand why." -NoNewline
     Set-RawUserPathEntry -Value $newPath -Kind $rawPath.Kind
     # install.sh does not prompt before appending to a shell rc file; this script follows the same
     # rule and does not prompt before this PATH change either -- see the report for the open
     # question of whether both should.
-    Set-Content -Path $markerPath -Value "This file records that install.ps1 added $installDir to this user's PATH.`r`nuninstall.ps1 reads it to decide whether to remove that PATH entry.`r`nDelete it only if you understand why." -NoNewline
     Write-Host "prikk-install: added $installDir to your user PATH (open a new terminal for it to take effect)"
   } else {
     Write-Host "prikk-install: $installDir is already on your user PATH"
