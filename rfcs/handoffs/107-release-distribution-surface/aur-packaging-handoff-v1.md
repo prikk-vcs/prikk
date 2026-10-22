@@ -146,3 +146,19 @@ keyserver.
 - the CHANGELOG entry goes on `main`.
 
 Report: `0.54.0-step-3-part-7b-report.md`.
+
+## Progress, 2026-10-22: Part 7b reviewed; Part 7b2 (text only) is next
+
+**Review:** `.git-exclude/reviewed/0.54.0-step-3-part-7b-review-v1.md`. Not yet accepted. Three text fixes, about 20
+minutes:
+- **T1:** the CHANGELOG entry claims that a compromised AUR push cannot make `paru -S prikk` build unsigned source.
+  That is false: an AUR push controls the PKGBUILD. Also, it is two PKGBUILDs per release, not one.
+- **T2:** `install.md` should tell the user to read the PKGBUILD (`paru -G prikk`), checking `validpgpkeys` and
+  `?signed`, instead of repeating the fingerprint check. `makepkg` already enforces that check.
+- **T3:** keep to measured behaviour: the key is on no keyserver, and `makepkg` stops with "unknown public key".
+
+**Where the fixes go:**
+- the CHANGELOG fix is a new commit on `main`, on top of `9bac1077`; do not amend it;
+- the `install.md` fix goes on `hold/0.54.0-windows-docs`.
+
+`9bac1077` and this note are held locally until 7b2, and pushed together. Report: `0.54.0-step-3-part-7b2-report.md`.
