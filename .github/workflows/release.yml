@@ -258,10 +258,25 @@ jobs:
       contents: read
     env:
       TAG: ${{ github.ref_name }}
-      # `-i key.pem`: the deploy key written below. `-o UserKnownHostsFile=known_hosts
+      # `-i <path>`: the deploy key written below. `-o UserKnownHostsFile=<path>
       # -o StrictHostKeyChecking=yes`: the pinned host key written below, checked strictly -- an
       # unpinned or substituted host key refuses the connection rather than silently trusting it.
-      GIT_SSH_COMMAND: ssh -i key.pem -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes
+      # `-o IdentitiesOnly=yes`: offer only this one key -- never an ssh-agent's other identities
+      # or another identity file ssh might otherwise find.
+      #
+      # Both paths are absolute, via `github.workspace` (0.54.0 step 3 Part 7a2 review, C2):
+      # `git -C aur-prikk push` changes into `aur-prikk/` before it starts ssh, so a *relative*
+      # `key.pem`/`known_hosts` resolves against `aur-prikk/`, not the checkout root where these
+      # files are actually written -- confirmed by the architect with a stand-in `ssh` that prints
+      # its own cwd (`…/w` for the clone, `…/w/aur-prikk` for the `-C` push). `runner.temp` would
+      # also be an absolute path outside the checkout, but the `runner` context is only available
+      # in a step-level `env:`, not this job-level one; `github.workspace` is available at both
+      # levels and is just as immune to the bug -- the failure was never about which directory the
+      # files live in, only about an unqualified relative name being resolved against whatever
+      # directory `git -C` most recently changed into. `github.workspace` is still outside
+      # `aur-prikk/` and `aur-prikk-bin/` themselves, so no `-C` this job runs ever changes into a
+      # directory that contains these files.
+      GIT_SSH_COMMAND: ssh -i ${{ github.workspace }}/key.pem -o UserKnownHostsFile=${{ github.workspace }}/known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -276,17 +291,24 @@ jobs:
       # This literal host-key line, not a bare fingerprint, is what `UserKnownHostsFile` above
       # needs -- `ssh`/`git` check the full key against this file.
       - name: Write the pinned AUR host key
-        run: echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > known_hosts
+        run: echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > ${{ github.workspace }}/known_hosts
 
       # Written via `printf` from a shell environment variable, never interpolated directly into a
       # `run:` string as `${{ secrets.AUR_SSH_PRIVATE_KEY }}` -- that would place the secret's
       # value in the literal script text GitHub Actions logs, rather than as an opaque runtime
       # value a masked `env:` substitution keeps out of the log. GitHub Actions masks a registered
       # secret's value automatically; nothing in this job `cat`s or otherwise prints the key file.
+      #
+      # `umask 077` (0.54.0 step 3 Part 7a2 review, C4): without it, the shell redirect creates
+      # the file under the runner's default umask (typically 0644) for the instant between
+      # creation and `chmod 600` -- briefly group/other-readable. `umask 077` makes the file mode
+      # 600 from its very first byte, so it is never readable by anything but the runner user, not
+      # even momentarily; `chmod 600` stays as a second, redundant guarantee in case the umask is
+      # ever not what this step assumes.
       - name: Write the AUR deploy key
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-        run: printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > key.pem && chmod 600 key.pem
+        run: umask 077 && printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ${{ github.workspace }}/key.pem && chmod 600 ${{ github.workspace }}/key.pem
 
       - name: Clone prikk's AUR repository
         run: git clone ssh://aur@aur.archlinux.org/prikk.git aur-prikk
@@ -311,11 +333,18 @@ jobs:
       # handoff's own requirement ("if the content is unchanged ... it pushes nothing and
       # succeeds"), confirmed against a real local repository before writing this step (0.54.0
       # step 3 Part 7a report), not assumed.
+      # `-c user.name=... -c user.email=...` passed on this one command, not a prior global
+      # `git config` call (0.54.0 step 3 Part 7a2 review, C3): the runner has no git identity
+      # configured, so a plain `git commit` exits 128, "Author identity unknown" -- reproduced
+      # directly with an empty `HOME` and `GIT_CONFIG_NOSYSTEM=1`, the shape of a clean runner.
+      # Identity decided by the owner, 2026-10-22: `prikk release workflow
+      # <19984221+nabbisen@users.noreply.github.com>`, a no-reply address for the account that
+      # already signs the release tags, so no mailbox is exposed.
       - name: Commit prikk, if changed
-        run: git -C aur-prikk diff --cached --quiet || git -C aur-prikk commit -m "prikk $TAG"
+        run: git -C aur-prikk diff --cached --quiet || git -c user.name="prikk release workflow" -c user.email="19984221+nabbisen@users.noreply.github.com" -C aur-prikk commit -m "prikk $TAG"
 
       - name: Commit prikk-bin, if changed
-        run: git -C aur-prikk-bin diff --cached --quiet || git -C aur-prikk-bin commit -m "prikk-bin $TAG"
+        run: git -C aur-prikk-bin diff --cached --quiet || git -c user.name="prikk release workflow" -c user.email="19984221+nabbisen@users.noreply.github.com" -C aur-prikk-bin commit -m "prikk-bin $TAG"
 
       # `git push` with nothing new to push exits 0 ("Everything up-to-date") -- confirmed directly
       # against a real local repository before writing this step, not assumed -- so neither push
@@ -330,4 +359,4 @@ jobs:
       # equivalent: this runs whether every step above succeeded or any one of them failed.
       - name: Remove the AUR deploy key
         if: always()
-        run: rm -f key.pem
+        run: rm -f ${{ github.workspace }}/key.pem
