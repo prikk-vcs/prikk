@@ -178,3 +178,14 @@ during Control 5 (review `0.54.0-step-3-part-6a3-review-v1`).
    `running under PowerShell 7.x`. The architect reads that run.
 
 **Then Part 6b.**
+
+## Progress, 2026-10-22 (late morning): Part 6a accepted; Part 6b is live
+
+**Part 6a4 is accepted, and with it Part 6a** (review `0.54.0-step-3-part-6a4-review-v1`): the installer test passed on
+CI, with 124 checks, both engines (13 runs each under 5.1 and 7.6) and about a minute per pass.
+
+**Next: Part 6b** (above), carrying:
+- **in `install.md`:** the PATH statement (added without a prompt; removed by uninstall only if install added it) and
+  execution policy for a saved `install.ps1`;
+- `install.sh`'s Windows refusal pointing to `install.ps1`;
+- the macOS suite timeout, 30 → 45 minutes.
