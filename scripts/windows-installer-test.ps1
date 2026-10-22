@@ -171,6 +171,18 @@ function Set-RawUserPathForTest([string]$Value, [Microsoft.Win32.RegistryValueKi
   }
 }
 
+# Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C2): deletes the user Path value
+# outright, so Control 5's "Shape B" scenario can seed the case where the value is absent entirely
+# before install.ps1 runs -- the same idiom this script's own Control 5 `finally` block already
+# uses to restore the CI runner's own Path to "absent" when that was its original state, now
+# factored out so setup can use it too, not only teardown.
+function Remove-RawUserPathForTest {
+  $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+  if ($null -ne $envKey) {
+    try { $envKey.DeleteValue('Path', $false) } finally { $envKey.Close() }
+  }
+}
+
 $distDirResolved = (Resolve-Path $DistDir).Path
 $assetName = "prikk-x86_64-pc-windows-msvc.zip"
 $assetPath = Join-Path $distDirResolved $assetName
@@ -338,13 +350,76 @@ try {
 # prove the *session* a real `irm | iex` invocation runs in stays clean, which a `-File`
 # invocation (used everywhere else in this test) cannot prove, since `-File` already gets its own
 # new process and script scope regardless of install.ps1's own fix.
+#
+# Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C4): both 4a and 4b are now shown
+# red before green, the same red-then-green pattern Controls 1, 2+3, and 5 already use -- this
+# control had no red run at all before this round.
 # ---------------------------------------------------------------------------
 Write-Section "Control 4: the one-line form, in a child session (C1)"
 
 $childScriptsDir = Join-Path $scratchRoot "control4-child-scripts"
 New-Item -ItemType Directory -Force -Path $childScriptsDir | Out-Null
 
-# --- Control 4a: the happy path, evaluated via iex in a child session --------------------------
+# --- Control 4a RED: the real '& { ... }' wrapper removed, so the body runs at the caller's own --
+# top-level scope again -- the pre-fix behavior. $ErrorActionPreference and the working variables
+# must then leak into the child session: the opposite of Control 4a GREEN's own assertions below.
+$wrapperOpenMarker = '& {'
+if (-not $installScriptContent.Contains($wrapperOpenMarker)) {
+  throw "control 4a's perturbation text ('& {') was not found in install.ps1 -- the template changed shape; update this script"
+}
+$noWrapperContent = $installScriptContent.Replace($wrapperOpenMarker, '')
+$trimmedNoWrapperContent = $noWrapperContent.TrimEnd()
+if (-not $trimmedNoWrapperContent.EndsWith('}')) {
+  throw "control 4a's perturbation could not find install.ps1's own matching closing brace for '& { ... }' at the end of the file -- the template changed shape; update this script"
+}
+# Removes exactly the one trailing '}' that closed the '& { ... }' wrapper -- every other brace in
+# the file (functions, if/else, try/finally, ...) stays balanced; only the wrapper's own open/close
+# pair is removed.
+$perturbed4aContent = $trimmedNoWrapperContent.Substring(0, $trimmedNoWrapperContent.Length - 1)
+$perturbed4aPath = Join-Path $scratchRoot "install-perturbed-control4a.ps1"
+Set-Content -Path $perturbed4aPath -Value $perturbed4aContent
+
+$installDir4aRed = Join-Path $scratchRoot "install-control4a-red"
+$env:PRIKK_INSTALL_DIR = $installDir4aRed
+$env:PRIKK_INSTALL_BASE_URL = "http://localhost:18086"
+$server4aRed = Start-StaticFileServer -Directory $distDirResolved -Port 18086
+try {
+  $child4aRedTemplate = @'
+$before = $ErrorActionPreference
+$scriptText = Get-Content -Path '__INSTALL_SCRIPT_PATH__' -Raw
+Invoke-Expression $scriptText
+$after = $ErrorActionPreference
+Write-Output "PRIKK_BEFORE=$before"
+Write-Output "PRIKK_AFTER=$after"
+Write-Output "PRIKK_REPO_DEFINED=$(Test-Path Variable:\repo)"
+Write-Output "PRIKK_VERSION_DEFINED=$(Test-Path Variable:\version)"
+Write-Output "PRIKK_INSTALLDIR_DEFINED=$(Test-Path Variable:\installDir)"
+'@
+  $child4aRedContent = $child4aRedTemplate.Replace('__INSTALL_SCRIPT_PATH__', $perturbed4aPath)
+  $child4aRedPath = Join-Path $childScriptsDir "child-4a-red.ps1"
+  Set-Content -Path $child4aRedPath -Value $child4aRedContent
+
+  $output4aRed = & $enginePath -NoProfile -File $child4aRedPath
+  Assert-True (Test-Path -Path (Join-Path $installDir4aRed "prikk.exe") -PathType Leaf) "RED: the perturbed install.ps1 (no '& { ... }' wrapper) still installs via iex -- the control can fail"
+
+  $before4aRed = ($output4aRed | Where-Object { $_ -like "PRIKK_BEFORE=*" }) -replace '^PRIKK_BEFORE=', ''
+  $after4aRed = ($output4aRed | Where-Object { $_ -like "PRIKK_AFTER=*" }) -replace '^PRIKK_AFTER=', ''
+  Assert-True ($after4aRed -eq "Stop") "RED: the perturbed install.ps1's own `$ErrorActionPreference = 'Stop' leaks into the child session ($before4aRed -> $after4aRed) -- the control can fail"
+
+  $repoDefined4aRed = ($output4aRed | Where-Object { $_ -like "PRIKK_REPO_DEFINED=*" }) -replace '^PRIKK_REPO_DEFINED=', ''
+  $versionDefined4aRed = ($output4aRed | Where-Object { $_ -like "PRIKK_VERSION_DEFINED=*" }) -replace '^PRIKK_VERSION_DEFINED=', ''
+  $installDirDefined4aRed = ($output4aRed | Where-Object { $_ -like "PRIKK_INSTALLDIR_DEFINED=*" }) -replace '^PRIKK_INSTALLDIR_DEFINED=', ''
+  Assert-True ($repoDefined4aRed -eq "True") "RED: `$repo leaks into the child session without the wrapper -- the control can fail"
+  Assert-True ($versionDefined4aRed -eq "True") "RED: `$version leaks into the child session without the wrapper -- the control can fail"
+  Assert-True ($installDirDefined4aRed -eq "True") "RED: `$installDir leaks into the child session without the wrapper -- the control can fail"
+} finally {
+  Stop-StaticFileServer $server4aRed
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  Remove-UserPathEntryIfPresent $installDir4aRed
+}
+
+# --- Control 4a GREEN: the real, unperturbed script -- the happy path, evaluated via iex ---------
 $installDir4a = Join-Path $scratchRoot "install-control4a"
 $env:PRIKK_INSTALL_DIR = $installDir4a
 $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18082"
@@ -373,19 +448,19 @@ Write-Output "PRIKK_INSTALLDIR_DEFINED=$(Test-Path Variable:\installDir)"
 
   $output4a = & $enginePath -NoProfile -File $child4aPath
   $exitCode4a = $LASTEXITCODE
-  Assert-True ($exitCode4a -eq 0) "4a: the child session's own process exited 0 after the one-line install via iex"
-  Assert-True (Test-Path -Path (Join-Path $installDir4a "prikk.exe") -PathType Leaf) "4a: prikk.exe is present after the one-line install via iex"
+  Assert-True ($exitCode4a -eq 0) "GREEN: the child session's own process exited 0 after the one-line install via iex"
+  Assert-True (Test-Path -Path (Join-Path $installDir4a "prikk.exe") -PathType Leaf) "GREEN: prikk.exe is present after the one-line install via iex"
 
   $before4a = ($output4a | Where-Object { $_ -like "PRIKK_BEFORE=*" }) -replace '^PRIKK_BEFORE=', ''
   $after4a = ($output4a | Where-Object { $_ -like "PRIKK_AFTER=*" }) -replace '^PRIKK_AFTER=', ''
-  Assert-True (($before4a.Length -gt 0) -and ($before4a -eq $after4a)) "4a: the child session's own ErrorActionPreference ($before4a) is unchanged after the one-line install via iex"
+  Assert-True (($before4a.Length -gt 0) -and ($before4a -eq $after4a)) "GREEN: the child session's own ErrorActionPreference ($before4a) is unchanged after the one-line install via iex"
 
   $repoDefined4a = ($output4a | Where-Object { $_ -like "PRIKK_REPO_DEFINED=*" }) -replace '^PRIKK_REPO_DEFINED=', ''
   $versionDefined4a = ($output4a | Where-Object { $_ -like "PRIKK_VERSION_DEFINED=*" }) -replace '^PRIKK_VERSION_DEFINED=', ''
   $installDirDefined4a = ($output4a | Where-Object { $_ -like "PRIKK_INSTALLDIR_DEFINED=*" }) -replace '^PRIKK_INSTALLDIR_DEFINED=', ''
-  Assert-True ($repoDefined4a -eq "False") "4a: `$repo does not exist in the child session after the one-line install via iex"
-  Assert-True ($versionDefined4a -eq "False") "4a: `$version does not exist in the child session after the one-line install via iex"
-  Assert-True ($installDirDefined4a -eq "False") "4a: `$installDir does not exist in the child session after the one-line install via iex"
+  Assert-True ($repoDefined4a -eq "False") "GREEN: `$repo does not exist in the child session after the one-line install via iex"
+  Assert-True ($versionDefined4a -eq "False") "GREEN: `$version does not exist in the child session after the one-line install via iex"
+  Assert-True ($installDirDefined4a -eq "False") "GREEN: `$installDir does not exist in the child session after the one-line install via iex"
 } finally {
   Stop-StaticFileServer $server4a
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
@@ -393,7 +468,49 @@ Write-Output "PRIKK_INSTALLDIR_DEFINED=$(Test-Path Variable:\installDir)"
   Remove-UserPathEntryIfPresent $installDir4a
 }
 
-# --- Control 4b: the corrupted-zip case, in a child session -- the session must survive ---------
+# --- Control 4b RED: the checksum-failure throw replaced with 'exit 1' -- the pre-fix behavior. --
+# The sentinel line must then never print, because `exit` kills the child process outright,
+# uncatchable by the surrounding try/catch (see Control 4b GREEN's own comment below for the
+# about_Try_Catch_Finally citation this depends on).
+$checksumThrowMarker = 'throw "prikk-install: checksum verification failed; refusing to install"'
+if (-not $installScriptContent.Contains($checksumThrowMarker)) {
+  throw "control 4b's perturbation text was not found in install.ps1 -- the template changed shape; update this script"
+}
+$perturbed4bContent = $installScriptContent.Replace($checksumThrowMarker, 'exit 1')
+$perturbed4bPath = Join-Path $scratchRoot "install-perturbed-control4b.ps1"
+Set-Content -Path $perturbed4bPath -Value $perturbed4bContent
+
+$installDir4bRed = Join-Path $scratchRoot "install-control4b-red"
+$env:PRIKK_INSTALL_DIR = $installDir4bRed
+$env:PRIKK_INSTALL_BASE_URL = "http://localhost:18087"
+$server4bRed = Start-StaticFileServer -Directory $control1Dir -Port 18087
+try {
+  $child4bRedTemplate = @'
+try {
+  $scriptText = Get-Content -Path '__INSTALL_SCRIPT_PATH__' -Raw
+  Invoke-Expression $scriptText
+} catch {
+  Write-Output "PRIKK_CAUGHT=true"
+}
+Write-Output "PRIKK_SENTINEL=reached-after-iex"
+'@
+  $child4bRedContent = $child4bRedTemplate.Replace('__INSTALL_SCRIPT_PATH__', $perturbed4bPath)
+  $child4bRedPath = Join-Path $childScriptsDir "child-4b-red.ps1"
+  Set-Content -Path $child4bRedPath -Value $child4bRedContent
+
+  $output4bRed = & $enginePath -NoProfile -File $child4bRedPath
+  Assert-True (-not (Test-Path -Path (Join-Path $installDir4bRed "prikk.exe"))) "RED: the one-line install via iex against the corrupted zip still installs nothing with 'exit 1' in place of the throw"
+
+  $sentinel4bRed = $output4bRed -contains "PRIKK_SENTINEL=reached-after-iex"
+  Assert-True (-not $sentinel4bRed) "RED: 'exit 1' in place of the checksum throw kills the child process before the sentinel line can print -- the control can fail"
+} finally {
+  Stop-StaticFileServer $server4bRed
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  Remove-UserPathEntryIfPresent $installDir4bRed
+}
+
+# --- Control 4b GREEN: the corrupted-zip case, in a child session -- the session must survive ----
 # Reuses Control 1's own corrupted-zip fixture directory ($control1Dir) on a fresh port (the
 # server that originally served it was already stopped in Control 1's own `finally` block).
 # The child script wraps Invoke-Expression in its own try/catch: `throw` (the fix) is a normal
@@ -405,7 +522,7 @@ Write-Output "PRIKK_INSTALLDIR_DEFINED=$(Test-Path Variable:\installDir)"
 # something a catch block intercepts -- so if install.ps1 still called `exit`, the child process
 # would terminate at that statement and the sentinel line below would never print. This is what
 # makes this control genuinely able to fail against the old behavior, not merely "the script no
-# longer contains the word exit".
+# longer contains the word exit" (Control 4b RED, above, proves it against the real template text).
 $installDir4b = Join-Path $scratchRoot "install-control4b"
 $env:PRIKK_INSTALL_DIR = $installDir4b
 $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18083"
@@ -425,10 +542,10 @@ Write-Output "PRIKK_SENTINEL=reached-after-iex"
   Set-Content -Path $child4bPath -Value $child4bContent
 
   $output4b = & $enginePath -NoProfile -File $child4bPath
-  Assert-True (-not (Test-Path -Path (Join-Path $installDir4b "prikk.exe"))) "4b: the one-line install via iex against the corrupted zip installs nothing"
+  Assert-True (-not (Test-Path -Path (Join-Path $installDir4b "prikk.exe"))) "GREEN: the one-line install via iex against the corrupted zip installs nothing"
 
   $caught4b = $output4b -contains "PRIKK_CAUGHT=true"
-  Assert-True $caught4b "4b: the failed install's own throw was caught by the child session's try/catch (a catchable error, not a process-killing exit)"
+  Assert-True $caught4b "GREEN: the failed install's own throw was caught by the child session's try/catch (a catchable error, not a process-killing exit)"
 
   $sentinel4b = $output4b -contains "PRIKK_SENTINEL=reached-after-iex"
   Assert-True $sentinel4b "GREEN: the child session prints a sentinel after the failed one-line install -- the session survived; the old 'exit 1' behavior would have ended the whole child process before this line, uncatchable by the surrounding try/catch"
@@ -455,21 +572,45 @@ Write-Output "PRIKK_SENTINEL=reached-after-iex"
 # (something this test does not control and cannot inspect in advance) could otherwise make even a
 # *correct* split/filter/rejoin round-trip fail a literal byte-for-byte comparison for reasons
 # having nothing to do with this control's own subject.
+#
+# Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, conditions C2 and C3): three PATH shapes run
+# here now, not one -- Shape A (one existing entry, the original Part 6a2 scenario), Shape B (no
+# Path value at all before install), and Shape C (two existing entries, one %VAR%-style and one
+# literal) -- because empty and one-item lists are exactly where PowerShell's pipeline unrolling
+# bites (install.ps1's own comment above $pathEntries has the about_Arrays citation). The RED
+# perturbation (install.ps1's raw-registry calls swapped back for the old Get/SetEnvironmentVariable
+# pair) is shown once, against Shape A, since the perturbation itself does not depend on which
+# shape is on the PATH; GREEN (the real, unperturbed install.ps1 and uninstall.ps1) runs for all
+# three. Every step below also prints the raw Value and Kind it just read or wrote, unconditionally
+# -- not only on failure -- so a future failure here is readable straight from the log, the way
+# Part 6a2's own Control 5 failure was not: it had to be diagnosed by reading install.ps1's source.
 # ---------------------------------------------------------------------------
-Write-Section "Control 5: raw PATH registry preservation, unexpanded ExpandString entries (C2, red before green)"
+Write-Section "Control 5: raw PATH registry preservation, unexpanded ExpandString entries (C2/C3, red before green)"
+
+function Write-RawPathState([string]$Step, $Raw) {
+  Write-Host "  Control 5 state ($Step): Value='$($Raw.Value)' Kind=$($Raw.Kind) Existed=$($Raw.Existed)"
+}
 
 $originalRawPath = Get-RawUserPathForTest
+Write-RawPathState "before any scenario (the CI runner's own real value, saved for final restore)" $originalRawPath
+
 $keepEntry = '%USERPROFILE%\prikk-keep'
-$installDir5 = Join-Path $scratchRoot "install-control5"
+$installDir5 = Join-Path $scratchRoot "install-control5a"
+$installDir5b = Join-Path $scratchRoot "install-control5b"
+$installDir5c = Join-Path $scratchRoot "install-control5c"
 
 try {
+  # ===== Shape A: one existing entry (the original Part 6a2 scenario) ===========================
+  Write-Host "-- Control 5, Shape A: one existing entry --"
   $seededValue = $keepEntry
   Set-RawUserPathForTest -Value $seededValue -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
   $afterSeedRaw = Get-RawUserPathForTest
-  Assert-True ($afterSeedRaw.Value -ceq $seededValue) "setup: the seeded Path value reads back unexpanded, as written"
-  Assert-True ($afterSeedRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "setup: the seeded Path value's own registry kind is ExpandString"
+  Write-RawPathState "Shape A seed" $afterSeedRaw
+  Assert-True ($afterSeedRaw.Value -ceq $seededValue) "Shape A setup: the seeded Path value reads back unexpanded, as written"
+  Assert-True ($afterSeedRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "Shape A setup: the seeded Path value's own registry kind is ExpandString"
 
-  # --- RED: install.ps1, perturbed back to the old API calls ------------------------------------
+  # --- RED: install.ps1, perturbed back to the old API calls -- shown once; the perturbation ----
+  # does not depend on which PATH shape is present, so it is not repeated for Shapes B and C.
   $rawReadMarker = '$rawPath = Get-RawUserPathEntry'
   if (-not $installScriptContent.Contains($rawReadMarker)) {
     throw "control 5's read perturbation text was not found in install.ps1 -- the template changed shape; update this script"
@@ -490,6 +631,7 @@ try {
   try {
     & $enginePath -NoProfile -ExecutionPolicy Bypass -File $perturbedInstall5Path
     $redRaw = Get-RawUserPathForTest
+    Write-RawPathState "Shape A RED (perturbed install)" $redRaw
     $redCorrupted = ($redRaw.Value -cne $seededValue) -or ($redRaw.Kind -ne [Microsoft.Win32.RegistryValueKind]::ExpandString)
     Assert-True $redCorrupted "RED: the perturbed install.ps1 (old Get/SetEnvironmentVariable calls) expands the seeded entry and/or downgrades its registry kind -- the control can fail"
   } finally {
@@ -501,19 +643,21 @@ try {
   # Restore the clean seed before exercising the real scripts.
   Set-RawUserPathForTest -Value $seededValue -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
   $afterRestoreRaw = Get-RawUserPathForTest
-  Assert-True ($afterRestoreRaw.Value -ceq $seededValue) "setup: the seeded Path value is restored before the real install.ps1 runs"
+  Write-RawPathState "Shape A restored before GREEN" $afterRestoreRaw
+  Assert-True ($afterRestoreRaw.Value -ceq $seededValue) "Shape A setup: the seeded Path value is restored before the real install.ps1 runs"
 
   # --- GREEN: the real, unperturbed install.ps1 -------------------------------------------------
   $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18085"
   $server5b = Start-StaticFileServer -Directory $distDirResolved -Port 18085
   try {
     & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
-    Assert-True ($LASTEXITCODE -eq 0) "GREEN: the real install.ps1 exits 0 with a seeded ExpandString Path entry present"
+    Assert-True ($LASTEXITCODE -eq 0) "Shape A GREEN: the real install.ps1 exits 0 with a seeded ExpandString Path entry present"
     $afterInstallRaw = Get-RawUserPathForTest
-    $afterInstallEntries = $afterInstallRaw.Value -split ';' | Where-Object { $_ -ne '' }
-    Assert-True ($afterInstallEntries -ccontains $keepEntry) "GREEN: the seeded entry is still present, unexpanded, after the real install.ps1 runs"
-    Assert-True ($afterInstallRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "GREEN: the Path value's own registry kind is still ExpandString after the real install.ps1 runs"
-    Assert-True ($afterInstallEntries -contains $installDir5) "GREEN: the real install.ps1 still added its own entry to the Path"
+    Write-RawPathState "Shape A GREEN install" $afterInstallRaw
+    $afterInstallEntries = @($afterInstallRaw.Value -split ';' | Where-Object { $_ -ne '' })
+    Assert-True ($afterInstallEntries -ccontains $keepEntry) "Shape A GREEN: the seeded entry is still present, unexpanded, after the real install.ps1 runs"
+    Assert-True ($afterInstallRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "Shape A GREEN: the Path value's own registry kind is still ExpandString after the real install.ps1 runs"
+    Assert-True ($afterInstallEntries -contains $installDir5) "Shape A GREEN: the real install.ps1 still added its own entry to the Path"
   } finally {
     Stop-StaticFileServer $server5b
     Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
@@ -521,22 +665,99 @@ try {
 
   # --- GREEN: the real, unperturbed uninstall.ps1 -- byte-for-byte round trip -------------------
   & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
-  Assert-True ($LASTEXITCODE -eq 0) "GREEN: the real uninstall.ps1 exits 0"
+  Assert-True ($LASTEXITCODE -eq 0) "Shape A GREEN: the real uninstall.ps1 exits 0"
   $afterUninstallRaw = Get-RawUserPathForTest
-  Assert-True ($afterUninstallRaw.Value -ceq $seededValue) "GREEN: the raw Path value after uninstall.ps1 is byte-for-byte identical to the seeded value (only this installer's own entry was removed; the seeded entry was completely untouched)"
-  Assert-True ($afterUninstallRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "GREEN: the Path value's own registry kind is still ExpandString after the real uninstall.ps1 runs"
+  Write-RawPathState "Shape A GREEN uninstall" $afterUninstallRaw
+  Assert-True ($afterUninstallRaw.Value -ceq $seededValue) "Shape A GREEN: the raw Path value after uninstall.ps1 is byte-for-byte identical to the seeded value (only this installer's own entry was removed; the seeded entry was completely untouched)"
+  Assert-True ($afterUninstallRaw.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "Shape A GREEN: the Path value's own registry kind is still ExpandString after the real uninstall.ps1 runs"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item -Path $installDir5 -Recurse -Force -ErrorAction SilentlyContinue
+
+  # ===== Shape B (C2): the user Path value is absent entirely before install ====================
+  Write-Host "-- Control 5, Shape B: Path value absent --"
+  Remove-RawUserPathForTest
+  $afterRemoveRaw = Get-RawUserPathForTest
+  Write-RawPathState "Shape B seed (value deleted)" $afterRemoveRaw
+  Assert-True (-not $afterRemoveRaw.Existed) "Shape B setup: the Path value does not exist before install.ps1 runs"
+
+  $env:PRIKK_INSTALL_DIR = $installDir5b
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18088"
+  $server5c = Start-StaticFileServer -Directory $distDirResolved -Port 18088
+  try {
+    & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+    Assert-True ($LASTEXITCODE -eq 0) "Shape B GREEN: the real install.ps1 exits 0 with no Path value present beforehand"
+    $afterInstallRawB = Get-RawUserPathForTest
+    Write-RawPathState "Shape B GREEN install" $afterInstallRawB
+    Assert-True ($afterInstallRawB.Value -ceq $installDir5b) "Shape B GREEN: the Path value holds only this installer's own entry after install.ps1 runs"
+  } finally {
+    Stop-StaticFileServer $server5c
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  }
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "Shape B GREEN: the real uninstall.ps1 exits 0"
+  $afterUninstallRawB = Get-RawUserPathForTest
+  Write-RawPathState "Shape B GREEN uninstall" $afterUninstallRawB
+  # uninstall.ps1's own logic (traced from the template, not assumed): it reads the Path value,
+  # removes this installer's own entry from the split/filtered array, and writes the *kept* array
+  # back with `Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind` -- it never
+  # deletes the registry value outright. When the kept array is empty (as here, since the only
+  # entry present was this installer's own), that write still happens, with an empty string. So
+  # after uninstall the Path value is expected to still EXIST, as an empty REG_SZ, not be absent
+  # again.
+  Assert-True ($afterUninstallRawB.Existed) "Shape B GREEN: the Path value still exists after uninstall.ps1 runs (uninstall.ps1 writes an empty string back; it does not delete the registry value)"
+  Assert-True ($afterUninstallRawB.Value -ceq "") "Shape B GREEN: the Path value is empty after uninstall.ps1 runs"
+  Assert-True ($afterUninstallRawB.Kind -eq [Microsoft.Win32.RegistryValueKind]::String) "Shape B GREEN: the Path value's own registry kind is String (the kind Get-RawUserPathEntry reports, and install.ps1 then writes, when no value existed beforehand to read a kind from)"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+
+  # ===== Shape C (C2): two existing entries, one %VAR%-style and one literal =====================
+  Write-Host "-- Control 5, Shape C: two existing entries, one %VAR%-style and one literal --"
+  $seedEntry1 = '%USERPROFILE%\prikk-keep'
+  $seedEntry2 = 'C:\some\literal\path'
+  $seededValueC = "$seedEntry1;$seedEntry2"
+  Set-RawUserPathForTest -Value $seededValueC -Kind ([Microsoft.Win32.RegistryValueKind]::ExpandString)
+  $afterSeedRawC = Get-RawUserPathForTest
+  Write-RawPathState "Shape C seed" $afterSeedRawC
+  Assert-True ($afterSeedRawC.Value -ceq $seededValueC) "Shape C setup: the seeded two-entry Path value reads back unexpanded, as written"
+
+  $env:PRIKK_INSTALL_DIR = $installDir5c
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18089"
+  $server5d = Start-StaticFileServer -Directory $distDirResolved -Port 18089
+  try {
+    & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+    Assert-True ($LASTEXITCODE -eq 0) "Shape C GREEN: the real install.ps1 exits 0 with two seeded entries present"
+    $afterInstallRawC = Get-RawUserPathForTest
+    Write-RawPathState "Shape C GREEN install" $afterInstallRawC
+    $afterInstallEntriesC = @($afterInstallRawC.Value -split ';' | Where-Object { $_ -ne '' })
+    Assert-True ($afterInstallEntriesC.Count -eq 3) "Shape C GREEN: the Path value holds exactly three entries after install.ps1 runs"
+    Assert-True ($afterInstallEntriesC[0] -ceq $seedEntry1) "Shape C GREEN: the first seeded entry survives in its original position, byte for byte"
+    Assert-True ($afterInstallEntriesC[1] -ceq $seedEntry2) "Shape C GREEN: the second seeded entry survives in its original position, byte for byte"
+    Assert-True ($afterInstallEntriesC[2] -ceq $installDir5c) "Shape C GREEN: this installer's own entry is appended last"
+    Assert-True ($afterInstallRawC.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "Shape C GREEN: the Path value's own registry kind is still ExpandString after install.ps1 runs"
+  } finally {
+    Stop-StaticFileServer $server5d
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  }
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "Shape C GREEN: the real uninstall.ps1 exits 0"
+  $afterUninstallRawC = Get-RawUserPathForTest
+  Write-RawPathState "Shape C GREEN uninstall" $afterUninstallRawC
+  Assert-True ($afterUninstallRawC.Value -ceq $seededValueC) "Shape C GREEN: the raw Path value after uninstall.ps1 is byte-for-byte identical to the two-entry seed, in order (only this installer's own entry was removed)"
+  Assert-True ($afterUninstallRawC.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) "Shape C GREEN: the Path value's own registry kind is still ExpandString after uninstall.ps1 runs"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
 } finally {
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
   Remove-Item -Path $installDir5 -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -Path $installDir5b -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -Path $installDir5c -Recurse -Force -ErrorAction SilentlyContinue
   # Restore the CI runner's own real Path value and kind regardless of pass/fail.
+  Write-RawPathState "restoring the CI runner's own original value" $originalRawPath
   if ($originalRawPath.Existed) {
     Set-RawUserPathForTest -Value $originalRawPath.Value -Kind $originalRawPath.Kind
   } else {
-    $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
-    if ($null -ne $envKey) {
-      try { $envKey.DeleteValue('Path', $false) } finally { $envKey.Close() }
-    }
+    Remove-RawUserPathForTest
   }
 }
 
