@@ -363,11 +363,16 @@ New-Item -ItemType Directory -Force -Path $childScriptsDir | Out-Null
 # --- Control 4a RED: the real '& { ... }' wrapper removed, so the body runs at the caller's own --
 # top-level scope again -- the pre-fix behavior. $ErrorActionPreference and the working variables
 # must then leak into the child session: the opposite of Control 4a GREEN's own assertions below.
-$wrapperOpenMarker = '& {'
+# '& {' alone is not unique in this file: it also occurs inside three top-of-file comments that
+# describe the wrapper in prose (the citations for C1/C2/C3), and `.Replace` has no "first match
+# only" form, so a non-unique marker would also mangle those comments. Pairing it with the first
+# real statement inside the block (its own next line) is unique, confirmed by grep against this
+# round's own install.ps1.txt.
+$wrapperOpenMarker = "& {`n`$ErrorActionPreference = 'Stop'"
 if (-not $installScriptContent.Contains($wrapperOpenMarker)) {
-  throw "control 4a's perturbation text ('& {') was not found in install.ps1 -- the template changed shape; update this script"
+  throw "control 4a's perturbation text ('& { ... `$ErrorActionPreference = ''Stop''') was not found in install.ps1 -- the template changed shape; update this script"
 }
-$noWrapperContent = $installScriptContent.Replace($wrapperOpenMarker, '')
+$noWrapperContent = $installScriptContent.Replace($wrapperOpenMarker, "`$ErrorActionPreference = 'Stop'")
 $trimmedNoWrapperContent = $noWrapperContent.TrimEnd()
 if (-not $trimmedNoWrapperContent.EndsWith('}')) {
   throw "control 4a's perturbation could not find install.ps1's own matching closing brace for '& { ... }' at the end of the file -- the template changed shape; update this script"
