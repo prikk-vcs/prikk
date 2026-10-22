@@ -141,3 +141,22 @@ The review's C1–C3, in full there. In short:
 
 **The first CI run of `windows-installer` passed** (job `119539225487`): 36 checks, both controls red then green. Part
 6a2's conditions stand as written (review addendum).
+
+## Progress, 2026-10-22 (later): Part 6a2 read on CI; Part 6a3 before 6b
+
+**Part 6a2 is pushed** (`9c51c1d3`). On CI, C1 (the `iex` scoping) and C3 (the engine) are proven on Windows. **C2's
+new PATH control found a real defect** (review `0.54.0-step-3-part-6a2-review-v1`).
+- **The bug:** with exactly one entry in the user PATH, `$pathEntries` is a string, not a one-item array, so `+`
+  concatenates. The installer writes one merged entry.
+- **Who it hits:** any user whose user PATH holds one entry.
+
+## Part 6a3 — the PATH list bug and the controls (about 45 min, report `0.54.0-step-3-part-6a3-report.md`)
+
+The review's C1–C5, in full there. In short:
+1. **C1:** `@( … )` around every pipeline result used as a list, in both scripts. Control 5 passes in both passes.
+2. **C2:** two more Control 5 shapes: the user `Path` value absent, and two entries (one `%VAR%`, one literal).
+3. **C3:** on a Control 5 failure, print the raw values and kinds before and after each step.
+4. **C4:** Control 4's two red runs: the wrapper removed, and an `exit 1` before the checksum throw.
+5. **C5:** write the marker before the PATH registry write.
+
+**Then Part 6b** (with its items above, and the macOS timeout).
