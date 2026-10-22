@@ -131,3 +131,18 @@ Report: `0.54.0-step-3-part-7a2-report.md`.
 `main`: the AUR packages are placeholders until the 0.54.0 release runs `aur-push`. Its CHANGELOG entry goes on
 `main`. The Arch section tells users to import the release key before `paru -S prikk`, because the key is on no public
 keyserver.
+
+## Progress, 2026-10-22: Part 7a accepted; Part 7b is next
+
+**Review:** `.git-exclude/reviewed/0.54.0-step-3-part-7a2-review-v1.md`. Pushed at `a818ca85`; CI 17/17.
+- **The dry run, re-run** (run `39722106943`), uploads all four files. Both checksums match 0.53.0's release page.
+- **`aur-push`'s committed step text was run by the architect against local repositories:**
+  - green, and a rerun that commits nothing;
+  - both controls red: with no commit identity, and with relative key paths.
+
+**Next: Part 7b, §5's text,** with the review-7a notes:
+- the `install.md` Arch section and the landing line go on `hold/0.54.0-windows-docs`;
+- `install.md` says to import the release key before `paru -S prikk`;
+- the CHANGELOG entry goes on `main`.
+
+Report: `0.54.0-step-3-part-7b-report.md`.
