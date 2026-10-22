@@ -124,7 +124,7 @@
      the `:hover` rules above still apply in full, this only turns off the tween between states, so
      a hover still communicates without needing to be seen moving. */
   @media (prefers-reduced-motion: reduce){
-    .button, nav[aria-label="Primary"] a, .copy{transition:none}
+    .button, nav[aria-label="Primary"] a, .copy, .tab{transition:none}
   }
 
   /* ---- hero (RFC 137 §11: a photographic hero, single column of copy over it) ---- */
@@ -324,6 +324,23 @@
   .feature-strip p{margin:0;font-size:13px;color:var(--ink-soft)}
 
   /* ---- install ---- */
+  /* Windows installer handoff v1 Part 6b, owner ruling 2026-10-20: "tabs are used and only one
+     for the user platform is visible by default." This is a platform-detection tab, a different
+     question from RFC 137 §13q's own skill-level (sh vs cargo) tab, which that section rejected
+     for unskilled-reader-confusion reasons unrelated to this one -- §13q's accessibility bar
+     still applies: `role="tablist"`/`role="tab"`/`aria-selected`, roving `tabindex`, and a visible
+     focus (`:focus-visible` above, reused rather than reinvented). Styled from the same tokens
+     the rest of the page uses (`--rule`/`--sage`/`--btn-ink`), matching `.button`'s own shape
+     rather than inventing a new one. */
+  .tabs{display:flex;gap:8px;margin-top:30px}
+  .tab{
+    display:inline-flex;align-items:center;justify-content:center;min-height:38px;
+    padding:0 18px;border-radius:999px;border:1px solid var(--rule);background:transparent;
+    color:var(--ink-soft);font:inherit;font-size:.85rem;font-weight:620;cursor:pointer;
+    transition:background-color var(--hover-timing), border-color var(--hover-timing), color var(--hover-timing);
+  }
+  .tab:hover{border-color:var(--sage);color:var(--ink)}
+  .tab[aria-selected="true"]{background:var(--sage);border-color:var(--sage);color:var(--btn-ink)}
   .install-block{display:grid;gap:12px;max-width:660px;margin-top:30px}
   .cmdrow{display:flex;align-items:center;gap:10px;background:var(--paper);box-shadow:var(--soft-shadow);
     border-radius:9px;padding:11px 14px;max-width:100%}
@@ -448,16 +465,36 @@
     <div class="wrap">
       <p class="eyebrow">Get started</p>
       <h2>Try Prikk</h2>
-      <div class="install-block">
+      <!-- Windows installer handoff v1 Part 6b: both panels are unconditionally in the markup,
+           and neither is hidden by any CSS rule -- only the inline script below ever sets the
+           `hidden` attribute. A reader with JavaScript disabled or blocked therefore sees both
+           commands, each under its own platform heading, and is never stuck; the tablist/arrow-key
+           behaviour and the platform-based default selection are a pure enhancement on top of
+           that, never a requirement for either command to be reachable. -->
+      <div class="tabs" role="tablist" aria-label="Install command, by platform">
+        <button class="tab" type="button" id="tab-unix" role="tab"
+          aria-selected="true" aria-controls="panel-unix" tabindex="0">macOS / Linux</button>
+        <button class="tab" type="button" id="tab-win" role="tab"
+          aria-selected="false" aria-controls="panel-win" tabindex="-1">Windows</button>
+      </div>
+      <div class="install-block" id="panel-unix" role="tabpanel" aria-labelledby="tab-unix">
         <div class="cmdrow">
           <code id="c1">curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/install.sh | sh</code>
           <button class="copy" type="button" data-for="c1">Copy</button>
         </div>
+        <p class="note">Linux (x86_64, aarch64) and macOS on Apple Silicon. The
+          <a href="docs/guide/install.html">install guide</a> also covers installing with Cargo,
+          pinning a version, verifying checksums, and building from source.</p>
       </div>
-      <p class="note">Linux (x86_64, aarch64) and macOS on Apple Silicon. On Windows, download the
-        zip, as the <a href="docs/guide/install.html">install guide</a> describes; the guide also
-        covers installing with Cargo, pinning a version, verifying checksums, and building from
-        source.</p>
+      <div class="install-block" id="panel-win" role="tabpanel" aria-labelledby="tab-win">
+        <div class="cmdrow">
+          <code id="c2">irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex</code>
+          <button class="copy" type="button" data-for="c2">Copy</button>
+        </div>
+        <p class="note">Windows (x86_64 only). The
+          <a href="docs/guide/install.html">install guide</a> also covers execution policy,
+          pinning a version, verifying checksums, and the PATH change the installer makes.</p>
+      </div>
       <p aria-live="polite" class="visually-hidden" id="copied"></p>
     </div>
   </section>
@@ -668,6 +705,60 @@ note: the message is validated but not stored -- it will not appear in `prikk lo
       });
     });
   });
+
+  (function () {
+    // Windows installer handoff v1 Part 6b: the WAI-ARIA Authoring Practices Guide (APG) tabs
+    // pattern (https://www.w3.org/WAI/ARIA/apg/patterns/tabs/) is what this is reviewed against --
+    // no browser exists in this round's dev environment to click through it, so this is a by-hand
+    // review against that spec, not a tested one. Horizontal tablist -> Left/Right move focus and
+    // selection together (automatic activation, the APG's own simpler model, fine for two cheap
+    // panels with no network cost to switching); Up/Down is the APG's rule for a *vertical*
+    // tablist, which this one is not. Home/End (first/last tab) are the APG's own optional extra,
+    // included since they cost nothing here.
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+    if (!tabs.length) { return; }
+
+    function panelFor(tab) {
+      return document.getElementById(tab.getAttribute("aria-controls"));
+    }
+
+    function select(tab, focusToo) {
+      tabs.forEach(function (t) {
+        var active = t === tab;
+        t.setAttribute("aria-selected", active ? "true" : "false");
+        t.tabIndex = active ? 0 : -1;
+        var panel = panelFor(t);
+        if (panel) { panel.hidden = !active; }
+      });
+      if (focusToo) { tab.focus(); }
+    }
+
+    tabs.forEach(function (tab, index) {
+      tab.addEventListener("click", function () { select(tab, false); });
+      tab.addEventListener("keydown", function (event) {
+        var next = null;
+        if (event.key === "ArrowRight") { next = (index + 1) % tabs.length; }
+        else if (event.key === "ArrowLeft") { next = (index - 1 + tabs.length) % tabs.length; }
+        else if (event.key === "Home") { next = 0; }
+        else if (event.key === "End") { next = tabs.length - 1; }
+        if (next !== null) {
+          event.preventDefault();
+          select(tabs[next], true);
+        }
+      });
+    });
+
+    // Platform-detection default (owner ruling, 2026-10-20): navigator.userAgentData.platform
+    // where available, navigator.userAgent otherwise; an unknown platform keeps the first
+    // (macOS/Linux) tab, since `isWindows` only ever flips it away from that default.
+    var platformHint = "";
+    try {
+      platformHint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.userAgent || "";
+    } catch (e) {}
+    var isWindows = /win/i.test(platformHint);
+    var defaultTab = tabs.filter(function (t) { return t.id === (isWindows ? "tab-win" : "tab-unix"); })[0];
+    if (defaultTab) { select(defaultTab, false); }
+  })();
 </script>
 </body>
 </html>
