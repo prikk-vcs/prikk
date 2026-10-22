@@ -33,9 +33,9 @@ multi-signer policy exists yet — see
 same statement when it finishes, rather than only stating it here.
 
 **Supported today**: Linux (`x86_64`, `aarch64`) and macOS (Apple Silicon only — there is no
-prebuilt binary for Intel Macs). **Not yet supported**: Windows — the script detects it and refuses
-with a pointer to the manual `.zip` download or `cargo install prikk`, rather than silently doing
-nothing or guessing. A PowerShell equivalent is a separate, later increment.
+prebuilt binary for Intel Macs). **On Windows, this script refuses** — it is a POSIX shell script,
+unusable there — and points at [the Windows installer](#the-windows-installer) below, rather than
+silently doing nothing or guessing.
 
 **Version selection**: defaults to the latest release. Pin one with `sh install.sh --version X.Y.Z`
 or `PRIKK_INSTALL_VERSION=X.Y.Z` — the form a CI pipeline typically wants, so a workflow does not
@@ -68,6 +68,66 @@ installer still writes to `~/.bashrc` (or `~/.zshrc` for zsh) — the file an in
 shell reads on Linux, and the common case this script optimizes for — and says so when it runs; if
 your `~/.bash_profile` does not source `~/.bashrc`, add the `PATH` line manually, or add
 `. ~/.bashrc` to `~/.bash_profile` yourself.
+
+## The Windows installer
+
+```powershell
+irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex
+```
+
+**What it does, exactly**: detects CPU architecture
+(`[RuntimeInformation]::OSArchitecture`, falling back to `$env:PROCESSOR_ARCHITECTURE` if that call
+is unavailable); downloads that platform's release `.zip` and its `.sha256` from the same release
+page URLs the manual path uses; verifies the checksum with `Get-FileHash` and **installs nothing if
+verification fails**; extracts `prikk.exe` to `%LOCALAPPDATA%\Programs\prikk`; and, if that
+directory is not already on your user `PATH`, adds it — see **The `PATH` change**, below.
+
+**Generated, not hand-maintained.** Exactly like `install.sh`/`uninstall.sh` above,
+`install.ps1`/`uninstall.ps1` are produced by `prikk-release-policy generate-installer` and attached
+as release assets at publish time — never committed to the repository as tracked files. Their
+source template lives beside `install.sh`'s own, in `tools/release-policy/templates/`.
+
+**What it claims, and what it does not.** The same statement as the shell installer's: a passing
+checksum proves the file you received matches what the release page published; it does not prove
+*who* published it. The script prints this itself when it finishes, the same as `install.sh` does.
+
+**`prikk.exe` is not code-signed, and Windows may warn or block it.**
+
+**Supported today**: `x86_64` Windows only. Any other architecture — ARM64 Windows included —
+refuses with a pointer to the manual `.zip` download or `cargo install prikk`, the same way the
+shell installer refuses an Intel Mac.
+
+**Version and install-directory overrides**: environment variables only —
+`PRIKK_INSTALL_VERSION=X.Y.Z` and `PRIKK_INSTALL_DIR=<path>`, set before the one-liner above. There
+are no `--version`/`--prefix` flags here, unlike `install.sh`: the one-line `irm | iex` form
+evaluates the downloaded script as if it were typed at the prompt, with no way to forward
+positional arguments to it the way `sh -s -- --version X.Y.Z` can.
+
+**The `PATH` change.** The installer adds its install directory to your **user** `PATH` (never the
+machine `PATH`), without asking first — the same no-prompt rule `install.sh` follows for its own
+`PATH` edit. It records in a marker file, inside the install directory, that it made the change;
+`uninstall.ps1` removes the `PATH` entry only if that marker says *this* installer added it, so a
+directory you had already put on `PATH` yourself beforehand is left alone.
+
+**Execution policy.** The one-line form above is unaffected by execution policy: code piped into
+`Invoke-Expression` runs as if typed at the prompt, which is not the code path execution policy
+gates. If you instead save the file first (`irm <url> -o install.ps1`, the same "read it before you
+run it" option the shell installer offers) and try to run that file directly, PowerShell's default
+policy will likely block it — either `Unblock-File .\install.ps1` first, or run it as
+`powershell -ExecutionPolicy Bypass -File install.ps1`.
+
+**Re-running is safe.** It overwrites `prikk.exe` with the same (or a newly pinned) version and
+does not add a duplicate `PATH` entry if one is already there.
+
+**Uninstalling**:
+
+```powershell
+irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | iex
+```
+
+Removes `prikk.exe`, the marker file, and the install directory itself if it is then empty, and the
+`PATH` entry — but only if the marker says this installer's own run added it. If you installed with
+a custom `PRIKK_INSTALL_DIR`, set the same value before running the uninstaller too.
 
 ## Verify the checksum
 
