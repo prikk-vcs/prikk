@@ -129,6 +129,46 @@ Removes `prikk.exe`, the marker file, and the install directory itself if it is 
 `PATH` entry — but only if the marker says this installer's own run added it. If you installed with
 a custom `PRIKK_INSTALL_DIR`, set the same value before running the uninstaller too.
 
+## Arch Linux (AUR)
+
+Two packages, [`prikk`](https://aur.archlinux.org/packages/prikk) and
+[`prikk-bin`](https://aur.archlinux.org/packages/prikk-bin), are **generated and pushed to the AUR by
+the release workflow** (the `aur-build` and `aur-push` jobs) for every tagged release — not
+hand-maintained. This differs from `install.sh`/`install.ps1` above: those are attached as release
+assets, while these are pushed straight into each package's own AUR git repository.
+
+**`prikk-bin`** installs the prebuilt binary and needs no key:
+
+```sh
+paru -S prikk-bin   # or: yay -S prikk-bin
+```
+
+Its PKGBUILD carries no `validpgpkeys` — the checksum is all it verifies. As elsewhere on this page:
+a passing checksum proves the package you received matches what the release published; it does not
+prove *who* published it.
+
+**`prikk`** builds from the signed source tag instead, and needs one step first that `prikk-bin`
+does not: import the release key and check its fingerprint, the same command [Verify the
+tag](#verify-the-tag) below already uses.
+
+```sh
+curl -fsSL https://github.com/nabbisen.gpg | gpg --import
+```
+
+Its fingerprint is `25757DA6CBF7022C4E14CCAC1B3066B87DB99A34` — check it the same way "Verify the
+tag" does. **This step is not optional.** The release key is on no public keyserver — neither
+`keys.openpgp.org` nor `keyserver.ubuntu.com` has it — and `paru`/`yay` try to fetch a PKGBUILD's
+missing `validpgpkeys` entry from a keyserver automatically when building a source package. Skip the
+import and the build stops at "unknown public key", with no further prompt. Once the key is
+imported:
+
+```sh
+paru -S prikk   # or: yay -S prikk
+```
+
+`makepkg` verifies the tagged source against the imported key before building; a tag whose signature
+does not verify never reaches `cargo build`.
+
 ## Verify the checksum
 
 Every downloaded release archive ships beside a `.sha256` file recording its SHA-256 digest —
