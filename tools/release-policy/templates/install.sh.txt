@@ -66,8 +66,10 @@ case "$os" in
     esac
     ;;
   MINGW* | MSYS* | CYGWIN*)
-    echo "prikk-install: this script does not support Windows yet" >&2
-    echo "prikk-install: download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," >&2
+    echo "prikk-install: this script does not support Windows -- it is a POSIX shell script" >&2
+    echo "prikk-install: run the Windows installer instead:" >&2
+    echo "prikk-install:   irm https://github.com/$repo/releases/latest/download/install.ps1 | iex" >&2
+    echo "prikk-install: or download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," >&2
     echo "prikk-install: or run 'cargo install prikk'" >&2
     exit 1
     ;;
