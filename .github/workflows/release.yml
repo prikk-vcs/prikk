@@ -218,3 +218,116 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo prikk-vcs/prikk --title "$TAG" --notes-file release-notes.md
+
+  # 0.54.0 step 3 Part 7a: builds (never pushes) the two AUR packages for this tag, in
+  # `aur-build.yml`'s own container -- see that file for why it is a separate, reusable workflow
+  # rather than inline steps here (the same logic must also run standalone, via that file's own
+  # `workflow_dispatch`, for the handoff's required pre-cut dry run against 0.53.0). `needs:
+  # publish`, per the handoff's own item 2: this only ever runs after the real GitHub release
+  # already exists -- a failure here cannot retroactively touch `publish`'s own outcome, since
+  # GitHub Actions jobs do not roll back prior jobs once they have concluded.
+  aur-build:
+    name: AUR build
+    needs: publish
+    uses: ./.github/workflows/aur-build.yml
+    permissions:
+      contents: read
+    with:
+      tag: ${{ github.ref_name }}
+      source: publish
+
+  # `needs: aur-build`, not `publish` directly -- this job only ever runs after the packages this
+  # tag will push have already built and had their source signature verified. `environment: aur`
+  # holds the one secret this job uses (`AUR_SSH_PRIVATE_KEY`); that environment does not exist yet
+  # (the owner creates it, per the handoff's own item 4 -- not this round's job). A workflow
+  # referencing a not-yet-created environment is valid YAML either way; GitHub Actions' own
+  # documented behaviour is to fail the job closed (it cannot resolve the environment's protection
+  # rules or secrets) until the environment exists -- the safe failure mode, not a silent bypass.
+  #
+  # No container: `security-audit.yml`'s own stance against `rustsec/audit-check` ("exactly the
+  # wrong place to add a new opaque third-party dependency for convenience") applies here with more
+  # force, not less -- this job holds a real deploy key, so it runs plain `ssh`/`git` only, on the
+  # bare `ubuntu-latest` runner, with no third-party action anywhere in its steps.
+  aur-push:
+    name: push AUR packages
+    needs: aur-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: aur
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
+      # `-i key.pem`: the deploy key written below. `-o UserKnownHostsFile=known_hosts
+      # -o StrictHostKeyChecking=yes`: the pinned host key written below, checked strictly -- an
+      # unpinned or substituted host key refuses the connection rather than silently trusting it.
+      GIT_SSH_COMMAND: ssh -i key.pem -o UserKnownHostsFile=known_hosts -o StrictHostKeyChecking=yes
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: aur-packages
+          path: aur-packages
+
+      # AUR's own published SSH host-key fingerprints (https://aur.archlinux.org/, "The following
+      # SSH fingerprints are used for the AUR"), independently re-verified with `ssh-keyscan
+      # aur.archlinux.org` at implementation time: the scanned Ed25519 key's own SHA256 fingerprint
+      # (computed locally from the raw key bytes, not read off any web page) matched the published
+      # `SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4` exactly (0.54.0 step 3 Part 7a report).
+      # This literal host-key line, not a bare fingerprint, is what `UserKnownHostsFile` above
+      # needs -- `ssh`/`git` check the full key against this file.
+      - name: Write the pinned AUR host key
+        run: echo "aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN" > known_hosts
+
+      # Written via `printf` from a shell environment variable, never interpolated directly into a
+      # `run:` string as `${{ secrets.AUR_SSH_PRIVATE_KEY }}` -- that would place the secret's
+      # value in the literal script text GitHub Actions logs, rather than as an opaque runtime
+      # value a masked `env:` substitution keeps out of the log. GitHub Actions masks a registered
+      # secret's value automatically; nothing in this job `cat`s or otherwise prints the key file.
+      - name: Write the AUR deploy key
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > key.pem && chmod 600 key.pem
+
+      - name: Clone prikk's AUR repository
+        run: git clone ssh://aur@aur.archlinux.org/prikk.git aur-prikk
+
+      - name: Clone prikk-bin's AUR repository
+        run: git clone ssh://aur@aur.archlinux.org/prikk-bin.git aur-prikk-bin
+
+      - name: Copy the generated package files (prikk)
+        run: cp aur-packages/prikk/PKGBUILD aur-packages/prikk/.SRCINFO aur-prikk/
+
+      - name: Copy the generated package files (prikk-bin)
+        run: cp aur-packages/prikk-bin/PKGBUILD aur-packages/prikk-bin/.SRCINFO aur-prikk-bin/
+
+      - name: Stage prikk's package files
+        run: git -C aur-prikk add PKGBUILD .SRCINFO
+
+      - name: Stage prikk-bin's package files
+        run: git -C aur-prikk-bin add PKGBUILD .SRCINFO
+
+      # `git diff --cached --quiet` exits non-zero only when there IS a staged change, so `||`
+      # commits only then -- a rerun with identical content commits nothing, which is exactly the
+      # handoff's own requirement ("if the content is unchanged ... it pushes nothing and
+      # succeeds"), confirmed against a real local repository before writing this step (0.54.0
+      # step 3 Part 7a report), not assumed.
+      - name: Commit prikk, if changed
+        run: git -C aur-prikk diff --cached --quiet || git -C aur-prikk commit -m "prikk $TAG"
+
+      - name: Commit prikk-bin, if changed
+        run: git -C aur-prikk-bin diff --cached --quiet || git -C aur-prikk-bin commit -m "prikk-bin $TAG"
+
+      # `git push` with nothing new to push exits 0 ("Everything up-to-date") -- confirmed directly
+      # against a real local repository before writing this step, not assumed -- so neither push
+      # needs a conditional guard even on a content-unchanged rerun.
+      - name: Push prikk
+        run: git -C aur-prikk push
+
+      - name: Push prikk-bin
+        run: git -C aur-prikk-bin push
+
+      # Unconditional cleanup -- GitHub Actions has no try/finally, so `if: always()` is the
+      # equivalent: this runs whether every step above succeeded or any one of them failed.
+      - name: Remove the AUR deploy key
+        if: always()
+        run: rm -f key.pem

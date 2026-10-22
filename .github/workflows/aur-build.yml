@@ -1,0 +1,171 @@
+name: AUR build
+
+# 0.54.0 step 3 Part 7a: builds (never pushes) the two AUR packages -- `prikk` (from the signed
+# source tag) and `prikk-bin` (the published binary) -- for a release tag, and proves the source
+# package verifies that tag's PGP signature before it is ever handed to `aur-push` (release.yml).
+#
+# A reusable `workflow_call` workflow, called two ways, running the *same* build-and-verify logic
+# either way -- the handoff's own dry-run requirement (item 3) needs to exercise exactly what a real
+# release's own job does, not an approximation of it, and the only way to guarantee that is for both
+# paths to go through this one file:
+#   - from `release.yml`, `needs: publish`, with `source: publish` -- reads `dist/` from this same
+#     run's own freshly-built `build`/`publish` artifacts.
+#   - directly, via this workflow's own `workflow_dispatch`, against any existing, already-released
+#     tag (the handoff's dry run: "Run it for 0.53.0 before 0.54.0 is cut") -- `source` defaults to
+#     `release` in that case (`inputs.source || 'release'` below), downloading that tag's own
+#     already-published assets with `gh release download` instead of an in-run artifact that does
+#     not exist for a tag cut by an earlier release.
+#
+# `skip_key_import` exists only for the handoff's own required red control (item 3): "the same dry
+# run ... with the key removed from the job, must fail in makepkg's signature check. Show it red."
+# It is `workflow_dispatch`-only (absent from `workflow_call`, so a real release's own call can never
+# set it -- `inputs.skip_key_import != true` reads `null != true` as `true` for that trigger) and
+# defaults to `false`.
+#
+# No secrets of any kind, in either trigger. This job's container never holds the AUR SSH key --
+# that lives only in `aur-push`'s own `aur` environment, a separate job in `release.yml`.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build AUR packages for"
+        required: true
+        type: string
+      source:
+        description: "Where dist/'s asset checksums come from: 'publish' (this run's own freshly-built artifact) or 'release' (download the tag's already-published GitHub release assets)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing, already-released tag to dry-run against (e.g. 0.53.0) -- never a tag not yet released"
+        required: true
+        type: string
+      skip_key_import:
+        description: "Red control only: skip importing the maintainer PGP key, to prove the signature check fails closed. Never true for a real dry run."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  aur-build:
+    name: build AUR packages (${{ inputs.tag }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # archlinux/archlinux:base, pinned by digest -- re-verified against Docker Hub's registry API
+    # at implementation time (0.54.0 step 3 Part 7a report), not trusted from an earlier brief.
+    # A floating `base` tag's digest changes as the upstream image updates, so this pin will need
+    # periodic re-pinning -- the same maintenance burden any digest-pinned dependency carries.
+    container:
+      image: archlinux/archlinux@sha256:09d7c61fa6a0b6ec21020d75dec1cf901208ee601407fe6ef0f7988c05b94d19
+    steps:
+      # `archlinux/archlinux:base` ships none of git/rust/cargo/gnupg/the GitHub CLI --
+      # `makedepends=(git rust cargo)` in prikk's own PKGBUILD, plus gnupg for signature
+      # verification and github-cli for the dry-run download path (installed unconditionally
+      # rather than conditionally, to keep this one step a single reviewable exact command).
+      # `-Syu`, not `-Sy` alone: a partial upgrade (syncing the database without upgrading already-
+      # installed packages) is explicitly unsupported by Arch and can produce broken dependency
+      # resolution -- the safe, documented sync for a fresh container.
+      - name: Install build tooling
+        run: pacman -Syu --noconfirm --needed base-devel git rust gnupg github-cli
+
+      # makepkg refuses to run as root (by design -- a PKGBUILD's build()/package() functions are
+      # arbitrary code, and running that as root in a package-building context is exactly the
+      # privilege escalation Arch's own tooling is written to prevent). `useradd -m` plus `su` for
+      # each build/import step, not `sudo`: no `/etc/sudoers` entry is configured anywhere in this
+      # job, because every make-dependency this job needs (`git`, `rust`, `gnupg`, `base-devel`) is
+      # installed by the step above, as root, before `builduser` exists -- so neither `makepkg -s`
+      # nor a sudo-backed `pacman` call is ever needed downstream, and the only privilege-relevant
+      # action this job performs as root is creating one unprivileged account.
+      - name: Create a non-root build user
+        run: useradd -m builduser
+
+      - uses: actions/checkout@v7
+
+      # `source: publish` (release.yml's own call): this run's own `build` job already produced
+      # dist/*.tar.gz(.sha256) as a workflow artifact; download it exactly as `publish` itself does.
+      - name: Download this run's build artifacts
+        if: ${{ (inputs.source || 'release') == 'publish' }}
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `source: release` (the dry run, and any future re-run against an already-cut tag): no
+      # build/publish job exists in *this* run to download from -- the tag was released earlier.
+      # Only the two Linux tarball+checksum pairs are needed (prikk-bin's own sources); gh CLI
+      # resolves `$TAG`'s already-published assets by pattern, the same shape `release.yml`'s own
+      # `gh release create` step already uses for its own asset globs.
+      - name: Download the tag's published release assets (dry run)
+        if: ${{ (inputs.source || 'release') == 'release' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --dir dist --repo prikk-vcs/prikk --pattern *.tar.gz --pattern *.tar.gz.sha256
+
+      - name: Generate AUR PKGBUILDs
+        env:
+          TAG: ${{ inputs.tag }}
+        run: cargo run -p prikk-release-policy --locked -- generate-aur "$TAG" dist
+
+      # Only the two package directories change owner -- not the whole checkout -- `builduser`
+      # needs write access to run `makepkg` there (it creates `src/`, `pkg/`, and `.SRCINFO`
+      # alongside the generated `PKGBUILD`), and nothing else in this job's working tree.
+      - name: Hand the package directories to the build user
+        run: chown -R builduser:builduser dist/aur
+
+      # The maintainer key `install.md`'s own "Verify the tag" section documents
+      # (`curl -fsSL https://github.com/nabbisen.gpg | gpg --import`) -- the same mechanism a user
+      # verifying a release by hand already uses, not a key file committed to this repository (none
+      # exists here; confirmed by searching the tree before writing this job). Runs as `builduser`
+      # so the key lands in *that* account's own keyring (`~/.gnupg`), which is where `makepkg`,
+      # also run as `builduser` below, looks for it.
+      #
+      # `skip_key_import` (red control, workflow_dispatch only): when true, this step does not run,
+      # so no key is ever imported into `builduser`'s keyring, and `makepkg`'s own signature check
+      # below must fail closed -- proving the check is real, not vacuously passing.
+      - name: Import the maintainer PGP key
+        if: ${{ inputs.skip_key_import != true }}
+        run: su builduser -c "curl -fsSL https://github.com/nabbisen.gpg | gpg --import"
+
+      # `makepkg -D <dir>` changes into the package directory itself rather than this step `cd`-ing
+      # there -- no shell variable, no `&&`, one process. `--printsrcinfo` only reads the PKGBUILD
+      # and writes `.SRCINFO`; it fetches no sources and runs no PKGBUILD function, so it needs
+      # neither the PGP key nor network beyond nothing at all.
+      - name: makepkg --printsrcinfo (prikk)
+        run: su builduser -c "makepkg -D dist/aur/prikk --printsrcinfo > dist/aur/prikk/.SRCINFO"
+
+      # The one step that actually proves the signed-tag claim: `prikk`'s own `source=(...?signed)`
+      # plus `validpgpkeys` (PKGBUILD(5), "Using VCS Sources") makes makepkg itself verify the
+      # tag's PGP signature during source retrieval, automatically, with no separate verification
+      # step required -- confirmed directly against PKGBUILD(5) and by running this exact PKGBUILD
+      # locally against the real signed 0.53.0 tag before writing this job (0.54.0 step 3 Part 7a
+      # report). A failed verification makes `makepkg` exit non-zero here, failing this job. No
+      # `-s`/`--syncdeps`: every makedepend (`git`, `rust`, `cargo`) was installed as root above.
+      - name: makepkg (prikk, build and verify the signed tag)
+        run: su builduser -c "makepkg -D dist/aur/prikk --noconfirm"
+
+      - name: makepkg --printsrcinfo (prikk-bin)
+        run: su builduser -c "makepkg -D dist/aur/prikk-bin --printsrcinfo > dist/aur/prikk-bin/.SRCINFO"
+
+      # `prikk-bin` carries no `validpgpkeys` -- its own PKGBUILD states why (the release assets are
+      # not signed, only the tag is). `sha256sums_x86_64` is still checked against the real
+      # downloaded tarball here, on this job's own `x86_64` runner.
+      - name: makepkg (prikk-bin, build and verify the checksum)
+        run: su builduser -c "makepkg -D dist/aur/prikk-bin --noconfirm"
+
+      # Only PKGBUILD and .SRCINFO -- never the built package, the compiled binary, or anything
+      # under src/`pkg/` -- `aur-push` (release.yml) only ever needs these two files per package.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aur-packages
+          path: |
+            dist/aur/prikk/PKGBUILD
+            dist/aur/prikk/.SRCINFO
+            dist/aur/prikk-bin/PKGBUILD
+            dist/aur/prikk-bin/.SRCINFO
+          if-no-files-found: error
