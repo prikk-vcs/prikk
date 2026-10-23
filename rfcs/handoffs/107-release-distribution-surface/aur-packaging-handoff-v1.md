@@ -176,3 +176,14 @@ minutes:
 - Replace "confirming that is on you".
 
 Report: `0.54.0-step-3-part-7b3-report.md`.
+
+## Progress, 2026-10-24: Part 7b3 accepted; this handoff is complete
+
+**Review:** `.git-exclude/reviewed/0.54.0-step-3-part-7b3-review-v1.md`. The guide now has the reader check the
+PKGBUILD before building, for both packages. Two wording touches go into release prep P1.
+
+**The held docs land after the release run publishes,** not before the tag. They wait until `install.ps1` exists and
+both AUR pages show 0.54.0. This corrects the Part 6b review's "just before the tag".
+
+**Owner setup: done and verified** (2026-10-22). The `aur` environment holds `AUR_SSH_PRIVATE_KEY` and one tag rule,
+`[0-9]*.[0-9]*.[0-9]*`. At the release, the architect reads both AUR jobs and confirms both AUR pages show 0.54.0.
