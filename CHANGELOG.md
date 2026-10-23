@@ -5,7 +5,7 @@
 ### Added
 
 - **`prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only]
-  [--max-bytes N] [--max-files N] [--format json]`** (0.54.0 step 3, Parts 2–3): writes
+  [--max-bytes N] [--max-files N] [--format json]`**: writes
   every file at a point into a brand-new, empty, external directory — no repository history, no
   worktree state. Unlike `cat`/`tree`, which may display any snapshot that merely decodes correctly,
   `extract` **anchors only where a writer would** — the identical admitted-anchor rule
@@ -40,7 +40,7 @@
   confirms, over a range of histories including renames, merges and a two-file swap, that
   `extract`'s own replay produces exactly the state the shared replay (`cat`/`tree`'s own) does, and
   that every malformed-operation shape the shared replay refuses (one per operation kind) is refused
-  by `extract` too. **Part 3** adds: `--plan-only`, reporting the point's own file count, total bytes
+  by `extract` too. It also adds: `--plan-only`, reporting the point's own file count, total bytes
   and `provisional` without writing anything; `--max-bytes`/`--max-files`, refusing the whole point
   by name before the first byte is written (learning the point's own size this way costs what it
   costs — the pre-walk's own cheap bound against unbounded history depth is unchanged and unrelated);
@@ -69,19 +69,19 @@
   the write itself; worth stating plainly since it is meant as a size-first report. `--format json`'s own point
   is now carried under one fixed key, `point` (with a new `point_kind` field for `"ref"`/`"block"`/
   `"claim"`), the same key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1` already use,
-  rather than a dynamic key. **Part 5d** completes `extract-report-v1` and adds this project's first
+  rather than a dynamic key. This also completes `extract-report-v1` and adds this project's first
   machine-readable refusal document. `largest_file_bytes` (the single largest entry's own byte length) is
   now always present, in the JSON report and in `--plan-only`'s text (`largest file: N bytes`); so is
   `claim_parent_block_id` (`null` unless `point_kind` is `"claim"`, in which case it names the block the
   claim's own patches would be sealed onto — distinct from `target_block_id`, the block the claim
-  *recognizes*; no command printed a claim's own parent before this round). Under `--format json`, every
+  *recognizes*; no command printed a claim's own parent until now). Under `--format json`, every
   refusal that exits `1` (never a usage error, exit `2`, which prints no document) now also writes one
   `refusal-v1` JSON document to stdout — stderr's own text and every exit code are entirely unchanged —
   naming one of thirteen stable ids (`over-max-bytes`, `over-max-files`, `destination-exists`,
   `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
   `claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `not-a-repository`,
   `damaged-repository`, `io-failure`), exhaustive by construction (an enum with one variant per id,
-  matched with no wildcard, so a fourteenth refusal cannot go unclassified) — **Part 5e** adds
+  matched with no wildcard, so a fourteenth refusal cannot go unclassified) — this also adds
   `not-a-repository` and a structural catch at `extract`'s own command boundary, so a refusal reached by a
   path not yet classified at its own raise site still gets a document instead of silently printing nothing;
   an unreadable current-branch pointer falls through this catch as `damaged-repository`.
@@ -96,12 +96,12 @@
   shared default — both are now `Precondition`, named `claim-not-found`/`not-a-claim`, without changing
   `read_typed` itself. `refusal-v1` is `extract`'s own document today, designed as this project's reusable
   form for a JSON refusal, for other commands to adopt when next touched.
-- **`prikk received remove <remotes/…> [--plan-only]`** (0.54.0 step 3 Part 5, B2a): removes one
+- **`prikk received remove <remotes/…> [--plan-only]`**: removes one
   received ref's own pointer — the ref itself, not what it reached — from the container `bundle
   import`/`archive import` write and `cat`/`tree`/`checkout`/`extract` read at a bare `remotes/…`
   point. The objects the pointer reached are not deleted by this command: they stay exactly as they
   were, and once nothing reaches them any more, `prikk verify` reports them as an unreached object
-  (0.54.0 step 3 Part 1's own warning, B1), a non-blocking note, not a failure. `--plan-only`
+  (a non-blocking note, not a failure). `--plan-only`
   reports what a real run would remove — the pointer's own current target, or that there is nothing
   named — writing nothing; it still takes the container's lock for the duration of the read, the
   same reason `compact`'s own `--plan-only` does (an operator acts on what a preview reports), and
@@ -115,7 +115,7 @@
   Either way — removed, or later restored — the bytes a pointer once reached are never themselves
   deleted; the only way to actually remove them is a `.prikk/` copy of the repository taken before
   the import that brought them in.
-- **`install.ps1`/`uninstall.ps1`** (0.54.0 step 3 Part 6, Windows installer handoff v1): a Windows
+- **`install.ps1`/`uninstall.ps1`**: a Windows
   installer and uninstaller, generated by `generate-installer` exactly as `install.sh`/`uninstall.sh`
   are, run as the one-line `irm .../install.ps1 | iex`. The whole body runs inside one `& { ... }`
   script block and raises `throw` rather than `exit`, so a failed `iex` run unwinds without closing
@@ -125,7 +125,7 @@
   expanded string; the install directory is added to the user `PATH` without prompting, and a marker
   file gates `uninstall.ps1`'s removal of that entry to only the one this installer itself added.
   Proven on CI under both Windows PowerShell 5.1 and PowerShell 7.
-- **`prikk`/`prikk-bin` on the AUR** (0.54.0 step 3 Part 7, AUR packaging handoff v1): published and kept current
+- **`prikk`/`prikk-bin` on the AUR**: published and kept current
   automatically by the release workflow's `aur-build`/`aur-push` jobs, two PKGBUILDs generated and pushed per tagged
   release, never hand-maintained. `prikk` builds from the signed source tag: its PKGBUILD names the release key, and
   `makepkg` refuses to build unless the tag's signature verifies against it. `prikk-bin` installs the prebuilt binary
@@ -149,7 +149,7 @@
 ### Output changes
 
 - **`verify` no longer fails forever on a stored `Block`/`RefState` that nothing in committed
-  state reaches any more (RFC 164 Rule E, B1).** Before this round, every `Block` and `RefState`
+  state reaches any more (RFC 164 Rule E).** Before 0.54.0, every `Block` and `RefState`
   had its publication trust checked regardless of reachability, so content imported under a key
   this repository never adopted kept failing `verify`'s publication-trust check even after the
   received pointer that named it was replaced by a later, sound import (0.52.0's own documented
@@ -167,7 +167,7 @@
   keeps failing on it exactly as before — this changes nothing for an import that has not yet been
   superseded. **`verify` prints the `unreached objects: N` count line on every run, the same as
   `unreferenced remnants: N`** — including `N = 0` — with the explanation carried only on the
-  per-object warning lines below it, not repeated on the count line itself (Part 1b polish).
+  per-object warning lines below it, not repeated on the count line itself.
 
 ### Fixed
 
@@ -181,8 +181,8 @@
   and `pkg-fmt = "zip"`; confirmed green with the same dry-run command.
 - **`prikk show <block-id>`, in both its text and `--format json` output, failed with `lifecycle
   replay: blob … required for a state effect is missing` on the second consecutive `EditText` of the
-  same file, and every one after** (0.54.0 Part 5c; measured directly by reverting the fix and
-  re-running the regression test this round adds — the first edit's own preimage is always a real,
+  same file, and every one after** (measured directly by reverting the fix and
+  re-running the regression test added for it — the first edit's own preimage is always a real,
   stored `CreateFile` blob, so the gap could never show up any earlier than the second edit).
   `show`'s own block-reading path folded a block's patches over its parent's state starting from an
   empty text cache, with no rebuild of text
