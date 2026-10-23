@@ -756,7 +756,7 @@ note: the message is validated but not stored -- it will not appear in `prikk lo
     try {
       platformHint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.userAgent || "";
     } catch (e) {}
-    var isWindows = /win/i.test(platformHint);
+    var isWindows = /\bWin(dows|32|64)\b/.test(platformHint);
     var defaultTab = tabs.filter(function (t) { return t.id === (isWindows ? "tab-win" : "tab-unix"); })[0];
     if (defaultTab) { select(defaultTab, false); }
   })();

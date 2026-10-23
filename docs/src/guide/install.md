@@ -140,8 +140,8 @@ assets, while these are pushed straight into each package's own AUR git reposito
 **`prikk-bin`** installs the prebuilt binary and needs no key. Its PKGBUILD carries no
 `validpgpkeys` — the checksum is all it verifies. As elsewhere on this page: a passing checksum
 proves the package you received matches what the release published; it does not prove *who*
-published it. The same read-before-building habit still applies: `paru -G prikk-bin` downloads its
-PKGBUILD for reading, so you can confirm its `source_x86_64`/`source_aarch64` URLs point at
+published it. Before building, `paru -G prikk-bin` downloads its PKGBUILD for reading: check that
+its `source_x86_64`/`source_aarch64` URLs point at
 `github.com/prikk-vcs/prikk/releases/download/`.
 
 ```sh
@@ -158,7 +158,7 @@ curl -fsSL https://github.com/nabbisen.gpg | gpg --import
 
 **This step is not optional.** AUR helpers cannot fetch the key for you: it is on no public
 keyserver — neither `keys.openpgp.org` nor `keyserver.ubuntu.com` has it. Without the import,
-`makepkg` stops with "unknown public key". Once the key is imported, read it before building:
+`makepkg` stops with "unknown public key". Once the key is imported, read the PKGBUILD before building:
 
 ```sh
 paru -G prikk   # downloads the PKGBUILD (and .SRCINFO) for reading; builds nothing
