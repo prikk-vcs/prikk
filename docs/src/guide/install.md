@@ -137,17 +137,16 @@ the release workflow** (the `aur-build` and `aur-push` jobs) for every tagged re
 hand-maintained. This differs from `install.sh`/`install.ps1` above: those are attached as release
 assets, while these are pushed straight into each package's own AUR git repository.
 
-**`prikk-bin`** installs the prebuilt binary and needs no key:
+**`prikk-bin`** installs the prebuilt binary and needs no key. Its PKGBUILD carries no
+`validpgpkeys` — the checksum is all it verifies. As elsewhere on this page: a passing checksum
+proves the package you received matches what the release published; it does not prove *who*
+published it. The same read-before-building habit still applies: `paru -G prikk-bin` downloads its
+PKGBUILD for reading, so you can confirm its `source_x86_64`/`source_aarch64` URLs point at
+`github.com/prikk-vcs/prikk/releases/download/`.
 
 ```sh
 paru -S prikk-bin   # or: yay -S prikk-bin
 ```
-
-Its PKGBUILD carries no `validpgpkeys` — the checksum is all it verifies. As elsewhere on this page:
-a passing checksum proves the package you received matches what the release published; it does not
-prove *who* published it. The same read-before-building habit still applies: `paru -G prikk-bin`
-downloads its PKGBUILD for reading, so you can confirm its `source_x86_64`/`source_aarch64` URLs
-point at `github.com/prikk-vcs/prikk/releases/download/`.
 
 **`prikk`** builds from the signed source tag instead, and needs one step first that `prikk-bin`
 does not: import the release key, using the same command [Verify the
@@ -159,7 +158,18 @@ curl -fsSL https://github.com/nabbisen.gpg | gpg --import
 
 **This step is not optional.** AUR helpers cannot fetch the key for you: it is on no public
 keyserver — neither `keys.openpgp.org` nor `keyserver.ubuntu.com` has it. Without the import,
-`makepkg` stops with "unknown public key". Once the key is imported:
+`makepkg` stops with "unknown public key". Once the key is imported, read it before building:
+
+```sh
+paru -G prikk   # downloads the PKGBUILD (and .SRCINFO) for reading; builds nothing
+```
+
+and check that `validpgpkeys` names `25757DA6CBF7022C4E14CCAC1B3066B87DB99A34` and that the
+`source=` line ends in `?signed`. Anyone with AUR push access to the `prikk` package controls its
+text, and could delete `validpgpkeys` and the `?signed` suffix on `source=` entirely, leaving no
+signature check at all. The signature protects the *source* only for as long as the PKGBUILD is the
+one the release workflow itself generated and pushed — so check those two fields yourself before
+every build.
 
 ```sh
 paru -S prikk   # or: yay -S prikk
@@ -167,19 +177,7 @@ paru -S prikk   # or: yay -S prikk
 
 `makepkg` verifies the tagged source against the imported key before building; a tag whose signature
 does not verify never reaches `cargo build`. That check accepts a signature only from a fingerprint
-actually listed in the PKGBUILD's own `validpgpkeys` — importing the wrong key cannot pass it. But
-it does not protect against the PKGBUILD itself being wrong: anyone with AUR push access to the
-`prikk` package controls its text, and could delete `validpgpkeys` and the `?signed` suffix on
-`source=` entirely, leaving no signature check at all. The signature protects the *source* only for
-as long as the PKGBUILD is the one the release workflow itself generated and pushed — confirming
-that is on you. Before building, read it:
-
-```sh
-paru -G prikk   # downloads the PKGBUILD (and .SRCINFO) for reading; builds nothing
-```
-
-and check that `validpgpkeys` names `25757DA6CBF7022C4E14CCAC1B3066B87DB99A34` and that the
-`source=` line ends in `?signed`.
+actually listed in the PKGBUILD's own `validpgpkeys` — importing the wrong key cannot pass it.
 
 ## Verify the checksum
 
