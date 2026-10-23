@@ -162,3 +162,17 @@ minutes:
 - the `install.md` fix goes on `hold/0.54.0-windows-docs`.
 
 `9bac1077` and this note are held locally until 7b2, and pushed together. Report: `0.54.0-step-3-part-7b2-report.md`.
+
+## Progress, 2026-10-24: Part 7b2 reviewed; CHANGELOG pushed; Part 7b3 (reorder) is next
+
+**Review:** `.git-exclude/reviewed/0.54.0-step-3-part-7b2-review-v1.md`.
+- **The CHANGELOG fix is accepted,** and pushed: `origin/main` is at `70c0e046`.
+- **The guide's content is accepted, but not its order:** it says `paru -S prikk` before "Before building, read it".
+
+**Next: Part 7b3,** about 10 minutes, on `hold/0.54.0-windows-docs` only.
+- For `prikk`: import the key, read the PKGBUILD (`paru -G prikk`, checking `validpgpkeys` and `?signed`, and why),
+  build, then what `makepkg` checks.
+- For `prikk-bin`: move the `paru -G prikk-bin` sentence before its `paru -S` block.
+- Replace "confirming that is on you".
+
+Report: `0.54.0-step-3-part-7b3-report.md`.
