@@ -584,7 +584,7 @@ ask before changing it.
 the current branch, for the identical two reasons the entry above names, but for the ref pointer
 index specifically — which, unlike the trust-key and author-key containers, *does* have a way out:
 the plan, then the rebuild for real, re-derives the index from the ref log directly, never reading
-the damaged slot at all. Before this round the message said only "run doctor before reading," which
+the damaged slot at all. Before 0.50.0 the message said only "run doctor before reading," which
 reads this exact container the exact same way and so answers with the identical failure again — the
 rebuild is what actually clears it. `doctor`'s own `PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE`
 issue prints first, before the current-branch warning and any `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE`

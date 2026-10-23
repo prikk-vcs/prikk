@@ -270,7 +270,7 @@ planned for.
   measured at 2.25 times the archive's own size for 1 GiB concentrated in one type; fixed before
   0.51.0 shipped).
 - **`prikk extract`'s own peak memory tracks the largest single file it actually reads, not the
-  point's own total content size** (0.54.0 step 3): every file whose content has not changed since
+  point's own total content size** (0.54.0): every file whose content has not changed since
   the admitted anchor streams straight from its stored blob id, one at a time, and only a text file
   edited since the anchor (at most 63 blocks of edits) is held resident. Measured against the real,
   shipped implementation (release build, fresh process per sample, `/proc/self/status`'s own
@@ -285,7 +285,7 @@ planned for.
   24 MiB file dominates its own measurement (about 2x its own size, not the point's own 24.5 MiB
   total); a damaged blob anywhere at the point still refuses the whole extraction, the same
   all-or-nothing guarantee every other patch-replay reader gives.
-- **`--plan-only` costs the same as a real write, not less** (0.54.0 step 3 Part 3): it reads every
+- **`--plan-only` costs the same as a real write, not less** (0.54.0): it reads every
   file's content once to measure it (`plan_summary`, `crates/prikk-cli/src/extract.rs`), the
   identical read a real write already pays, and only skips the write itself. Measured: on the
   since-checkpoint shape below (a 24 MiB file, a separate `growing.bin` reaching ~1.7 MiB across 32
@@ -295,7 +295,7 @@ planned for.
   of about 12,376 KiB (12,368 / 12,384 KiB). **This matters for planeter's own size report**: asking
   only for the size is not a cheap operation here, and the text must not imply otherwise.
 - **`--claim`'s own *whole-command* peak memory follows the identical "roughly twice the largest
-  file read" rule as the ref/block-id path — there is no anomaly** (0.54.0 step 3 Part 3b/3c).
+  file read" rule as the ref/block-id path — there is no anomaly** (0.54.0).
   An earlier measurement compared `--claim`'s own *planning phase alone* (`prepare_extract_plan_for_claim`,
   which derives state through `derive_next_state_for_candidate` — the identical mechanism `seal`/
   `merge`/`seal-from-accepted` already share, not `patch_replay::extract`'s own block-chain replay)

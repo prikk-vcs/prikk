@@ -192,8 +192,7 @@ N`** refuse the whole point, by name, before the first byte is written — learn
 size this way costs what it costs (each file not already resident is read once to measure it), the same
 cost a real write already pays; the *pre-walk's* own bound (refusing a point whose nearest admitted
 snapshot is unreachably far back) is the separate, cheap guard against unbounded history depth, checked
-before a single Patch or Blob is read, never relaxed by these flags. **`--format json`** (`extract-report-v1`,
-completed 0.54.0 step 3 Part 5d) carries `file_count`, `total_bytes`, `largest_file_bytes` (the single
+before a single Patch or Blob is read, never relaxed by these flags. **`--format json`** (`extract-report-v1`) carries `file_count`, `total_bytes`, `largest_file_bytes` (the single
 largest entry's own byte length, always present, the same number the text form's `largest file: N bytes`
 line gives), `provisional`, `written` (whether this call actually wrote the target), `point` (the ref name or
 the block/claim id given, the one fixed key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1`
