@@ -901,10 +901,27 @@ function Invoke-ArchRow([string]$ScriptPath, [string]$ProcessorArchitecture, [st
   $env:PRIKK_INSTALL_BASE_URL = "http://localhost:$Port"
   $server = Start-StaticFileServer -Directory $ServeDir -Port $Port
   try {
-    $rowOutput = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $ScriptPath 2>&1
+    # 0.54.1b: a refusal row's own install.ps1 prints its `throw`'s error record to stderr and
+    # exits non-zero, by design -- that refusal is this control's own point. In Windows PowerShell
+    # (5.1 and earlier), redirecting a native process's stderr with `2>&1` turns each stderr line
+    # into an ErrorRecord that still obeys $ErrorActionPreference, so this file's own top-of-script
+    # `$ErrorActionPreference = 'Stop'` made the capture statement itself a terminating error at the
+    # first refusal row CI reached, killing the whole run before it could read $LASTEXITCODE or
+    # report anything. PowerShell 7.2+ changed this: a native command's redirected stderr is never
+    # subject to $ErrorActionPreference there, only its exit code is (via $LASTEXITCODE, read
+    # below) -- so `pwsh` was never affected, but setting 'Continue' here is harmless for it too.
+    # 'Continue' applies only around this one capture, restored in its own `finally` regardless of
+    # what the row did, so the script-wide 'Stop' still governs everything else in this file.
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $rowOutput = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $ScriptPath 2>&1
+    } finally {
+      $ErrorActionPreference = $previousEap
+    }
     $rowExitCode = $LASTEXITCODE
     return @{
-      Output    = (($rowOutput | ForEach-Object { $_.ToString() }) -join "`n")
+      Output    = (($rowOutput | ForEach-Object { "$_" }) -join "`n")
       ExitCode  = $rowExitCode
       Installed = (Test-Path -Path (Join-Path $InstallDir "prikk.exe") -PathType Leaf)
     }
