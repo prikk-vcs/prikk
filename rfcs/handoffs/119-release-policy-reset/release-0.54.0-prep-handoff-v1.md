@@ -110,3 +110,17 @@ round 2 put that bar on object deletion, which is out of 0.54.0. The binary matc
 
 **Next: P3,** with R1–R4 first. **R1 adds:** the Security text must not say the pointer can be removed only "once
 nothing reaches" its objects. The pointer can always be removed; what nothing else reaches becomes unreached.
+
+**P3 ACCEPTED 2026-10-24** (`f1d5f23e`, `6b5e1462`, `2373f405`, `15becc27`, `71b1d9d2`; review
+`release-0.54.0-prep-P3-review-v1`). **`71b1d9d2` is the candidate:**
+- `matrix.py` v6 and `reproduce.sh` show no verdict different from 0.53.0's;
+- the smoke has 438 ok, re-run by the architect on `71b1d9d2`.
+
+**The dev team's part is complete.**
+
+**The owner chose to offer the external review** (2026-10-24). The letter is drafted at
+`send/draft/035-review-request-the-0-54-0-candidate/`. The tag waits for the answer, then for the owner's word.
+
+**At the release,** the held docs are cherry-picked by hash, in this order: `c87da024`, `9d34f257`, `3a39f3c2`,
+`92f53924`, `1a759e0e`, `2c9fea04`, `8027daab`. Not by branch range: three older commits on the branch are already on
+`main` under other hashes.
