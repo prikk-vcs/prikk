@@ -826,6 +826,134 @@ try {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Control 6 (0.54.1): the architecture decision. install.ps1 decides whether to install, and
+# whether to print the ARM64 emulation line, from $env:PROCESSOR_ARCHITEW6432 (when set) or
+# $env:PROCESSOR_ARCHITECTURE -- never from .NET's RuntimeInformation.OSArchitecture, which this
+# round's own handoff found silently answering nothing on a real Windows 11 machine under Windows
+# PowerShell 5.1, so the installer refused an ordinary x64 machine. The child process inherits the
+# parent's environment (the same mechanism this file's own Control 1/2+3/4/5 setup already relies
+# on for $env:PRIKK_INSTALL_DIR etc.), so each row below sets both variables in this script's own
+# session immediately before launching install.ps1, and clears them again right after so later
+# rows, and anything after this control, are unaffected. The CI runner's own real values (if any)
+# are saved first and restored in `finally` regardless of pass/fail, the same discipline Control 5
+# already applies to the Path registry value.
+#
+# Shown red first, for the two rows whose expected outcome the real CI runner's own .NET
+# architecture query cannot produce: install.ps1 is perturbed back to the exact RuntimeInformation-
+# based decision this round's fix removed, and run against the ARM64 row and the x86-only row. On
+# this runner (an x64 machine, confirmed already by the happy path at Scenario A), .NET's own
+# OSArchitecture always answers X64 regardless of what this test sets
+# $env:PROCESSOR_ARCHITECTURE/$env:PROCESSOR_ARCHITEW6432 to -- so the perturbed script installs on
+# both rows: printing no emulation line on the ARM64 row (which expects one), and not refusing at
+# all on the x86-only row (which expects a refusal naming "x86") -- proving each control can fail.
+# GREEN then runs the real, unperturbed install.ps1 against all five table rows.
+# ---------------------------------------------------------------------------
+Write-Section "Control 6: the architecture decision reads only Windows' own variables, never .NET (red before green)"
+
+$originalProcessorArchitecture = $env:PROCESSOR_ARCHITECTURE
+$originalProcessorArchitew6432 = $env:PROCESSOR_ARCHITEW6432
+
+$newArchBlock = (@'
+$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+
+if ($arch -eq "AMD64") {
+  # Install the x64 build, as today.
+} elseif ($arch -eq "ARM64") {
+  Write-Host "prikk-install: this is ARM64 Windows; installing the x64 build, which runs under Windows' x64 emulation"
+} else {
+  $archDisplay = if ($arch) { $arch } else { "unknown" }
+  Write-Host "prikk-install: download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," -ForegroundColor Yellow
+  Write-Host "prikk-install: or run 'cargo install prikk'" -ForegroundColor Yellow
+  throw "prikk-install: no prebuilt binary for Windows/$archDisplay (only x86_64 ships one)"
+}
+'@).Replace("`r`n", "`n").TrimEnd()
+
+$oldArchBlock = (@'
+try {
+  $isX64 = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::X64
+} catch {
+  $isX64 = $env:PROCESSOR_ARCHITECTURE -eq "AMD64"
+}
+
+if (-not $isX64) {
+  Write-Host "prikk-install: download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," -ForegroundColor Yellow
+  Write-Host "prikk-install: or run 'cargo install prikk'" -ForegroundColor Yellow
+  throw "prikk-install: no prebuilt binary for Windows/$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) (only x86_64 ships one)"
+}
+'@).Replace("`r`n", "`n").TrimEnd()
+
+if (-not $installScriptContent.Contains($newArchBlock)) {
+  throw "control 6's architecture-block marker was not found in install.ps1 -- the template changed shape; update this script"
+}
+$perturbedArch6Content = $installScriptContent.Replace($newArchBlock, $oldArchBlock)
+$perturbedArch6Path = Join-Path $scratchRoot "install-perturbed-control6.ps1"
+Set-Content -Path $perturbedArch6Path -Value $perturbedArch6Content
+
+# Runs install.ps1 (real or perturbed) with the two processor variables set for just this one
+# invocation, against a static file server serving $ServeDir, and reports what happened -- without
+# leaving any of its own state (env vars, the install directory, the PATH entry) behind for the
+# next row.
+function Invoke-ArchRow([string]$ScriptPath, [string]$ProcessorArchitecture, [string]$ProcessorArchitew6432, [string]$InstallDir, [int]$Port, [string]$ServeDir) {
+  if ($ProcessorArchitecture) { $env:PROCESSOR_ARCHITECTURE = $ProcessorArchitecture } else { Remove-Item Env:\PROCESSOR_ARCHITECTURE -ErrorAction SilentlyContinue }
+  if ($ProcessorArchitew6432) { $env:PROCESSOR_ARCHITEW6432 = $ProcessorArchitew6432 } else { Remove-Item Env:\PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue }
+  $env:PRIKK_INSTALL_DIR = $InstallDir
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:$Port"
+  $server = Start-StaticFileServer -Directory $ServeDir -Port $Port
+  try {
+    $rowOutput = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $ScriptPath 2>&1
+    $rowExitCode = $LASTEXITCODE
+    return @{
+      Output    = (($rowOutput | ForEach-Object { $_.ToString() }) -join "`n")
+      ExitCode  = $rowExitCode
+      Installed = (Test-Path -Path (Join-Path $InstallDir "prikk.exe") -PathType Leaf)
+    }
+  } finally {
+    Stop-StaticFileServer $server
+    Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+    Remove-UserPathEntryIfPresent $InstallDir
+  }
+}
+
+try {
+  # --- RED: the ARM64 row and the x86-only row, against the perturbed (old, .NET-based) script ---
+  $redArm64 = Invoke-ArchRow -ScriptPath $perturbedArch6Path -ProcessorArchitecture "ARM64" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-red-arm64") -Port 18090 -ServeDir $distDirResolved
+  Assert-True ($redArm64.Installed -and -not ($redArm64.Output -like "*x64 emulation*")) "RED: ARM64 row -- the perturbed install.ps1 (old RuntimeInformation-based check) installs without printing the emulation line, because the real CI runner's own .NET always answers X64 -- the control can fail"
+
+  $redX86Only = Invoke-ArchRow -ScriptPath $perturbedArch6Path -ProcessorArchitecture "x86" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-red-x86") -Port 18091 -ServeDir $distDirResolved
+  Assert-True ($redX86Only.Installed) "RED: x86-only row -- the perturbed install.ps1 (old RuntimeInformation-based check) installs where the real script must refuse, because the real CI runner's own .NET always answers X64 -- the control can fail"
+
+  # --- GREEN: all five table rows, against the real, unperturbed install.ps1 -----------------------
+  $greenAmd64 = Invoke-ArchRow -ScriptPath $installScriptPath -ProcessorArchitecture "AMD64" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-green-amd64") -Port 18092 -ServeDir $distDirResolved
+  Assert-True ($greenAmd64.ExitCode -eq 0) "GREEN: AMD64/unset -- install.ps1 exits 0"
+  Assert-True ($greenAmd64.Installed) "GREEN: AMD64/unset -- installs"
+  Assert-True (-not ($greenAmd64.Output -like "*x64 emulation*")) "GREEN: AMD64/unset -- no emulation line is printed"
+
+  $greenWow64 = Invoke-ArchRow -ScriptPath $installScriptPath -ProcessorArchitecture "x86" -ProcessorArchitew6432 "AMD64" -InstallDir (Join-Path $scratchRoot "control6-green-wow64") -Port 18093 -ServeDir $distDirResolved
+  Assert-True ($greenWow64.ExitCode -eq 0) "GREEN: x86/AMD64 (PROCESSOR_ARCHITEW6432) -- install.ps1 exits 0"
+  Assert-True ($greenWow64.Installed) "GREEN: x86/AMD64 (PROCESSOR_ARCHITEW6432) -- installs"
+  Assert-True (-not ($greenWow64.Output -like "*x64 emulation*")) "GREEN: x86/AMD64 (PROCESSOR_ARCHITEW6432) -- no emulation line is printed"
+
+  $greenArm64 = Invoke-ArchRow -ScriptPath $installScriptPath -ProcessorArchitecture "ARM64" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-green-arm64") -Port 18094 -ServeDir $distDirResolved
+  Assert-True ($greenArm64.ExitCode -eq 0) "GREEN: ARM64/unset -- install.ps1 exits 0"
+  Assert-True ($greenArm64.Installed) "GREEN: ARM64/unset -- installs"
+  Assert-True ($greenArm64.Output -like "*x64 emulation*") "GREEN: ARM64/unset -- the emulation line is printed"
+
+  $greenX86Only = Invoke-ArchRow -ScriptPath $installScriptPath -ProcessorArchitecture "x86" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-green-x86") -Port 18095 -ServeDir $distDirResolved
+  Assert-True ($greenX86Only.ExitCode -ne 0) "GREEN: x86/unset -- install.ps1 exits non-zero"
+  Assert-True (-not $greenX86Only.Installed) "GREEN: x86/unset -- installs nothing"
+  Assert-True ($greenX86Only.Output -like "*Windows/x86*") "GREEN: x86/unset -- the refusal names x86"
+
+  $greenEmpty = Invoke-ArchRow -ScriptPath $installScriptPath -ProcessorArchitecture "" -ProcessorArchitew6432 "" -InstallDir (Join-Path $scratchRoot "control6-green-empty") -Port 18096 -ServeDir $distDirResolved
+  Assert-True ($greenEmpty.ExitCode -ne 0) "GREEN: empty/unset -- install.ps1 exits non-zero"
+  Assert-True (-not $greenEmpty.Installed) "GREEN: empty/unset -- installs nothing"
+  Assert-True ($greenEmpty.Output -like "*Windows/unknown*") "GREEN: empty/unset -- the refusal names unknown (the empty value, displayed)"
+} finally {
+  if ($originalProcessorArchitecture) { $env:PROCESSOR_ARCHITECTURE = $originalProcessorArchitecture } else { Remove-Item Env:\PROCESSOR_ARCHITECTURE -ErrorAction SilentlyContinue }
+  if ($originalProcessorArchitew6432) { $env:PROCESSOR_ARCHITEW6432 = $originalProcessorArchitew6432 } else { Remove-Item Env:\PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue }
+}
+
 Remove-Item -Path $scratchRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Section "Summary"
