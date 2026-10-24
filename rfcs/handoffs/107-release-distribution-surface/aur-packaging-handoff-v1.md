@@ -187,3 +187,22 @@ both AUR pages show 0.54.0. This corrects the Part 6b review's "just before the 
 
 **Owner setup: done and verified** (2026-10-22). The `aur` environment holds `AUR_SSH_PRIVATE_KEY` and one tag rule,
 `[0-9]*.[0-9]*.[0-9]*`. At the release, the architect reads both AUR jobs and confirms both AUR pages show 0.54.0.
+
+## Progress, 2026-10-24: the AUR packages are live at 0.54.1; the held docs are published
+
+- **The owner updated the deploy key.** The secret `AUR_SSH_PRIVATE_KEY` in the `aur` environment was updated at
+  11:07Z.
+- **The architect re-ran only the failed `aur-push` job** of release run `40085404677` (attempt 2). All its steps
+  succeeded, and the key file was removed at the end.
+- **Checked on AUR:**
+  - both package pages show 0.54.1-1. AUR's metadata API still served its cached 0.0.0 a few minutes later;
+  - the clones show commits `prikk 0.54.1` and `prikk-bin 0.54.1`, by `prikk release workflow
+    <19984221+nabbisen@users.noreply.github.com>`;
+  - `prikk`'s PKGBUILD keeps `#tag=${pkgver}?signed` and `validpgpkeys=('25757DA6…9A34')`;
+  - `prikk-bin`'s two checksums equal the 0.54.1 release page's `.sha256` files;
+  - `.SRCINFO` says `pkgver = 0.54.1`.
+- **The nine held docs commits were cherry-picked by hash onto `main`** (`71f78fdf`). Only `docs/landing/index.html`
+  and `docs/src/guide/install.md` changed. The book builds, and the architect's 14 gates passed. They are live at
+  `prikk.org`: the install guide's Arch and Windows sections, and the landing page's platform tabs.
+
+**This handoff is complete.**
