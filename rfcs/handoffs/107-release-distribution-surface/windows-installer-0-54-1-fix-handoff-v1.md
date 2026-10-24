@@ -147,3 +147,27 @@ fixes.
     architecture refuses.
 
 Then the 14 gates.
+
+## Progress, 2026-10-24: 0.54.1b accepted; 0.54.1 RELEASED
+
+**Review:** `.git-exclude/reviewed/0.54.1b-windows-installer-review-v1.md`. **CI run `40082755184` on `2d8ec0d5`:**
+17/17. The installer test had 158 `PASS` across both engines, with Control 6 complete under each.
+
+**0.54.1 is tagged and signed on `2d8ec0d5`** (the owner: *"Tag and publish"*). **Release run `40085404677`:**
+- **all four cells of the install-from-release job are green:** `windows-latest` and `windows-11-arm`, each under
+  PowerShell 5.1 and 7;
+- **on ARM64, the emulation line is printed,** and `prikk --version` reports `prikk 0.54.1`;
+- **`aur-push` failed again** with `Permission denied (publickey)`. The owner's key fix is still pending;
+- **the architect verified:**
+  - checksums, 8/8;
+  - build info, 4/4, naming `2d8ec0d5`;
+  - the notes match the CHANGELOG section;
+  - `releases/latest/download/install.ps1` serves the fixed check.
+- **crates.io:** all eight crates are at 0.54.1, confirmed on the index.
+
+**Still owed:**
+- the owner's AUR key fix, then a re-run of `aur-push` in run `40085404677`;
+- then the held docs, nine commits by hash: `c87da024`, `9d34f257`, `3a39f3c2`, `92f53924`, `1a759e0e`, `2c9fea04`,
+  `8027daab`, `c13dd8d5`, `701269e8`;
+- the owner's own re-try of the one-line install;
+- the letters.
