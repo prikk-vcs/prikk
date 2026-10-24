@@ -644,6 +644,15 @@ from committed state** — a ref, a received pointer, a queued patch, or a seale
 them (RFC 164 Rule E). A Block nothing reaches this way is an **unreferenced remnant**, reported as a
 warning instead — see the next entry.
 
+**If this came from `prikk show` on a sealed block, under 0.52.0 or 0.53.0, specifically on the
+second (or a later) consecutive `EditText` of the same file** — `lifecycle replay: blob <id>
+required for a state effect is missing`, from `show` alone, in either its text or `--format json`
+output — this is not the interrupted-import damage the rest of this entry describes. It is a read
+bug in `show`'s own sealed-block fold, fixed in 0.54.0 (CHANGELOG, `### Fixed`): the stored history
+is sound, `prikk verify` exits `0` the whole time, and no repair is needed or possible for it. The
+way out is to upgrade to 0.54.0 or later; running any of this entry's repair steps on a repository
+that only has this symptom fixes nothing, because nothing is actually damaged.
+
 ## `warning: <owner type> <id> references missing <missing type> <id> (<role>) -- re-run the import if you still have the bundle; otherwise it is harmless`
 
 Seen from `verify` and `doctor` (as `PRIKK-DOCTOR-UNREFERENCED-REMNANT`) for a stored object's own

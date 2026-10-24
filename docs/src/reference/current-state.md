@@ -347,14 +347,14 @@ planned for.
   Replacing a received pointer with a later, sound import of the same ref moves the pointer, but
   does not remove the objects the earlier import wrote — there is no command that removes stored
   objects. A copy of this repository's own `.prikk/` directory, taken before the import, is the way
-  back. **0.54.0 (B1) changes what happens once the pointer has been replaced:** a stored `Block`
+  back. **0.54.0 (RFC 164 Rule E) changes what happens once the pointer has been replaced:** a stored `Block`
   or `RefState` that nothing in committed state reaches any more (the same reachability RFC 164
   Rule E already computes for a dangling *reference*, applied here to the object itself) is
   reported as an unreached object, a non-blocking warning, and no longer fails `verify`'s
   publication-trust check. While the received pointer is still present, everything it reaches
   stays reached, and `verify` keeps failing on it exactly as before — this changes nothing for an
   import whose pointer has not yet been superseded. The bytes stay either way; no command removes
-  them yet. **0.54.0 (B2a) adds a second way the pointer itself can go, on purpose**: `prikk
+  them yet. **0.54.0 (`received remove`) adds a second way the pointer itself can go, on purpose**: `prikk
   received remove <remotes/…>` removes the pointer directly, the same consequence as replacing it
   (everything it alone reached becomes an unreached-object warning on the next `verify`), without
   waiting for a later, sound import to happen to supersede it. The objects themselves are still not

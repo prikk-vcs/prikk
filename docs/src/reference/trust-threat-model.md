@@ -230,7 +230,7 @@ Block references, ref pointer/log consistency, active WAL records, active WAL me
 rollback-draft structure for active and sealed rollback-marked Patches, and publication trust for
 Block, RefState, RefUpdate, and locally-published Tag envelopes against the repository-local
 maintainer trust policy. A received, not-yet-adopted tag's own signature is deliberately not part of
-this check — see [Trust Roots and Roles](#trust-roots-and-roles) above. **0.54.0 (B1, RFC 164 Rule
+this check — see [Trust Roots and Roles](#trust-roots-and-roles) above. **0.54.0 (RFC 164 Rule
 E):** a stored `Block` or `RefState` that nothing in committed state reaches (no local ref, received
 pointer, queued patch, or sealed block descending from them) has its publication trust check skipped
 entirely, rather than checked and potentially failed — reported instead as a counted, non-blocking
