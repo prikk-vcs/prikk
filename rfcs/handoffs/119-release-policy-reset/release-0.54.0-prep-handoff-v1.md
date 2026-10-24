@@ -161,3 +161,17 @@ destination refusal. Both are recorded in ROADMAP as 0.55.0 work.
 1. The architect pushes, reads CI, and runs the 14 gates on the tip.
 2. The owner's word on the tag.
 3. The release.
+
+**P4 item 1 ACCEPTED, item 2 not** (2026-10-24; `442b968f`, `6d3cbad6`, both held locally; review
+`release-0.54.0-prep-P4-review-v1`). "external" is gone from all nine places.
+
+**A correction to P4 item 2, the architect's error:** `verify`'s unreached count is not a lower bound when damage is
+reported. Objects reached only through a damaged object are not walked, so they are counted as unreached and go
+unchecked, and the count can include objects that are in fact reached. `verify` still fails on the damage itself.
+
+**P4b (about 10 min, `release-0.54.0-prep-P4b-report.md`):**
+- replace the sentence at `commands.md:257` and `current-state.md:355` with the review's wording;
+- add it as a new commit on top, without amending;
+- run the 14 gates.
+
+Then the architect pushes everything together.
