@@ -93,9 +93,11 @@ checksum proves the file you received matches what the release page published; i
 
 **`prikk.exe` is not code-signed, and Windows may warn or block it.**
 
-**Supported today**: `x86_64` Windows only. Any other architecture — ARM64 Windows included —
-refuses with a pointer to the manual `.zip` download or `cargo install prikk`, the same way the
-shell installer refuses an Intel Mac.
+**Supported today**: `x86_64` Windows only. Any other architecture refuses with a pointer to the
+manual `.zip` download or `cargo install prikk`, the same way the shell installer refuses an Intel
+Mac.
+
+**ARM64 Windows** gets the x64 build too, which runs under Windows' own x64 emulation.
 
 **Version and install-directory overrides**: environment variables only —
 `PRIKK_INSTALL_VERSION=X.Y.Z` and `PRIKK_INSTALL_DIR=<path>`, set before the one-liner above. There
