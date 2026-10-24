@@ -124,3 +124,40 @@ nothing reaches" its objects. The pointer can always be removed; what nothing el
 **At the release,** the held docs are cherry-picked by hash, in this order: `c87da024`, `9d34f257`, `3a39f3c2`,
 `92f53924`, `1a759e0e`, `2c9fea04`, `8027daab`. Not by branch range: three older commits on the branch are already on
 `main` under other hashes.
+
+## P4 — the notes' "external" corrected (live 2026-10-24, about 30 min, `release-0.54.0-prep-P4-report.md`)
+
+**External review 035: nothing blocks the tag** (reading `.git-exclude/reviewed/external-review-035-reading-v1.md`). It
+confirms the reach rule, pointer-only `received remove`, and `extract`'s trust and path rules. **One sentence in our
+notes is false.** `extract` writes into "a brand-new, empty, external directory", but the binary accepts any path that
+does not exist yet, inside the repository too, even under `.prikk/`. The architect reproduced it on the candidate. **The
+owner decided, 2026-10-24: fix the wording now; the refusal is 0.55.0 work.**
+
+**The architect's reading, stated so it can be corrected:** text only. No behaviour changes.
+
+1. **Replace "external" with what holds,** in each of these places, and grep for any others:
+   - `CHANGELOG.md` (the `extract` entry, line 81);
+   - `docs/src/reference/commands.md:175`;
+   - `docs/src/reference/git-mapping.md:33`;
+   - the `--help` line, `crates/prikk-cli/src/commands.rs:265`;
+   - the module docs, `crates/prikk-cli/src/extract.rs:2`, `crates/prikk-store/src/extract.rs:2` and
+     `crates/prikk-store/src/anchor_trust.rs:81`.
+
+   The user-facing places say **"a new directory that does not exist yet"**. `CHANGELOG.md` and `commands.md` also say,
+   in one sentence: 0.54.0 does not refuse a path inside the repository, so choose one outside it, because the next
+   `commit --from-worktree` takes the files as content.
+2. **One sentence on `verify`'s unreached count,** where `commands.md` or `current-state.md` describes it: when
+   `verify` also reports a damaged object, the unreached count is a lower bound, because objects named only by the
+   damaged one cannot be walked. Measure that sentence if you can (damage one stored `Block`, then read the count), or
+   word it as what the code does, citing `verify/reachability.rs`.
+3. **No process words.**
+4. **The 14 gates** on the final commit. The `--help` text changes, so any test that pins it changes with it. Name each
+   one.
+
+**Not in P4:** `--claim`'s `damaged-repository` id for a claim whose parent is pending (review §3.3), and the
+destination refusal. Both are recorded in ROADMAP as 0.55.0 work.
+
+**Then:**
+1. The architect pushes, reads CI, and runs the 14 gates on the tip.
+2. The owner's word on the tag.
+3. The release.
