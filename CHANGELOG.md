@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The Windows installer refused an ordinary x64 machine under Windows PowerShell 5.1, found on a
+  real Windows 11 machine.** Its architecture check read
+  `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture`; on that machine the
+  property resolved to nothing without raising an exception, so the installer's own fallback never
+  ran, and it refused to install with an empty architecture value in its own error message. It now
+  decides from Windows' own processor environment variables (`PROCESSOR_ARCHITEW6432`, falling back
+  to `PROCESSOR_ARCHITECTURE`) instead of any .NET API. On ARM64 Windows it installs the x64 build,
+  which runs under Windows' own x64 emulation, and says so in one line before downloading.
+
 ## 0.54.0 — 2026-10-24
 
 ### Security
