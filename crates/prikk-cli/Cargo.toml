@@ -31,6 +31,10 @@ prikk-store                 = { workspace = true }
 [dev-dependencies]
 prikk-store                 = { workspace = true, features = ["test-support"] }
 prikk-replay                 = { workspace = true }
+# 0.55.0 G2 Part A: `crates/prikk-cli/tests/support/` moved into this crate (`tools/test-support`),
+# so it compiles once instead of once per integration-test binary. `crates/prikk-cli/tests/
+# support/mod.rs` stays as a two-line re-export, so no test file's `mod support;` changed.
+prikk-test-support           = { workspace = true }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ version }/prikk-{ target }.tar.gz"

@@ -6,6 +6,17 @@
 //! there is no `serde_json` to lean on; what there can be is *one* parser. The two existing copies
 //! are left where they are, on `support/mod.rs`'s own precedent: this is the point past which no one
 //! should copy-paste it again, not a retrofit.
+//!
+//! 0.55.0 G2 Part A: moved here, unchanged in substance, from `crates/prikk-cli/tests/support/
+//! json.rs`. Every item below is `pub`, not `pub(crate)` as it was there -- this module now lives in
+//! its own crate, and 16 of `prikk`'s own test files call `support::json::...` from *outside* this
+//! crate (through `crates/prikk-cli/tests/support/mod.rs`'s thin re-export); `pub(crate)` would make
+//! every one of those sites fail to compile with "function is private". This same reasoning is also
+//! why this module does not reach for `serde_json` to parse Cargo's own `--message-format=json`
+//! output in `lib.rs`'s `locate_prikk_binary` -- adding that dependency here would put a third-party
+//! crate into `prikk`'s own dev-dependency graph for the first time, which is exactly what the
+//! zero-dependency rule above exists to prevent. `locate_prikk_binary` reuses this same hand-rolled
+//! parser instead.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -13,18 +24,27 @@ use std::collections::BTreeMap;
 use std::iter::Peekable;
 use std::str::Chars;
 
+/// A JSON value, as decoded by [`parse`].
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Value {
+pub enum Value {
+    /// JSON `null`.
     Null,
+    /// JSON `true`/`false`.
     Bool(bool),
+    /// A JSON number, kept as its original decimal text (this parser never needs its numeric
+    /// value, only to round-trip or compare it).
     Number(String),
+    /// A JSON string, with every escape already decoded.
     String(String),
+    /// A JSON array.
     Array(Vec<Value>),
+    /// A JSON object, keyed by its string keys in sorted order.
     Object(BTreeMap<String, Value>),
 }
 
 impl Value {
-    pub(crate) fn get(&self, key: &str) -> &Value {
+    /// This value's field `key`. Panics if this is not an object, or has no such key.
+    pub fn get(&self, key: &str) -> &Value {
         match self {
             Value::Object(map) => map.get(key).unwrap_or_else(|| {
                 panic!("missing key {key:?} in object with keys {:?}", map.keys())
@@ -33,33 +53,38 @@ impl Value {
         }
     }
 
-    pub(crate) fn as_array(&self) -> &[Value] {
+    /// This value as an array. Panics if it is not one.
+    pub fn as_array(&self) -> &[Value] {
         match self {
             Value::Array(items) => items,
             other => panic!("expected an array, got {other:?}"),
         }
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    /// This value as a string. Panics if it is not one.
+    pub fn as_str(&self) -> &str {
         match self {
             Value::String(text) => text,
             other => panic!("expected a string, got {other:?}"),
         }
     }
 
-    pub(crate) fn as_bool(&self) -> bool {
+    /// This value as a bool. Panics if it is not one.
+    pub fn as_bool(&self) -> bool {
         match self {
             Value::Bool(value) => *value,
             other => panic!("expected a bool, got {other:?}"),
         }
     }
 
-    pub(crate) fn is_null(&self) -> bool {
+    /// Whether this value is `null`.
+    pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
 }
 
-pub(crate) fn parse(input: &str) -> Value {
+/// Decode `input` as a single JSON value. Panics on malformed input or trailing content.
+pub fn parse(input: &str) -> Value {
     let mut chars = input.trim().chars().peekable();
     let value = parse_value(&mut chars);
     skip_ws(&mut chars);

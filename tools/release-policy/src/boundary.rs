@@ -120,6 +120,13 @@ fn check_members(root: &Path, metadata: &Metadata, errors: &mut Vec<BoundaryErro
             // through `[workspace.dependencies]` (handoff §5: tools are outside `PRODUCTS`'
             // dependency-placement scan by construction), and ships to nobody.
             ("prikk-corpus", "tools/corpus/Cargo.toml"),
+            // 0.55.0 G2 Part A: `prikk`'s own CLI test harness, formerly `crates/prikk-cli/tests/
+            // support/`. Same treatment as `prikk-benchmarks`/`prikk-corpus` above and for the same
+            // reason -- `publish = false`, outside `default-members` and `PRODUCTS`' own
+            // dependency-placement scan -- even though, unlike those two, `prikk` itself genuinely
+            // depends on it (a `[dev-dependencies]` edge, declared through `[workspace.dependencies]`
+            // per this workspace's own convention for a new edge, not outside it like those two).
+            ("prikk-test-support", "tools/test-support/Cargo.toml"),
         ])
         .collect();
     let members = packages_by_id(metadata, &metadata.workspace_members);

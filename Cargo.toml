@@ -12,6 +12,7 @@ members = [
     "tools/benchmarks",
     "tools/corpus",
     "tools/release-policy",
+    "tools/test-support",
 ]
 default-members = [
     "crates/prikk-cli",
@@ -47,6 +48,12 @@ prikk-hash                  = { version = "0.54.1", path = "crates/prikk-hash" }
 prikk-object                = { version = "0.54.1", path = "crates/prikk-object" }
 prikk-replay                = { version = "0.54.1", path = "crates/prikk-replay" }
 prikk-store                 = { version = "0.54.1", path = "crates/prikk-store" }
+# 0.55.0 G2 Part A: `publish = false`, like `prikk-benchmarks`/`prikk-corpus` below -- never
+# published, so no `version` to pin (there is no crates.io release to resolve against). Listed here,
+# not left absent like those two, because this one is a real dependency edge: `prikk`'s own
+# `[dev-dependencies]` needs it, and new dependency edges in this workspace go through
+# `[workspace.dependencies]`.
+prikk-test-support          = { path = "tools/test-support" }
 
 ed25519-dalek               = "3"
 getrandom                   = "0.4"

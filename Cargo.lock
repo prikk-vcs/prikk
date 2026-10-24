@@ -977,6 +977,7 @@ dependencies = [
  "prikk-object",
  "prikk-replay",
  "prikk-store",
+ "prikk-test-support",
 ]
 
 [[package]]
@@ -1071,6 +1072,13 @@ dependencies = [
  "prikk-replay",
  "proptest",
  "rustix",
+]
+
+[[package]]
+name = "prikk-test-support"
+version = "0.54.1"
+dependencies = [
+ "prikk-store",
 ]
 
 [[package]]

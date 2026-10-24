@@ -1,0 +1,17 @@
+[package]
+name = "prikk-test-support"
+description = "Shared CLI end-to-end test harness for prikk's own integration tests (0.55.0 G2 Part A, DC-67). Not part of the shipped product; not built by default; a dev-dependency of `prikk` only."
+readme = "README.md"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+prikk-store = { workspace = true }
+
+[lints]
+workspace = true
