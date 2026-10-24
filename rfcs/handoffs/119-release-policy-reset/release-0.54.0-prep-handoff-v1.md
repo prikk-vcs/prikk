@@ -181,3 +181,29 @@ Then the architect pushes everything together.
 sentence matches the code. **The dev team's part is complete.**
 
 **Next, the architect's:** CI fully green on the tip, all 14 gates on the same commit, then the owner's word on the tag.
+
+**0.54.0: RELEASED 2026-10-24.** The tag `0.54.0` is signed and sits on `154a2bc5`, the commit CI ran on. The owner:
+*"Yes. Authorized. To publish is authorized, too."*
+- **CI run `40070318109`:** 17/17. **The architect's 14 gates on `154a2bc5`:** exit 0.
+- **Release run `40071978840`:**
+  - all four builds, the publication and `aur-build` are green;
+  - **`aur-push` failed** at its first clone, with `Permission denied (publickey)`. The pinned host key was accepted, so
+    AUR did not recognise the deploy key. The owner checks the key (handoff 107 §4), then the architect re-runs that
+    job.
+- **The architect verified the assets:**
+  - checksums, 8/8;
+  - build info, 4/4, naming `154a2bc5`;
+  - the smoke on the published Linux binary, 438 ok;
+  - the Release page carries the CHANGELOG section byte for byte, followed by the standard footer;
+  - `releases/latest/download/install.ps1` returns 200;
+  - `cargo binstall --dry-run … --targets x86_64-pc-windows-msvc prikk@0.54.0` resolves `prikk.exe` from the
+    release.
+- **crates.io: PUBLISHED 2026-10-24.** All eight crates are at 0.54.0, published in dependency order from the tag's
+  worktree. Each is confirmed on the index.
+
+**Still owed:**
+- the AUR push, after the owner fixes the key;
+- the held docs, cherry-picked by hash once the AUR pages show 0.54.0;
+- a Windows PowerShell 5.1 install from the release page, method to be agreed;
+- letter 036 to the external architect;
+- the stikk and planeter letters.
