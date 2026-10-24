@@ -177,22 +177,38 @@ $repo = "REPO_SLUG"
 $version = if ($env:PRIKK_INSTALL_VERSION) { $env:PRIKK_INSTALL_VERSION } else { "latest" }
 $installDir = if ($env:PRIKK_INSTALL_DIR) { $env:PRIKK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\prikk" }
 
-# `[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture` is preferred over the
-# $env:PROCESSOR_ARCHITECTURE environment variable, which a WOW64 (32-bit-on-64-bit) process can
-# see rewritten for the process's own architecture rather than the OS's -- confirmed from .NET's
-# own documentation, not measured here. It requires .NET Framework 4.7.1+, present on every
-# Windows 10/11 install this project supports; the catch below falls back to the environment
-# variable if it is somehow unavailable, rather than refusing outright.
-try {
-  $isX64 = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::X64
-} catch {
-  $isX64 = $env:PROCESSOR_ARCHITECTURE -eq "AMD64"
-}
+# 0.54.1: the architecture decision reads only Windows' own processor environment variables, never
+# a .NET API. The previous round here used
+# [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture, in a try, with
+# $env:PROCESSOR_ARCHITECTURE as the catch fallback -- on the reasoning that OSArchitecture is the
+# OS's own real architecture while PROCESSOR_ARCHITECTURE alone can read a WOW64 process's own
+# rewritten value instead. That reasoning was correct but the fallback was not: found on a real
+# Windows 11 machine running Windows PowerShell 5.1.26100.9711, the .NET property read raised no
+# exception at all -- so the catch never ran -- yet still resolved to nothing. In Windows
+# PowerShell, reading a member that does not resolve yields $null silently, and $null -eq X64 is
+# false, so the try block "succeeded" with the installer refusing an ordinary x64 machine while
+# printing an empty architecture value. GitHub's own windows-latest CI runner answers that same
+# .NET expression correctly, which is why 13 passing CI runs under PowerShell 5.1 never caught
+# this -- only a real end-user machine did.
+#
+# The lesson: a check whose failure is silent must not be what decides a refusal. Windows itself
+# sets $env:PROCESSOR_ARCHITECTURE for every process, and -- only for a 32-bit process running
+# under WOW64 on 64-bit Windows -- also sets $env:PROCESSOR_ARCHITEW6432 to the OS's own real
+# architecture; that one is preferred when it is set, for the same WOW64 reason the old .NET call
+# was preferred for. Neither variable's presence or value depends on any .NET runtime being
+# loaded, so there is no fallback branch at all here: one read, used for both the decision and its
+# own refusal message, never two separate reads that can disagree with each other.
+$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 
-if (-not $isX64) {
+if ($arch -eq "AMD64") {
+  # Install the x64 build, as today.
+} elseif ($arch -eq "ARM64") {
+  Write-Host "prikk-install: this is ARM64 Windows; installing the x64 build, which runs under Windows' x64 emulation"
+} else {
+  $archDisplay = if ($arch) { $arch } else { "unknown" }
   Write-Host "prikk-install: download prikk-x86_64-pc-windows-msvc.zip from the release page by hand," -ForegroundColor Yellow
   Write-Host "prikk-install: or run 'cargo install prikk'" -ForegroundColor Yellow
-  throw "prikk-install: no prebuilt binary for Windows/$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) (only x86_64 ships one)"
+  throw "prikk-install: no prebuilt binary for Windows/$archDisplay (only x86_64 ships one)"
 }
 $target = "x86_64-pc-windows-msvc"
 
