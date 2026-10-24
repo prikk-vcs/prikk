@@ -58,7 +58,26 @@ const CARGO: &str = env!("CARGO");
 /// `prikk` was built under for this same invocation.
 fn locate_prikk_binary(release: bool) -> PathBuf {
     let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-    let mut args: Vec<&str> = vec!["build", "--locked", "--message-format=json"];
+    // `--tests`, not a plain `build`: found empirically, by a real test failing deterministically
+    // (`rfc155_part_ib2_real_kill.rs`'s `a_real_sigkill_mid_objects_is_recovered_through_doctor_
+    // and_unlock`, timing out waiting for a marker file that a differently-built binary never
+    // writes). `crates/prikk-cli/Cargo.toml`'s own `[dev-dependencies]` requests `prikk-store`'s
+    // `test-support` feature -- Cargo only unifies a dev-dependency's requested features into the
+    // build graph when a test/bench/example target is actually being built, never for a plain
+    // `cargo build` of the ordinary `[[bin]]` target alone. The real `cargo test -p prikk`
+    // invocation this crate's own code always runs under already builds that unified graph, and
+    // `env!("CARGO_BIN_EXE_prikk")` (before this crate existed) pointed at exactly that binary, with
+    // every feature-gated test seam present. A plain `cargo build -p prikk` instead, as this
+    // function first shipped, silently produces the *ordinary*, test-support-feature-disabled
+    // binary -- which ignores `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` entirely rather than
+    // refusing or erroring, so the test above waited 30 real seconds for a marker file a build
+    // missing that env-var-gated code path can never write. `--tests` asks Cargo to build the same
+    // unified graph `cargo test` itself builds (dev-dependencies included), which also produces the
+    // `[[bin]]` target's own `compiler-artifact` message -- integration tests for a package with a
+    // `[[bin]]` target always need that binary built too, which is the entire reason
+    // `CARGO_BIN_EXE_<name>` exists in the first place. Confirmed, not assumed: the real kill test
+    // above was re-run after this fix, three times, and passed every time.
+    let mut args: Vec<&str> = vec!["build", "--tests", "--locked", "--message-format=json"];
     if release {
         args.push("--release");
     }
