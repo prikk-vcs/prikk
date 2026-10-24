@@ -326,7 +326,7 @@ pub fn maintainer_public_key_hex() -> String {
 /// refused by the reader, and every such test would have had to learn why.
 ///
 /// Memoised per hex value: a binary that signs a hundred times writes one file per distinct key, not
-/// one per call. **Left without a cleanup guard, for the same reason [`isolated_config_home`]'s own
+/// one per call. **Left without a cleanup guard, for the same reason `isolated_config_home`'s own
 /// doc comment gives in full: this cache is shared for the rest of the process's life, keyed by
 /// `seed_hex`, and no call site here is "the last one that needs it."** The files live in the
 /// process's temp directory and are left for the OS to reap.
