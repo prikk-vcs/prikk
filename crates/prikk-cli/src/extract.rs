@@ -1,5 +1,6 @@
-//! `prikk extract` (0.54.0 step 3 Part 2): write the files at a ref or a block id into a brand-new,
-//! empty, external directory -- no repository history, no worktree state.
+//! `prikk extract` (0.54.0 step 3 Part 2): write the files at a ref or a block id into a new
+//! directory that does not exist yet -- no repository history, no worktree state. Nothing here
+//! refuses a destination that happens to sit inside this repository's own tree.
 //!
 //! **Anchoring is the one thing that makes this a different command from `cat`/`tree`, not a third
 //! copy of their own read path.** This writes what a CI job tests and what a forge serves for
@@ -884,8 +885,8 @@ fn print_provisional_line(provisional: bool) {
     // under `AnchorSite::ExtractClaim`, through `derive_next_state_for_candidate`).
     //
     // 0.54.0 Part 5c: the `provisional: yes` line used to close with `checkout`'s own "run `prikk
-    // verify` before committing" -- wrong here, since `extract` writes into a brand-new external
-    // directory, never this repository, and has no commit step at all for `verify` to precede.
+    // verify` before committing" -- wrong here, since `extract` writes into a new directory and has
+    // no commit step at all for `verify` to precede.
     //
     // 0.54.0 Part 5c review v1, condition C1: the replacement wording this round shipped still
     // overclaimed -- "this extract already completed correctly regardless" and "verify would only

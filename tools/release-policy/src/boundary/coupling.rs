@@ -75,8 +75,8 @@ const UPPER_LAYER: [&str; 29] = [
     // `point_reading` and `line_diff`; reached only by the CLI.
     "diff",
     "doctor",
-    // 0.54.0 step 3 Part 2: `prikk extract`, writing a resolved point's files into a brand-new external
-    // directory through `patch_replay::extract`'s own streamed replay (lower). Built on `patch_replay`,
+    // 0.54.0 step 3 Part 2: `prikk extract`, writing a resolved point's files into a new directory
+    // that does not exist yet, through `patch_replay::extract`'s own streamed replay (lower). Built on `patch_replay`,
     // `point`, `anchor_trust` and `path` (all lower); reached only by the CLI.
     "extract",
     // RFC 156 §5b: runs `verify` and takes `ActiveLock` before changing the format marker.

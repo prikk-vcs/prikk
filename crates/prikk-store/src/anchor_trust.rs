@@ -78,7 +78,8 @@ pub(crate) enum AnchorSite {
     Baseline,
     /// `prikk extract` (0.54.0 step 3 Part 2, `patch_replay::extract`): a different site from
     /// [`Self::WorktreeWrite`], even though the rule is identical, because `extract` never writes into
-    /// this repository's own worktree -- it writes a brand-new, external, history-free directory. A
+    /// this repository's own worktree -- it writes a new, history-free directory that does not
+    /// exist yet, never checked against this repository's own tree. A
     /// shared site name would let `extract`'s own control and `WorktreeWrite`'s own control pass or
     /// fail together for reasons that have nothing to do with each other.
     Extract,

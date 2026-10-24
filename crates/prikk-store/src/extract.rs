@@ -1,5 +1,6 @@
 //! `prikk extract` (0.54.0 step 3 Part 2, design review v2 ruling 2): the files at a point, written
-//! into a brand-new, external, history-free directory. An upper-layer module (RFC 149, the same role
+//! into a new, history-free directory that does not exist yet -- never checked against this
+//! repository's own tree. An upper-layer module (RFC 149, the same role
 //! `point_reading.rs` plays for `cat`/`tree`): built on the point resolver and
 //! [`crate::patch_replay::extract`]'s own streamed replay.
 //!
