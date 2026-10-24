@@ -97,3 +97,16 @@ They describe `install.ps1` and the AUR packages, which do not exist until the 0
   - `ExtractError` gets `#[non_exhaustive]`;
   - `NoCheckpointReason` and `ExtractPlanContent` each get one doc line saying why they stay exhaustive;
   - `UnreachedObject` is re-exported from `prikk-store`'s root.
+
+**P2 ACCEPTED 2026-10-24** (no commits; review `release-0.54.0-prep-P2-review-v1`).
+- **The ratio** is 1.8804× against 1.880×.
+- **The queue bytes** are within one byte of the CHANGELOG's figures.
+- **Every `extract` cost sentence holds.**
+- **The smoke has 438 ok,** re-run by the architect. The `show` control fails on 0.53.0, checked by an independent
+  probe.
+
+**A correction to P2's item 4:** `received remove` does not refuse while something else reaches the objects. Design
+round 2 put that bar on object deletion, which is out of 0.54.0. The binary matches the accepted design.
+
+**Next: P3,** with R1–R4 first. **R1 adds:** the Security text must not say the pointer can be removed only "once
+nothing reaches" its objects. The pointer can always be removed; what nothing else reaches becomes unreached.
