@@ -27,100 +27,49 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-/// `env!("CARGO")` -- the exact cargo binary that built this crate, per rustc/cargo's own
-/// documented mechanism for a crate to reliably re-invoke cargo without assuming it is on `PATH`.
-/// Mirrors `tools/corpus/tests/support/mod.rs`'s own use of the identical constant, for the
-/// identical reason.
-const CARGO: &str = env!("CARGO");
-
-/// Ask Cargo itself where it already built `prikk`'s binary, for the profile this very crate was
-/// itself compiled under (`release`, i.e. `!cfg!(debug_assertions)`).
+/// Derive the `prikk` binary's path from this very test executable's own location -- no process
+/// spawned, nothing guessed (0.55.0 G2 Part A2, replacing Part A's nested `cargo build`).
 ///
-/// **Why not `env!("CARGO_BIN_EXE_prikk")`, as this file used before the move:** that macro only
-/// resolves at compile time, for the rustc invocation building an integration test or benchmark
-/// belonging to the *same package* as the `[[bin]]` target it names (or a crate with a genuine
-/// Cargo dependency edge to a package that has both a `[lib]` and that `[[bin]]`). `prikk`
-/// (`crates/prikk-cli`) has no `[lib]` target, so nothing -- including this crate -- can form a
-/// dependency edge to it, and this crate's own compilation is in any case a separate rustc
-/// invocation from `prikk`'s own test/bench compilation. `tools/corpus/tests/support/mod.rs` hit the
-/// identical constraint first, for the identical reason (its own doc comment states it exactly),
-/// and its fix is reused here nearly verbatim: `--message-format=json`, parsing the
-/// `compiler-artifact` record for the `prikk` binary target, is Cargo's own authoritative report of
-/// the path it already built -- not a guessed `target/<profile>/prikk`. Parsed with this crate's own
-/// [`json`] module, not `serde_json`: `prikk`'s test crates have no third-party dependencies (RFC
-/// 118 §10 prerequisite 4), and adding one here would put a third-party crate into `prikk`'s own
-/// dev-dependency graph for the first time -- exactly what that rule exists to prevent.
+/// **Why not `env!("CARGO_BIN_EXE_prikk")`:** that macro only resolves at compile time, for the
+/// rustc invocation building an integration test or benchmark belonging to the *same package* as
+/// the `[[bin]]` target it names. `prikk` (`crates/prikk-cli`) has no `[lib]` target, so nothing --
+/// including this crate -- can form a Cargo dependency edge to it, and this crate's own compilation
+/// is in any case a separate rustc invocation from `prikk`'s own test/bench compilation.
 ///
-/// `cfg!(debug_assertions)`, not an argument the caller chooses: the test harness and the `prikk`
-/// binary it names are always compiled by the same `cargo test` invocation, under the same profile
-/// (no `[profile.*]` table in the workspace `Cargo.toml` decouples `debug-assertions` from the
-/// chosen profile), so whichever profile *this* compiled crate carries is exactly the profile
-/// `prikk` was built under for this same invocation.
-fn locate_prikk_binary(release: bool) -> PathBuf {
-    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
-    // `--tests`, not a plain `build`: found empirically, by a real test failing deterministically
-    // (`rfc155_part_ib2_real_kill.rs`'s `a_real_sigkill_mid_objects_is_recovered_through_doctor_
-    // and_unlock`, timing out waiting for a marker file that a differently-built binary never
-    // writes). `crates/prikk-cli/Cargo.toml`'s own `[dev-dependencies]` requests `prikk-store`'s
-    // `test-support` feature -- Cargo only unifies a dev-dependency's requested features into the
-    // build graph when a test/bench/example target is actually being built, never for a plain
-    // `cargo build` of the ordinary `[[bin]]` target alone. The real `cargo test -p prikk`
-    // invocation this crate's own code always runs under already builds that unified graph, and
-    // `env!("CARGO_BIN_EXE_prikk")` (before this crate existed) pointed at exactly that binary, with
-    // every feature-gated test seam present. A plain `cargo build -p prikk` instead, as this
-    // function first shipped, silently produces the *ordinary*, test-support-feature-disabled
-    // binary -- which ignores `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` entirely rather than
-    // refusing or erroring, so the test above waited 30 real seconds for a marker file a build
-    // missing that env-var-gated code path can never write. `--tests` asks Cargo to build the same
-    // unified graph `cargo test` itself builds (dev-dependencies included), which also produces the
-    // `[[bin]]` target's own `compiler-artifact` message -- integration tests for a package with a
-    // `[[bin]]` target always need that binary built too, which is the entire reason
-    // `CARGO_BIN_EXE_<name>` exists in the first place. Confirmed, not assumed: the real kill test
-    // above was re-run after this fix, three times, and passed every time.
-    let mut args: Vec<&str> = vec!["build", "--tests", "--locked", "--message-format=json"];
-    if release {
-        args.push("--release");
-    }
-    args.extend(["--manifest-path", manifest_path, "-p", "prikk"]);
-    let output = Command::new(CARGO)
-        .args(&args)
-        .output()
-        .unwrap_or_else(|err| panic!("spawning {CARGO} build -p prikk: {err}"));
-    assert!(
-        output.status.success(),
-        "{CARGO} build -p prikk failed (status {:?}): {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value = json::parse(line);
-        if value.get("reason").as_str() != "compiler-artifact" {
-            continue;
-        }
-        let target = value.get("target");
-        let is_prikk_bin = target.get("name").as_str() == "prikk"
-            && target
-                .get("kind")
-                .as_array()
-                .iter()
-                .any(|kind| kind.as_str() == "bin");
-        if !is_prikk_bin {
-            continue;
-        }
-        return PathBuf::from(value.get("executable").as_str());
-    }
-    panic!("{CARGO} build -p prikk produced no compiler-artifact message naming the prikk binary");
+/// **Why not Part A's nested `cargo build --tests -p prikk`, reviewed and rejected
+/// (`.git-exclude/reviewed/0.55.0-g2-A-review-v1.md`):** it ran a real `cargo` subprocess inside
+/// every one of ~141 test-binary processes (doubling `cargo test -p prikk`'s own wall time, 7.74s to
+/// 14.26s), and it *inferred* the profile/target/features/lock rather than reusing the exact binary
+/// `cargo test` itself already built -- the very class of bug Part A's own Defect 1 surfaced once
+/// (a plain `cargo build` silently produced the test-support-feature-disabled binary).
+///
+/// **This derivation instead reads where Cargo already put things**, the same technique
+/// long-established Cargo test-support crates use (`assert_cmd::cargo::cargo_bin`,
+/// `escargot`): a `cargo test`-built integration-test executable always lives at
+/// `<target-dir>/[<target-triple>/]<profile>/deps/<name>-<hash>[.exe]`, and every other binary
+/// Cargo built *for that same invocation* -- including `prikk`'s own `[[bin]]` -- lives directly in
+/// that same `<profile>` directory: this executable's own parent's parent. No profile/target/
+/// feature/lock guesswork, because nothing is re-derived -- it is read from the one build that
+/// already happened, the build this very test process is itself a product of. Verified against
+/// `env!("CARGO_BIN_EXE_prikk")` by identity, in every profile, by
+/// `tests/support_binary_identity.rs` (A2.2).
+fn locate_prikk_binary() -> PathBuf {
+    let exe = std::env::current_exe()
+        .unwrap_or_else(|err| panic!("current_exe() (to locate the prikk binary): {err}"));
+    let deps_dir = exe
+        .parent()
+        .unwrap_or_else(|| panic!("{exe:?} (this test executable) has no parent directory"));
+    let profile_dir = deps_dir.parent().unwrap_or_else(|| {
+        panic!("{deps_dir:?} (expected a Cargo `deps` directory) has no parent directory")
+    });
+    profile_dir.join(format!("prikk{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// The `prikk` binary for this process's own profile, built once per test-binary process
+/// The `prikk` binary for this process's own profile, derived once per test-binary process
 /// (`OnceLock`) rather than once per call.
 pub fn prikk_bin_path() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| locate_prikk_binary(!cfg!(debug_assertions)))
+    PATH.get_or_init(locate_prikk_binary)
 }
 
 /// A `Command` for the `prikk` binary, in `repo`'s directory, with key isolation already applied.
