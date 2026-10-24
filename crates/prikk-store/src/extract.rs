@@ -30,6 +30,11 @@ use crate::path::{RepoPath, validate_no_path_collisions};
 use crate::point::Point;
 
 /// Where one planned file's content comes from.
+///
+/// Deliberately not `#[non_exhaustive]`: new in this same release cycle, with exactly the two
+/// shapes a planned file's content can take (streamed from a stored Blob, or already resident),
+/// and growing it is this crate's own change to make alongside the match in `prikk-cli` that
+/// writes each entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtractPlanContent {
     /// Stream straight from this Blob id, read fresh with [`read_extract_blob_content`] only when

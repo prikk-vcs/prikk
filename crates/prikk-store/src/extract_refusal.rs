@@ -27,6 +27,10 @@ use prikk_error::PrikkError;
 /// Which of `no-checkpoint-in-reach`'s own three reasons applied (0.54.0 step 3 Part 5d): the
 /// first that applies, checked in priority order, across the whole admitted-anchor search within
 /// reach (`patch_replay::extract::search_admitted_anchor`).
+///
+/// Deliberately not `#[non_exhaustive]`: new in this same release cycle, with exactly the three
+/// reasons the admitted-anchor search's own priority order can produce, and growing it is this
+/// crate's own change to make alongside the match in `prikk-cli` that reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoCheckpointReason {
     /// A recorded checkpoint was found within reach, but its signer is not a key this repository
@@ -77,6 +81,7 @@ pub enum ExtractRefusalKind {
 /// then classifies by `error`'s own `PrikkError` variant (`Io` -> `io-failure`, everything else
 /// that names a persisted-data problem -> `damaged-repository`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExtractError {
     /// The refusal kind, when the raise site already knows it.
     pub kind: Option<ExtractRefusalKind>,
