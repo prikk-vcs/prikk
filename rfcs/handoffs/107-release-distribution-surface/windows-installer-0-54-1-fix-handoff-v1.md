@@ -171,3 +171,10 @@ Then the 14 gates.
   `8027daab`, `c13dd8d5`, `701269e8`;
 - the owner's own re-try of the one-line install;
 - the letters.
+
+**Confirmed by the owner, 2026-10-24,** on the same x64 Windows 11 machine, in Windows PowerShell 5.1.26100.9711:
+- the documented line installed to `%LOCALAPPDATA%\Programs\prikk\prikk.exe`, verified the checksum, and added the
+  user PATH entry;
+- a new console printed `prikk 0.54.1`.
+
+The defect that started this handoff is closed.
