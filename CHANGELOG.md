@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+### Security
+
+- **0.52.0's own `### Security` entry said a repository that had imported under its 0.51.0 defect
+  kept a ref signed by an unadopted key failing `verify`'s publication-trust check forever, with no
+  command that removed stored objects at all.** That is no longer the whole picture: an object
+  nothing reaches any more is now reported as a non-blocking warning instead of failing `verify`
+  (see Output changes), and `prikk received remove` can now take a received pointer out on purpose
+  — the pointer can always be removed; what nothing else reaches becomes unreached, and what is
+  still reached elsewhere stays reached and is checked exactly as before (see Added). What still
+  holds: no command deletes the bytes themselves, either way — a `.prikk/` copy taken before the
+  import remains the only way to actually remove them.
+
+### Output changes
+
+- **`verify` no longer fails forever on a stored `Block`/`RefState` that nothing in committed
+  state reaches any more (RFC 164 Rule E).** Before 0.54.0, every `Block` and `RefState`
+  had its publication trust checked regardless of reachability, so content imported under a key
+  this repository never adopted kept failing `verify`'s publication-trust check even after the
+  received pointer that named it was replaced by a later, sound import (0.52.0's own documented
+  Security limitation, `docs/src/reference/current-state.md`). Now, an object reachable through no
+  local ref, received pointer, queued patch, or sealed block descending from them has its trust
+  check skipped and is reported instead as a counted, non-blocking **unreached object** warning —
+  the identical "nothing reaches it" test `UnreferencedRemnant` already applies to a dangling
+  *reference*, now applied to the object itself. `verify`'s own exit code stays `0` on this alone.
+  **Nothing is deleted** — the bytes stay, and no command removes them yet. Before, with an
+  unadopted-key import whose pointer has been replaced: `error: repository has publication-trust
+  issues` (exit `1`). After: exit `0`, with `unreached objects: N` and one warning line per
+  object. `--format json` gains an additive `unreached_objects` array (`object_id`/`object_type`
+  per entry); `unreferenced_remnants` is not retroactively added to the JSON schema by this change.
+  While a received pointer is still present, everything it reaches stays reached and `verify`
+  keeps failing on it exactly as before — this changes nothing for an import that has not yet been
+  superseded. **`verify` prints the `unreached objects: N` count line on every run, the same as
+  `unreferenced remnants: N`** — including `N = 0` — with the explanation carried only on the
+  per-object warning lines below it, not repeated on the count line itself.
+
+### Fixed
+
+- **`cargo binstall` could not install prikk's Windows release** (found by stikk's letter 022).
+  `[package.metadata.binstall]` named `prikk-{ target }.tar.gz`/`pkg-fmt = "tgz"` for every target,
+  but the Windows release asset is a `.zip` holding `prikk.exe` at its root. Measured 2026-10-20:
+  `cargo binstall --dry-run --disable-strategies compile,quick-install --targets
+  x86_64-pc-windows-msvc prikk@0.53.0` failed ("Fallback to cargo-install is disabled"); the Linux
+  target already succeeded. Fixed by a
+  `[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]` section naming the `.zip` asset
+  and `pkg-fmt = "zip"`; confirmed green with the same dry-run command.
+- **`prikk show <block-id>`, in both its text and `--format json` output, failed with `lifecycle
+  replay: blob … required for a state effect is missing` on the second consecutive `EditText` of the
+  same file, and every one after** (measured directly by reverting the fix and
+  re-running the regression test added for it — the first edit's own preimage is always a real,
+  stored `CreateFile` blob, so the gap could never show up any earlier than the second edit).
+  `show`'s own block-reading path folded a block's patches over its parent's state starting from an
+  empty text cache, with no rebuild of text
+  that an earlier edit produced but never separately stored — a deliberate storage optimization
+  elsewhere in this codebase: `EditText` never writes a fresh `Blob` object, only the file's
+  original `CreateFile` does. The queue's own equivalent fold already carried this rebuild; `show`'s
+  sealed-block fold did not. Introduced at `052e6c45` (0.52.0, stikk 020); shipped in both 0.52.0
+  and 0.53.0. **The stored history itself was always sound** — nothing was lost or corrupted, and
+  `prikk verify` was never affected: it already exited `0`, correctly, the whole time. This was a
+  read-path bug in `show` alone, now fixed by sharing the queue's own materialize-and-retry fallback
+  with `show`'s own sealed-block fold.
+
+### Changed
+
+- **A commit reads the queue twice, not three times.** `commit` held the active-session lock
+  across three full decodes of `queue.wal`: the publication-cleanup precondition's own replay, the
+  commit's own `active_replay`, and the append's own replay (which stays — the pre-append check
+  immediately before the durable write). The first two now share one decode, taken at the
+  precondition's own existing decode point — the same checks, in the same order, producing the
+  same refusal text — and handed back to the commit instead of taken a second time. Measured
+  (one-file commit, `queue.wal` fully decoded): 100 queued commits, 107,074 bytes (was 157,046);
+  800 queued commits, 808,781 bytes (was 1,209,605).
+
 ### Added
 
 - **`prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only]
@@ -130,81 +202,6 @@
   release, never hand-maintained. `prikk` builds from the signed source tag: its PKGBUILD names the release key, and
   `makepkg` refuses to build unless the tag's signature verifies against it. `prikk-bin` installs the prebuilt binary
   instead, checksum-verified only, no key needed.
-
-### Security
-
-- **`## 0.52.0`'s own `### Security` entry said that a repository which had imported a crafted or
-  corrupted archive under 0.51.0's defect — one carrying a branch ref that resolved to the wrong
-  kind of object — kept what it wrote forever: the carried objects stayed, a ref signed by a key
-  this repository never adopted kept failing `verify`'s publication-trust check with no way to
-  clear it, and prikk had no command that removed stored objects at all, leaving a `.prikk/` copy
-  taken before the import as the only way back. That is no longer the whole picture. This round, an
-  object nothing reaches any more is a warning (`verify`'s unreached object, B1), not a failure,
-  and `prikk received remove <remotes/…>` (B2a) can now take the offending pointer itself out on
-  purpose, once nothing reaches the objects it named, so `verify` stops failing on them. What is
-  still true, exactly as the 0.52.0 entry said: the bytes themselves are never deleted by any of
-  this, either removed or later restored — a `.prikk/` copy taken before the import remains the
-  only way to actually remove them.
-
-### Output changes
-
-- **`verify` no longer fails forever on a stored `Block`/`RefState` that nothing in committed
-  state reaches any more (RFC 164 Rule E).** Before 0.54.0, every `Block` and `RefState`
-  had its publication trust checked regardless of reachability, so content imported under a key
-  this repository never adopted kept failing `verify`'s publication-trust check even after the
-  received pointer that named it was replaced by a later, sound import (0.52.0's own documented
-  Security limitation, `docs/src/reference/current-state.md`). Now, an object reachable through no
-  local ref, received pointer, queued patch, or sealed block descending from them has its trust
-  check skipped and is reported instead as a counted, non-blocking **unreached object** warning —
-  the identical "nothing reaches it" test `UnreferencedRemnant` already applies to a dangling
-  *reference*, now applied to the object itself. `verify`'s own exit code stays `0` on this alone.
-  **Nothing is deleted** — the bytes stay, and no command removes them yet. Before, with an
-  unadopted-key import whose pointer has been replaced: `error: repository has publication-trust
-  issues` (exit `1`). After: exit `0`, with `unreached objects: N` and one warning line per
-  object. `--format json` gains an additive `unreached_objects` array (`object_id`/`object_type`
-  per entry); `unreferenced_remnants` is not retroactively added to the JSON schema by this change.
-  While a received pointer is still present, everything it reaches stays reached and `verify`
-  keeps failing on it exactly as before — this changes nothing for an import that has not yet been
-  superseded. **`verify` prints the `unreached objects: N` count line on every run, the same as
-  `unreferenced remnants: N`** — including `N = 0` — with the explanation carried only on the
-  per-object warning lines below it, not repeated on the count line itself.
-
-### Fixed
-
-- **`cargo binstall` could not install prikk's Windows release** (found by stikk's letter 022).
-  `[package.metadata.binstall]` named `prikk-{ target }.tar.gz`/`pkg-fmt = "tgz"` for every target,
-  but the Windows release asset is a `.zip` holding `prikk.exe` at its root. Measured 2026-10-20:
-  `cargo binstall --dry-run --disable-strategies compile,quick-install --targets
-  x86_64-pc-windows-msvc prikk@0.53.0` failed ("Fallback to cargo-install is disabled"); the Linux
-  target already succeeded. Fixed by a
-  `[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]` section naming the `.zip` asset
-  and `pkg-fmt = "zip"`; confirmed green with the same dry-run command.
-- **`prikk show <block-id>`, in both its text and `--format json` output, failed with `lifecycle
-  replay: blob … required for a state effect is missing` on the second consecutive `EditText` of the
-  same file, and every one after** (measured directly by reverting the fix and
-  re-running the regression test added for it — the first edit's own preimage is always a real,
-  stored `CreateFile` blob, so the gap could never show up any earlier than the second edit).
-  `show`'s own block-reading path folded a block's patches over its parent's state starting from an
-  empty text cache, with no rebuild of text
-  that an earlier edit produced but never separately stored — a deliberate storage optimization
-  elsewhere in this codebase: `EditText` never writes a fresh `Blob` object, only the file's
-  original `CreateFile` does. The queue's own equivalent fold already carried this rebuild; `show`'s
-  sealed-block fold did not. Introduced at `052e6c45` (0.52.0, stikk 020); shipped in both 0.52.0
-  and 0.53.0. **The stored history itself was always sound** — nothing was lost or corrupted, and
-  `prikk verify` was never affected: it already exited `0`, correctly, the whole time. This was a
-  read-path bug in `show` alone, now fixed by sharing the queue's own materialize-and-retry fallback
-  with `show`'s own sealed-block fold.
-
-### Changed
-
-- **A commit reads the queue twice, not three times.** `commit` held the active-session lock
-  across three full decodes of `queue.wal`: the publication-cleanup precondition's own replay, the
-  commit's own `active_replay`, and the append's own replay (which stays — the pre-append check
-  immediately before the durable write). The first two now share one decode, taken at the
-  precondition's own existing decode point — the same checks, in the same order, producing the
-  same refusal text — and handed back to the commit instead of taken a second time. Measured
-  (one-file commit, `queue.wal` fully decoded): 100 queued commits, 107,074 bytes (was 157,046);
-  800 queued commits, 808,781 bytes (was 1,209,605).
 
 ## 0.53.0 — 2026-10-18
 
