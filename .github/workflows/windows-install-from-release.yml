@@ -1,0 +1,106 @@
+name: Windows install from the release page
+
+# 0.54.1: proves the documented one-line install/uninstall (`irm .../install.ps1 | iex`,
+# `irm .../uninstall.ps1 | iex`) actually works against a real, already-published GitHub release --
+# not a local fixture server, the way `scripts/windows-installer-test.ps1` already proves the
+# generated scripts' own logic against a fixture. install.ps1 always downloads from
+# .../releases/latest/download/..., so this job exercises whatever release is "latest" on GitHub at
+# the moment it runs, and separately checks that the installed `prikk --version` prints the tag
+# this call expects "latest" to resolve to -- catching "latest" silently pointing at the wrong
+# release (`scripts/windows-install-from-release-verify.ps1` -- a `.ps1` file, outside
+# `scannable_reference_file`'s own `md|yml|yaml|sh` set, holds that checking logic, the same reason
+# `windows-installer-test.ps1` does).
+#
+# A reusable `workflow_call` workflow, called two ways, mirroring `aur-build.yml`'s own shape
+# exactly, for the identical reason that file gives: the handoff's own required dry run needs to
+# exercise exactly what a real release's own job does, not an approximation of it --
+#   - from `release.yml`, `needs: publish`, with `tag: ${{ github.ref_name }}` -- "latest" IS this
+#     tag at that point, since `publish` only just ran.
+#   - directly, via this workflow's own `workflow_dispatch`, against any existing, already-released
+#     tag. The handoff's dry run: its first use is 0.54.0, run by the architect after this round is
+#     pushed. Expect the `windows-latest` cell to install (that runner's own .NET answers the
+#     architecture query correctly, so 0.54.0's old, buggy install.ps1 happens to work there too)
+#     and the `windows-11-arm` cell to reproduce the exact 0.54.1 bug this round fixes: refuse with
+#     an empty/unrecognized architecture, because 0.54.0's own install.ps1 -- not this round's fix
+#     -- is what "latest" resolves to until 0.54.1 is tagged. That is expected, documented behavior
+#     proving the dry run exercises the real defect, not a thing to "fix" in this job.
+#
+# No secrets of any kind, in either trigger -- this job only ever runs the public, documented
+# one-line install/uninstall form against the public release page; `permissions: contents: read`
+# throughout.
+#
+# Runner/engine availability (checked directly against GitHub's own current documentation and the
+# `actions/runner-images` repository before writing this matrix, not assumed): `windows-11-arm` is
+# a real, currently GA GitHub-hosted runner label, free and unlimited for public repositories
+# (docs.github.com/en/actions/reference/runners/github-hosted-runners), arm64, and its own image
+# (`Windows11-Arm64-Readme.md`, image version 20261006.188.1 as of this round) ships PowerShell 7
+# under its own "PowerShell Tools" section -- so `pwsh` is present on it, and the full 2x2 matrix
+# (runner x engine) below is exercised on every cell.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "The tag this call expects 'latest' to resolve to (prikk --version must print it)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing, already-released tag this dispatch expects 'latest' to resolve to (e.g. 0.54.0) -- never a tag not yet released"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows-install-from-release:
+    name: install from the release page (${{ matrix.runner }}, ${{ matrix.engine }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+        engine: [powershell, pwsh]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The install invocation wraps the exact documented one-line form in
+      # Start-Transcript/Stop-Transcript so the verify step below can confirm whether the ARM64
+      # emulation line appeared in its output -- `irm ... | iex` itself is byte-identical to the
+      # documented line either way; nothing here changes what gets installed or how.
+      - name: Install (the documented one-line form, capturing output for the emulation-line check)
+        if: matrix.engine == 'powershell'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Transcript -Path install-output.log | Out-Null; irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex; Stop-Transcript | Out-Null"
+      - name: Install (the documented one-line form, capturing output for the emulation-line check)
+        if: matrix.engine == 'pwsh'
+        run: pwsh -NoProfile -Command "Start-Transcript -Path install-output.log | Out-Null; irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex; Stop-Transcript | Out-Null"
+
+      - name: Verify the installed version and the ARM64 emulation line
+        if: matrix.engine == 'powershell'
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECT_EMULATION_LINE: ${{ matrix.runner == 'windows-11-arm' }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-install-from-release-verify.ps1 -Mode PostInstall
+      - name: Verify the installed version and the ARM64 emulation line
+        if: matrix.engine == 'pwsh'
+        env:
+          EXPECTED_TAG: ${{ inputs.tag }}
+          EXPECT_EMULATION_LINE: ${{ matrix.runner == 'windows-11-arm' }}
+        run: pwsh -NoProfile -File scripts/windows-install-from-release-verify.ps1 -Mode PostInstall
+
+      - name: Uninstall (the documented one-line form)
+        if: matrix.engine == 'powershell'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | iex"
+      - name: Uninstall (the documented one-line form)
+        if: matrix.engine == 'pwsh'
+        run: pwsh -NoProfile -Command "irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | iex"
+
+      - name: Verify prikk is gone
+        if: matrix.engine == 'powershell'
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-install-from-release-verify.ps1 -Mode PostUninstall
+      - name: Verify prikk is gone
+        if: matrix.engine == 'pwsh'
+        run: pwsh -NoProfile -File scripts/windows-install-from-release-verify.ps1 -Mode PostUninstall

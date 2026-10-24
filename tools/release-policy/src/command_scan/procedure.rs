@@ -85,8 +85,10 @@ pub(super) fn allowed(tokens: &[String], index: usize, head: &str) -> bool {
         // not blanket approval; all the actual branching logic lives in
         // `scripts/windows-installer-test.ps1` itself, a `.ps1` file outside
         // `scannable_reference_file`'s scanned set, not in this workflow's own `run:` line.
-        "powershell" => windows_installer_test_powershell(tail),
-        "pwsh" => windows_installer_test_pwsh(tail),
+        "powershell" => {
+            windows_installer_test_powershell(tail) || windows_install_from_release_powershell(tail)
+        }
+        "pwsh" => windows_installer_test_pwsh(tail) || windows_install_from_release_pwsh(tail),
         // 0.54.0 step 3 Part 7a: `aur-build.yml`/`release.yml`'s new AUR packaging jobs.
         // `pacman`/`useradd`/`chown`/`su`/`gh` (release download)/`git` can each execute another
         // program (a package's own install scripts, a login shell, an arbitrary PKGBUILD, a
@@ -134,6 +136,83 @@ fn windows_installer_test_pwsh(tail: &[String]) -> bool {
         "-DistDir",
         "dist",
     ]
+}
+
+/// 0.54.1: `windows-install-from-release.yml`'s own install/verify/uninstall steps, under Windows
+/// PowerShell 5.1. `irm … | iex` is opaque execution by this project's own design (DC-70 B1) --
+/// like `su builduser -c "curl … | gpg --import"` (`aur_su`, below), everything after
+/// `-Command`/`-File` is pinned as one exact string per invocation, the scanner never parsing what
+/// is inside it. The install invocation also wraps the documented one-line form in
+/// `Start-Transcript`/`Stop-Transcript` so a later step can confirm whether the ARM64 emulation
+/// line appeared in its output (`windows-install-from-release-verify.ps1` reads the file); the
+/// uninstall invocation needs no such wrapping and stays exactly the bare documented line.
+fn windows_install_from_release_powershell(tail: &[String]) -> bool {
+    tail == [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "Start-Transcript -Path install-output.log | Out-Null; irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex; Stop-Transcript | Out-Null",
+    ] || tail
+        == [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | iex",
+        ]
+        || tail
+            == [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/windows-install-from-release-verify.ps1",
+                "-Mode",
+                "PostInstall",
+            ]
+        || tail
+            == [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/windows-install-from-release-verify.ps1",
+                "-Mode",
+                "PostUninstall",
+            ]
+}
+
+/// Same four invocations as `windows_install_from_release_powershell`, under PowerShell 7 -- no
+/// `-ExecutionPolicy Bypass`, the same omission `windows_installer_test_pwsh` already makes for
+/// the identical reason (pwsh's own default execution policy already permits this).
+fn windows_install_from_release_pwsh(tail: &[String]) -> bool {
+    tail == [
+        "-NoProfile",
+        "-Command",
+        "Start-Transcript -Path install-output.log | Out-Null; irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex; Stop-Transcript | Out-Null",
+    ] || tail
+        == [
+            "-NoProfile",
+            "-Command",
+            "irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | iex",
+        ]
+        || tail
+            == [
+                "-NoProfile",
+                "-File",
+                "scripts/windows-install-from-release-verify.ps1",
+                "-Mode",
+                "PostInstall",
+            ]
+        || tail
+            == [
+                "-NoProfile",
+                "-File",
+                "scripts/windows-install-from-release-verify.ps1",
+                "-Mode",
+                "PostUninstall",
+            ]
 }
 
 fn windows_new_item(tail: &[String]) -> bool {

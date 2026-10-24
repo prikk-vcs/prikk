@@ -236,6 +236,25 @@ jobs:
       tag: ${{ github.ref_name }}
       source: publish
 
+  # 0.54.1: runs the real, documented one-line install/uninstall against the actual, just-published
+  # release page, on both a real Windows x64 runner and a real Windows ARM64 runner, under both
+  # PowerShell engines -- `scripts/windows-installer-test.ps1` already proves the generated
+  # scripts' own logic against a local fixture server; this job proves the real release page itself
+  # serves a working install.ps1/uninstall.ps1 pair, under the exact command a real user runs.
+  # `needs: publish`, per the same reasoning as `aur-build` directly above: this only ever runs
+  # after the real GitHub release already exists, and a failure here cannot retroactively touch
+  # `publish`'s own outcome -- GitHub Actions jobs do not roll back prior jobs once they have
+  # concluded, the identical property `aur-build`'s own comment already states for the same
+  # dependency shape.
+  windows-install-from-release:
+    name: Windows install from the release page
+    needs: publish
+    uses: ./.github/workflows/windows-install-from-release.yml
+    permissions:
+      contents: read
+    with:
+      tag: ${{ github.ref_name }}
+
   # `needs: aur-build`, not `publish` directly -- this job only ever runs after the packages this
   # tag will push have already built and had their source signature verified. `environment: aur`
   # holds the one secret this job uses (`AUR_SSH_PRIVATE_KEY`); that environment does not exist yet
