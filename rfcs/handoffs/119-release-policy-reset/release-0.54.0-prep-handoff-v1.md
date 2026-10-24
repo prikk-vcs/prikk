@@ -175,3 +175,9 @@ unchecked, and the count can include objects that are in fact reached. `verify` 
 - run the 14 gates.
 
 Then the architect pushes everything together.
+
+**P4 ACCEPTED, with P4b** (2026-10-24; `442b968f`, `6d3cbad6`, `d7c9dd27`; review
+`release-0.54.0-prep-P4b-review-v1`). The notes no longer promise an "external" destination, and the unreached-count
+sentence matches the code. **The dev team's part is complete.**
+
+**Next, the architect's:** CI fully green on the tip, all 14 gates on the same commit, then the owner's word on the tag.
