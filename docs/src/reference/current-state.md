@@ -351,9 +351,10 @@ planned for.
   or `RefState` that nothing in committed state reaches any more (the same reachability RFC 164
   Rule E already computes for a dangling *reference*, applied here to the object itself) is
   reported as an unreached object, a non-blocking warning, and no longer fails `verify`'s
-  publication-trust check. When `verify` also reports a damaged object, its unreached-object count
-  is a lower bound: an object reachable only through the damaged one is never walked, so it can
-  never be confirmed unreached either (`prikk-store/src/verify/reachability.rs`). While the
+  publication-trust check. When `verify` also reports a damaged object, the walk cannot read past
+  it: objects reached only through the damaged one are counted as unreached, and their publication
+  trust is not checked, so the count can include objects that are in fact reached. `verify` still
+  fails on the damage itself (`verify/reachability.rs`, `verify/objects.rs`). While the
   received pointer is still present, everything it reaches
   stays reached, and `verify` keeps failing on it exactly as before — this changes nothing for an
   import whose pointer has not yet been superseded. The bytes stay either way; no command removes

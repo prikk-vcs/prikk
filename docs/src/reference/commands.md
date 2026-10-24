@@ -254,9 +254,10 @@ removes one received ref's own pointer from the received-index container — the
 `remotes/…` point. **The objects it reached are not removed, only the pointer**: a stored `Block`
 or `RefState` nothing else reaches any more is reported by `prikk verify` as an **unreached
 object**, a non-blocking warning, not a failure (see `verify`'s own entry above). When `verify` also
-reports a damaged object, its unreached-object count is a lower bound: an object reachable only
-through the damaged one is never walked, so it can never be confirmed unreached either
-(`prikk-store/src/verify/reachability.rs`). `--plan-only`
+reports a damaged object, the walk cannot read past it: objects reached only through the damaged
+one are counted as unreached, and their publication trust is not checked, so the count can include
+objects that are in fact reached. `verify` still fails on the damage itself
+(`verify/reachability.rs`, `verify/objects.rs`). `--plan-only`
 reports what would be removed — the pointer's own current target, or that there is nothing named —
 writing nothing, but it still takes the container's lock for the duration of the read: the same
 reason `compact`'s own `--plan-only` variants do — an operator acts on what a preview reports, and
