@@ -124,3 +124,26 @@ so the old code installs where the row expects otherwise. Show those reds in you
 5. **The held docs are cherry-picked by hash,** with the new ARM64 sentence, once `install.ps1` works on the release
    page and the AUR pages show the release.
 6. The owner tries the one-line install again on the same machine.
+
+## Progress, 2026-10-24: the fix is accepted; 0.54.1b fixes Control 6's harness and two held-branch sentences
+
+**Review:** `.git-exclude/reviewed/0.54.1-windows-installer-review-v1.md`. Pushed at `3982fc5e`. No file under
+`crates/` changed.
+
+**CI run `40080307243`: 16/17.** In Control 6, both reds hold and three green rows pass. **The `x86`-only refusal row
+then stopped the run:** the capture (`… 2>&1` while `$ErrorActionPreference` is `Stop`) turns the child's stderr line
+into a terminating `NativeCommandError` under Windows PowerShell 5.1. The installer itself refused correctly, naming
+`x86`.
+
+**The new job against 0.54.0** (run `40080319837`): x64 installs; ARM64 refuses with `Windows/Arm64`, which 0.54.1
+fixes.
+
+**Next: 0.54.1b,** about 30 minutes. Report: `0.54.1b-windows-installer-report.md`.
+- **C1:** capture each row without letting stderr terminate the run. All five rows must run under both engines, and
+  the job must exit 0.
+- **C2, on the held branch:**
+  - `install.md` lines 78–79 still describe the .NET check;
+  - "Supported today" becomes one rule: x64 installs; ARM64 installs the x64 build under emulation; any other
+    architecture refuses.
+
+Then the 14 gates.
