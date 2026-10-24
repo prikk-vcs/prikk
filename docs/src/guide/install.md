@@ -75,9 +75,9 @@ your `~/.bash_profile` does not source `~/.bashrc`, add the `PATH` line manually
 irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | iex
 ```
 
-**What it does, exactly**: detects CPU architecture
-(`[RuntimeInformation]::OSArchitecture`, falling back to `$env:PROCESSOR_ARCHITECTURE` if that call
-is unavailable); downloads that platform's release `.zip` and its `.sha256` from the same release
+**What it does, exactly**: decides the architecture from Windows' own processor environment
+variables (`$env:PROCESSOR_ARCHITEW6432` when set, else `$env:PROCESSOR_ARCHITECTURE` — never a
+.NET API); downloads that platform's release `.zip` and its `.sha256` from the same release
 page URLs the manual path uses; verifies the checksum with `Get-FileHash` and **installs nothing if
 verification fails**; extracts `prikk.exe` to `%LOCALAPPDATA%\Programs\prikk`; and, if that
 directory is not already on your user `PATH`, adds it — see **The `PATH` change**, below.
@@ -93,11 +93,10 @@ checksum proves the file you received matches what the release page published; i
 
 **`prikk.exe` is not code-signed, and Windows may warn or block it.**
 
-**Supported today**: `x86_64` Windows only. Any other architecture refuses with a pointer to the
-manual `.zip` download or `cargo install prikk`, the same way the shell installer refuses an Intel
-Mac.
-
-**ARM64 Windows** gets the x64 build too, which runs under Windows' own x64 emulation.
+**Supported today**: `x64` Windows installs the x64 build. **ARM64 Windows** installs the x64 build
+too, which runs under Windows' own x64 emulation. Any other architecture refuses with a pointer to
+the manual `.zip` download or `cargo install prikk`, the same way the shell installer refuses an
+Intel Mac.
 
 **Version and install-directory overrides**: environment variables only —
 `PRIKK_INSTALL_VERSION=X.Y.Z` and `PRIKK_INSTALL_DIR=<path>`, set before the one-liner above. There
