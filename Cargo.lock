@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "prikk"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "prikk-crypto",
  "prikk-error",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-benchmarks"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "criterion",
  "prikk-store",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-corpus"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "prikk-hash",
  "prikk-store",
@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-crypto"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -1010,25 +1010,25 @@ dependencies = [
 
 [[package]]
 name = "prikk-error"
-version = "0.54.0"
+version = "0.54.1"
 
 [[package]]
 name = "prikk-ffi"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "windows-sys",
 ]
 
 [[package]]
 name = "prikk-hash"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "sha2",
 ]
 
 [[package]]
 name = "prikk-object"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "prikk-error",
  "prikk-hash",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-release-policy"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "cargo_metadata",
  "jsonschema",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-replay"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "prikk-error",
  "prikk-hash",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "prikk-store"
-version = "0.54.0"
+version = "0.54.1"
 dependencies = [
  "getrandom 0.4.3",
  "prikk-crypto",
