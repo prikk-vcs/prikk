@@ -83,3 +83,17 @@ They describe `install.ps1` and the AUR packages, which do not exist until the 0
     binstall fix;
   - **planeter:** `extract`, their request, measured on the published binary;
   - **the external architect:** the review, if the owner offers it.
+
+**P1 ACCEPTED 2026-10-24** (`727faa10`, `54bc3d0b`, held branch `8027daab`; review `release-0.54.0-prep-P1-review-v1`).
+`--help` gains exactly two lines (`extract`, `received remove`). **Next: P2,** unchanged.
+
+**P3 carries four rulings first:**
+- **R1:** `### Security` is kept, and shortened to the correction: what 0.52.0 said, what changes, and what still
+  holds. No B1/B2a, and no "this round".
+- **R2:** the docs' "(B1)" and "(B2a)" labels become RFC references, looked up.
+- **R3:** `troubleshooting.md`'s entry for `lifecycle replay: blob … required for a state effect is missing` gains a
+  paragraph: from `prikk show` under 0.52.0 or 0.53.0, it is the read bug fixed in 0.54.0, so upgrade.
+- **R4:**
+  - `ExtractError` gets `#[non_exhaustive]`;
+  - `NoCheckpointReason` and `ExtractPlanContent` each get one doc line saying why they stay exhaustive;
+  - `UnreachedObject` is re-exported from `prikk-store`'s root.
