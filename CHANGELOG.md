@@ -78,8 +78,10 @@
 
 - **`prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only]
   [--max-bytes N] [--max-files N] [--format json]`**: writes
-  every file at a point into a brand-new, empty, external directory — no repository history, no
-  worktree state. Unlike `cat`/`tree`, which may display any snapshot that merely decodes correctly,
+  every file at a point into a new directory that does not exist yet — no repository history, no
+  worktree state. 0.54.0 does not refuse a destination path inside the repository; choose one
+  outside it, because the next `commit --from-worktree` would pick up the extracted files as
+  worktree content. Unlike `cat`/`tree`, which may display any snapshot that merely decodes correctly,
   `extract` **anchors only where a writer would** — the identical admitted-anchor rule
   (`AnchorTrust::admit`) `checkout`'s own worktree writes already use, under its own new
   `AnchorSite::Extract` — because its own output is what a CI job tests and what a forge serves for

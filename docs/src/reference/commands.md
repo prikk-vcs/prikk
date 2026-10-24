@@ -172,8 +172,11 @@ and is written to a temporary sibling then renamed into place. **Binary content 
 <point>`. `--format json` is `path-content-v1`: the same fields as one `tree-listing-v1` entry, and no bytes.
 
 **Writing a point into a new folder: `extract`.** `extract --ref <ref|block-id> <dir>` writes every file
-at a point into a brand-new, empty, external directory, no repository history and no worktree state, the
-same shape `git archive | tar -x` produces. Unlike `cat`/`tree`, **it anchors only where a writer would**:
+at a point into a new directory that does not exist yet, no repository history and no worktree state, the
+same shape `git archive | tar -x` produces. 0.54.0 does not refuse a destination path inside the
+repository — `<dir>` may be an absolute or relative path, even one under `.prikk/`; choose a path outside
+the repository yourself, because the next `commit --from-worktree` would pick up the extracted files as
+worktree content. Unlike `cat`/`tree`, **it anchors only where a writer would**:
 the same admitted-anchor rule `checkout`'s own worktree writes use, never the weaker rule that lets `cat`
 and `tree` display any snapshot that merely decodes correctly. A `remotes/...` ref under a key this
 repository has not adopted therefore always replays fully from its own genesis; past 63 blocks with no
@@ -250,7 +253,10 @@ removes one received ref's own pointer from the received-index container — the
 `bundle import`/`archive import` write and `cat`/`tree`/`checkout`/`extract` read at a bare
 `remotes/…` point. **The objects it reached are not removed, only the pointer**: a stored `Block`
 or `RefState` nothing else reaches any more is reported by `prikk verify` as an **unreached
-object**, a non-blocking warning, not a failure (see `verify`'s own entry above). `--plan-only`
+object**, a non-blocking warning, not a failure (see `verify`'s own entry above). When `verify` also
+reports a damaged object, its unreached-object count is a lower bound: an object reachable only
+through the damaged one is never walked, so it can never be confirmed unreached either
+(`prikk-store/src/verify/reachability.rs`). `--plan-only`
 reports what would be removed — the pointer's own current target, or that there is nothing named —
 writing nothing, but it still takes the container's lock for the duration of the read: the same
 reason `compact`'s own `--plan-only` variants do — an operator acts on what a preview reports, and
