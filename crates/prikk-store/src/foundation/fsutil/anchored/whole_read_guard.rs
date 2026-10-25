@@ -40,7 +40,7 @@ pub(crate) const SCOPES: &[DeclaredScope] = &[
     DeclaredScope {
         id: "index-whole-decode",
         status: ScopeStatus::Intentional,
-        reason: "`replay_index_with_extent` decodes the whole object index: once per session for `IndexSnapshot::open`, once per call                  for `FileObjectStore`'s lookups (`lookup_object_location`, per read / has / write) and for every read command's                  snapshot. The per-write refresh after a session's own write is a tail read (`replay_index_tail_with_extent`) and is                  not this scope. The linear lookup is what the index's own ROADMAP row owns",
+        reason: "`replay_index_with_extent` decodes the whole object index: once per session for `IndexSnapshot::open`, and for                  `FileObjectStore`'s own lookups (`resolve_object_location_entries`, behind `resolve_cached`'s per-handle memo                  since 0.50.0 step 1 Part D1 -- at most once per handle per index-file state, not once per read / has / write                  call) and for every read command's snapshot. The per-write refresh after a session's own write is a tail read                  (`replay_index_tail_with_extent`) and is not this scope. The linear lookup over already-decoded entries is what                  the index's own ROADMAP row owns",
         reference: "RFC 111 §6.1; ROADMAP AUD-01 (the object index's linear lookup); RFC 160 §3.1 and §6 (out of scope there)",
     },
     DeclaredScope {

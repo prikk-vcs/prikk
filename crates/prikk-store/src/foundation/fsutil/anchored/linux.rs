@@ -53,6 +53,13 @@ impl DurabilityContract for LinuxDurability {
     ) -> Result<u64> {
         let directory = open_existing_directory_required(root, required_parent(relative)?)?;
         let name = required_file_name(relative)?;
+        // 0.55.0 step 3 Part 2 (sync stage i): no directory sync here. `open_append_regular` opens
+        // without `OFlags::CREATE` (`regular.rs:80`-`82`, RFC 102 Stage 5 design-v1.md §14.3/§14.5:
+        // "requires an existing file rather than falling back to creation") and refuses a missing
+        // one rather than creating it, so this call never adds a directory entry -- there is no
+        // creation event here to make durable. Content durability (the file sync below) is the
+        // whole of this contract (RFC 102 §3: "appending to or updating a file that already has a
+        // name requires only content durability").
         let fd = open_append_regular(&directory.fd, name)?;
         let mut file = File::from(fd);
         // The length before the append, from the descriptor the record is appended to (see the trait method's doc).
@@ -61,8 +68,6 @@ impl DurabilityContract for LinuxDurability {
         file.write_all(bytes)?;
         failpoints::required_file_sync()?;
         file.sync_all()?;
-        failpoints::required_directory_sync()?;
-        directory.sync()?;
         Ok(offset)
     }
 

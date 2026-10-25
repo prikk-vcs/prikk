@@ -46,12 +46,12 @@ use crate::commit_boundary::worktree_patch::{
 };
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
 use crate::foundation::fsutil::{EntryKind, RootFileStat, read_file_if_exists};
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
 use crate::lifecycle_cache::replay::TextCache;
-use crate::lock::ActiveLock;
+use crate::lock::{ActiveLock, ContainerLockGuard, acquire_container_locks};
 use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
 use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
-use crate::object_store::{ObjectReader, ObjectWriteSession, ObjectWriter};
+use crate::object_store::{ObjectReader, ObjectWriteSession};
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::RepoPath;
 use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
@@ -488,6 +488,15 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // `finish_interrupted_publication`/`RefPublication` anywhere in this file -- so it needs no
     // ref-publication threading, only the plain object-write-session swap.
     let mut object_store = ObjectWriteSession::open(layout).map_err(AuthorError::Store)?;
+    // 0.55.0 step 3 Part 2: held once across both blob-writing loops below
+    // (`write_object_under_held_lock`, the shape `archive import` already uses), instead of
+    // acquired and released once per written file. `ObjectStore` is a leaf
+    // (`object_store.rs:237`-`241`) and declared last in `LockableContainer`'s own order; nothing
+    // else is acquired anywhere else in this function (only `ActiveLock`, above, already held), so
+    // holding it here changes nothing about the documented nesting. Dropped explicitly once both
+    // loops are done, below.
+    let object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])
+        .map_err(AuthorError::Store)?;
 
     // Baseline node lifecycle state from authoritative replay only (E3), with any already-queued
     // (unsealed) patches folded on top (DC-66) -- the single derivation `worktree-status` now
@@ -683,7 +692,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                             Some(bytes) => bytes,
                             None => read_existing_file_bytes(layout, path, BlobKind::Binary)?,
                         };
-                        planned.push(plan_replace_binary(&mut object_store, base, &bytes, path)?);
+                        planned.push(plan_replace_binary(
+                            &mut object_store,
+                            &object_store_lock,
+                            base,
+                            &bytes,
+                            path,
+                        )?);
                     }
                 }
                 NodeKind::Symlink => {
@@ -818,6 +833,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                 NodeKind::BinaryFile => {
                     planned.push(plan_replace_binary(
                         &mut object_store,
+                        &object_store_lock,
                         base,
                         &bytes,
                         new_path,
@@ -862,7 +878,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     for (path, bytes, mode) in &create_candidates {
         let repo_path = RepoPath::parse(path).map_err(AuthorError::Store)?;
         let (blob_kind, node_kind) = classify_new(bytes);
-        let blob_id = write_content_blob(&mut object_store, blob_kind, bytes)?;
+        let blob_id = write_content_blob(&mut object_store, &object_store_lock, blob_kind, bytes)?;
         let node_id = generator
             .mint_fresh(&working_state)
             .map_err(AuthorError::Mint)?;
@@ -893,6 +909,9 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             blob_refs: 1,
         });
     }
+    // Every blob write for this commit is behind us; nothing past this point touches the object
+    // store, so the lock is released here rather than riding along to the end of the function.
+    drop(object_store_lock);
 
     if planned.is_empty() {
         // RFC 166 §13 item 13: a `Pending` commit witness means the active WAL already durably
@@ -1181,12 +1200,14 @@ fn plan_edit_text(
     })
 }
 fn plan_replace_binary(
-    object_store: &mut impl ObjectWriter,
+    object_store: &mut ObjectWriteSession,
+    object_store_lock: &ContainerLockGuard,
     base: &BaselineFile,
     new_bytes: &[u8],
     path: &str,
 ) -> std::result::Result<PlannedOp, AuthorError> {
-    let new_blob_id = write_content_blob(object_store, BlobKind::Binary, new_bytes)?;
+    let new_blob_id =
+        write_content_blob(object_store, object_store_lock, BlobKind::Binary, new_bytes)?;
     Ok(PlannedOp {
         kind: OperationKind::ReplaceBinary(ReplaceBinary {
             node_id: base.node_id,
@@ -1356,7 +1377,8 @@ fn read_worktree_file_bytes(
 }
 
 fn write_content_blob(
-    object_store: &mut impl ObjectWriter,
+    object_store: &mut ObjectWriteSession,
+    object_store_lock: &ContainerLockGuard,
     kind: BlobKind,
     bytes: &[u8],
 ) -> std::result::Result<ObjectId, AuthorError> {
@@ -1367,8 +1389,10 @@ fn write_content_blob(
     // tolerated that -- stateless, so a clone was harmless -- but cloning `ObjectWriteSession` would
     // fork its in-memory snapshot, silently discarding this write from the caller's own copy). Takes
     // `object_store` mutably instead, threaded all the way up to where the session is opened.
+    // 0.55.0 step 3 Part 2: `write_object_under_held_lock`, not `write_object` -- the caller already
+    // holds `ObjectStore` for the whole commit, once, not once per blob.
     object_store
-        .write_object(&envelope)
+        .write_object_under_held_lock(&envelope, object_store_lock)
         .map_err(AuthorError::Store)
 }
 

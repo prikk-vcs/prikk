@@ -471,10 +471,11 @@ pub(crate) fn rebuild_index_from_containers_count_for_test() -> usize {
 ///
 /// **Test-only since RFC 162 rule 1**: the index is a pure cache, and a reader must never refuse while
 /// the containers are sound -- `foundation` cannot itself rebuild a damaged index (the coupling gate
-/// forbids `foundation -> lock`), so the object-store layer's own `resolve_object_location`
-/// (`object_store.rs`) is production's real lookup, composing this function's exact refusal with a
-/// rebuild-and-retry under the object-store lock. Kept here, unchanged, as the low-level primitive that
-/// tests the foundation-layer contract directly.
+/// forbids `foundation -> lock`), so the object-store layer's own lookups (`object_store.rs`'s
+/// `resolve_object_location_entries` for an unlocked reader, `resolve_object_location_locked` for a
+/// writer already holding the object-store lock) are production's real lookup, each transparently
+/// falling back to an in-memory container scan rather than surfacing this function's refusal. Kept
+/// here, unchanged, as the low-level primitive that tests the foundation-layer contract directly.
 #[cfg(test)]
 pub(crate) fn lookup_object_location(
     layout: &RepositoryLayout,
@@ -483,8 +484,8 @@ pub(crate) fn lookup_object_location(
     let replay = replay_index(layout)?;
     if replay.has_item_failure() {
         // Q1b item 4: this function is test-only (see its own doc) -- production never surfaces
-        // this text, since `object_store.rs::resolve_object_location` composes this refusal with a
-        // transparent rebuild-and-retry instead. `doctor` itself treats the index as a pure cache
+        // this text, since `object_store.rs`'s own lookups fall back to an in-memory container scan
+        // instead of returning this refusal. `doctor` itself treats the index as a pure cache
         // (`PRIKK-DOCTOR-OBJECT-INDEX-INTERIOR-DAMAGE`'s own recommendation: "no repair is
         // required ... run `prikk doctor --repair-index` to rebuild it on disk if desired"), so
         // this names that command rather than the circular "run doctor before reading."

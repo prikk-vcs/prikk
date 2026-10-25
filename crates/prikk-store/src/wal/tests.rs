@@ -142,28 +142,12 @@ fn wal_file_sync_failure_retains_replayable_record() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
-#[cfg(not(windows))]
-#[test]
-fn first_wal_directory_sync_failure_retains_replayable_record() {
-    let root = unique_temp_dir("wal-directory-sync-failure");
-    let layout = RepositoryLayout::init(root.clone());
-    assert!(layout.is_ok());
-    if let Ok(layout) = layout {
-        let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
-        fail_once_for_test(TestFailPoint::RequiredDirectorySync);
-        assert!(wal.append_patch(&signed_patch_envelope()).is_err());
-        let replay = wal.replay();
-        assert!(replay.is_ok());
-        if let Ok(replay) = replay {
-            assert_eq!(replay.records.len(), 1);
-            assert_eq!(replay.trailing_partial_bytes, 0);
-        }
-        assert_eq!(wal.append_patch(&signed_patch_envelope()), Ok(1));
-        assert_eq!(wal.replay().map(|replay| replay.records.len()), Ok(1));
-    }
-    let _ = std::fs::remove_dir_all(root);
-}
+// `first_wal_directory_sync_failure_retains_replayable_record` (injected `RequiredDirectorySync`
+// on the WAL's own append) removed, 0.55.0 step 3 Part 2: `durable_append_reporting_offset` no
+// longer syncs the directory at all (the WAL file is permanent from `init`, so an append to it
+// never creates a directory entry -- RFC 102 §3). There is no longer a directory-sync point on
+// this call path to fail; `wal_file_sync_failure_retains_replayable_record` above already covers
+// the sibling file-sync failure, which is unchanged.
 
 #[test]
 fn wal_truncate_failure_retains_partial_tail_and_retry_repairs_it() -> prikk_error::Result<()> {

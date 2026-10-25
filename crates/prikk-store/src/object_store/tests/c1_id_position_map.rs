@@ -19,7 +19,7 @@ use prikk_object::{BlobKind, BlobPayload, CanonicalEncode, ObjectId, ObjectType}
 
 use crate::foundation::index::{IndexEntry, rebuild_index_from_containers};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
-use crate::object_store::{checked_index_position, index_position_map};
+use crate::object_store::{extend_entries_and_by_id, index_position_map};
 use crate::test_gates::test_support::{maintainer_signature, unique_temp_dir};
 use crate::{
     FileObjectStore, ObjectReader, ObjectWriter, append_superseding_record_for_test_support,
@@ -128,11 +128,12 @@ fn entry_strategy() -> impl Strategy<Value = IndexEntry> {
     })
 }
 
-/// One step of the kind `IndexSnapshot` actually takes: `Extend` batches new entries onto the end --
-/// the one true incremental path, `ensure_current_impl`'s own insert-before-extend discipline,
-/// reproduced verbatim below -- and `Rebuild` discards the map and recomputes it wholesale from
-/// whatever `entries` holds right then (`open`, the shrink branch, and both damage-rebuild branches
-/// all call `index_position_map` over the full vector, never incrementally).
+/// One step of the kind `IndexSnapshot` actually takes: `Extend` batches new entries onto the end,
+/// through `extend_entries_and_by_id` itself (0.55.0 step 3 Part 2, F2) -- so this test exercises
+/// the real incremental-extend code, not a reproduction of it -- and `Rebuild` discards the map and
+/// recomputes it wholesale from whatever `entries` holds right then (`open`, the shrink branch, and
+/// both damage-rebuild branches all call `index_position_map` over the full vector, never
+/// incrementally).
 #[derive(Debug, Clone)]
 enum Step {
     Extend(Vec<IndexEntry>),
@@ -164,15 +165,7 @@ proptest! {
         for step in steps {
             match step {
                 Step::Extend(tail) => {
-                    // `ensure_current_impl`'s own discipline: compute each new entry's position
-                    // before moving it into `entries`, so a repeated id's later occurrence always
-                    // overwrites the map entry an earlier one in this same batch just inserted.
-                    let start = entries.len();
-                    for (offset, entry) in tail.iter().enumerate() {
-                        let position = checked_index_position(start + offset).unwrap();
-                        by_id.insert(entry.object_id, position);
-                    }
-                    entries.extend(tail);
+                    extend_entries_and_by_id(&mut entries, &mut by_id, tail).unwrap();
                 }
                 Step::Rebuild => {
                     by_id = index_position_map(&entries).unwrap();

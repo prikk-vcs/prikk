@@ -81,6 +81,38 @@ fn index_position_map(entries: &[IndexEntry]) -> Result<HashMap<ObjectId, u32>> 
     Ok(by_id)
 }
 
+/// The one true incremental-extend step (0.55.0 step 3 Part 1's own `ensure_current_impl`
+/// branch, factored out in Part 2 (F2) so the property test in `tests/c1_id_position_map.rs`
+/// exercises this exact code instead of a hand-copied reproduction of it -- a copy can pass even
+/// when the real branch is broken, as the review's own control 2 found only through an unrelated
+/// pre-existing test).
+///
+/// F3: every new entry's position is computed and checked *before* `by_id` or `entries` is
+/// mutated at all. The previous shape inserted into `by_id` as it went, so a `checked_index_
+/// position` failure partway through a batch left `by_id` and `entries` out of step (unreachable
+/// below `u32::MAX` entries, but no longer possible either way).
+fn extend_entries_and_by_id(
+    entries: &mut Vec<IndexEntry>,
+    by_id: &mut HashMap<ObjectId, u32>,
+    tail_entries: Vec<IndexEntry>,
+) -> Result<()> {
+    let start = entries.len();
+    let mut positions = Vec::with_capacity(tail_entries.len());
+    for offset in 0..tail_entries.len() {
+        let position = start.checked_add(offset).ok_or_else(|| {
+            PrikkError::Integrity(
+                "object index position overflowed usize while extending".to_string(),
+            )
+        })?;
+        positions.push(checked_index_position(position)?);
+    }
+    for (entry, &position) in tail_entries.iter().zip(positions.iter()) {
+        by_id.insert(entry.object_id, position);
+    }
+    entries.extend(tail_entries);
+    Ok(())
+}
+
 /// `resolve_object_location_entries`'s own decode-or-rebuild result, memoized against the index
 /// file's raw stat length (0.50.0 step 1 Part D1) -- see [`FileObjectStore`]'s own field doc for why.
 #[derive(Debug, Clone)]
@@ -595,21 +627,8 @@ impl IndexSnapshot {
         let must_rebuild =
             tail.has_item_failure() || (already_locked && tail.trailing_partial_bytes != 0);
         if !must_rebuild {
-            // 0.55.0 step 3 Part 1 (2C, ruling C1): the one true incremental path -- insert the
-            // tail's own entries at the positions they are about to land at, before moving them
-            // into `self.entries` (iterating `tail.entries` by reference first, so the later
-            // `.extend` still owns it).
-            let start = self.entries.len();
-            for (offset, entry) in tail.entries.iter().enumerate() {
-                let position = start.checked_add(offset).ok_or_else(|| {
-                    PrikkError::Integrity(
-                        "object index position overflowed usize while extending".to_string(),
-                    )
-                })?;
-                self.by_id
-                    .insert(entry.object_id, checked_index_position(position)?);
-            }
-            self.entries.extend(tail.entries);
+            // 0.55.0 step 3 Part 1 (2C, ruling C1): the one true incremental path.
+            extend_entries_and_by_id(&mut self.entries, &mut self.by_id, tail.entries)?;
             self.known_length = new_extent;
             return Ok(());
         }

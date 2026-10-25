@@ -3,15 +3,9 @@
 use prikk_object::{ObjectEnvelope, ObjectType};
 
 use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
-use crate::test_gates::test_support::{
-    dummy_signature, signed_empty_block_envelope, signed_patch_envelope, signed_ref_state_envelope,
-    signed_ref_update_envelope, text_replay_manifest, unique_temp_dir,
-};
+use crate::test_gates::test_support::{dummy_signature, text_replay_manifest, unique_temp_dir};
 use crate::worktree::materialize_replay_manifest_entries;
-use crate::{
-    ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RefPublication, RefStore,
-    RepositoryLayout, Wal, write_active_ref_metadata,
-};
+use crate::{ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RepositoryLayout};
 
 /// RFC 102 Stage 5, design-v1.md §14.10: `FORMAT` now goes through `create_new_file_required`
 /// (`create_exclusive`), the same primitive every other `init`-time name uses -- `MutableParentSync`
@@ -111,78 +105,29 @@ fn object_write_sync_failure_retains_and_classifies() -> prikk_error::Result<()>
     Ok(())
 }
 
-#[test]
-fn wal_parent_sync_failure_retains_one_record_and_retries() -> prikk_error::Result<()> {
-    let root = unique_temp_dir("wal-sync-matrix");
-    let layout = RepositoryLayout::init(root.clone())?;
-    let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
-    let patch = signed_patch_envelope();
-    fail_once_for_test(TestFailPoint::RequiredDirectorySync);
-    assert!(wal.append_patch(&patch).is_err());
-    assert_eq!(wal.replay()?.records.len(), 1);
-    assert_eq!(wal.append_patch(&patch)?, 1);
-    assert_eq!(wal.replay()?.records.len(), 1);
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
-}
+// `wal_parent_sync_failure_retains_one_record_and_retries` removed, 0.55.0 step 3 Part 2:
+// `durable_append_reporting_offset` no longer syncs the directory at all (the WAL file is
+// permanent from `init`, so its own append never creates a directory entry -- RFC 102 §3). There
+// is no longer a `RequiredDirectorySync` point on this call path; `wal::tests::wal_file_sync_
+// failure_retains_replayable_record` already covers the sibling file-sync failure, unchanged.
 
-/// RFC 102 Stage 5, design-v1.md §14.6: `write_active_ref_metadata` no longer goes through
-/// `atomic_replace` -- it truncates, then appends, each through `RequiredDirectorySync`. `is_file()`
-/// stopped being a meaningful postcondition the moment the file became permanent from `init` onward
-/// (it is always true); asserting the actual content survived an error is what still distinguishes
-/// "the write landed, only its confirmation failed" from "the write never happened." Skip 1 to land the
-/// injected failure on the append's own directory sync, not the truncate's -- skip 0 would fail before
-/// "heads/main" is ever written at all, proving a different (and less interesting) property.
-#[test]
-fn active_metadata_parent_sync_failure_retains_and_retries() -> prikk_error::Result<()> {
-    let root = unique_temp_dir("active-sync-matrix");
-    let layout = RepositoryLayout::init(root.clone())?;
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 1);
-    assert!(write_active_ref_metadata(&layout, "heads/main").is_err());
-    assert_eq!(
-        std::fs::read(layout.default_active_ref_name_path())?,
-        b"heads/main"
-    );
-    assert!(write_active_ref_metadata(&layout, "heads/main").is_ok());
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
-}
+// `active_metadata_parent_sync_failure_retains_and_retries` removed, 0.55.0 step 3 Part 2:
+// `write_active_ref_metadata` truncates (still directory-synced, unchanged by this part), then
+// appends through `durable_append_reporting_offset`, which no longer syncs the directory at all
+// (RFC 102 §3 -- the file is permanent from `init`, so the append never creates a directory
+// entry). This test's property ("the write landed, only its confirmation failed") specifically
+// targeted the append's own directory sync (skip 1); that sync no longer exists, and injecting at
+// the truncate's own directory sync (skip 0) instead fails before any content is written at all,
+// a different property this test was not about. No replacement: `RequiredFileSync` failures on
+// this path are covered by the generic object/WAL file-sync matrix rows elsewhere in this file.
 
-#[test]
-fn ref_log_parent_sync_failure_retains_one_update_and_retries() -> prikk_error::Result<()> {
-    let root = unique_temp_dir("ref-sync-matrix");
-    let layout = RepositoryLayout::init(root.clone())?;
-    let mut objects = FileObjectStore::new(layout.clone());
-    let target = objects.write_object(&signed_empty_block_envelope())?;
-    let ref_state = signed_ref_state_envelope("heads/main", None, target, 1);
-    let ref_state_id = ref_state.object_id();
-    let publication = RefPublication {
-        ref_name: "heads/main".to_string(),
-        expected_previous_ref_state_id: None,
-        ref_update: signed_ref_update_envelope("heads/main", None, ref_state_id, target, 1),
-        ref_state,
-    };
-    let store = RefStore::new(layout);
-    // RFC 102 Stage 3: skip past the ref lock's own creation and the ref-state object's own
-    // container and index appends (each fires `RequiredDirectorySync` too). RFC 102 Stage 4 adds
-    // one more before the log append: the pointer-index append. RFC 102 Stage 6 Step 2,
-    // design-v1.md §15.8, adds two more before that -- `acquire_container_locks`'s own
-    // `RefPointerIndex` and `RefLog` lock file creations, hoisted to right after `RefLock::acquire`
-    // and each firing this same failpoint via `create_new_file_required` the same way `RefLock`'s
-    // own creation always has. RFC 102's 2026-09-12 object-store lock adds one more
-    // before the object write -- `append_object_under_lock`'s own lock file creation, which
-    // fires this point through `create_new_file_required` exactly as every other lock creation
-    // here does. Skip 7, not 6, to land the
-    // injected failure on the log append's own directory sync -- see `refs::tests`'s equivalent fix
-    // for the full accounting.
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 7);
-    assert!(store.publish(&publication).is_err());
-    assert_eq!(store.replay_log("heads/main")?.records.len(), 1);
-    assert_eq!(store.publish(&publication)?, ref_state_id);
-    assert_eq!(store.replay_log("heads/main")?.records.len(), 1);
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
-}
+// `ref_log_parent_sync_failure_retains_one_update_and_retries` removed, 0.55.0 step 3 Part 2:
+// every append on this path (the object container, the object index, the pointer index, and the
+// ref log container itself) goes through `durable_append_reporting_offset`, which no longer
+// syncs the directory at all (RFC 102 §3) -- only the lock-file creations still do, and none of
+// them is "the log append's own directory sync" this test meant to land on, so it no longer has
+// an injection point. The identical property for the file-sync case is unchanged and covered by
+// `refs::tests::first_publication_retries_completed_log_sync_without_duplicate`.
 
 #[test]
 fn lock_parent_sync_failure_retains_stale_state_until_explicit_cleanup() -> prikk_error::Result<()>

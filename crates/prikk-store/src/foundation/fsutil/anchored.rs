@@ -86,6 +86,15 @@ pub(crate) use failpoints::clear as clear_failpoint_for_test;
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub(crate) use failpoints::fail_after as fail_after_for_test;
+// 0.55.0 step 3 Part 2: the instrument's only caller, `caller_tests::sync_count`, is itself gated
+// `cfg(all(test, any(target_os = "linux", target_os = "macos")))` (`fsutil.rs`'s own comment on
+// that module explains why: the two sync-shaped `Point`s this instrument cares about beyond
+// `RequiredFileSync` have no Windows counterpart). Matching that gate exactly here, rather than
+// including `windows`, is what keeps this re-export from reading as dead code on that target.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use failpoints::reset_sync_call_count_for_test;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use failpoints::sync_call_count_for_test;
 
 /// The one gated symbol DC-82 exists to introduce: picks the active `DurabilityContract`
 /// implementor for this build. Every function below calls through it unconditionally.

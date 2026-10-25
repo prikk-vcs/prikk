@@ -92,7 +92,7 @@ use crate::foundation::layout::{
     DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
 };
 use crate::lock::{ActiveLock, acquire_container_locks};
-use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession, ObjectWriter};
+use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
 };
@@ -917,14 +917,23 @@ pub fn import_bundle(
     //   the object writes is the order `commit` and `seal` already use.
     // - The received-index lock is taken here rather than just before the pointer write, so a
     //   concurrent compaction refuses this import up front instead of after its objects are written.
-    //   Object appends take only the object-store lock, declared last and a leaf, so holding this one
-    //   across them follows the documented order.
+    // - 0.55.0 step 3 Part 2: `ObjectStore` joins this same acquisition, held across every object
+    //   write below (`write_object_under_held_lock`, the shape `archive import` already uses) instead
+    //   of being acquired and released once per object. `acquire_container_locks` sorts by
+    //   `LockableContainer`'s own declared order, and `ObjectStore` is declared last and is a leaf
+    //   (`object_store.rs:237`-`241`), so nothing acquired here changes the documented order --
+    //   nothing else is acquired inside the write loop below.
     //
     // Before this, the author-key conflict check ran after every object was written, so a refused
     // import left the bundle's objects behind -- appended to containers nothing prunes.
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
-    let _received_index_lock =
-        acquire_container_locks(layout, &[LockableContainer::ReceivedIndex])?;
+    let _container_locks = acquire_container_locks(
+        layout,
+        &[
+            LockableContainer::ReceivedIndex,
+            LockableContainer::ObjectStore,
+        ],
+    )?;
     // RFC 163 §2, Addendum 1 item 1: the received index's own write-side tail guard belongs here too --
     // before the first object write, under the same lock the pointer write later runs under, exactly
     // like the author-key check below. It used to run inside `append_received_index_entry`, after
@@ -964,8 +973,10 @@ pub fn import_bundle(
     // durable while an earlier one it depends on is still missing.
     let admission_envelopes = objects_in_dependency_order(admission.envelopes)?;
 
-    // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
-    // can stop the import -- never a decision about the bundle's content.
+    // Past this point only I/O can stop the import -- never a decision about the bundle's content,
+    // and never a concurrent writer: `_container_locks` already holds `ObjectStore` for the whole
+    // loop (0.55.0 step 3 Part 2), so `write_object_under_held_lock` only re-checks that the lock is
+    // still held, rather than acquiring and releasing it once per object.
     let mut written_object_count = 0_usize;
     for envelope in &admission_envelopes {
         let id = envelope.object_id();
@@ -974,7 +985,7 @@ pub fn import_bundle(
                 PrikkError::Integrity("bundle import written-object count overflow".to_string())
             })?;
         }
-        object_store.write_object(envelope)?;
+        object_store.write_object_under_held_lock(envelope, &_container_locks)?;
     }
 
     #[cfg(test)]

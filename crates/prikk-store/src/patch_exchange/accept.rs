@@ -13,9 +13,9 @@ use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
     verify_author_signatures_with,
 };
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
-use crate::lock::ActiveLock;
-use crate::object_store::{ObjectReadSnapshot, ObjectWriteSession, ObjectWriter};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
+use crate::lock::{ActiveLock, acquire_container_locks};
+use crate::object_store::{ObjectReadSnapshot, ObjectWriteSession};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations, decode_patch_parent_ids,
 };
@@ -316,6 +316,13 @@ pub fn accept_exchange_artifact(
     for (&key_id, &public_key) in &artifact_key_ids {
         check_author_key_conflict(layout, key_id, public_key)?;
     }
+    // 0.55.0 step 3 Part 2: held once across both write loops below (`write_object_under_held_lock`,
+    // the shape `archive import` already uses), instead of acquired and released once per object.
+    // `ObjectStore` is a leaf (`object_store.rs:237`-`241`) and declared last in `LockableContainer`'s
+    // own order, so holding it here changes nothing about the documented nesting -- nothing is
+    // acquired between the two loops (`record_author_key_material` takes `&active_lock` as proof it
+    // is already held, and acquires nothing itself) or inside either loop's own body.
+    let _object_store_lock = acquire_container_locks(layout, &[LockableContainer::ObjectStore])?;
     let mut object_store = ObjectWriteSession::open(layout)?;
     // One id, one envelope — an object id does not cover signatures, so the same id can arrive twice
     // with different signature bytes; the store would refuse the second after writing the first.
@@ -379,8 +386,9 @@ pub fn accept_exchange_artifact(
     let content_envelopes = crate::bundle::objects_in_dependency_order(admission_envelopes)?;
     let publication_envelopes = crate::bundle::objects_in_dependency_order(publication_envelopes)?;
 
-    // Past this point only I/O, or a concurrent writer holding the object-store lock for one append,
-    // can stop the exchange — never a decision about what it carries.
+    // Past this point only I/O can stop the exchange -- never a decision about what it carries, and
+    // never a concurrent writer: `_object_store_lock` already holds `ObjectStore` for both loops
+    // below (0.55.0 step 3 Part 2).
     //
     // Item 10: patches and blobs. Content-addressed and idempotent -- a replayed accept (§4.3) writes
     // nothing new here.
@@ -392,7 +400,7 @@ pub fn accept_exchange_artifact(
                 PrikkError::Integrity("exchange accept written-object count overflow".to_string())
             })?;
         }
-        object_store.write_object(envelope)?;
+        object_store.write_object_under_held_lock(envelope, &_object_store_lock)?;
     }
 
     // Item 11: record every entry, each already checked above under this same lock
@@ -415,8 +423,9 @@ pub fn accept_exchange_artifact(
                 PrikkError::Integrity("exchange accept written-object count overflow".to_string())
             })?;
         }
-        object_store.write_object(envelope)?;
+        object_store.write_object_under_held_lock(envelope, &_object_store_lock)?;
     }
+    drop(_object_store_lock);
     drop(active_lock);
 
     Ok(AcceptReport {

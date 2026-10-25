@@ -63,6 +63,40 @@ std::thread_local! {
     static DIRECTORY_CREATE_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
     #[cfg(target_os = "windows")]
     static ANCHOR_VERIFICATION_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
+    // 0.55.0 step 3 Part 2: counts real sync syscalls on this thread (`file.sync_all()`,
+    // `directory.sync()`), not opens/writes/unlinks -- `is_sync_point` below names exactly which
+    // `Point`s those are. Used to measure "syncs per object write" directly instead of inferring it
+    // by sweeping `fail_after` ordinals upward until one stops firing. Its only caller
+    // (`caller_tests::sync_count`) is Linux/macOS-only (`fsutil.rs`'s own comment on that module),
+    // so gated the same way rather than reading as dead code on Windows.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    static SYNC_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+/// Zero this thread's sync-call count. Call before the operation whose sync count is being
+/// measured.
+pub(crate) fn reset_sync_call_count_for_test() {
+    SYNC_CALL_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+/// How many real sync syscalls (`file.sync_all()`/`directory.sync()`) this thread has made since
+/// the last [`reset_sync_call_count_for_test`].
+pub(crate) fn sync_call_count_for_test() -> usize {
+    SYNC_CALL_COUNT.with(|count| count.get())
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+/// Whether `point` is a real sync syscall rather than an open, a write, an unlink, or a directory
+/// creation -- the three that are, on the object-write path: a file's own `sync_all()`
+/// (`RequiredFileSync`), and on Linux/macOS a directory's own `sync()`, whether required by a
+/// write (`RequiredDirectorySync`) or by a cleanup unlink (`CleanupDirectorySync`).
+fn is_sync_point(point: Point) -> bool {
+    matches!(
+        point,
+        Point::RequiredFileSync | Point::RequiredDirectorySync | Point::CleanupDirectorySync
+    )
 }
 
 #[cfg(test)]
@@ -314,6 +348,10 @@ fn wait_at_test_barrier(barrier: TestBarrier) {
 
 #[cfg(test)]
 fn check(point: Point) -> Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if is_sync_point(point) {
+        SYNC_CALL_COUNT.with(|count| count.set(count.get() + 1));
+    }
     NEXT.with(|next| {
         let mut next = next.borrow_mut();
         match next.as_mut() {

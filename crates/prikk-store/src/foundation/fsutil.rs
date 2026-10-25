@@ -111,6 +111,12 @@ pub(crate) use anchored::fail_after_for_test;
     any(target_os = "linux", target_os = "macos", target_os = "windows")
 ))]
 pub(crate) use anchored::failpoint_armed_for_test;
+// 0.55.0 step 3 Part 2: matches `caller_tests::sync_count`'s own gate (above, `caller_tests`'
+// comment) -- Linux/macOS only, not `windows`, or this re-export reads as dead code there.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use anchored::reset_sync_call_count_for_test;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use anchored::sync_call_count_for_test;
 
 #[cfg(all(
     test,

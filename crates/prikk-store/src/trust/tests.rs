@@ -349,54 +349,15 @@ fn failed_key_append_keeps_previous_effective_policy() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// The policy snapshot append (the third `RequiredDirectorySync` checkpoint this call reaches --
-/// `ActiveLock::acquire`'s own lock-file creation is the first, since `create_exclusive` shares this
-/// failpoint too, and the key material append is the second) fails at its own directory-sync
-/// confirmation: the new snapshot's bytes are already physically appended by then (`durable_append`'s
-/// write/file-sync steps both precede the directory sync), so the failed call already exposes the new
-/// effective policy on a fresh read -- the failure is honestly reported (durability wasn't confirmed),
-/// but the content already moved. Same "operation happened, confirmation failed" shape the retired
-/// `atomic_replace`-based test proved for `MutableParentSync`. The skip count of 2 (not 1) is the
-/// direct consequence of the shared-failpoint fact this module's other test found the hard way.
-/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
-#[cfg(not(windows))]
-#[test]
-fn failed_policy_append_exposes_retryable_new_effective_policy() {
-    let root = unique_temp_dir("trust-policy-append-failure");
-    let layout = RepositoryLayout::init(root.clone());
-    assert!(layout.is_ok());
-    if let Ok(layout) = layout {
-        let old_key = public_key_hex(&[7_u8; 32]);
-        let new_key = public_key_hex(&[8_u8; 32]);
-        assert!(add_trusted_maintainer(&layout, "old", &old_key).is_ok());
-        // Adding a genuinely new key id ("new") fires `RequiredDirectorySync` four times: the
-        // `ActiveLock`'s own creation, the `TrustPolicy` container lock's own creation (RFC 102
-        // Stage 6 Step 2, design-v1.md §15.8 -- `acquire_container_locks`, hoisted to right after
-        // `ActiveLock::acquire`), the new key-material entry's append, and the policy snapshot's
-        // own append. Skip 3, not 2, to land on the policy snapshot's own directory sync -- the
-        // point this test's own assertions are about.
-        fail_after_for_test(TestFailPoint::RequiredDirectorySync, 3);
-        assert!(add_trusted_maintainer(&layout, "new", &new_key).is_err());
-        let loaded = load_maintainer_trust_policy(&layout);
-        assert!(loaded.is_ok());
-        if let Ok(loaded) = loaded {
-            assert_eq!(
-                loaded.keys.len(),
-                2,
-                "the policy append already landed before the directory sync failed"
-            );
-            assert_eq!(loaded.keys[1].key_id, "new");
-        }
-        assert!(add_trusted_maintainer(&layout, "new", &new_key).is_ok());
-        let retried = load_maintainer_trust_policy(&layout);
-        assert!(retried.is_ok());
-        if let Ok(retried) = retried {
-            assert_eq!(retried.keys.len(), 2);
-            assert_eq!(retried.keys[1].key_id, "new");
-        }
-    }
-    let _ = std::fs::remove_dir_all(root);
-}
+// `failed_policy_append_exposes_retryable_new_effective_policy` removed, 0.55.0 step 3 Part 2:
+// both the key-material append and the policy snapshot's own append go through `durable_append_
+// reporting_offset`, which no longer syncs the directory at all (RFC 102 §3). Only the two lock
+// creations (`ActiveLock`, the `TrustPolicy` container lock) still fire `RequiredDirectorySync`
+// on this path, so there is no longer an injection point at "the policy snapshot's own append" --
+// the property this test was about. No `RequiredFileSync`-based replacement exists for this exact
+// "operation landed, confirmation failed" shape on the policy append; `trust_append_failures_pin_
+// effective_state_and_retry` above already covers the "operation never landed" (`AppendWrite`)
+// case for both the key and the policy boundary, unaffected by this part.
 
 #[test]
 fn trust_reads_and_updates_remain_on_retained_repository_root() -> prikk_error::Result<()> {

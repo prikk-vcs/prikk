@@ -177,7 +177,7 @@ pub(super) fn verify_objects(
     // containers are sound. This used to abort the whole `Objects` stage on any index item failure
     // (RFC 102 Stage 2's own reasoning, since superseded); now, when the index itself is damaged, its
     // membership is derived from a fresh in-memory container scan instead -- the same fallback
-    // `object_store.rs::resolve_object_location` uses for every other reader, chosen here for the same
+    // `object_store.rs::resolve_object_location_entries` uses for every other reader, chosen here for the same
     // reason: `verify` is documented read-only end to end (RFC 111 §6.1), so it must not persist a
     // repair the way `doctor --repair-index` does.
     let index_replay = replay_index(layout)?;

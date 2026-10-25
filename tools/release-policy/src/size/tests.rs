@@ -256,8 +256,13 @@ fn an_inline_test_module_is_not_production() {
         // precondition now takes the decode itself, so `author_inner` declares a slot and takes
         // the decode back out of it (with a fail-closed `ok_or_else`, not `expect`, to keep
         // `clippy::expect-used` clean) instead of decoding before the call, 1494 -> 1500.
+        // 0.55.0 step 3 Part 2: `author_inner` now acquires the `ObjectStore` container lock once
+        // (a comment plus the acquisition, plus an explicit `drop` once both blob-writing loops are
+        // done) and threads a `&ContainerLockGuard` through `plan_replace_binary`/
+        // `write_content_blob` to every call site, 1500 -> 1525, then `cargo fmt` joined one
+        // two-line `let` back onto one line, 1525 -> 1524.
         physical,
-        1500,
+        1524,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -267,7 +272,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1451);
+    assert_eq!(counted.production_lines, 1475);
     assert_eq!(
         physical - counted.production_lines,
         49,

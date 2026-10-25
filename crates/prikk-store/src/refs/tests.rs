@@ -248,13 +248,13 @@ fn ref_store_publishes_ref_state_and_log() {
 
 #[test]
 fn first_publication_retries_completed_log_sync_without_duplicate() -> prikk_error::Result<()> {
-    // A directory fsync is an injection point on Linux and macOS only (`anchored/failpoints.rs`).
-    #[cfg(not(windows))]
-    let points = [
-        TestFailPoint::RequiredFileSync,
-        TestFailPoint::RequiredDirectorySync,
-    ];
-    #[cfg(windows)]
+    // 0.55.0 step 3 Part 2: `RequiredDirectorySync` dropped from this list. Every append on this
+    // path (the object container, the object index, the pointer index, and the ref log container
+    // itself) goes through `durable_append_reporting_offset`, which no longer syncs the directory
+    // at all (RFC 102 §3) -- only the four lock-file *creations* still do, and none of them is
+    // "the ref log's own completed append" this test means to land on. `RequiredFileSync`'s own
+    // count on this path is unchanged by that removal (no file sync was removed, only directory
+    // syncs), so skip 7 still lands correctly for it.
     let points = [TestFailPoint::RequiredFileSync];
     for point in points {
         let root = unique_temp_dir("ref-publication-log-sync-retry");
