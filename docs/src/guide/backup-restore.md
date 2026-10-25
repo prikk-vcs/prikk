@@ -386,7 +386,7 @@ bundle format, signing, trust, or repository state.
 ---
 
 **This page's own command sequence is exercised by an automated test**
-(`crates/prikk-cli/tests/dc44_backup_restore_page.rs`), which runs every command above, in order,
+(`crates/prikk-cli/tests/installers_and_help/dc44_backup_restore_page.rs`), which runs every command above, in order,
 against the compiled binary, and asserts on the same output lines quoted here, including the
 `--force` refusal and the unsealed-commit demonstration. A change to the CLI that alters any of
 them fails that test, not just this page.

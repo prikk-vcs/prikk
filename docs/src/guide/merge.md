@@ -122,7 +122,7 @@ something this command works around.
 
 `verify`, `doctor`, `rollback-preview`, and DC-64's incremental lifecycle cache all continue to work
 against a repository containing a merged block — tested, not argued
-(`crates/prikk-cli/tests/dc74_merge_execution.rs`).
+(`crates/prikk-cli/tests/merge/dc74_merge_execution.rs`).
 
 ## Deferred
 

@@ -314,7 +314,7 @@ count is smaller than `stable`'s. The gates that remain, by name:
   which this one had apparently been gated to match by copying rather than its own reason. Widened to run on all
   three platforms; no longer a gap.
 - **Linux only, as written: individual tests gated `cfg(target_os = "linux")` inside suites that run elsewhere.**
-  `crates/prikk-cli/tests/rfc158_incoming_bound.rs` gates six `control1_*` tests (lines 96-227: bundle import,
+  `crates/prikk-cli/tests/verify_and_doctor/rfc158_incoming_bound.rs` gates six `control1_*` tests (lines 96-227: bundle import,
   preview and verify; sync compare, build and accept; each on a sparse 1 GiB file). In
   `crates/prikk-cli/tests/rfc147_declaration_resolution.rs` the items at lines 514, 721, 746 and 762 are gated:
   `a_rename_reports_a_mode_change` at 514, and the socket and FIFO fixture helpers at 721 and 746 (line 762 was

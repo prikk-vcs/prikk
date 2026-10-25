@@ -185,6 +185,6 @@ two report the same thing.
 ---
 
 **This tutorial's own command sequence is exercised by an automated test**
-(`crates/prikk-cli/tests/beginners_tutorial.rs`), which runs every command above, in order, against
+(`crates/prikk-cli/tests/installers_and_help/beginners_tutorial.rs`), which runs every command above, in order, against
 the compiled binary, and asserts on the same output lines quoted here — including both refusals. A
 change to the CLI that alters any of them fails that test, not just this page.
