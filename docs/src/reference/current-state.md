@@ -233,8 +233,16 @@ planned for.
   targets), so a cold commit there is in exactly this no-checkpoint case: it costs what it did in
   0.52.0 until the next `prikk verify` or `seal` rebuilds the record. Measured: 32 ms at 16 MiB
   stored on the commit right after deleting `.prikk/cache/`, 1 ms on the commit right after a
-  `verify` rebuilds the record. The every-64th forced derivation is counted in the cache file
-  itself, so this bound holds only while a cache file is present. **The residual, extending RFC 159
+  `verify` rebuilds the record. **`verify` records the checkpoint whether or not it exits 0:** the
+  write (`verified_blocks::record_verified_blocks`, called while `verify_repository_with_options`
+  still builds its own report) and the exit-code decision (`verify_verdict`'s own publication-trust
+  check, read only afterward) are two separate steps — a failing trust check cannot prevent a write
+  that already happened. Measured: a received ref signed by a key this repository had not adopted
+  (`bundle import`, never followed by `trust maintainer add`) made a release build's `prikk verify`
+  exit 1 for "repository has publication-trust issues"; with the record file deleted first, it
+  reappeared afterward regardless, 112 bytes, identical to a run before the deletion. The every-64th
+  forced derivation is counted in the cache file itself, so this bound holds only while a cache file
+  is present. **The residual, extending RFC 159
   ruling C1 from `seal` to `commit`:** a state root (and a checkpoint's own manifest) commits to a
   file's blob *id*, never to its bytes, so neither `seal` nor a cold, anchored `commit` re-reads the
   content of a blob no live file names. **Measured, below the checkpoint:** a commit that edits the
