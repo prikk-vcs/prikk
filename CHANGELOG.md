@@ -15,6 +15,30 @@
   `damaged-repository` — the repository was never damaged in this case; the parent simply has not
   arrived.
 
+### Changed — `verify` and `bundle import` no longer scan the object index per object
+
+An id lookup against the object index (`verify`'s own per-object pass, and `bundle import`'s
+per-object write decision) used to search the index's entries in reverse, one full pass per
+lookup — O(N) per object, so a command touching every object in a repository of N objects cost
+O(N²). Both now resolve an id through a `HashMap` kept alongside the index's own entries, built
+once per snapshot and updated as it grows, in O(1) per lookup.
+
+**Measured, release build, tmpfs, three samples each, one commit of N × 4 KiB files**:
+
+| objects | `verify` before | `verify` after | `bundle import` before | `bundle import` after |
+|---|---|---|---|---|
+| 1,000 | 0.028 s | 0.033 s | 0.047 s | 0.056 s |
+| 10,000 | 0.31–0.32 s | 0.33–0.34 s | 0.60–0.65 s | 0.53–0.54 s |
+| 30,000 | 1.54–1.58 s | 0.99–1.00 s | 2.28–2.58 s | 1.62–1.72 s |
+| 100,000 | 8.80–9.18 s | 2.92–3.08 s | 12.80–14.59 s | 4.57–4.62 s |
+
+From 30,000 to 100,000 objects (3.33×), `verify` now takes about 3.0× as long, matching the growth
+in object count; before, it took about 5.7×. Below 10,000 objects the map's own construction cost
+is a small net loss, visible above as `after` running slightly slower than `before` — the part
+that was quadratic has not yet grown large enough to dominate. The object index's own resident
+memory grows by roughly 47 bytes per entry (a `HashMap` bucket's own overhead): about 1.54× its
+prior size at 100,000 objects, against a target of no more than 2×.
+
 ### Fixed
 
 - **The Windows uninstaller left an empty `Path` value where none existed before install,** when

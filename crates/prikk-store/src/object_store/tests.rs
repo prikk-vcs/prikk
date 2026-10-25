@@ -1,5 +1,6 @@
 //! Object store and layout tests.
 
+mod c1_id_position_map;
 mod d1_lookup_memo;
 
 // DC-98 Stage 1: `mod immutable;` and `mod races;` (G5's own conformance and race tests) removed

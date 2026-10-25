@@ -5,6 +5,7 @@
 //! which target `container.rs`'s per-type container files instead of one file per object.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
@@ -53,6 +54,33 @@ pub trait ObjectWriter {
     fn write_object(&mut self, envelope: &ObjectEnvelope) -> Result<ObjectId>;
 }
 
+/// A position in an `entries: Vec<IndexEntry>`, checked to fit `u32` -- 0.55.0 step 3 Part 1 (2C,
+/// ruling C1): a workspace-wide index past 4 billion entries is not realistic today, but the
+/// conversion is still checked, never `as`, so a repository that somehow reached one refuses with a
+/// named cause instead of silently wrapping to the wrong entry.
+fn checked_index_position(position: usize) -> Result<u32> {
+    u32::try_from(position).map_err(|_| {
+        PrikkError::Integrity(format!(
+            "object index has grown past u32::MAX entries (position {position}); the id-to-position \
+             map cannot represent it"
+        ))
+    })
+}
+
+/// Build an id-to-position map from a freshly-decoded or -rebuilt `entries`, in its own forward
+/// (append) order -- 0.55.0 step 3 Part 1 (2C, ruling C1). A later insert for a repeated id
+/// overwrites the earlier one, so the map's own stored position for any id is always whichever
+/// record is last in `entries`, exactly the "last entry wins" result `.iter().rev().find(...)`
+/// already gave -- confirmed by a dedicated test, not just asserted here (ruling C3: duplicates are
+/// not rare, every format-7 signature merge appends a new record for the same id).
+fn index_position_map(entries: &[IndexEntry]) -> Result<HashMap<ObjectId, u32>> {
+    let mut by_id = HashMap::with_capacity(entries.len());
+    for (position, entry) in entries.iter().enumerate() {
+        by_id.insert(entry.object_id, checked_index_position(position)?);
+    }
+    Ok(by_id)
+}
+
 /// `resolve_object_location_entries`'s own decode-or-rebuild result, memoized against the index
 /// file's raw stat length (0.50.0 step 1 Part D1) -- see [`FileObjectStore`]'s own field doc for why.
 #[derive(Debug, Clone)]
@@ -62,6 +90,10 @@ struct LookupCache {
     /// (or rebuild) would produce -- recomputing it would re-pay the same cost for the same answer.
     index_file_length: u64,
     entries: Vec<IndexEntry>,
+    /// 0.55.0 step 3 Part 1 (2C, ruling C1): id -> position in `entries`, built once alongside
+    /// `entries` itself (this cache is always replaced wholesale, never incrementally extended --
+    /// `resolve_cached`'s own cold path below is the only place that builds it).
+    by_id: HashMap<ObjectId, u32>,
 }
 
 /// File-backed object store.
@@ -113,23 +145,26 @@ impl FileObjectStore {
         let current_length = current_index_file_length(&self.layout)?;
         if let Some(cache) = self.lookup_cache.borrow().as_ref() {
             if cache.index_file_length == current_length {
+                // In range by construction: every `by_id` value is a position `index_position_map`
+                // checked against `entries.len()` at the time it was inserted. `.get()` is used
+                // anyway to satisfy `clippy::indexing_slicing`, not because this can fail.
                 return Ok(cache
-                    .entries
-                    .iter()
-                    .rev()
-                    .find(|entry| entry.object_id == id)
+                    .by_id
+                    .get(&id)
+                    .and_then(|&position| cache.entries.get(position as usize))
                     .copied());
             }
         }
         let entries = resolve_object_location_entries(&self.layout)?;
-        let found = entries
-            .iter()
-            .rev()
-            .find(|entry| entry.object_id == id)
+        let by_id = index_position_map(&entries)?;
+        let found = by_id
+            .get(&id)
+            .and_then(|&position| entries.get(position as usize))
             .copied();
         *self.lookup_cache.borrow_mut() = Some(LookupCache {
             index_file_length: current_length,
             entries,
+            by_id,
         });
         Ok(found)
     }
@@ -423,6 +458,12 @@ struct IndexSnapshot {
     /// raw stat size (RFC 111 §6.1 addendum §3.2: a torn trailing write must not be counted as
     /// decoded).
     known_length: u64,
+    /// 0.55.0 step 3 Part 1 (2C, ruling C1): id -> position in `entries`, kept alongside it on every
+    /// path that changes `entries` -- a full rebuild on `open`/a replace, an incremental extend on
+    /// the one true append path. `entries` itself is kept exactly as it was (never removed): its own
+    /// forward order is what makes "last entry wins" the natural result of inserting into this map
+    /// in that same order, and `lookup`'s own callers never needed anything but by-id access.
+    by_id: HashMap<ObjectId, u32>,
 }
 
 impl IndexSnapshot {
@@ -451,29 +492,40 @@ impl IndexSnapshot {
     fn open(layout: &RepositoryLayout) -> Result<Self> {
         let (replay, known_length) = index::replay_index_with_extent(layout)?;
         if replay.has_item_failure() {
+            let entries = index::rebuild_index_from_containers(layout)?;
+            let by_id = index_position_map(&entries)?;
             return Ok(Self {
-                entries: index::rebuild_index_from_containers(layout)?,
+                entries,
                 known_length: current_index_file_length(layout)?,
+                by_id,
             });
         }
         if replay.trailing_partial_bytes != 0 {
+            let entries = index::rebuild_index_from_containers(layout)?;
+            let by_id = index_position_map(&entries)?;
             return Ok(Self {
-                entries: index::rebuild_index_from_containers(layout)?,
+                entries,
                 known_length,
+                by_id,
             });
         }
+        let by_id = index_position_map(&replay.entries)?;
         Ok(Self {
             entries: replay.entries,
             known_length,
+            by_id,
         })
     }
 
-    /// Same last-entry-wins semantics `lookup_object_location` already has, preserved verbatim.
+    /// Same last-entry-wins semantics `lookup_object_location` already has, preserved verbatim --
+    /// 0.55.0 step 3 Part 1 (2C, ruling C1) replaced the reverse linear scan with an O(1) lookup
+    /// into `by_id`, which already names whichever position is last-written for `id`.
     fn lookup(&self, id: ObjectId) -> Option<&IndexEntry> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|entry| entry.object_id == id)
+        // In range by construction, as `resolve_cached`'s own comment explains; `.get()` is used
+        // anyway to satisfy `clippy::indexing_slicing`.
+        self.by_id
+            .get(&id)
+            .and_then(|&position| self.entries.get(position as usize))
     }
 
     /// Re-stat only; decode only if the stat disagrees with what this snapshot already knows. Every
@@ -529,6 +581,7 @@ impl IndexSnapshot {
                 )));
             }
             self.entries = fresh.entries;
+            self.by_id = index_position_map(&self.entries)?;
             self.known_length = fresh_length;
             return Ok(());
         }
@@ -542,6 +595,20 @@ impl IndexSnapshot {
         let must_rebuild =
             tail.has_item_failure() || (already_locked && tail.trailing_partial_bytes != 0);
         if !must_rebuild {
+            // 0.55.0 step 3 Part 1 (2C, ruling C1): the one true incremental path -- insert the
+            // tail's own entries at the positions they are about to land at, before moving them
+            // into `self.entries` (iterating `tail.entries` by reference first, so the later
+            // `.extend` still owns it).
+            let start = self.entries.len();
+            for (offset, entry) in tail.entries.iter().enumerate() {
+                let position = start.checked_add(offset).ok_or_else(|| {
+                    PrikkError::Integrity(
+                        "object index position overflowed usize while extending".to_string(),
+                    )
+                })?;
+                self.by_id
+                    .insert(entry.object_id, checked_index_position(position)?);
+            }
             self.entries.extend(tail.entries);
             self.known_length = new_extent;
             return Ok(());
@@ -558,9 +625,11 @@ impl IndexSnapshot {
             })?;
             let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
             self.entries = fresh.entries;
+            self.by_id = index_position_map(&self.entries)?;
             self.known_length = fresh_length;
         } else {
             self.entries = index::rebuild_index_from_containers(layout)?;
+            self.by_id = index_position_map(&self.entries)?;
             self.known_length = current_index_file_length(layout)?;
         }
         Ok(())
