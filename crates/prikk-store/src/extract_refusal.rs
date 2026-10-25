@@ -67,10 +67,28 @@ pub enum ExtractRefusalKind {
         /// How many parents the claim declared.
         count: usize,
     },
+    /// `claim-parent-not-sealed`: the claim's own declared parent Block was never sealed or
+    /// received into this repository -- this repository is not damaged, the parent just has not
+    /// arrived yet (0.55.0 step 1 item 2, external review 035 §3.3). Boxed: two full `ObjectId`s
+    /// (64 bytes) would otherwise make this the largest variant, pushing `ExtractError` (returned
+    /// by value on every `Result::Err` this module's functions raise) past
+    /// `clippy::result_large_err`'s threshold for what is, in practice, one of this enum's rarest
+    /// constructions.
+    ClaimParentNotSealed(Box<ClaimParentNotSealedInfo>),
     /// `case-collision`: two of the point's own resolved paths collide under ASCII case folding.
     CaseCollision,
     /// `no-checkpoint-in-reach`: the pre-walk bound, carrying its own `reason` sub-classification.
     NoCheckpointInReach(NoCheckpointReason),
+}
+
+/// [`ExtractRefusalKind::ClaimParentNotSealed`]'s own payload, boxed there for the reason that
+/// variant's own doc comment gives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimParentNotSealedInfo {
+    /// The claim being extracted.
+    pub claim: prikk_object::ObjectId,
+    /// The claim's own declared parent, confirmed absent from this repository's object store.
+    pub parent: prikk_object::ObjectId,
 }
 
 /// [`prepare_extract_plan`](crate::extract::prepare_extract_plan)/

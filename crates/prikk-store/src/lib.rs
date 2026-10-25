@@ -207,7 +207,9 @@ pub use extract::{
     ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
     prepare_extract_plan_for_claim, read_extract_blob_content, rename_new_directory_no_replace,
 };
-pub use extract_refusal::{ExtractError, ExtractRefusalKind, NoCheckpointReason};
+pub use extract_refusal::{
+    ClaimParentNotSealedInfo, ExtractError, ExtractRefusalKind, NoCheckpointReason,
+};
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{

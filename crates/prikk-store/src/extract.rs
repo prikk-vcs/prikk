@@ -221,6 +221,36 @@ pub fn prepare_extract_plan_for_claim(
         }
     };
 
+    // 0.55.0 step 1 item 2 (external review 035 §3.3): the claim's own declared parent, checked
+    // here specifically, before any deeper chain walk -- structurally, via `read_typed`'s own
+    // `Ok(None)` (never by matching a later "missing Block" error's message text, which this
+    // crate's own `ExtractRefusalKind` doc explicitly disclaims). This repository is not damaged
+    // when a claim's parent simply has not arrived yet; it is damaged when some *other* object the
+    // replay needs is genuinely missing, which `replay_for_extract_claim`'s own unclassified
+    // `single_parent_chain`/`derive_candidate` calls below still correctly report as
+    // `damaged-repository` -- only this one, specific read is reclassified.
+    if let Some(parent_id) = parent {
+        match reader.read_typed(parent_id, ObjectType::Block) {
+            Ok(None) => {
+                return Err(ExtractError::classified(
+                    ExtractRefusalKind::ClaimParentNotSealed(Box::new(
+                        crate::extract_refusal::ClaimParentNotSealedInfo {
+                            claim: claim_id,
+                            parent: parent_id,
+                        },
+                    )),
+                    PrikkError::Precondition(format!(
+                        "recognition claim {claim_id} declares parent {parent_id}, which is not \
+                         in this repository yet -- seal or receive the parent before extracting \
+                         this claim"
+                    )),
+                ));
+            }
+            Ok(Some(_)) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+
     let outcome =
         replay_for_extract_claim(layout, reader, parent, &claim.patch_ids, allow_full_replay)?;
 

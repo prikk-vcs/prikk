@@ -482,3 +482,107 @@ fn prepare_extract_plan_for_claim_refuses_a_block_id_as_not_a_claim() {
         "{err}"
     );
 }
+
+/// 0.55.0 step 1 item 2 (external review 035 §3.3): a claim whose own declared parent was never
+/// sealed or received -- this repository is not damaged, the parent simply has not arrived yet.
+/// Classified structurally, by `read_typed`'s own `Ok(None)` for the parent id specifically, never
+/// by matching a later "missing Block" error's message text.
+#[test]
+fn prepare_extract_plan_for_claim_refuses_an_unsealed_parent_as_claim_parent_not_sealed() {
+    let (layout, _maintainer, _author, _genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-parent-not-sealed");
+    let mut store = FileObjectStore::new(layout.clone());
+    let blob = write_blob(&mut store, b"claimed content\n").unwrap();
+    let patch_payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "claimed.txt".to_string(),
+                node_id: NodeId::from_bytes([0x44; 32]),
+                blob_id: blob,
+                mode: 0o100644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        patch_payload.to_canonical_bytes().unwrap(),
+    );
+    patch.add_signature(dummy_signature()).unwrap();
+    let patch_id = store.write_object(&patch).unwrap();
+
+    // The declared parent: a well-formed id, never written to this store at all -- exactly the
+    // shape a claim whose parent has not yet been sealed/received takes.
+    let unsealed_parent = ObjectId::from_bytes([0x55; 32]);
+    let claim_id = write_claim(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: unsealed_parent,
+            patch_ids: vec![patch_id],
+            parent_block_ids: vec![unsealed_parent],
+        },
+    );
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id, false).unwrap_err();
+    assert!(
+        matches!(err.error, prikk_error::PrikkError::Precondition(_)),
+        "{err:?}"
+    );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::ClaimParentNotSealed(Box::new(
+            crate::ClaimParentNotSealedInfo {
+                claim: claim_id,
+                parent: unsealed_parent,
+            }
+        ))),
+        "{err}"
+    );
+    assert!(err.to_string().contains(&claim_id.to_string()), "{err}");
+    assert!(
+        err.to_string().contains(&unsealed_parent.to_string()),
+        "{err}"
+    );
+}
+
+/// The narrow-classification sibling: a claim whose declared parent genuinely *is* sealed, but
+/// whose own patch references a Patch object never written anywhere -- a different, deeper missing
+/// object than the parent itself. This must stay unclassified (`kind: None`), falling through to
+/// the ordinary `damaged-repository` fallback exactly as before 0.55.0 step 1 item 2 -- proving the
+/// new classification above is narrow, not a blanket reclassification of every "missing object"
+/// shape on this path.
+#[test]
+fn prepare_extract_plan_for_claim_still_falls_back_when_a_different_object_is_missing() {
+    let (layout, _maintainer, _author, genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-other-object-missing");
+    let mut store = FileObjectStore::new(layout.clone());
+
+    // A well-formed Patch id, never written to this store -- a genuinely missing object that is
+    // not the claim's own declared parent.
+    let missing_patch = ObjectId::from_bytes([0x66; 32]);
+    let claim_id = write_claim(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: genesis_block,
+            patch_ids: vec![missing_patch],
+            parent_block_ids: vec![genesis_block], // genuinely sealed -- not the missing object.
+        },
+    );
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, claim_id, false).unwrap_err();
+    assert_eq!(
+        err.kind, None,
+        "a missing object other than the claim's own parent must stay unclassified, not \
+         {:?}",
+        err.kind
+    );
+}
