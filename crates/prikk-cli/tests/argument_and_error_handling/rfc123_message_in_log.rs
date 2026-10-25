@@ -6,9 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn commit_message_appears_in_log_under_its_block() {
     let repo = support::unique_repo("rfc123-message-in-log");

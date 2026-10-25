@@ -39,10 +39,8 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::{Path, PathBuf};
-
-#[path = "../support/mod.rs"]
-mod support;
 
 fn fixture_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

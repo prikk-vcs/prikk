@@ -8,9 +8,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 fn write(repo: &std::path::Path, relative: &str, content: &[u8]) {
     let target = repo.join(relative);
     if let Some(parent) = target.parent() {

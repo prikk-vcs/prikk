@@ -11,6 +11,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::Path;
 use std::process::Output;
 
@@ -25,9 +26,6 @@ use prikk_store::{
     add_trusted_maintainer, author_signature, execute_merge, maintainer_signature,
     seal_from_accepted_claim, simulate_one_seal_for_test_support, write_active_ref_metadata,
 };
-
-#[path = "../support/mod.rs"]
-mod support;
 
 const MAIN: &str = "heads/main";
 const FEATURE: &str = "heads/feature";

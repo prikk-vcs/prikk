@@ -5,9 +5,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn a_successful_command_exits_zero() {
     let repo = support::unique_repo("rfc121-exit-zero");

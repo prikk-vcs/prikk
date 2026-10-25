@@ -19,3 +19,5 @@ mod rfc132_part1_precondition_ownership;
 mod rfc132_part2_precondition_prefix;
 #[path = "argument_and_error_handling/rfc147_authoring_refusal_field.rs"]
 mod rfc147_authoring_refusal_field;
+#[path = "support/mod.rs"]
+mod support;

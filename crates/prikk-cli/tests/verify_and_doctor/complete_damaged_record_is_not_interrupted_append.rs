@@ -10,9 +10,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 /// The container path and frame offset a printed line names after `prefix`, the path split off at `end`. The path is

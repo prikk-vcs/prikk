@@ -47,6 +47,8 @@ mod rfc164_addendum3_all_files_reader;
 mod rfc164_rule_d_refuse_before_first_write;
 #[path = "verify_and_doctor/rfc165_addendum1_wedge_and_entry_points.rs"]
 mod rfc165_addendum1_wedge_and_entry_points;
+#[path = "support/mod.rs"]
+mod support;
 // The file itself keeps its own name; the `mod` identifier is adjusted to snake_case
 // (`rustc`'s `nonstandard_style` lint, `-D warnings` under the `clippy*` gates).
 #[path = "verify_and_doctor/rfc165_step1_partA_ref_complete_directly.rs"]

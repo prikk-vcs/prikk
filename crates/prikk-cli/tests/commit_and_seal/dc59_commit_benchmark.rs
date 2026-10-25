@@ -72,11 +72,10 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
+use crate::support;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-#[path = "../support/mod.rs"]
-mod support;
 use std::time::{Duration, Instant};
 
 use prikk_store::{Ed25519MaintainerSigner, MaintainerSigner};

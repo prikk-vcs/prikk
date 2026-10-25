@@ -6,9 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use prikk_object::ObjectId;
 use prikk_store::{
     Ed25519AuthorSigner, FileObjectStore, ObjectReader, RepositoryLayout,

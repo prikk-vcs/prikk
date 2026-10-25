@@ -8,9 +8,7 @@
 //! *planned* entry, landed or not) with a genuinely colliding fixture.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use support::ok;
 
 fn export_one_generation(repo: &std::path::Path, tag: &str) -> std::path::PathBuf {

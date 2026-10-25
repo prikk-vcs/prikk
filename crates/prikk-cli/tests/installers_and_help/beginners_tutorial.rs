@@ -13,10 +13,8 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::process::Output;
-
-#[path = "../support/mod.rs"]
-mod support;
 
 const MAINTAINER_PUBLIC_KEY_HEX: &str =
     "a00899dfd3357aee69729405913f9324dfc033cec04a2215239eda64ae6d9d91";

@@ -6,10 +6,8 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::PathBuf;
-
-#[path = "../support/mod.rs"]
-mod support;
 
 fn sync_file(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!(

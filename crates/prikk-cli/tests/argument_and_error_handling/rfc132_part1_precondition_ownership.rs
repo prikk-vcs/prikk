@@ -9,9 +9,6 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 /// A real, unrelated `PrikkError::Precondition`: an empty change set
 /// (`worktree_patch/node_authoring.rs`), nothing to do with active-WAL ownership
 /// (`active.rs::active_ref_ownership`). Confirms it produces the exact same `Display` prefix,
@@ -19,6 +16,7 @@ mod support;
 /// `branch_close_does_not_block_commits_to_unrelated_refs` pins that case) -- proving the old
 /// bare-variant match at `branch.rs`'s call site genuinely could not have told the two apart, had
 /// this scenario ever reached it.
+use crate::support;
 #[test]
 fn a_second_real_precondition_exists_and_shares_the_variant() {
     let repo = support::unique_repo("rfc132-part1-empty-commit");

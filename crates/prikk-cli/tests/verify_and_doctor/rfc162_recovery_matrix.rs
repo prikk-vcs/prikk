@@ -9,9 +9,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 /// magic(8) version(2) body_len(8) checksum(32) -- the object container, the object index, and the

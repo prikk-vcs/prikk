@@ -3,5 +3,7 @@
 //! and this grouping file's `mod` line are new. See the module's own file under
 //! `tests/harness_self_test/` for its own doc comment.
 
+#[path = "support/mod.rs"]
+mod support;
 #[path = "harness_self_test/support_binary_identity.rs"]
 mod support_binary_identity;

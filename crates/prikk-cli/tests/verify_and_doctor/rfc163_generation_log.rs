@@ -8,9 +8,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 const HEADER_LEN: usize = 8 + 2 + 8 + 32;

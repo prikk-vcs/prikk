@@ -31,9 +31,6 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 /// Write a signed Blob and a signed branch `RefState` targeting it (the identical shape
 /// `control_c_a_branch_targeting_a_carried_non_block_is_damage`,
 /// `crates/prikk-store/src/archive/verify/tests.rs`, builds -- a `Blob` is never a `Block`, so this
@@ -43,6 +40,7 @@ mod support;
 /// export/import: those are for building an *exportable source* whose own local ref a real
 /// `archive export` would carry; here the shape is written straight into the *destination*, the
 /// state a received ref is actually in once something (by any route) has landed it.
+use crate::support;
 fn write_damaged_received_ref(layout: &prikk_store::RepositoryLayout, ref_name: &str) {
     use prikk_object::{CanonicalEncode, ObjectEnvelope, ObjectId};
     use prikk_store::{FileObjectStore, ObjectWriter};

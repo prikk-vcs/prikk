@@ -13,3 +13,5 @@ mod dc73_node_model_apply;
 mod rfc144_increment3_piece1_mv;
 #[path = "node_model_and_rename/rfc144_increment3_piece2_move_hint.rs"]
 mod rfc144_increment3_piece2_move_hint;
+#[path = "support/mod.rs"]
+mod support;

@@ -15,3 +15,5 @@ mod rfc121_command_help;
 mod rfc146_help_inventory_matches_commands_md;
 #[path = "installers_and_help/rfc146_help_synopsis_advertises_format_json.rs"]
 mod rfc146_help_synopsis_advertises_format_json;
+#[path = "support/mod.rs"]
+mod support;

@@ -31,3 +31,5 @@ mod rfc155_part_ie_trust_note;
 mod rfc155_part_if_trust_note;
 #[path = "archive_and_bundle/step0_c1_closure_shapes.rs"]
 mod step0_c1_closure_shapes;
+#[path = "support/mod.rs"]
+mod support;

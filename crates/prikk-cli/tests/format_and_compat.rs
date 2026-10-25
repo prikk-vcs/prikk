@@ -13,3 +13,5 @@ mod rfc136_seal_block_byte_identity;
 mod rfc136_verified_record;
 #[path = "format_and_compat/rfc156_format_7.rs"]
 mod rfc156_format_7;
+#[path = "support/mod.rs"]
+mod support;

@@ -8,12 +8,10 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 /// The untrusted-but-well-formed seed shared with `dc60_branch_management.rs`,
 /// `dc61_branch_closure.rs`, and `dc63_tag_surface.rs` -- a valid 64-hex/32-byte seed, so the refusal
 /// below is for being untrusted, not malformed.
+use crate::support;
 const UNTRUSTED_MAINTAINER_SEED: &str =
     "222233334444555566667777888899990000aaaabbbbccccddddeeeeffff1111";
 

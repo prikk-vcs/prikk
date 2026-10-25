@@ -9,14 +9,12 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 /// Full hand-written recursive-descent JSON syntax checker (objects, arrays, strings, numbers,
 /// `true`/`false`/`null`), mirroring `rfc118_stage5_verify_json.rs`'s own -- this crate has no
 /// third-party dependencies, so there is no `serde_json` to lean on (RFC 118 §10 prerequisite 4).
 /// `status-report-v1` is the first schema in this crate to emit numbers *and* `null` together, so
 /// this copies the more complete of the two existing checkers rather than `rfc138`'s narrower one.
+use crate::support;
 fn assert_valid_json(input: &str) -> serde_json_like::Value {
     let mut chars = input.trim().chars().peekable();
     let value = serde_json_like::parse_value(&mut chars);

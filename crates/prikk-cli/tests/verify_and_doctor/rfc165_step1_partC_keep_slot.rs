@@ -2,9 +2,7 @@
 //! through the real binary (the handoff's own smoke section 28, condensed).
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::Path;
 
 use support::{init, ok, prikk};

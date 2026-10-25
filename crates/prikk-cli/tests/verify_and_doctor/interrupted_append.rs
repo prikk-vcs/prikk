@@ -8,9 +8,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 /// A repository with one committed blob of `big` bytes, then a crash-torn copy of its frame (header and half its body) appended to the

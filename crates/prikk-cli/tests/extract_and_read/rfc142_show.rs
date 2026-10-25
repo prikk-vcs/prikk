@@ -5,11 +5,9 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 /// Full hand-written recursive-descent JSON syntax checker, mirroring `rfc140_status_json_and_
 /// enumeration.rs`'s own (this crate has no `serde_json` -- RFC 118 §10 prerequisite 4).
+use crate::support;
 fn assert_valid_json(input: &str) -> serde_json_like::Value {
     let mut chars = input.trim().chars().peekable();
     let value = serde_json_like::parse_value(&mut chars);

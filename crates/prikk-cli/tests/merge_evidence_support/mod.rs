@@ -1,7 +1,6 @@
 //! Shared helpers for `merge_evidence` integration tests.
 
-#[path = "../support/mod.rs"]
-mod support;
+use crate::support;
 
 use std::collections::BTreeMap;
 use std::error::Error;

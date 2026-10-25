@@ -6,10 +6,8 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::PathBuf;
-
-#[path = "../support/mod.rs"]
-mod support;
 
 use prikk_store::{
     DEFAULT_HAVE_LIST_MAX_PATCH_COUNT, DEFAULT_HAVE_LIST_MAX_TOTAL_BYTES, ObjectReadSnapshot,

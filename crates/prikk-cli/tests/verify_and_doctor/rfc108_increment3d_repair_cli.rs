@@ -8,9 +8,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use prikk_store::{ActiveLock, DEFAULT_ACTIVE_NAME, RepositoryLayout};
 
 /// Same technique as `prikk-store::doctor::tests::doctor_reports_trailing_partial_wal_warning`:

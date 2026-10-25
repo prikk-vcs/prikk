@@ -15,9 +15,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 #![cfg(target_family = "unix")]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 const INDEX_MAGIC: &[u8; 8] = b"PIDXENT1";

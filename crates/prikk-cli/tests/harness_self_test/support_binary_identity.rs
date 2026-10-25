@@ -14,9 +14,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn prikk_bin_path_names_the_same_binary_cargo_built() {
     let printed = support::prikk_bin_path().display().to_string();

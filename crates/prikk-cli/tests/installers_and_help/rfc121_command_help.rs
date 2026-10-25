@@ -7,9 +7,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 fn help_output(repo: &std::path::Path, args: &[&str]) -> std::process::Output {
     support::prikk(repo).args(args).output().unwrap()
 }

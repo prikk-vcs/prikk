@@ -8,9 +8,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn seal_refuses_a_bad_flag_before_the_signer_is_ever_built() {
     let repo = support::unique_repo("rfc121-aud10-seal");

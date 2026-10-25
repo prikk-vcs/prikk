@@ -9,9 +9,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 fn witness_path(repo: &Path) -> PathBuf {

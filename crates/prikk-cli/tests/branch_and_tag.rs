@@ -24,3 +24,5 @@ mod rfc147_tag_ref_resolution;
 mod rfc151_branch_switch;
 #[path = "branch_and_tag/rfc151_current_branch.rs"]
 mod rfc151_current_branch;
+#[path = "support/mod.rs"]
+mod support;

@@ -10,9 +10,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 fn assert_usage_error(output: &std::process::Output, needle: &str) {
     assert_eq!(
         output.status.code(),

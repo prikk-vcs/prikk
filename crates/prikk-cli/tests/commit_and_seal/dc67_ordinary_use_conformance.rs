@@ -60,11 +60,9 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
 // DC-71: used only by sequence_05's Unix permission-bit assertions, below.
 #[cfg(unix)]
+use crate::support;
 use std::os::unix::fs::PermissionsExt;
 
 use support::{

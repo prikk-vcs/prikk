@@ -13,10 +13,8 @@
 //! own discipline.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::Path;
-
-#[path = "../support/mod.rs"]
-mod support;
 
 use support::{
     branch_close, branch_create, commit, init, ok, prikk, seal, store_bytes, tag_create,

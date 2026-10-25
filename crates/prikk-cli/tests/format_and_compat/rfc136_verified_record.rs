@@ -3,9 +3,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::Path;
 
 const RECORD: &str = ".prikk/cache/replay-verified-blocks.v1";

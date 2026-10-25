@@ -2,9 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::Path;
 
 /// Only the `unix_only` round-trip test uses this now: RFC 148 removed the `export PRIKK_*_SEED=`

@@ -4,9 +4,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::Path;
 
 /// Set the first frame of `repo`'s blob container to claim a body of `claimed` bytes (the big-endian `u64` at bytes 10..18 of a frame).

@@ -13,14 +13,12 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use prikk_object::{ObjectType, RefStatePayload};
 use prikk_store::{
     Ed25519MaintainerSigner, FileObjectStore, ObjectReader, RefStore, RepositoryLayout,
     add_trusted_maintainer, simulate_one_seal_for_test_support,
 };
-
-#[path = "../support/mod.rs"]
-mod support;
 
 const REF_NAME: &str = "heads/main";
 

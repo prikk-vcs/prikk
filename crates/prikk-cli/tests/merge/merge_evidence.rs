@@ -5,9 +5,7 @@
 // every other prikk-cli integration test file that already carries this allow.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../merge_evidence_support/mod.rs"]
-mod merge_evidence_support;
-
+use crate::merge_evidence_support;
 use merge_evidence_support::*;
 
 #[test]

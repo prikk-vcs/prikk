@@ -5,11 +5,9 @@
 // integration test file that already carries this allow.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-#[path = "../support/mod.rs"]
-mod support;
 
 use prikk_store::{Ed25519MaintainerSigner, MaintainerSigner, RefStore, RepositoryLayout};
 

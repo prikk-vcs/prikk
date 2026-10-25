@@ -15,6 +15,8 @@ mod dc75_merge_two_edits;
 mod dc85_merge_from_received_ref;
 #[path = "merge/merge_evidence.rs"]
 mod merge_evidence;
+#[path = "merge_evidence_support/mod.rs"]
+mod merge_evidence_support;
 #[path = "merge/merge_plan.rs"]
 mod merge_plan;
 #[path = "merge/merge_refusal_classes.rs"]
@@ -27,3 +29,5 @@ mod rfc126_aud08_merge_update_seq_overflow;
 mod rfc144_increment1_rename_replay;
 #[path = "merge/rfc156_collaboration_merges.rs"]
 mod rfc156_collaboration_merges;
+#[path = "support/mod.rs"]
+mod support;

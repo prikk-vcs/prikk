@@ -21,9 +21,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 #![cfg(target_family = "unix")]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::Path;
 
 const RACERS: usize = 12;

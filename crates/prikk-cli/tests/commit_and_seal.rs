@@ -31,3 +31,5 @@ mod rfc126_aud08_seal_update_seq_overflow;
 mod seal_recovery;
 #[path = "commit_and_seal/seal_trust_gate.rs"]
 mod seal_trust_gate;
+#[path = "support/mod.rs"]
+mod support;

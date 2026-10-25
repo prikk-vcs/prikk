@@ -2,9 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::iter::Peekable;
 use std::path::Path;
 use std::str::Chars;

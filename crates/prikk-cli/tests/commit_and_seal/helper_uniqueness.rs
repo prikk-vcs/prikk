@@ -8,9 +8,7 @@
 // other prikk-cli integration test file that includes this module.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::collections::HashSet;
 use std::sync::{Arc, Barrier};
 use std::thread;

@@ -3,9 +3,7 @@
 //! are not told apart, on purpose. The line now says which rule is in force, so a reader does not
 //! mistake silence for "nothing to check."
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn a_fresh_repository_names_the_pre_0_49_0_classification() {
     let repo = support::unique_repo("a6-item3-no-witness");

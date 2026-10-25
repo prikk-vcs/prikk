@@ -7,9 +7,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use support::*;
 
 use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};

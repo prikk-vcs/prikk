@@ -23,9 +23,7 @@
 // later round adds a refusal reachable without a symlink, its test does not belong in this file.
 #![cfg(target_family = "unix")]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use std::path::{Path, PathBuf};
 
 use support::json;

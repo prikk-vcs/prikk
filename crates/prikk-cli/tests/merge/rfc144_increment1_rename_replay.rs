@@ -5,9 +5,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 use prikk_object::{
     CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectType, Operation, OperationKind,
     PatchPayload, PatchPurpose, RenamePath,

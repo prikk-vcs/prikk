@@ -5,12 +5,10 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Output, Stdio};
-
-#[path = "../support/mod.rs"]
-mod support;
 
 use support::{init, ok, prikk, unique_repo};
 

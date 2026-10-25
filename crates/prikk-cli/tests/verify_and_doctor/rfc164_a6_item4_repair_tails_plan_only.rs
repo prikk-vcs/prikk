@@ -4,9 +4,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn plan_only_writes_nothing_and_matches_the_real_runs_own_report() {
     let repo = support::unique_repo("a6-item4-repair-tails-plan-only");

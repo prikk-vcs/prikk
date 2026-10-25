@@ -13,9 +13,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-#[path = "../support/mod.rs"]
-mod support;
-
+use crate::support;
 #[test]
 fn branch_list_keeps_working_through_a_lost_generation_log_by_deducing_the_live_slot() {
     let repo = support::unique_repo("part-e2-pointer-index-lost-generation-log");

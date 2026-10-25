@@ -15,12 +15,10 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
+use crate::support;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-
-#[path = "../support/mod.rs"]
-mod support;
 
 fn fixture_repo(tag: &str) -> PathBuf {
     let repo = support::unique_repo(tag);
