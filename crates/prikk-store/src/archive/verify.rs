@@ -92,10 +92,10 @@ pub struct CarriedMaintainerKeySummary {
 
 /// One `Block`'s own missing, reachability-exempt reference (0.52.0 step 0, Part C1 round 2, finding
 /// C1-4): structured, not a pre-formatted string, so a caller can print it with the store's own
-/// [`crate::verify`] warning shape instead of inventing a second wording. Harmless by construction --
+/// `crate::verify` warning shape instead of inventing a second wording. Harmless by construction --
 /// see [`ArchiveVerifyReport::unreferenced_remnants`]'s own doc for why.
-/// Field names match the store's own [`crate::verify::UnreferencedRemnant`] (same RFC 164 Rule E
-/// concept, carried by the archive instead of the live repository) so a caller already familiar
+/// Field names match the store's own [`UnreferencedRemnant`](crate::UnreferencedRemnant) (same
+/// RFC 164 Rule E concept, carried by the archive instead of the live repository) so a caller already familiar
 /// with one reads the other without translation. Named distinctly (0.55.0 step 1 item 4,
 /// release-0.54.0 prep P1 review R5) because the two are not the same type -- this one has no
 /// `owner_object_type`/`missing_object_type` fields, the live repository's own `Block`/`RefState`
