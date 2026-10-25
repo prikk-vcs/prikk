@@ -874,7 +874,7 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
                  measured when the ceiling was set): the finding is getting worse, not just failing to improve",
                 operation.name
             )),
-            Expectation::FollowsHistory { finding, ceiling } if large < small + (16 << 10) => failures.push(format!(
+            Expectation::FollowsHistory { finding, ceiling: _ } if large < small + (16 << 10) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes at the shallow / deep history: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
                 operation.name
@@ -884,7 +884,7 @@ fn no_per_object_operation_reads_more_on_a_larger_store() -> Result<()> {
                  measured when the ceiling was set): the finding is getting worse, not just failing to improve",
                 operation.name
             )),
-            Expectation::FollowsRefs { finding, ceiling } if large < small + (16 << 10) => failures.push(format!(
+            Expectation::FollowsRefs { finding, ceiling: _ } if large < small + (16 << 10) => failures.push(format!(
                 "{}: an open finding ({finding}) now reads {small} / {large} bytes at the few / many refs: it is flat. Promote the \
                  row to `Expectation::Flat` and remove the finding",
                 operation.name
