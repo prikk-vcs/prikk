@@ -94,12 +94,17 @@ pub struct CarriedMaintainerKeySummary {
 /// C1-4): structured, not a pre-formatted string, so a caller can print it with the store's own
 /// [`crate::verify`] warning shape instead of inventing a second wording. Harmless by construction --
 /// see [`ArchiveVerifyReport::unreferenced_remnants`]'s own doc for why.
-/// Field names match the store's own `crate::verify::UnreferencedRemnant` (same RFC 164 Rule E
+/// Field names match the store's own [`crate::verify::UnreferencedRemnant`] (same RFC 164 Rule E
 /// concept, carried by the archive instead of the live repository) so a caller already familiar
-/// with one reads the other without translation.
+/// with one reads the other without translation. Named distinctly (0.55.0 step 1 item 4,
+/// release-0.54.0 prep P1 review R5) because the two are not the same type -- this one has no
+/// `owner_object_type`/`missing_object_type` fields, the live repository's own `Block`/`RefState`
+/// distinction the archive's own flat object model has no counterpart for -- and both are now
+/// re-exported from this crate's own root, where two identically-named public types could not
+/// coexist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct UnreferencedRemnant {
+pub struct ArchiveUnreferencedRemnant {
     /// The `Block` that holds the missing reference.
     pub owner_object_id: ObjectId,
     /// Which of the `Block`'s own three reachability-gated reference kinds is missing: `"parent
@@ -167,7 +172,7 @@ pub struct ArchiveVerifyReport {
     /// carried ref still needs it, so it is harmless, not damage. A killed `bundle import` is the
     /// standing example (§5): no command removes the remnant it leaves, and an honest export of
     /// that repository carries it forward, same as the store's own `verify` already does.
-    pub unreferenced_remnants: Vec<UnreferencedRemnant>,
+    pub unreferenced_remnants: Vec<ArchiveUnreferencedRemnant>,
     /// Every maintainer key this archive carries, listed for inspection -- never adopted by this
     /// call.
     pub maintainer_keys: Vec<CarriedMaintainerKeySummary>,
@@ -362,7 +367,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                  not carry"
             ));
         } else {
-            unreferenced_remnants.push(UnreferencedRemnant {
+            unreferenced_remnants.push(ArchiveUnreferencedRemnant {
                 owner_object_id,
                 missing_role: missing_role.to_string(),
                 missing_object_id,
