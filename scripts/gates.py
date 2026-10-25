@@ -255,7 +255,11 @@ def main():
     # named, for a human to go look at. Only this run's own subdirectory is ever removed or named
     # here -- never `base_tmpdir`, which this script did not create and must not touch.
     if failed:
-        print(f"gate run failed -- TMPDIR kept for inspection: {tmpdir}", flush=True)
+        entry_count = len(os.listdir(tmpdir))
+        print(
+            f"gate run failed -- TMPDIR kept for inspection: {tmpdir} ({entry_count} entries)",
+            flush=True,
+        )
     else:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
