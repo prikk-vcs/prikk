@@ -240,6 +240,190 @@ fn extract_refuses_an_existing_temporary_sibling() {
     let _ = std::fs::remove_dir_all(&sibling);
 }
 
+/// Asserts a `destination-inside-repository` refusal: exits 1, names the repository root, and
+/// creates neither the target nor its temporary sibling (0.55.0 step 1 item 1, external review 035
+/// §3.2).
+fn assert_refuses_inside_repository(repo: &Path, target: &Path, output: &Output) {
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("inside this repository's own root"),
+        "{stderr}"
+    );
+    assert!(!target.exists(), "the target must not have been created");
+    let sibling = target.with_file_name(format!(
+        "{}.prikk-extract-tmp",
+        target.file_name().unwrap().to_str().unwrap()
+    ));
+    assert!(
+        !sibling.exists(),
+        "the temporary sibling must not have been created either"
+    );
+    let _ = repo;
+}
+
+/// An absolute path inside the worktree refuses, naming the repository root, with nothing created.
+#[test]
+fn extract_refuses_a_destination_inside_the_worktree_absolute() {
+    let repo = support::unique_repo("extract-inside-worktree-absolute");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let target = repo.join("inside-the-worktree");
+    let output = extract(&repo, "heads/main", &target, &[]);
+    assert_refuses_inside_repository(&repo, &target, &output);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The same refusal for a relative path, resolved against the process's own current directory
+/// (`support::prikk` sets it to `repo`) -- the destination never resolves differently just because
+/// it was spelled relatively.
+#[test]
+fn extract_refuses_a_destination_inside_the_worktree_relative() {
+    let repo = support::unique_repo("extract-inside-worktree-relative");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let relative_target = PathBuf::from("inside-the-worktree-relative");
+    let output = extract(&repo, "heads/main", &relative_target, &[]);
+    let resolved_target = repo.join(&relative_target);
+    assert_refuses_inside_repository(&repo, &resolved_target, &output);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A path under `.prikk/` refuses -- `.prikk` is always nested under the repository root, so the
+/// same root-identity check already covers it; this proves it does, not just by construction.
+#[test]
+fn extract_refuses_a_destination_under_the_prikk_directory() {
+    let repo = support::unique_repo("extract-inside-dot-prikk");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let target = repo.join(".prikk").join("extracted-into-prikk-dir");
+    let output = extract(&repo, "heads/main", &target, &[]);
+    assert_refuses_inside_repository(&repo, &target, &output);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A destination spelled with a literal `..` component that, once resolved, lands back inside the
+/// repository still refuses -- comparing resolved paths by identity, never as text, is exactly what
+/// defeats this.
+#[test]
+fn extract_refuses_a_destination_reached_through_dot_dot() {
+    let repo = support::unique_repo("extract-inside-via-dotdot");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let repo_name = repo.file_name().unwrap().to_str().unwrap();
+    // Relative to the process's own cwd (`repo`, per `support::prikk`): up to the parent, back
+    // down through the repository's own directory name, landing inside it again.
+    let relative_target = PathBuf::from("..").join(repo_name).join("via-dot-dot");
+    let output = extract(&repo, "heads/main", &relative_target, &[]);
+    let resolved_target = repo.join("via-dot-dot");
+    assert_refuses_inside_repository(&repo, &resolved_target, &output);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A symlinked parent directory that points inside the repository refuses too -- `canonicalize`
+/// follows every symlink on the way to the nearest existing ancestor, so a destination reached only
+/// through a symlink resolves to where it actually lands.
+#[cfg(unix)]
+#[test]
+fn extract_refuses_a_destination_through_a_symlinked_parent() {
+    let repo = support::unique_repo("extract-inside-via-symlink");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let link_container = support::unique_repo("extract-inside-via-symlink-link-container");
+    let link = link_container.join("points-into-the-repo");
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    let target = link.join("via-symlink");
+
+    let output = extract(&repo, "heads/main", &target, &[]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("inside this repository's own root"),
+        "{stderr}"
+    );
+    assert!(!target.exists(), "the target must not have been created");
+
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_dir_all(&link_container);
+}
+
+/// Windows-only: a case-different spelling of the repository root still resolves to the same
+/// repository, by the file system's own canonical on-disk casing (`GetFinalPathNameByHandleW`),
+/// not by the casing the caller typed. The first real execution of this test is CI's Windows job --
+/// no Windows host exists in this development environment.
+#[cfg(windows)]
+#[test]
+fn extract_refuses_a_destination_under_a_case_different_spelling_of_the_repository_root() {
+    let repo = support::unique_repo("extract-inside-case-different");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let repo_str = repo.to_str().unwrap();
+    let flipped: String = repo_str
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() {
+                c.to_ascii_uppercase()
+            } else if c.is_ascii_uppercase() {
+                c.to_ascii_lowercase()
+            } else {
+                c
+            }
+        })
+        .collect();
+    let target = PathBuf::from(flipped).join("case-different-target");
+    let output = extract(&repo, "heads/main", &target, &[]);
+    let resolved_target = repo.join("case-different-target");
+    assert_refuses_inside_repository(&repo, &resolved_target, &output);
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A sibling directory of the repository whose name starts with the repository's own name
+/// (`repo-out` beside `repo`) is genuinely outside it and must still succeed -- proving the check
+/// compares path components, never a bare string prefix.
+#[test]
+fn extract_succeeds_into_a_sibling_whose_name_starts_with_the_repositorys_own_name() {
+    let repo = support::unique_repo("extract-sibling-prefix");
+    support::init(&repo);
+    std::fs::write(repo.join("README.md"), b"hello\n").unwrap();
+    support::ok(&support::commit(&repo, "heads/main", "genesis"), "commit");
+    support::ok(&support::seal(&repo, "heads/main"), "seal");
+
+    let mut sibling_name = repo.file_name().unwrap().to_os_string();
+    sibling_name.push("-out");
+    let out = repo.with_file_name(sibling_name);
+    let _ = std::fs::remove_dir_all(&out);
+
+    let output = extract(&repo, "heads/main", &out, &[]);
+    support::ok(&output, "extract into a same-prefix sibling must succeed");
+    assert_eq!(std::fs::read(out.join("README.md")).unwrap(), b"hello\n");
+
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
 /// A successful extract never writes into the repository: every byte under `.prikk/` is identical
 /// before and after.
 #[test]

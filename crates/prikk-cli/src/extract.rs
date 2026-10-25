@@ -42,21 +42,24 @@ use crate::output::verification::escape_json_string;
 use crate::stdout::println;
 use crate::{current_branch, open_repository};
 
-/// `refusal-v1`'s own thirteen ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e) --
-/// this project's first machine-readable refusal document, designed as a precedent other commands
-/// adopt when next touched. **Exhaustive by construction**: no `match` over this enum anywhere in
-/// this module has a wildcard arm, so a fourteenth refusal `extract` grows later, without updating
-/// this enum, is a compile error here, not a silently missing id in the document.
+/// `refusal-v1`'s own fifteen ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e,
+/// `destination-inside-repository` and `claim-parent-not-sealed` added in 0.55.0 step 1) -- this
+/// project's first machine-readable refusal document, designed as a precedent other commands adopt
+/// when next touched. **Exhaustive by construction**: no `match` over this enum anywhere in this
+/// module has a wildcard arm, so a sixteenth refusal `extract` grows later, without updating this
+/// enum, is a compile error here, not a silently missing id in the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtractRefusalId {
     OverMaxBytes,
     OverMaxFiles,
     DestinationExists,
+    DestinationInsideRepository,
     TemporarySiblingExists,
     PointNotFound,
     ClaimNotFound,
     NotAClaim,
     ClaimHasSeveralParents,
+    ClaimParentNotSealed,
     CaseCollision,
     NoCheckpointInReach,
     DamagedRepository,
@@ -70,11 +73,13 @@ impl ExtractRefusalId {
             Self::OverMaxBytes => "over-max-bytes",
             Self::OverMaxFiles => "over-max-files",
             Self::DestinationExists => "destination-exists",
+            Self::DestinationInsideRepository => "destination-inside-repository",
             Self::TemporarySiblingExists => "temporary-sibling-exists",
             Self::PointNotFound => "point-not-found",
             Self::ClaimNotFound => "claim-not-found",
             Self::NotAClaim => "not-a-claim",
             Self::ClaimHasSeveralParents => "claim-has-several-parents",
+            Self::ClaimParentNotSealed => "claim-parent-not-sealed",
             Self::CaseCollision => "case-collision",
             Self::NoCheckpointInReach => "no-checkpoint-in-reach",
             Self::DamagedRepository => "damaged-repository",
@@ -140,6 +145,9 @@ fn classify_extract_plan_error(
         Some(ExtractRefusalKind::NotAClaim { .. }) => (ExtractRefusalId::NotAClaim, None),
         Some(ExtractRefusalKind::ClaimHasSeveralParents { .. }) => {
             (ExtractRefusalId::ClaimHasSeveralParents, None)
+        }
+        Some(ExtractRefusalKind::ClaimParentNotSealed(_)) => {
+            (ExtractRefusalId::ClaimParentNotSealed, None)
         }
         Some(ExtractRefusalKind::CaseCollision) => (ExtractRefusalId::CaseCollision, None),
         Some(ExtractRefusalKind::NoCheckpointInReach(reason)) => (
@@ -536,8 +544,10 @@ fn run_extract_inner(args: ExtractArgs) -> std::result::Result<(), CliError> {
         return Ok(());
     }
 
+    refuse_destination_inside_repository(args.format_json, &layout, &args.target)?;
     refuse_existing_target(args.format_json, &args.target)?;
     let temp_sibling = temp_sibling_path(&args.target)?;
+    refuse_destination_inside_repository(args.format_json, &layout, &temp_sibling)?;
     if destination_exists(&temp_sibling) {
         return Err(refuse(
             args.format_json,
@@ -680,6 +690,36 @@ fn sync_tree_directories(root: &Path) -> std::io::Result<()> {
     directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     for directory in directories {
         crate::durable_output::sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
+/// Refuse `target` (or its temporary sibling) when it resolves inside this repository's own root
+/// (`.prikk/` included -- `.prikk` is always `root.join(".prikk")`, so checking against the root
+/// alone already covers it) -- 0.55.0 step 1 item 1, external review 035 §3.2. Checked before the
+/// existing-destination check below: a path both inside the repository and already occupied should
+/// name the repository-containment problem, the one a caller is more likely to have made by
+/// accident (a relative path resolved against the wrong current directory, say) than an accidental
+/// collision with something already there. See `durable_output::inside_directory`'s own doc comment
+/// for exactly which cases this defeats (`..`, a symlinked parent, Windows case and short-name
+/// forms) and how.
+fn refuse_destination_inside_repository(
+    format_json: bool,
+    layout: &prikk_store::RepositoryLayout,
+    destination: &Path,
+) -> std::result::Result<(), CliError> {
+    if crate::durable_output::inside_directory(layout.root(), destination) {
+        return Err(refuse(
+            format_json,
+            ExtractRefusalId::DestinationInsideRepository,
+            None,
+            CliError::Failure(format!(
+                "precondition not met: refusing to extract into {}, inside this repository's own \
+                 root {} -- choose a destination outside the repository (nothing was written)",
+                destination.display(),
+                layout.root().display()
+            )),
+        ));
     }
     Ok(())
 }

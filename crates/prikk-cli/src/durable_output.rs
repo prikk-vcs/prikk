@@ -59,6 +59,60 @@ pub(crate) fn destination_exists(destination: &Path) -> bool {
     std::fs::symlink_metadata(destination).is_ok()
 }
 
+/// Whether `destination` lies inside `ancestor` (0.55.0 step 1 item 1, generalized from `cat.rs`'s
+/// own `--output` policy, RFC 157 §4). Compared by identity, never as text: `destination` usually
+/// does not exist yet (it is the not-yet-created target of a write), so this walks up to its
+/// nearest existing ancestor and canonicalizes *that*, falling back to a plain `starts_with` only
+/// if nothing above it resolves either (e.g. `ancestor` itself is missing, which should not happen
+/// for a repository root or `.prikk` directory a caller already opened).
+///
+/// **What this defeats, and how:**
+/// - **`..` and relative components:** `canonicalize` resolves every `.`/`..` before comparing, so
+///   `repo/../repo/target` and `repo/target` compare identically regardless of how either side was
+///   spelled.
+/// - **A symlinked parent that points inside `ancestor`** (Unix): `canonicalize` follows every
+///   symlink on the path to the nearest existing ancestor, so a destination reached only through a
+///   symlink resolves to where it actually lands, not where it appears to be.
+/// - **Windows case-different spellings of the repository root:** NTFS paths are case-insensitive,
+///   and Windows' own `GetFinalPathNameByHandleW` (what `std::fs::canonicalize` calls through) asks
+///   the file system for the path's own canonical on-disk casing, not the casing the caller typed —
+///   so `C:\Repo` and `c:\repo` canonicalize to the same string.
+/// - **Windows 8.3 short-name aliases** (e.g. `C:\REPO~1`): not textual expansion but a real file
+///   handle opened against the short-name path, then asked for its final path — the file system
+///   answers with the same canonical long-name record either way, the same mechanism that defeats
+///   the case-spelling alias above. **This reasoning is not verified on a real Windows host in this
+///   development environment** (none exists here); CI's own Windows job is what actually confirms
+///   both of the two points above, the same stance this codebase already takes for other
+///   Windows-specific durability claims it cannot execute locally (see this module's own doc
+///   comment on `write_new_file_durably`).
+pub(crate) fn inside_directory(ancestor: &Path, destination: &Path) -> bool {
+    let resolved_ancestor =
+        std::fs::canonicalize(ancestor).unwrap_or_else(|_| ancestor.to_path_buf());
+    let mut candidate = destination.to_path_buf();
+    loop {
+        // A relative destination with no directory components of its own (`foo`, never `./foo`)
+        // pops down to an *empty* path, not `.` -- `Path`'s own `pop`/`parent` treat a bare
+        // single-component relative path's parent as empty, and `canonicalize("")` fails outright
+        // (confirmed: `ENOENT`, it is not special-cased to mean "the current directory" the way a
+        // shell or `Path::new(".")` would be). The current directory is what an empty remainder
+        // actually means here, so it is resolved explicitly instead of asking `canonicalize` to
+        // guess at an empty string.
+        let resolved = if candidate.as_os_str().is_empty() {
+            std::env::current_dir()
+                .ok()
+                .and_then(|dir| std::fs::canonicalize(dir).ok())
+        } else {
+            std::fs::canonicalize(&candidate).ok()
+        };
+        if let Some(resolved) = resolved {
+            return resolved.starts_with(&resolved_ancestor);
+        }
+        if !candidate.pop() {
+            return destination.starts_with(ancestor);
+        }
+    }
+}
+
 /// Write `bytes` to `destination`, atomically and durably, never leaving a partial file at
 /// `destination` either on success or on failure. See this module's own doc comment for exactly
 /// what is and is not guaranteed. Overwrites `destination` if it already exists — callers that

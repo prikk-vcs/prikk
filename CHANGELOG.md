@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Output changes
+
+- **`extract` refuses a destination inside the repository.** The target, and its temporary
+  sibling, must resolve outside the repository's own root (`.prikk/` included) — compared by
+  identity, never by spelling, so a relative path, a path reached through `..`, a symlinked
+  parent, or a differently-cased or short-name spelling of the root on Windows all refuse the
+  same way a plain path inside the worktree does. The new `refusal-v1` id is
+  `destination-inside-repository`.
+- **`extract --claim` on a claim whose own declared parent has not been sealed or received yet
+  now refuses `claim-parent-not-sealed`,** naming the claim and its declared parent, instead of
+  `damaged-repository` — the repository was never damaged in this case; the parent simply has not
+  arrived.
+
 ## 0.54.1 — 2026-10-24
 
 ### Fixed

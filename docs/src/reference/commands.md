@@ -173,10 +173,14 @@ and is written to a temporary sibling then renamed into place. **Binary content 
 
 **Writing a point into a new folder: `extract`.** `extract --ref <ref|block-id> <dir>` writes every file
 at a point into a new directory that does not exist yet, no repository history and no worktree state, the
-same shape `git archive | tar -x` produces. 0.54.0 does not refuse a destination path inside the
-repository — `<dir>` may be an absolute or relative path, even one under `.prikk/`; choose a path outside
-the repository yourself, because the next `commit --from-worktree` would pick up the extracted files as
-worktree content. Unlike `cat`/`tree`, **it anchors only where a writer would**:
+same shape `git archive | tar -x` produces. `<dir>` must resolve outside this repository's own root
+(`.prikk/` included) — compared by identity, never by spelling, so a relative path, a `..` that lands back
+inside, a symlinked parent, or a differently-cased or short-name spelling of the root on Windows all refuse
+just as a plain path inside the worktree does; a path outside the repository, including a sibling
+directory whose name merely starts with the repository's own name, is unaffected. The reason is the same
+one `commit --from-worktree` already gives for its own worktree content: a copy left inside the repository
+would be picked up as worktree content by the very next commit. Unlike `cat`/`tree`, **it anchors only
+where a writer would**:
 the same admitted-anchor rule `checkout`'s own worktree writes use, never the weaker rule that lets `cat`
 and `tree` display any snapshot that merely decodes correctly. A `remotes/...` ref under a key this
 repository has not adopted therefore always replays fully from its own genesis; past 63 blocks with no
@@ -231,10 +235,13 @@ classified by a fallback, rather than exiting `1` under `--format json` with not
 {"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
 ```
 
-`refusal` is one of thirteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
-`destination-exists`, `temporary-sibling-exists`, `point-not-found`, `claim-not-found`, `not-a-claim`,
-`claim-has-several-parents`, `case-collision`, `no-checkpoint-in-reach`, `not-a-repository`,
-`damaged-repository`, `io-failure`. `reason` is set only for `no-checkpoint-in-reach`, naming which of
+`refusal` is one of fifteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`destination-exists`, `destination-inside-repository`, `temporary-sibling-exists`, `point-not-found`,
+`claim-not-found`, `not-a-claim`, `claim-has-several-parents`, `claim-parent-not-sealed`, `case-collision`,
+`no-checkpoint-in-reach`, `not-a-repository`, `damaged-repository`, `io-failure`. `claim-parent-not-sealed`
+means the claim's own declared parent has not been sealed or received into this repository yet — seal or
+receive it first, then extract the claim again; this repository is not damaged. `reason` is set only for
+`no-checkpoint-in-reach`, naming which of
 three conditions the admitted-anchor search found in reach — **one cause at a time**: the first blocker
 the search meets, not necessarily the only one. Fix it and run again; the next refusal names the next
 cause, if any. In priority order: `signer-not-adopted` (a recorded checkpoint whose signer this repository

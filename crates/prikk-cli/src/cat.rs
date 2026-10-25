@@ -192,7 +192,7 @@ fn refuse_output_destination(
     destination: &Path,
     force: bool,
 ) -> std::result::Result<(), CliError> {
-    if inside_prikk_directory(layout.prikk_dir(), destination) {
+    if durable_output::inside_directory(layout.prikk_dir(), destination) {
         return Err(CliError::Failure(format!(
             "precondition not met: refusing to write inside the repository's own `.prikk` directory: {}",
             destination.display()
@@ -206,23 +206,6 @@ fn refuse_output_destination(
         )));
     }
     Ok(())
-}
-
-/// Whether `destination` lies inside `prikk_dir`. Compared by identity where both sides exist: the
-/// destination itself usually does not, so its nearest existing ancestor is what is resolved, and the
-/// unresolved form is compared as a fallback (a symlinked parent is caught by the resolved comparison).
-fn inside_prikk_directory(prikk_dir: &Path, destination: &Path) -> bool {
-    let resolved_prikk =
-        std::fs::canonicalize(prikk_dir).unwrap_or_else(|_| prikk_dir.to_path_buf());
-    let mut candidate = destination.to_path_buf();
-    loop {
-        if let Ok(resolved) = std::fs::canonicalize(&candidate) {
-            return resolved.starts_with(&resolved_prikk);
-        }
-        if !candidate.pop() {
-            return destination.starts_with(prikk_dir);
-        }
-    }
 }
 
 /// `path-content-v1` (RFC 157 §4): the same fields and rules as one `tree-listing-v1` entry, and no bytes.
