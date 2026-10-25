@@ -11,7 +11,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
-use support::ok;
+use crate::support::ok;
 
 /// Append a real-looking but torn frame to a blob container: a genuine header (right magic,
 /// version, and a claimed body length far longer than what follows) with only 10 of its own

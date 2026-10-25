@@ -15,11 +15,11 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 use std::process::Output;
 
-use support::json;
+use crate::support;
+use crate::support::json;
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()

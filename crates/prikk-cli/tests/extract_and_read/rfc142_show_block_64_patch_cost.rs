@@ -11,10 +11,9 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::time::Instant;
 
-use support::*;
+use crate::support::*;
 
 #[test]
 #[ignore]

@@ -8,7 +8,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
-use support::*;
+use crate::support::*;
 
 use prikk_object::{BlockKind, BlockPayload, ObjectId, ObjectType, RefStatePayload};
 use prikk_store::{FileObjectStore, ObjectReader, RefStore, RepositoryLayout};

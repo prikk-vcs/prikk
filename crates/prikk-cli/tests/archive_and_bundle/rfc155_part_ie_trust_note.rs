@@ -9,7 +9,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
-use support::ok;
+use crate::support::ok;
 
 fn export_one_generation(repo: &std::path::Path, tag: &str) -> std::path::PathBuf {
     support::init(repo);

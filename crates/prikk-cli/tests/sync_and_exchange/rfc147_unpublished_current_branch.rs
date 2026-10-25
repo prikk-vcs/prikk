@@ -19,11 +19,11 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 use std::process::Output;
 
-use support::json::{self, Value};
+use crate::support;
+use crate::support::json::{self, Value};
 
 fn run(repo: &Path, args: &[&str]) -> Output {
     support::prikk(repo).args(args).output().unwrap()

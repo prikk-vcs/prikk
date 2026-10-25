@@ -8,13 +8,13 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
 use std::process::Output;
 
-use support::json::Value;
+use crate::support;
+use crate::support::json::Value;
 
 const TEXT: &[u8] = b"fn main() {\n    println!(\"hi\");\n}\n";
 const BINARY: &[u8] = b"\xff\xfe\x00binary\x01\x02";

@@ -5,11 +5,10 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 use std::process::Output;
 
-use support::{init, ok, prikk, unique_repo};
+use crate::support::{init, ok, prikk, unique_repo};
 
 fn trust_a_key(repo: &Path) -> Output {
     prikk(repo)

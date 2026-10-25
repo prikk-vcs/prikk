@@ -5,12 +5,11 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Output, Stdio};
 
-use support::{init, ok, prikk, unique_repo};
+use crate::support::{init, ok, prikk, unique_repo};
 
 fn active_lock_path(repo: &Path) -> std::path::PathBuf {
     repo.join(".prikk/active/default/active.lock")

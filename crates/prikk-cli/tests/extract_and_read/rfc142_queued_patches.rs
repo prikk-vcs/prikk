@@ -4,11 +4,11 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use support::json;
+use crate::support;
+use crate::support::json;
 
 const MESSAGE: &str = "add a.txt, queued";
 

@@ -6,8 +6,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
-use support::*;
+use crate::support::*;
 
 #[test]
 fn branch_create_rejects_case_insensitive_collision() {

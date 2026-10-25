@@ -23,10 +23,10 @@
 // later round adds a refusal reachable without a symlink, its test does not belong in this file.
 #![cfg(target_family = "unix")]
 
-use crate::support;
 use std::path::{Path, PathBuf};
 
-use support::json;
+use crate::support;
+use crate::support::json;
 
 fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()

@@ -2,10 +2,10 @@
 //! through the real binary (the handoff's own smoke section 28, condensed).
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 
-use support::{init, ok, prikk};
+use crate::support;
+use crate::support::{init, ok, prikk};
 
 fn compact(repo: &Path, args: &[&str]) -> std::process::Output {
     prikk(repo)

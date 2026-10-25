@@ -35,13 +35,13 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 
-use crate::support;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::support;
 #[cfg(target_os = "linux")]
-use support::prikk;
-use support::{init, seal, unique_repo, verify};
+use crate::support::prikk;
+use crate::support::{init, seal, unique_repo, verify};
 
 const REF_NAME: &str = "heads/main";
 

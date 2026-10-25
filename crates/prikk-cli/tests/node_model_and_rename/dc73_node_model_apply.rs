@@ -4,8 +4,7 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
-use support::*;
+use crate::support::*;
 
 #[cfg(unix)]
 fn set_mode(path: &std::path::Path, mode: u32) {

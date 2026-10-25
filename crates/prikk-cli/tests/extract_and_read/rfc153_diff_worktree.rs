@@ -8,12 +8,12 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use support::json::Value;
+use crate::support;
+use crate::support::json::Value;
 
 fn run(repo: &Path, args: &[&str]) -> Output {
     support::prikk(repo).args(args).output().unwrap()

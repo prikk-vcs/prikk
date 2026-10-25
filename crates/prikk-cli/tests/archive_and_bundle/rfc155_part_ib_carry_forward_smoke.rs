@@ -11,11 +11,13 @@
 //! panics immediately, naming why).
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 use std::process::Command;
 
-use support::{MAINTAINER_KEY_ID, isolate_key_environment_for, maintainer_public_key_hex, ok};
+use crate::support;
+use crate::support::{
+    MAINTAINER_KEY_ID, isolate_key_environment_for, maintainer_public_key_hex, ok,
+};
 
 fn release_prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(support::release_binary_path());

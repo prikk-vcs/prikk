@@ -12,10 +12,10 @@
 //! `rfc163_write_never_buries_a_crash_state.rs` already use for exactly this reason.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::Path;
 
-use support::{
+use crate::support;
+use crate::support::{
     branch_close, branch_create, commit, init, ok, prikk, seal, store_bytes, trust_maintainer,
     unique_repo, verify,
 };

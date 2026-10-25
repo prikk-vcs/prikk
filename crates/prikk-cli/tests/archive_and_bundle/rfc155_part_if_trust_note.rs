@@ -13,8 +13,8 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
+use crate::support::ok;
 use std::path::{Path, PathBuf};
-use support::ok;
 
 const SECOND_MAINTAINER_KEY_ID: &str = "rfc155-if-second-maintainer";
 const SECOND_MAINTAINER_SEED: [u8; 32] = [

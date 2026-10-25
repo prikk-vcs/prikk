@@ -9,7 +9,7 @@
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
-use support::{commit, init, ok, unique_repo};
+use crate::support::{commit, init, ok, unique_repo};
 
 fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()

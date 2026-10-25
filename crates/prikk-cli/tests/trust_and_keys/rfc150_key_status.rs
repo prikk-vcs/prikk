@@ -15,11 +15,11 @@
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
-use crate::support;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use support::json;
+use crate::support;
+use crate::support::json;
 
 /// One key-directory state to drive both commands against: a label, and what to do to the fixture's
 /// key directory to produce it.

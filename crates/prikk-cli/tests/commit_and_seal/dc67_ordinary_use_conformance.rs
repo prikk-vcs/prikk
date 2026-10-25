@@ -62,10 +62,9 @@
 
 // DC-71: used only by sequence_05's Unix permission-bit assertions, below.
 #[cfg(unix)]
-use crate::support;
 use std::os::unix::fs::PermissionsExt;
 
-use support::{
+use crate::support::{
     branch_close, branch_create, commit, generation, init, ok, rebuild_from_sealed_history, seal,
     tag_create, unique_repo, verify,
 };
