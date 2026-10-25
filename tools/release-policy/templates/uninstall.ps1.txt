@@ -117,7 +117,16 @@ if (Test-Path -Path $markerPath -PathType Leaf) {
   # by an older install has no such line at all -- `$createdPathValue` is then `$false`, the exact
   # value every install before this one implicitly had, so an upgrade's own stale marker changes
   # nothing about how this script already behaved for it.
-  $markerText = Get-Content -Path $markerPath -Raw
+  #
+  # 0.55.0 step 1 item 1b (review 0.55.0-step-1-review-v1, condition 1b.1): `-ErrorAction
+  # SilentlyContinue`, not the file's own default `Stop` -- `Test-Path` above and this read are two
+  # separate calls, so the marker can still vanish between them, and Controls 2/3's own red
+  # perturbation forces exactly that shape (the existence check patched to always say "yes" with no
+  # real marker file ever written) to prove this branch's removal still runs without it. `$null
+  # -match '...'` evaluates to `$false` without raising -- a missing or unreadable marker reads as
+  # "this install did not create the value", the same safe default an older marker's own absent
+  # line already gives.
+  $markerText = Get-Content -Path $markerPath -Raw -ErrorAction SilentlyContinue
   $createdPathValue = [bool]($markerText -match 'created-path-value:\s*true')
   $rawPath = Get-RawUserPathEntry
   if ($rawPath.Value) {
