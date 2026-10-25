@@ -738,13 +738,62 @@ try {
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
   Remove-Item -Path $installDir5 -Recurse -Force -ErrorAction SilentlyContinue
 
-  # ===== Shape B (C2): the user Path value is absent entirely before install ====================
+  # ===== Shape B (C2, revised 0.55.0 step 1 item 5): the user Path value is absent entirely
+  # before install; after uninstall it must be absent again, not present-and-empty. =============
   Write-Host "-- Control 5, Shape B: Path value absent --"
   Remove-RawUserPathForTest
   $afterRemoveRaw = Get-RawUserPathForTest
   Write-RawPathState "Shape B seed (value deleted)" $afterRemoveRaw
   Assert-True (-not $afterRemoveRaw.Existed) "Shape B setup: the Path value does not exist before install.ps1 runs"
 
+  # --- RED (0.55.0 step 1 item 5): uninstall.ps1 perturbed back to its own pre-fix shape -- the
+  # unconditional write this round replaced, which never deleted the registry value outright. ----
+  $uninstallDeleteBranch = (@'
+      if ($kept.Count -eq 0 -and $createdPathValue) {
+        # This install created the Path value from nothing, and removing our own entry leaves it
+        # empty: delete the registry value entirely, restoring the pre-install state, rather than
+        # leaving an empty value that did not exist before this install ever ran.
+        $envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+        try {
+          $envKey.DeleteValue('Path', $false)
+        } finally {
+          $envKey.Close()
+        }
+        Send-EnvironmentChangeBroadcast
+      } else {
+        # Either other entries remain (kept, unchanged from before this item), or this is an older
+        # marker that never recorded creating the value (the old behaviour: write it back, possibly
+        # empty, never delete it).
+        Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind
+      }
+'@).Replace("`r`n", "`n").TrimEnd()
+  $oldUnconditionalWrite = '      Set-RawUserPathEntry -Value ($kept -join '';'') -Kind $rawPath.Kind'
+  $normalizedUninstallContent = $uninstallScriptContent.Replace("`r`n", "`n")
+  if (-not $normalizedUninstallContent.Contains($uninstallDeleteBranch)) {
+    throw "control 5 Shape B's item-5 write perturbation text was not found in uninstall.ps1 -- the template changed shape; update this script"
+  }
+  $perturbedUninstall5bContent = $normalizedUninstallContent.Replace($uninstallDeleteBranch, $oldUnconditionalWrite)
+  $env:PRIKK_INSTALL_DIR = $installDir5b
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18088"
+  $server5redb = Start-StaticFileServer -Directory $distDirResolved -Port 18088
+  try {
+    & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+    Assert-True ($LASTEXITCODE -eq 0) "Shape B RED setup: the real install.ps1 exits 0 with no Path value present beforehand"
+  } finally {
+    Stop-StaticFileServer $server5redb
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  }
+  $perturbedUninstall5bPath = Join-Path $scratchRoot "uninstall-perturbed-control5b.ps1"
+  Set-Content -Path $perturbedUninstall5bPath -Value $perturbedUninstall5bContent
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $perturbedUninstall5bPath
+  $redRawB = Get-RawUserPathForTest
+  Write-RawPathState "Shape B RED (perturbed uninstall)" $redRawB
+  Assert-True ($redRawB.Existed -and $redRawB.Value -ceq "") "RED: the perturbed uninstall.ps1 (pre-item-5 unconditional write) leaves the Path value present and empty, where the fixed script deletes it -- the control can fail"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+
+  # --- GREEN: the real install.ps1 and uninstall.ps1 ---------------------------------------------
+  Remove-RawUserPathForTest
   $env:PRIKK_INSTALL_DIR = $installDir5b
   $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18088"
   $server5c = Start-StaticFileServer -Directory $distDirResolved -Port 18088
@@ -763,17 +812,77 @@ try {
   Assert-True ($LASTEXITCODE -eq 0) "Shape B GREEN: the real uninstall.ps1 exits 0"
   $afterUninstallRawB = Get-RawUserPathForTest
   Write-RawPathState "Shape B GREEN uninstall" $afterUninstallRawB
-  # uninstall.ps1's own logic (traced from the template, not assumed): it reads the Path value,
-  # removes this installer's own entry from the split/filtered array, and writes the *kept* array
-  # back with `Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind` -- it never
-  # deletes the registry value outright. When the kept array is empty (as here, since the only
-  # entry present was this installer's own), that write still happens, with an empty string. So
-  # after uninstall the Path value is expected to still EXIST, as an empty REG_SZ, not be absent
-  # again.
-  Assert-True ($afterUninstallRawB.Existed) "Shape B GREEN: the Path value still exists after uninstall.ps1 runs (uninstall.ps1 writes an empty string back; it does not delete the registry value)"
-  Assert-True ($afterUninstallRawB.Value -ceq "") "Shape B GREEN: the Path value is empty after uninstall.ps1 runs"
-  Assert-True ($afterUninstallRawB.Kind -eq [Microsoft.Win32.RegistryValueKind]::String) "Shape B GREEN: the Path value's own registry kind is String (the kind Get-RawUserPathEntry reports, and install.ps1 then writes, when no value existed beforehand to read a kind from)"
+  # 0.55.0 step 1 item 5: install.ps1's marker now records that it created the Path value from
+  # nothing, and uninstall.ps1 reads that back -- removing its own entry leaves nothing else, so the
+  # registry value is deleted outright, not written back empty.
+  Assert-True (-not $afterUninstallRawB.Existed) "Shape B GREEN: the Path value is absent again after uninstall.ps1 runs (it was absent before install.ps1 ran, and install.ps1's own marker recorded that)"
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+
+  # ===== Shape D (0.55.0 step 1 item 5): no Path value before install, but another program adds
+  # an unrelated entry before uninstall runs -- the value must be kept, holding only that entry. ===
+  Write-Host "-- Control 5, Shape D: Path value absent before install, another entry added before uninstall --"
+  Remove-RawUserPathForTest
+  $afterRemoveRawD = Get-RawUserPathForTest
+  Assert-True (-not $afterRemoveRawD.Existed) "Shape D setup: the Path value does not exist before install.ps1 runs"
+
+  $installDir5d = Join-Path $scratchRoot "install-control5d"
+  $env:PRIKK_INSTALL_DIR = $installDir5d
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18088"
+  $server5d2 = Start-StaticFileServer -Directory $distDirResolved -Port 18088
+  try {
+    & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+    Assert-True ($LASTEXITCODE -eq 0) "Shape D GREEN: the real install.ps1 exits 0 with no Path value present beforehand"
+  } finally {
+    Stop-StaticFileServer $server5d2
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  }
+
+  # Another program (not this installer) adds its own entry, between install and uninstall.
+  $otherEntry = 'C:\some\other\program'
+  $afterInstallRawD = Get-RawUserPathForTest
+  $combinedValue = "$($afterInstallRawD.Value);$otherEntry"
+  Set-RawUserPathForTest -Value $combinedValue -Kind $afterInstallRawD.Kind
+  Write-RawPathState "Shape D after another program's own entry" (Get-RawUserPathForTest)
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "Shape D GREEN: the real uninstall.ps1 exits 0"
+  $afterUninstallRawD = Get-RawUserPathForTest
+  Write-RawPathState "Shape D GREEN uninstall" $afterUninstallRawD
+  Assert-True ($afterUninstallRawD.Existed) "Shape D GREEN: the Path value still exists after uninstall.ps1 runs (another entry remains)"
+  Assert-True ($afterUninstallRawD.Value -ceq $otherEntry) "Shape D GREEN: the Path value holds only the other program's own entry after uninstall.ps1 runs"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+
+  # ===== Old-marker compatibility (0.55.0 step 1 item 5): a marker written by a version before
+  # this one has no `created-path-value` line at all -- uninstall.ps1 must treat that exactly as
+  # "did not create", the behaviour every install before this one already had. ====================
+  Write-Host "-- Control 5, old-marker compatibility: a pre-0.55.0 marker has no created-path-value line --"
+  Remove-RawUserPathForTest
+  $installDir5e = Join-Path $scratchRoot "install-control5e"
+  $env:PRIKK_INSTALL_DIR = $installDir5e
+  $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18088"
+  $server5e = Start-StaticFileServer -Directory $distDirResolved -Port 18088
+  try {
+    # The real install.ps1 builds a genuine install directory and binary; only its own marker is
+    # then overwritten below, to the exact pre-0.55.0 shape, rather than hand-building the rest of
+    # a real install by hand.
+    & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+    Assert-True ($LASTEXITCODE -eq 0) "old-marker setup: the real install.ps1 exits 0"
+  } finally {
+    Stop-StaticFileServer $server5e
+    Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  }
+  # Overwrite the real marker install.ps1 just wrote with the exact free-text shape install.ps1
+  # wrote before this item -- no `created-path-value` line at all.
+  Set-Content -Path (Join-Path $installDir5e "path-added-by-install.marker") -Value "This file records that install.ps1 added $installDir5e to this user's PATH.`r`nuninstall.ps1 reads it to decide whether to remove that PATH entry.`r`nDelete it only if you understand why." -NoNewline
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "old-marker: the real uninstall.ps1 exits 0 against a pre-0.55.0 marker"
+  $afterOldMarkerRaw = Get-RawUserPathForTest
+  Write-RawPathState "old-marker after uninstall" $afterOldMarkerRaw
+  Assert-True ($afterOldMarkerRaw.Existed) "old-marker: the Path value still exists after uninstall.ps1 runs (no created-path-value line means 'did not create', the pre-0.55.0 behaviour)"
+  Assert-True ($afterOldMarkerRaw.Value -ceq "") "old-marker: the Path value is empty, written back exactly as a pre-0.55.0 install's own uninstall.ps1 already did"
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item -Path $installDir5e -Recurse -Force -ErrorAction SilentlyContinue
 
   # ===== Shape C (C2): two existing entries, one %VAR%-style and one literal =====================
   Write-Host "-- Control 5, Shape C: two existing entries, one %VAR%-style and one literal --"

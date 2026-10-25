@@ -84,7 +84,7 @@ Write-Host "prikk-install: running under PowerShell $($PSVersionTable.PSVersion)
 function Get-RawUserPathEntry {
   $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
   if ($null -eq $key) {
-    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String; Existed = $false }
   }
   try {
     $exists = $false
@@ -92,11 +92,11 @@ function Get-RawUserPathEntry {
       if ($name -eq 'Path') { $exists = $true; break }
     }
     if (-not $exists) {
-      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String; Existed = $false }
     }
     $kind = $key.GetValueKind('Path')
     $raw = $key.GetValue('Path', "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    return @{ Value = [string]$raw; Kind = $kind }
+    return @{ Value = [string]$raw; Kind = $kind; Existed = $true }
   } finally {
     $key.Close()
   }
@@ -298,7 +298,16 @@ try {
     # entry, and uninstall then removes nothing, which is harmless. uninstall.ps1's own order (remove
     # the PATH entry first, then the marker) is already the safe one for the same reason, in reverse:
     # a failed uninstall can simply be re-run, so it is left unchanged.
-    Set-Content -Path $markerPath -Value "This file records that install.ps1 added $installDir to this user's PATH.`r`nuninstall.ps1 reads it to decide whether to remove that PATH entry.`r`nDelete it only if you understand why." -NoNewline
+    #
+    # 0.55.0 step 1 item 5: the marker's own last line now records whether this install created the
+    # Path registry value from nothing (`-not $rawPath.Existed`, read above before this branch).
+    # uninstall.ps1 reads it to decide whether an empty remaining value should be deleted outright,
+    # rather than always writing an empty string back where none existed before. A marker written by
+    # an older install (no such line at all) is read by uninstall.ps1 as `false` -- the exact
+    # behaviour every install before this one already had, never a silent change for an existing
+    # install this version never touches.
+    $createdPathValue = if ($rawPath.Existed) { "false" } else { "true" }
+    Set-Content -Path $markerPath -Value "This file records that install.ps1 added $installDir to this user's PATH.`r`nuninstall.ps1 reads it to decide whether to remove that PATH entry.`r`nDelete it only if you understand why.`r`ncreated-path-value: $createdPathValue" -NoNewline
     Set-RawUserPathEntry -Value $newPath -Kind $rawPath.Kind
     # install.sh does not prompt before appending to a shell rc file; this script follows the same
     # rule and does not prompt before this PATH change either -- see the report for the open

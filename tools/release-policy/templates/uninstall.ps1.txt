@@ -41,7 +41,7 @@ Write-Host "prikk-uninstall: running under PowerShell $($PSVersionTable.PSVersio
 function Get-RawUserPathEntry {
   $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $false)
   if ($null -eq $key) {
-    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+    return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String; Existed = $false }
   }
   try {
     $exists = $false
@@ -49,11 +49,11 @@ function Get-RawUserPathEntry {
       if ($name -eq 'Path') { $exists = $true; break }
     }
     if (-not $exists) {
-      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String }
+      return @{ Value = ""; Kind = [Microsoft.Win32.RegistryValueKind]::String; Existed = $false }
     }
     $kind = $key.GetValueKind('Path')
     $raw = $key.GetValue('Path', "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    return @{ Value = [string]$raw; Kind = $kind }
+    return @{ Value = [string]$raw; Kind = $kind; Existed = $true }
   } finally {
     $key.Close()
   }
@@ -111,6 +111,14 @@ if (Test-Path -Path $binaryPath -PathType Leaf) {
 # to it and is left untouched, exactly as the handoff requires.
 $removedPathEntry = $false
 if (Test-Path -Path $markerPath -PathType Leaf) {
+  # 0.55.0 step 1 item 5: a marker written by this version (or later) of install.ps1 carries its
+  # own `created-path-value: true|false` line (`-match`, not an exact line comparison, so trailing
+  # whitespace or a line-ending difference never turns a real match into a miss). A marker written
+  # by an older install has no such line at all -- `$createdPathValue` is then `$false`, the exact
+  # value every install before this one implicitly had, so an upgrade's own stale marker changes
+  # nothing about how this script already behaved for it.
+  $markerText = Get-Content -Path $markerPath -Raw
+  $createdPathValue = [bool]($markerText -match 'created-path-value:\s*true')
   $rawPath = Get-RawUserPathEntry
   if ($rawPath.Value) {
     # Part 6a3 (review 0.54.0-step-3-part-6a2-review-v1, condition C1): wrapped in @(...), for the
@@ -126,7 +134,23 @@ if (Test-Path -Path $markerPath -PathType Leaf) {
       # scalar still produces the right string by coincidence, but $kept should be an array on its
       # own terms, not by accident of what -join happens to do with a non-collection input.
       $kept = @($entries | Where-Object { $_ -ne $installDir })
-      Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind
+      if ($kept.Count -eq 0 -and $createdPathValue) {
+        # This install created the Path value from nothing, and removing our own entry leaves it
+        # empty: delete the registry value entirely, restoring the pre-install state, rather than
+        # leaving an empty value that did not exist before this install ever ran.
+        $envKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+        try {
+          $envKey.DeleteValue('Path', $false)
+        } finally {
+          $envKey.Close()
+        }
+        Send-EnvironmentChangeBroadcast
+      } else {
+        # Either other entries remain (kept, unchanged from before this item), or this is an older
+        # marker that never recorded creating the value (the old behaviour: write it back, possibly
+        # empty, never delete it).
+        Set-RawUserPathEntry -Value ($kept -join ';') -Kind $rawPath.Kind
+      }
       $removedPathEntry = $true
       Write-Host "prikk-uninstall: removed the PATH entry for $installDir"
     }

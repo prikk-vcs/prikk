@@ -15,6 +15,14 @@
   `damaged-repository` — the repository was never damaged in this case; the parent simply has not
   arrived.
 
+### Fixed
+
+- **The Windows uninstaller left an empty `Path` value where none existed before install,** when
+  this installer's own entry was the only one present. The installer's own marker now records
+  whether it created the value from nothing; the uninstaller deletes the value only when the
+  marker says so and nothing else remains in it. Any other value, or a marker from an older
+  install with no such record, is left exactly as it already was.
+
 ## 0.54.1 — 2026-10-24
 
 ### Fixed

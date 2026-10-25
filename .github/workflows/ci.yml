@@ -315,31 +315,15 @@ jobs:
   windows-installer:
     name: Windows installer/uninstaller test
     runs-on: windows-latest
-    # Part 6a4 (review 0.54.0-step-3-part-6a3-review-v1, condition C2): was 20. Run `39701403131`
-    # was cut off at that limit mid-way through the first (5.1) pass, during Control 5, with 38
-    # PASS and 0 FAIL -- the review's own account attributes the overrun to
-    # `windows-installer-test.ps1`'s own server teardown (about 2 minutes per
-    # Start-StaticFileServer/Stop-StaticFileServer pair, confirmed flat: "Control 4, with
-    # [4] servers, took 8 minutes"), not this job's build/package/generate steps or the installer
-    # logic itself, and that teardown is what Part 6a4 fixes (see `scripts/windows-installer-
-    # test.ps1`'s own Start-/Stop-StaticFileServer comments). This value is a REASONED ESTIMATE,
-    # not a measurement -- no `pwsh`/`powershell` exists in the Linux environment this round was
-    # written in, so the fix could not be timed directly. Reasoning: this job's own
-    # Build/Package/Generate-installer steps are not measured either, but release.yml's own
-    # equivalent build+package job for this same target (`build (x86_64-pc-windows-msvc)`) runs
-    # under a 5-minute timeout across real releases, so 8 minutes is a generous allowance for this
-    # job's version of that (plus the extra `generate-installer` step, plus this job's own
-    # checkout/toolchain/cache overhead). With the ~2-minute-per-server teardown gone (replaced by
-    # a `/__stop` HTTP round-trip bounded by a 10-second `Wait-Job -Timeout`), the file's 10
-    # Start-/Stop-StaticFileServer pairs per pass should cost at most about 2 minutes total per
-    # pass worst-case, not 20; the genuine install/uninstall/assertion work itself was already fast
-    # ("each install and uninstall takes seconds" per the review) -- call it 5 minutes per pass to
-    # cover the ~20+ child-process spawns (`& $enginePath -File ...`) each pass makes. That totals
-    # roughly 8 (setup) + 2 x (5 + 2) (two passes) = 22 minutes of estimated real work; doubling
-    # that for the review's own "about 2x" margin gives about 44, rounded up to 45. Like the
-    # macOS/Windows mutation jobs' own timeout history in this file, this is a first value: the
-    # architect reads the next real run and this number gets corrected if it is wrong.
-    timeout-minutes: 45
+    # 0.55.0 step 1 item 5: was 45 (Part 6a4's own reasoned estimate, never measured against a
+    # real run at the time it was set). This job has since run green many times; its last five
+    # green runs (`gh run view <id> --json jobs`, the "Windows installer/uninstaller test" job's
+    # own `startedAt`/`completedAt`) took 7m14s (job `121046663398`), 4m41s (`121041628956`), 7m03s
+    # (`121038004251`), 7m33s (`121032778065`), and 7m06s (`121006479714`) -- about 4.7 to 7.5
+    # minutes, not the 22 minutes of estimated work the 45-minute figure was built from. 20 minutes
+    # keeps roughly 2.65x headroom over the slowest of these five real runs, the same margin
+    # discipline the macOS/Windows mutation jobs' own timeout history in this file already follows.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
