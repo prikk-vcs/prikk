@@ -5,7 +5,10 @@ use prikk_object::{ObjectEnvelope, ObjectType};
 use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
 use crate::test_gates::test_support::{dummy_signature, text_replay_manifest, unique_temp_dir};
 use crate::worktree::materialize_replay_manifest_entries;
-use crate::{ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RepositoryLayout};
+use crate::{
+    ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RepositoryLayout,
+    write_active_ref_metadata,
+};
 
 /// RFC 102 Stage 5, design-v1.md §14.10: `FORMAT` now goes through `create_new_file_required`
 /// (`create_exclusive`), the same primitive every other `init`-time name uses -- `MutableParentSync`
@@ -111,15 +114,28 @@ fn object_write_sync_failure_retains_and_classifies() -> prikk_error::Result<()>
 // is no longer a `RequiredDirectorySync` point on this call path; `wal::tests::wal_file_sync_
 // failure_retains_replayable_record` already covers the sibling file-sync failure, unchanged.
 
-// `active_metadata_parent_sync_failure_retains_and_retries` removed, 0.55.0 step 3 Part 2:
-// `write_active_ref_metadata` truncates (still directory-synced, unchanged by this part), then
-// appends through `durable_append_reporting_offset`, which no longer syncs the directory at all
-// (RFC 102 §3 -- the file is permanent from `init`, so the append never creates a directory
-// entry). This test's property ("the write landed, only its confirmation failed") specifically
-// targeted the append's own directory sync (skip 1); that sync no longer exists, and injecting at
-// the truncate's own directory sync (skip 0) instead fails before any content is written at all,
-// a different property this test was not about. No replacement: `RequiredFileSync` failures on
-// this path are covered by the generic object/WAL file-sync matrix rows elsewhere in this file.
+/// 0.55.0 step 3 Part 3a (G1): retargeted from `RequiredDirectorySync` to `RequiredFileSync`.
+/// `write_active_ref_metadata` truncates (`RequiredFileSync` occurrence 1, still directory-synced
+/// afterward too -- `durable_truncate_to_empty` is a different primitive, unchanged by Part 2),
+/// then appends through `durable_append_reporting_offset` (`RequiredFileSync` occurrence 2, and no
+/// directory sync at all any more -- RFC 102 §3). Skip 1 lands on the append's own file sync, not
+/// the truncate's -- verified empirically (skip 0 fails before any content is written at all, a
+/// red control this report cites), not merely reasoned, the same way the original directory-sync
+/// skip of 1 was.
+#[test]
+fn active_metadata_file_sync_failure_retains_and_retries() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("active-sync-matrix");
+    let layout = RepositoryLayout::init(root.clone())?;
+    fail_after_for_test(TestFailPoint::RequiredFileSync, 1);
+    assert!(write_active_ref_metadata(&layout, "heads/main").is_err());
+    assert_eq!(
+        std::fs::read(layout.default_active_ref_name_path())?,
+        b"heads/main"
+    );
+    assert!(write_active_ref_metadata(&layout, "heads/main").is_ok());
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
 
 // `ref_log_parent_sync_failure_retains_one_update_and_retries` removed, 0.55.0 step 3 Part 2:
 // every append on this path (the object container, the object index, the pointer index, and the

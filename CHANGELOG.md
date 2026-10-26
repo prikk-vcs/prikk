@@ -31,6 +31,23 @@ files**:
 
 At 100,000 objects, `verify` goes from about 9 s to about 3 s (tmpfs).
 
+### Changed — writing to a repository syncs less to disk
+
+Every operation that writes more than one thing in a single command — `commit`, `bundle import`,
+`sync accept`, publishing a ref, and changing trusted maintainers — now confirms its writes to disk
+with fewer sync calls. Nothing about what survives a crash changes: every write is still durable
+before the next one begins.
+
+**Measured on real disk, release build, alternated before/after rounds, one commit or import of
+1,000 files/objects**:
+
+| | before | after |
+|---|---|---|
+| `commit` | 16.0–19.8 s | 7.4–14.1 s |
+| `bundle import` | 18.0–36.3 s | 7.2–14.0 s |
+
+About twice as fast; the disk is noisy, but the direction held in every round.
+
 ### Fixed
 
 - **The Windows uninstaller left an empty `Path` value where none existed before install,** when

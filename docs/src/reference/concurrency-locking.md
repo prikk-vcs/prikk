@@ -258,8 +258,11 @@ The current model is conservative:
   those, even though their per-ref locks differ;
 - one writer or one `prikk compact` run can hold each of the four compaction-related container
   locks;
-- one object append at a time holds the object-store lock, so two commands that both write objects
-  serialize against each other: the second is refused with `lock conflict` rather than queued;
+- the object-store lock serializes two commands that both write objects against each other: the
+  second is refused with `lock conflict` rather than queued. A command that writes many objects in
+  one call (`commit`, `bundle import`, `sync accept`) holds it once across that whole write, not
+  once per object (0.55.0 step 3 Part 2) — a concurrent writer meets the refusal for that whole
+  span rather than only in the gaps between objects;
 - the default active WAL still serializes public command flows that author then seal active state;
 - read-only verification, doctor analysis, history inspection, checkout planning, merge evidence, and
   merge planning do not create these lock files, though they still read mutable repository state.

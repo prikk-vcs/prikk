@@ -35,9 +35,9 @@ Release-transaction durability, artifact identity, and evidence limits are docum
 ## Commit Persistence Boundary
 
 A successful `commit` appends an exact signed Patch envelope to the active WAL. The WAL append path
-rejects non-Patch envelopes and unsigned Patch envelopes, writes a checksummed record, required-syncs
-the WAL file, and required-syncs the parent directory after every append. Any required
-file or directory sync failure returns an operation failure while retaining written state for replay.
+rejects non-Patch envelopes and unsigned Patch envelopes, writes a checksummed record, and
+required-syncs the WAL file. Any required file sync failure returns an operation failure while
+retaining written state for replay.
 
 That is the active-session persistence boundary. It does not mean the Patch is sealed into a Block, a
 RefState has been published, a ref pointer moved, or the active WAL has been drained. Sealed history is
@@ -599,7 +599,7 @@ production-readiness claims. Single-ref backup/restore tooling is no longer defe
 
 | Claim | Source anchors |
 |---|---|
-| Commit persistence appends exact signed Patch envelopes to the active WAL, required-syncs the WAL file, and required-syncs the parent directory after every append. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
+| Commit persistence appends exact signed Patch envelopes to the active WAL and required-syncs the WAL file. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
 | WAL replay reports incomplete trailing bytes separately from complete-record checksum failures. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [PR-004](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-004-WAL-HANDOFF.md), [PR-006](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-006-VERIFY-HANDOFF.md) |
 | WAL-tail repair truncates only a trailing prefix of the last frame, preserving every complete, sound record behind it; a damaged record with sound records behind it refuses rather than truncating past it (unchanged since RFC 162), and since RFC 166 it also refuses rather than remove a record the active session's own commit witness already names as acknowledged. | [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [`commit_boundary/classification.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/classification.rs), [PR-012](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/PR-012-DOCTOR-REPAIR-HANDOFF.md), [RFC 166](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/166-a-queued-commit-has-a-witness.md) |
 | `--discard-damaged-commits` removes an acknowledged commit the active WAL no longer holds soundly, or declares it lost, saving the removed bytes first, all-or-nothing, the same way `--repair-wal-tail` does; `--restore-queue-target --ref <ref> [--not-current-branch]` gives an owned queue its owner back by rewriting the active ref metadata in place, after saving its previous bytes to `recovery/log`, with the ref always supplied by the caller, never read from the witness, and accepted only when a readable commit record agrees or (absent one) it is the caller's own current branch or `--not-current-branch` is given (RFC 166 §14). Both are `--plan-only`-previewable and refuse, writing nothing, over every row they do not act on. | [`doctor/discard_damaged_commits.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/discard_damaged_commits.rs), [`doctor/restore_queue_target.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor/restore_queue_target.rs), [RFC 166 D5/§14](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/166-a-queued-commit-has-a-witness.md) |
