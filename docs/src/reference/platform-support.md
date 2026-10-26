@@ -304,10 +304,9 @@ count is smaller than `stable`'s. The gates that remain, by name:
   failpoint only where a directory can be synced (Linux, macOS), and Windows has no such operation. The tests that
   inject one are gated `not(windows)` (or, for the `caller_tests` module as a whole, the equivalent
   `any(target_os = "linux", target_os = "macos")`) and run on macOS: among them the lock, active-metadata and
-  patch-checkout retry tests. 0.55.0 step 3 Part 2 removed the directory sync from every append (every name a
-  `prikk` repository ever appends to already exists by the time it is appended to, RFC 102 §3), so the WAL, trust
-  and refs tests that used to inject this point on an append no longer have one there; Part 3a retargeted each to
-  its own surviving `RequiredFileSync` injection point on the same call path instead, or confirmed one already
+  patch-checkout retry tests. An append never creates a name, so it syncs only the file (RFC 102 §3) — the WAL,
+  trust and refs tests that used to inject this point on an append no longer have one there; each was retargeted
+  to its own surviving `RequiredFileSync` injection point on the same call path instead, or confirmed one already
   existed.
 - **Unix (macOS and Linux), by necessity: symlink creation.** `a_symlinked_witness_path_refuses_the_same_way_every_other_session_file_does`
   creates a symlink, which macOS allows and Windows allows only with a privilege.

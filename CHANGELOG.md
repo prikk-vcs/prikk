@@ -33,9 +33,10 @@ At 100,000 objects, `verify` goes from about 9 s to about 3 s (tmpfs).
 
 ### Changed — writing to a repository syncs less to disk
 
-Every operation that writes more than one thing in a single command — `commit`, `bundle import`,
-`sync accept`, publishing a ref, and changing trusted maintainers — now confirms its writes to disk
-with fewer sync calls. Nothing about what survives a crash changes: every write is still durable
+Writing to a repository now makes fewer sync calls to disk, confirming the same durability with
+less overhead — even a single write is affected, and `commit`, `bundle import`, `sync accept`,
+publishing a ref, and changing trusted maintainers, which each write several things in one call,
+are affected most. Nothing about what survives a crash changes: every write is still durable
 before the next one begins.
 
 **Measured on real disk, release build, alternated before/after rounds, one commit or import of
