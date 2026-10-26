@@ -60,6 +60,12 @@
     --rule:#333a34; --btn-ink:#1c201d;
   }
   *{box-sizing:border-box}
+  /* 0.55.0 step 3 Part 3a (G4): the browser's own `[hidden]{display:none}` is a user-agent rule,
+     the weakest specificity there is -- any author rule that sets `display` on the same element
+     (`.install-block{display:grid;...}` below) wins over it, so a panel the tab script marks
+     `hidden` stayed a visible grid. Restated here, once, for every element on the page rather than
+     patched per-class, so a later class that sets its own `display` cannot reopen this. */
+  [hidden]{display:none !important}
   body{
     margin:0; background:var(--cream); color:var(--ink);
     font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
@@ -466,11 +472,15 @@
       <p class="eyebrow">Get started</p>
       <h2>Try Prikk</h2>
       <!-- Windows installer handoff v1 Part 6b: both panels are unconditionally in the markup,
-           and neither is hidden by any CSS rule -- only the inline script below ever sets the
-           `hidden` attribute. A reader with JavaScript disabled or blocked therefore sees both
-           commands, each under its own platform heading, and is never stuck; the tablist/arrow-key
-           behaviour and the platform-based default selection are a pure enhancement on top of
-           that, never a requirement for either command to be reachable. -->
+           and neither is hidden by any class-based CSS rule of its own -- only the inline script
+           below ever sets the `hidden` attribute. A reader with JavaScript disabled or blocked
+           therefore sees both commands, each under its own platform heading, and is never stuck;
+           the tablist/arrow-key behaviour and the platform-based default selection are a pure
+           enhancement on top of that, never a requirement for either command to be reachable.
+           0.55.0 step 3 Part 3a (G4): once the script does set `hidden`, the page-wide
+           `[hidden]{display:none !important}` rule above is what actually hides the inactive
+           panel -- `.install-block{display:grid;...}` otherwise outranks the browser's own
+           default `[hidden]` styling, the defect this part fixed. -->
       <div class="tabs" role="tablist" aria-label="Install command, by platform">
         <button class="tab" type="button" id="tab-unix" role="tab"
           aria-selected="true" aria-controls="panel-unix" tabindex="0">macOS / Linux</button>
