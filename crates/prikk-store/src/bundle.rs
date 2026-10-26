@@ -978,6 +978,8 @@ pub fn import_bundle(
     // loop (0.55.0 step 3 Part 2), so `write_object_under_held_lock` only re-checks that the lock is
     // still held, rather than acquiring and releasing it once per object.
     let mut written_object_count = 0_usize;
+    #[cfg(feature = "test-support")]
+    let mut test_support_objects_written_so_far = 0_usize;
     for envelope in &admission_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
@@ -986,6 +988,12 @@ pub fn import_bundle(
             })?;
         }
         object_store.write_object_under_held_lock(envelope, &_container_locks)?;
+        #[cfg(feature = "test-support")]
+        {
+            test_support_objects_written_so_far =
+                test_support_objects_written_so_far.saturating_add(1);
+            block_after_n_objects_for_real_kill_test(test_support_objects_written_so_far);
+        }
     }
 
     #[cfg(test)]
@@ -1015,6 +1023,37 @@ pub fn import_bundle(
         dropped_signatures: admission.dropped,
         recorded_author_key_count,
     })
+}
+
+/// 0.55.0 step 3 Part 3a (R6): the one seam reachable from a real, separately compiled `prikk`
+/// process, gated by the `test-support` feature (never the shipped binary) rather than
+/// `#[cfg(test)]` (which only ever compiles into this crate's own unit-test binary) -- the same
+/// shape `archive::import`'s own `block_after_n_objects_for_real_kill_test` already uses, for the
+/// identical reason: a seam that returns `Err` lets `Drop` release every lock normally, and a real
+/// crash does not.
+///
+/// A no-op unless `PRIKK_BUNDLE_IMPORT_BLOCK_AFTER_N_FOR_TEST` is set to `total_objects_written`'s
+/// own value -- read fresh on every call, the same reasoning as the archive-import twin. When it
+/// matches: writes a marker file at the path named by `PRIKK_BUNDLE_IMPORT_BLOCKED_MARKER_FOR_TEST`,
+/// then blocks forever, so the harness's own real `SIGKILL` leaves real lock files on disk the way
+/// an actual crash would.
+#[cfg(feature = "test-support")]
+fn block_after_n_objects_for_real_kill_test(total_objects_written: usize) {
+    let Ok(block_after) = std::env::var("PRIKK_BUNDLE_IMPORT_BLOCK_AFTER_N_FOR_TEST") else {
+        return;
+    };
+    let Ok(block_after) = block_after.parse::<usize>() else {
+        return;
+    };
+    if block_after != total_objects_written {
+        return;
+    }
+    if let Ok(marker_path) = std::env::var("PRIKK_BUNDLE_IMPORT_BLOCKED_MARKER_FOR_TEST") {
+        let _ = std::fs::write(marker_path, b"blocked\n");
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 /// The object model's own acyclic reference order (0.49.0 step 0, finding 3): a `Block` names

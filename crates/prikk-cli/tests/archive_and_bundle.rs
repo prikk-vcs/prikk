@@ -3,6 +3,10 @@
 //! and this grouping file's `mod` line are new. See the module's own file under
 //! `tests/archive_and_bundle/` for its own doc comment.
 
+#[path = "archive_and_bundle/bundle_import_fifo_input.rs"]
+mod bundle_import_fifo_input;
+#[path = "archive_and_bundle/bundle_import_real_kill.rs"]
+mod bundle_import_real_kill;
 #[path = "archive_and_bundle/bundle_import_refuses_before_writing.rs"]
 mod bundle_import_refuses_before_writing;
 #[path = "archive_and_bundle/dc44_bundle_export_durability.rs"]
