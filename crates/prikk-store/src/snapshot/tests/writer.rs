@@ -30,8 +30,8 @@ use crate::{
     compute_patch_set_digest_from_block, execute_merge, export_bundle,
     materialize_patch_checkout_with_deletions, materialize_snapshot_checkout,
     plan_patch_checkout_deletions, prepare_patch_inverse_plan, prepare_patch_plan_content_report,
-    prepare_patch_replay_plan, prepare_rollback_preview, preview_bundle, show, switch_branch,
-    verify_repository, write_active_ref_metadata,
+    prepare_patch_replay_plan, prepare_rollback_preview, show, switch_branch, verify_repository,
+    write_active_ref_metadata,
 };
 
 const MAIN: &str = "heads/main";
@@ -392,7 +392,7 @@ fn every_report(sealer: &Sealer) -> Result<Vec<(&'static str, String)>> {
     let (_, bundle) = export_bundle(layout, MAIN)?;
     let target_root = unique_temp_dir("rfc136-1b-preview-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let preview = preview_bundle(
+    let preview = crate::bundle::preview_bundle_from_bytes(
         &target,
         &bundle,
         &BundleImportOptions::default_limits(),
@@ -735,12 +735,13 @@ fn anchored_read_only_reports_equal_the_same_reports_replayed_from_genesis() -> 
             crate::prepare_patch_plan_content_report_reporting_anchor(layout, MAIN, &requested)?;
         let (deletions, deletion_fallback) =
             crate::plan_patch_checkout_deletions_reporting_anchor(layout, MAIN)?;
-        let (preview, preview_fallbacks) = crate::preview_bundle_reporting_anchor(
-            &target,
-            &bundle,
-            &BundleImportOptions::default_limits(),
-            MAIN,
-        )?;
+        let (preview, preview_fallbacks) =
+            crate::bundle::preview_bundle_reporting_anchor_from_bytes(
+                &target,
+                &bundle,
+                &BundleImportOptions::default_limits(),
+                MAIN,
+            )?;
         let _ = std::fs::remove_dir_all(target_root);
         assert!(
             plan_fallback.is_none()

@@ -34,9 +34,7 @@ use std::path::PathBuf;
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
-use crate::bounded_read::{
-    SizeBound, open_bundle_source, read_bounded_file, render_incoming_error,
-};
+use crate::bounded_read::{SizeBound, open_bundle_source, render_incoming_error};
 use crate::commands::CliError;
 use crate::config::resolve_max_object_bytes;
 use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
@@ -150,8 +148,11 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_preview_args(args)?;
     let layout = crate::open_repository(root)?;
-    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
-    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    // 0.55.0 step 3 Part 3b-iii: a regular file stays an open, seekable handle, the same as
+    // `bundle import` -- memory follows the bundle's decoded content, not a second raw-bytes copy
+    // of the whole file. A non-regular input (a FIFO, a pipe) is still fully buffered and bounded
+    // before a byte reaches the store, exactly as before.
+    let mut source = open_bundle_source("bundle", &parsed.input, &bundle_total_size_bound()?)?;
     let object_bound = resolve_max_object_bytes(
         parsed.max_object_bytes,
         Some(&layout),
@@ -161,7 +162,7 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
     // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
     let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
     let (report, anchor_fallbacks) =
-        prikk_store::preview_bundle_reporting_anchor(&layout, &bytes, &options, &ref_name)
+        prikk_store::preview_bundle_reporting_anchor(&layout, &mut source, &options, &ref_name)
             .map_err(|err| render_incoming_error(err, &object_bound))?;
     // RFC 136 §10.3b.4: a snapshot the preview could not anchor at is named on stderr.
     crate::warn_anchor_fallbacks(anchor_fallbacks.iter());
@@ -230,8 +231,10 @@ fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, Cli
 
 fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_verify_args(args)?;
-    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
-    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    // 0.55.0 step 3 Part 3b-iii: a regular file stays an open, seekable handle (same as `bundle
+    // import`/`bundle preview`). A non-regular input (a FIFO, a pipe) is still fully buffered and
+    // bounded before a byte reaches the store, exactly as before.
+    let mut source = open_bundle_source("bundle", &parsed.input, &bundle_total_size_bound()?)?;
     // No repository (this command's own module doc: `run_verify` never calls `open_repository`),
     // so `prikk config` never applies here and never appears in this refusal (handoff §3).
     let object_bound = resolve_max_object_bytes(
@@ -240,8 +243,8 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
         DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     )?;
     let options = bundle_import_options(&object_bound)?;
-    let report =
-        verify_bundle(&bytes, &options).map_err(|err| render_incoming_error(err, &object_bound))?;
+    let report = verify_bundle(&mut source, &options)
+        .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("bundle verifies: {}", report.ref_name);
     println!("RefState: {}", report.ref_state_id);
     println!("tip block: {}", report.tip_block_id);
@@ -314,7 +317,9 @@ fn parse_verify_args(args: Vec<String>) -> std::result::Result<VerifyArgs, CliEr
 }
 
 /// DC-86: the bundle's total-byte bound from `PRIKK_BUNDLE_MAX_BYTES`, with a description of where
-/// it came from (RFC 158 Stage A §2) for [`crate::bounded_read::read_bounded_file`]'s own refusal.
+/// it came from (RFC 158 Stage A §2) for [`crate::bounded_read::open_bundle_source`]'s own
+/// refusal -- shared by all three commands that read a bundle (`import`, `preview`, `verify`,
+/// 0.55.0 step 3 Part 3b-iii).
 fn bundle_total_size_bound() -> std::result::Result<SizeBound, CliError> {
     Ok(SizeBound::from_env(
         "PRIKK_BUNDLE_MAX_BYTES",

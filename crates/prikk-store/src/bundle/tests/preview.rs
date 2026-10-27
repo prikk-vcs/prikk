@@ -1,7 +1,7 @@
 //! RFC 144 §4m — `bundle preview` controls.
 //!
 //! Two independent repositories throughout: `source` is where a bundle gets exported from,
-//! `local` is the repository `preview_bundle` is run against. `fork_repo` copies one onto the
+//! `local` is the repository `preview_bundle_from_bytes` is run against. `fork_repo` copies one onto the
 //! other's own disk state at a chosen point, so the two can share genesis and then diverge
 //! independently -- exactly the shape connectivity/conflict controls need.
 
@@ -16,7 +16,7 @@ use prikk_object::{
 
 use crate::bundle::{
     BundleImportOptions, BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffectKind,
-    export_bundle, preview_bundle,
+    export_bundle, preview_bundle_from_bytes,
 };
 use crate::test_gates::test_support::{
     dummy_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
@@ -182,11 +182,11 @@ fn bundle_preview_writes_nothing() {
     let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
 
     let (local_layout, local_root) = fork_repo(&source_root, "rfc144-preview-write-nothing-local");
-    let _ = local_layout; // exists only to prove `preview_bundle` needs no separate construction step
+    let _ = local_layout; // exists only to prove `preview_bundle_from_bytes` needs no separate construction step
 
     let before = directory_digest(&local_root);
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(
+    let report = preview_bundle_from_bytes(
         &RepositoryLayout::init(local_root.clone()).unwrap(),
         &bytes,
         &options,
@@ -222,7 +222,7 @@ fn bundle_preview_write_nothing_control_can_fail() {
 
     let before = directory_digest(&local_root);
     // Perturbation: something writes into the local repository during what the real control
-    // treats as a read-only call. Simulated directly (not by editing `preview_bundle` itself,
+    // treats as a read-only call. Simulated directly (not by editing `preview_bundle_from_bytes` itself,
     // which the write-nothing control above already proves does not do this) to prove the
     // digest-comparison mechanism itself is sensitive to a real write, not just a passing shape.
     let mut object_store = FileObjectStore::new(local_layout.clone());
@@ -253,7 +253,7 @@ fn does_not_connect_is_reported_not_errored() {
     let (local_layout, local_root) = unrelated_genesis_repo("rfc144-preview-disconnect-local");
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(
         report.connectivity,
         BundlePreviewConnectivity::DoesNotConnect
@@ -284,7 +284,7 @@ fn fast_forward_reports_the_new_file_as_created() {
     let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(report.connectivity, BundlePreviewConnectivity::FastForward);
     assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
     assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
@@ -329,7 +329,7 @@ fn diverged_with_disjoint_paths_applies_cleanly() {
     let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(report.connectivity, BundlePreviewConnectivity::Diverged);
     assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
     assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
@@ -371,7 +371,7 @@ fn diverged_with_the_same_path_reports_a_conflict_not_a_wrong_answer() {
     let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(report.connectivity, BundlePreviewConnectivity::Diverged);
     match &report.conflict {
         Some(BundlePreviewConflict::Conflict { detail }) => {
@@ -415,7 +415,7 @@ fn already_included_reports_no_effects() {
     .unwrap();
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(
         report.connectivity,
         BundlePreviewConnectivity::AlreadyIncluded
@@ -442,7 +442,7 @@ fn no_local_history_reports_the_whole_bundle_as_created() {
 
     let before = directory_digest(&local_root);
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(
         report.connectivity,
         BundlePreviewConnectivity::NoLocalHistory
@@ -482,7 +482,8 @@ fn a_ref_name_that_never_existed_behaves_the_same_as_an_unpublished_one() {
         genesis_repo("rfc144-preview-no-history-neighbour-local");
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/does-not-exist").unwrap();
+    let report =
+        preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/does-not-exist").unwrap();
     assert_eq!(
         report.connectivity,
         BundlePreviewConnectivity::NoLocalHistory
@@ -502,7 +503,7 @@ fn sealed_by_reports_the_maintainer_key_id() {
     let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
 
     let options = BundleImportOptions::default_limits();
-    let report = preview_bundle(&local_layout, &bytes, &options, "heads/main").unwrap();
+    let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert!(
         !report.sealed_by.is_empty(),
         "the bundle's own RefState is maintainer-signed; sealed_by must report it"

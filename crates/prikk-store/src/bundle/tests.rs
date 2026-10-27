@@ -19,6 +19,7 @@ use crate::bundle::{
     DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle,
     encode_bundle_v1_for_test, encode_bundle_v2_for_test, export_bundle,
     first_over_bound_object_index, import_bundle, import_bundle_from_bytes, verify_bundle,
+    verify_bundle_from_bytes,
 };
 use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 use crate::foundation::fsutil::len_to_u64;
@@ -1649,7 +1650,8 @@ fn a_pbndl002_bundle_imports_with_no_manifest_but_recorded_author_key_material()
     let v2_bytes = encode_bundle_v2_for_test(&ref_name, &objects, &author_keys)?;
 
     // `verify_bundle` sees no manifest at all -- absence, not a decode failure (§4.2).
-    let verify_report = verify_bundle(&v2_bytes, &BundleImportOptions::default_limits())?;
+    let verify_report =
+        verify_bundle_from_bytes(&v2_bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(verify_report.manifest, None);
     assert_eq!(verify_report.author_key_count, 1);
 
@@ -1760,7 +1762,7 @@ fn a_manifest_that_disagrees_with_the_payload_is_refused_by_verify_and_import()
         &author_keys,
         &manifest,
     )?;
-    assert!(verify_bundle(&wrong_count_bytes, &options).is_err());
+    assert!(verify_bundle_from_bytes(&wrong_count_bytes, &options).is_err());
     let target = RepositoryLayout::init(target_root.clone())?;
     assert!(import_bundle_from_bytes(&target, &wrong_count_bytes, &options).is_err());
     assert!(
@@ -1771,7 +1773,7 @@ fn a_manifest_that_disagrees_with_the_payload_is_refused_by_verify_and_import()
     // Case 2: the manifest's declared ref name disagrees with the bundle's own header ref name.
     let wrong_header_bytes =
         encode_bundle_with_wrong_manifest_ref_name(&ref_name, &objects, &author_keys, &manifest)?;
-    assert!(verify_bundle(&wrong_header_bytes, &options).is_err());
+    assert!(verify_bundle_from_bytes(&wrong_header_bytes, &options).is_err());
     assert!(import_bundle_from_bytes(&target, &wrong_header_bytes, &options).is_err());
 
     // Case 3: the manifest's declared ref name disagrees with the exported RefState's own signed
@@ -1780,7 +1782,7 @@ fn a_manifest_that_disagrees_with_the_payload_is_refused_by_verify_and_import()
     let mismatched_signed_name = format!("{ref_name}-does-not-exist");
     let bytes_with_mismatched_header =
         encode_bundle(&mismatched_signed_name, &objects, &author_keys, &manifest)?;
-    assert!(verify_bundle(&bytes_with_mismatched_header, &options).is_err());
+    assert!(verify_bundle_from_bytes(&bytes_with_mismatched_header, &options).is_err());
     assert!(import_bundle_from_bytes(&target, &bytes_with_mismatched_header, &options).is_err());
 
     let _ = std::fs::remove_dir_all(source_root);
@@ -2121,7 +2123,7 @@ fn verify_of_a_real_export_succeeds_and_matches_the_export_report() -> prikk_err
     .target_object_id;
     let (export_report, bytes) = export_bundle(&source, "heads/main")?;
 
-    let verify_report = verify_bundle(&bytes, &BundleImportOptions::default_limits())?;
+    let verify_report = verify_bundle_from_bytes(&bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(verify_report.ref_name, export_report.ref_name);
     assert_eq!(verify_report.tip_block_id, tip_block_id);
     assert_eq!(verify_report.object_count, export_report.object_count);
@@ -2162,9 +2164,9 @@ fn verify_of_a_real_export_succeeds_and_matches_the_export_report() -> prikk_err
 #[test]
 fn verify_rejects_the_same_malformed_bytes_import_rejects() {
     let options = BundleImportOptions::default_limits();
-    assert!(verify_bundle(b"not a bundle", &options).is_err());
-    assert!(verify_bundle(b"PBNDL001", &options).is_err());
-    assert!(verify_bundle(&[], &options).is_err());
+    assert!(verify_bundle_from_bytes(b"not a bundle", &options).is_err());
+    assert!(verify_bundle_from_bytes(b"PBNDL001", &options).is_err());
+    assert!(verify_bundle_from_bytes(&[], &options).is_err());
 }
 
 /// Control 2 (framing): a bundle truncated partway through its object list is refused, by both
@@ -2180,7 +2182,7 @@ fn verify_and_import_agree_a_truncated_bundle_is_refused() -> prikk_error::Resul
     let options = BundleImportOptions::default_limits();
 
     assert!(
-        verify_bundle(truncated, &options).is_err(),
+        verify_bundle_from_bytes(truncated, &options).is_err(),
         "a truncated bundle must fail verification"
     );
     let target_root = unique_temp_dir("dc44-verify-truncated-target");
@@ -2223,7 +2225,7 @@ fn verify_and_import_agree_a_declared_count_that_disagrees_with_content_is_refus
         let malformed_bytes =
             encode_bundle_with_declared_count(&ref_name, &objects, &author_keys, declared_count)?;
         assert!(
-            verify_bundle(&malformed_bytes, &options).is_err(),
+            verify_bundle_from_bytes(&malformed_bytes, &options).is_err(),
             "declared count {declared_count} against {} real objects must fail verification",
             objects.len()
         );
@@ -2351,7 +2353,7 @@ fn verify_and_import_agree_a_corrupted_object_whose_id_no_longer_matches_its_byt
     )?;
 
     let options = BundleImportOptions::default_limits();
-    let verify_err = match verify_bundle(&corrupted_bundle_bytes, &options) {
+    let verify_err = match verify_bundle_from_bytes(&corrupted_bundle_bytes, &options) {
         Ok(report) => panic!("a corrupted patch id must fail verification: {report:?}"),
         Err(err) => err,
     };
@@ -2398,7 +2400,7 @@ fn verify_and_import_agree_a_bundle_missing_a_referenced_blob_is_refused() -> pr
     let broken_bytes = encode_bundle(&ref_name, &broken_objects, &author_keys, &test_manifest())?;
     let options = BundleImportOptions::default_limits();
 
-    let verify_err = match verify_bundle(&broken_bytes, &options) {
+    let verify_err = match verify_bundle_from_bytes(&broken_bytes, &options) {
         Ok(report) => {
             panic!("a bundle missing a patch-referenced blob must fail verification: {report:?}")
         }
@@ -2430,7 +2432,7 @@ fn verify_and_import_agree_a_well_formed_bundle_is_accepted() -> prikk_error::Re
     let (_, bytes) = export_bundle(&source, "heads/main")?;
     let options = BundleImportOptions::default_limits();
 
-    assert!(verify_bundle(&bytes, &options).is_ok());
+    assert!(verify_bundle_from_bytes(&bytes, &options).is_ok());
 
     let target_root = unique_temp_dir("dc44-verify-agree-good-target");
     let target = RepositoryLayout::init(target_root.clone())?;
@@ -2797,7 +2799,7 @@ fn a_bundle_carrying_one_id_twice_with_different_envelopes_is_refused_before_wri
 
     assert!(
         matches!(
-            verify_bundle(&tampered, &BundleImportOptions::default_limits()),
+            verify_bundle_from_bytes(&tampered, &BundleImportOptions::default_limits()),
             Err(prikk_error::PrikkError::MalformedData(ref message)) if message.contains("twice")
         ),
         "offline verification refuses it"
@@ -3962,6 +3964,118 @@ fn a_pass_two_digest_mismatch_refuses_with_rs_message_shape() -> prikk_error::Re
         read_received_pointer(&target, "remotes/heads/main")?.is_none(),
         "no received pointer may be written when pass 2 refuses"
     );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-iii (D1): `bundle verify`'s own real-file path lands the identical report
+/// as the buffered path, the same positive control
+/// `bundle_import_against_a_real_file_succeeds_without_the_corruption_seam` already proves for
+/// `import` -- `verify_bundle` never writes, so there is no write-security seam to pair this with,
+/// only this equivalence.
+#[test]
+fn bundle_verify_against_a_real_file_matches_the_buffered_path() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-verify-real-file-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let mut bundle_path = source_root.clone();
+    bundle_path.push("exported.bundle");
+    std::fs::write(&bundle_path, &bytes)?;
+
+    let mut source_handle = BundleSource::File(std::fs::File::open(&bundle_path)?);
+    let report = verify_bundle(&mut source_handle, &BundleImportOptions::default_limits())?;
+    assert_eq!(
+        report.object_count, 5,
+        "seal_two_block_history's own known shape"
+    );
+
+    let reference_report =
+        verify_bundle_from_bytes(&bytes, &BundleImportOptions::default_limits())?;
+    assert_eq!(
+        report, reference_report,
+        "the real-file path and the buffered path must land the identical report"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-iii (D1): `bundle preview`'s own real-file path lands the identical report
+/// (and the identical anchor-fallback list) as the buffered path.
+#[test]
+fn bundle_preview_against_a_real_file_matches_the_buffered_path() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-preview-real-file-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let mut bundle_path = source_root.clone();
+    bundle_path.push("exported.bundle");
+    std::fs::write(&bundle_path, &bytes)?;
+
+    let target_root = unique_temp_dir("bundle-preview-real-file-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    let mut source_handle = BundleSource::File(std::fs::File::open(&bundle_path)?);
+    let (report, fallbacks) = crate::bundle::preview_bundle_reporting_anchor(
+        &target,
+        &mut source_handle,
+        &BundleImportOptions::default_limits(),
+        "heads/main",
+    )?;
+
+    let reference_target_root = unique_temp_dir("bundle-preview-real-file-reference");
+    let reference_target = RepositoryLayout::init(reference_target_root.clone())?;
+    let (reference_report, reference_fallbacks) =
+        crate::bundle::preview_bundle_reporting_anchor_from_bytes(
+            &reference_target,
+            &bytes,
+            &BundleImportOptions::default_limits(),
+            "heads/main",
+        )?;
+    assert_eq!(
+        report, reference_report,
+        "the real-file path and the buffered path must land the identical report"
+    );
+    assert_eq!(
+        fallbacks.len(),
+        reference_fallbacks.len(),
+        "the real-file path and the buffered path must anchor-fallback the same amount"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    let _ = std::fs::remove_dir_all(reference_target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-iii (D1): the simpler `preview_bundle` wrapper (not `_reporting_anchor`)
+/// also takes a real file -- a one-line control that its own signature update did not break the
+/// delegation to `preview_bundle_reporting_anchor`.
+#[test]
+fn bundle_preview_simple_wrapper_accepts_a_real_file() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-preview-simple-real-file-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let mut bundle_path = source_root.clone();
+    bundle_path.push("exported.bundle");
+    std::fs::write(&bundle_path, &bytes)?;
+
+    let target_root = unique_temp_dir("bundle-preview-simple-real-file-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    let mut source_handle = BundleSource::File(std::fs::File::open(&bundle_path)?);
+    let report = crate::bundle::preview_bundle(
+        &target,
+        &mut source_handle,
+        &BundleImportOptions::default_limits(),
+        "heads/main",
+    )?;
+    assert_eq!(report.bundle_ref_name, "heads/main");
 
     let _ = std::fs::remove_dir_all(source_root);
     let _ = std::fs::remove_dir_all(target_root);

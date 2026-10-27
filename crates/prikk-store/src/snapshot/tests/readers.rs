@@ -22,7 +22,7 @@ use crate::{
     SnapshotManifest, StateRootEntry, export_bundle, materialize_patch_checkout,
     materialize_snapshot_checkout, plan_patch_checkout_deletions, prepare_patch_inverse_plan,
     prepare_patch_replay_plan, prepare_rollback_preview, prepare_snapshot_checkout_plan,
-    preview_bundle, verify_repository,
+    verify_repository,
 };
 
 const MAIN: &str = "heads/main";
@@ -142,7 +142,7 @@ fn preview_into_empty_repository(layout: &RepositoryLayout) -> prikk_error::Resu
     let (_, bytes) = export_bundle(layout, MAIN)?;
     let target_root = unique_temp_dir("snapshot-readers-bundle-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let report = preview_bundle(
+    let report = crate::bundle::preview_bundle_from_bytes(
         &target,
         &bytes,
         &BundleImportOptions::default_limits(),
