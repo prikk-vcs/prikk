@@ -3794,6 +3794,64 @@ fn bundle_import_against_a_real_file_succeeds_without_the_corruption_seam()
     Ok(())
 }
 
+/// 0.55.0 step 3 Part 3b-i2 (Q2, K1): the third real-file mutation named alongside truncate and
+/// rewrite -- deleting the bundle's own backing file between the two passes -- is not actually a
+/// distinct case on a POSIX filesystem, and this test states that plainly instead of forcing a
+/// refusal that would not reflect reality. `import_bundle` never reopens the path; it keeps the
+/// one handle `bounded_read::open_bundle_source` gave it. Deleting the *name* (`unlink`) does not
+/// invalidate an already-open file descriptor or change the bytes it reads -- the kernel keeps the
+/// inode alive until the last open handle closes, so pass 2's reads succeed exactly as if nothing
+/// happened, and the import completes normally. This is the real, observable behavior; asserting a
+/// refusal here would misrepresent it. Truncate and rewrite, tested above, are the two mutations
+/// that genuinely are observable through an already-open handle, because file length and content
+/// (unlike the directory entry) are properties of the inode itself, not of the name that reaches
+/// it.
+#[test]
+#[allow(clippy::expect_used)]
+fn a_pass_two_file_deleted_between_passes_still_completes_through_the_open_handle()
+-> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-real-delete-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let mut bundle_path = source_root.clone();
+    bundle_path.push("exported.bundle");
+    std::fs::write(&bundle_path, &bytes)?;
+
+    let target_root = unique_temp_dir("bundle-real-delete-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+
+    let seam_path = bundle_path.clone();
+    crate::bundle::corrupt_file_between_passes_for_test(move || {
+        std::fs::remove_file(&seam_path).expect("delete the bundle's own backing file");
+        assert!(
+            !seam_path.exists(),
+            "the file's name must actually be gone from the directory"
+        );
+    });
+
+    // The handle was opened before the seam ran, so it keeps the now-unlinked inode alive.
+    let mut source_handle = BundleSource::File(std::fs::File::open(&bundle_path)?);
+    let report = import_bundle(
+        &target,
+        &mut source_handle,
+        &BundleImportOptions::default_limits(),
+    )?;
+    assert_eq!(
+        report.written_object_count, 5,
+        "a deleted directory entry does not disturb an already-open handle's own reads"
+    );
+    assert!(
+        read_received_pointer(&target, "remotes/heads/main")?.is_some(),
+        "the import completed normally and must have written its received pointer"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
 /// 0.55.0 step 3 Part 3b-i, K1 row 2 (companion): the identical bundle, with the seam disarmed,
 /// still imports cleanly -- the assertion above is a real property of the fixture, not an
 /// always-refusing one.
