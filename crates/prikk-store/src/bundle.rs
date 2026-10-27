@@ -969,11 +969,17 @@ fn read_bytes_u64_from(source: &mut BundleSource, max_len: usize) -> Result<Vec<
     read_exact_from(source, u64_to_usize(len)?)
 }
 
-/// One object frame's complete raw bytes, length prefix included (R3's own digest range) -- the
-/// streaming counterpart of `read_bounded_object_frame`, reading from an open [`BundleSource`]
-/// instead of an in-memory `ByteCursor`. Refuses on the length prefix, before the frame's body is
-/// read, exactly as the buffered path already does.
-fn read_frame_from(source: &mut BundleSource, max_object_bytes: usize) -> Result<Vec<u8>> {
+/// One object frame's declared length and body, read separately -- 0.55.0 step 3 Part 3b-ii2
+/// (N1): pass 1 used to concatenate the 8-byte length prefix and the body into one combined
+/// `frame` buffer solely so R3's digest could be computed over "the length-prefixed frame exactly
+/// as read" in a single `sha256` call. `sha256_parts` already exists for exactly this split --
+/// "a checksum covers a header and a body that are held apart" -- so this reads only `body`
+/// (never a second, prefix-prepended copy of it), and the caller hashes the prefix and body as
+/// two parts instead. Refuses on the length prefix, before the body is read, exactly as before.
+fn read_frame_body_from(
+    source: &mut BundleSource,
+    max_object_bytes: usize,
+) -> Result<(u64, Vec<u8>)> {
     let declared_bytes = read_u64_from(source)?;
     let bound_bytes = len_to_u64(max_object_bytes)?;
     if declared_bytes > bound_bytes {
@@ -983,10 +989,7 @@ fn read_frame_from(source: &mut BundleSource, max_object_bytes: usize) -> Result
         });
     }
     let body = read_exact_from(source, u64_to_usize(declared_bytes)?)?;
-    let mut frame = Vec::with_capacity(8 + body.len());
-    frame.extend_from_slice(&declared_bytes.to_be_bytes());
-    frame.extend_from_slice(&body);
-    Ok(frame)
+    Ok((declared_bytes, body))
 }
 
 /// 0.55.0 step 3 Part 3b-i2: the author-key section comes *after* every object frame in the wire
@@ -1668,17 +1671,20 @@ pub fn import_bundle(
     let mut closure_by_id: BTreeMap<ObjectId, ClosureMetadata> = BTreeMap::new();
     for _ in 0..count {
         let start = stream_position_usize(source)?;
-        let frame = read_frame_from(source, options.max_object_bytes)?;
-        let end = start.checked_add(frame.len()).ok_or_else(|| {
-            PrikkError::Integrity("bundle import: frame range overflow".to_string())
-        })?;
-        let real_frame_digest = prikk_hash::sha256(&frame);
-        let Some(frame_body) = frame.get(8..) else {
-            return Err(PrikkError::Integrity(
-                "bundle import: a frame is shorter than its own length prefix".to_string(),
-            ));
-        };
-        let envelope = decode_envelope_file(frame_body)?;
+        let (declared_bytes, body) = read_frame_body_from(source, options.max_object_bytes)?;
+        let end = start
+            .checked_add(8)
+            .and_then(|v| v.checked_add(body.len()))
+            .ok_or_else(|| {
+                PrikkError::Integrity("bundle import: frame range overflow".to_string())
+            })?;
+        let real_frame_digest = prikk_hash::sha256_parts(&[&declared_bytes.to_be_bytes(), &body]);
+        let envelope = decode_envelope_file(&body)?;
+        // 0.55.0 step 3 Part 3b-ii2 (N1): `body` (the largest buffer this turn holds) is never
+        // read again past this point -- `envelope.canonical_payload` already owns its own copy.
+        // Dropped here rather than left to the end of this loop's own scope, so it is not still
+        // resident while `admit_one`/`closure_metadata_for` run their own allocations below.
+        drop(body);
         let object_id = envelope.object_id();
 
         // 0.55.0 step 3 Part 3b-i's own fix, restated for the streaming walk: a bundle may carry
@@ -1713,10 +1719,16 @@ pub fn import_bundle(
         // written; an invalid one refuses the whole import.
         let admitted = admitter.admit_one(&object_store, envelope, &mut author_material_closure)?;
         object_store.check_write(&admitted.envelope)?;
+        let merged = admitted.merged;
+        // 0.55.0 step 3 Part 3b-ii2 (N1): `admitted.envelope` (the decoded payload, same size as
+        // `body` above) is never read again once `check_write` has validated it -- pass 1 keeps
+        // only `merged` from here on. Dropped explicitly rather than left alive through the push
+        // below, for the same reason as `body`'s own early drop.
+        drop(admitted);
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut admission_outcome = if !already_present {
             AdmissionOutcomeKind::New
-        } else if admitted.merged {
+        } else if merged {
             AdmissionOutcomeKind::Merged
         } else {
             AdmissionOutcomeKind::AlreadyPresent
