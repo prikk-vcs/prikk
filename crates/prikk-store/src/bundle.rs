@@ -956,7 +956,8 @@ pub fn import_bundle(
     // decision, and asserts each still agrees with pass 1's record before writing it -- "the
     // store cannot change while the lock is held" (R4), so a mismatch there is an internal error,
     // never a legitimate outcome.
-    let frame_ranges = frame_ranges_in_bundle_order(bytes, options.max_object_count, options.max_object_bytes)?;
+    let frame_ranges =
+        frame_ranges_in_bundle_order(bytes, options.max_object_count, options.max_object_bytes)?;
     let object_count = frame_ranges.len();
     if object_count != contents.objects.len() {
         return Err(PrikkError::Integrity(format!(
@@ -990,11 +991,13 @@ pub fn import_bundle(
         // which of its signatures may join the stored record. Verified here, before anything is
         // written; an invalid one refuses the whole import. A format-6 repository keeps one
         // record per id, so its store refuses the second envelope below instead.
-        let admitted = admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        let admitted =
+            admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
         // The store's own write decision, before any object is written: an envelope the format
         // rejects, or -- in format 6 -- an id this repository already holds under other envelope
         // bytes.
         object_store.check_write(&admitted.envelope)?;
+        #[cfg_attr(not(test), allow(unused_mut))]
         let mut admission_outcome = if !already_present {
             AdmissionOutcomeKind::New
         } else if admitted.merged {
@@ -1007,13 +1010,15 @@ pub fn import_bundle(
             admission_outcome = corrupted_admission_outcome_for_test(object_id, admission_outcome);
         }
         let same_kind_dependencies = same_kind_dependencies(&envelope)?;
-        let mut frame_digest = prikk_hash::sha256(bytes.get(frame_range.clone()).ok_or_else(|| {
-            PrikkError::Integrity(
-                "bundle import: a frame range traced from the bundle's own bytes no longer \
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut frame_digest =
+            prikk_hash::sha256(bytes.get(frame_range.clone()).ok_or_else(|| {
+                PrikkError::Integrity(
+                    "bundle import: a frame range traced from the bundle's own bytes no longer \
                  resolves against them"
-                    .to_string(),
-            )
-        })?);
+                        .to_string(),
+                )
+            })?);
         #[cfg(test)]
         {
             frame_digest = corrupted_frame_digest_for_test(object_id, frame_digest);
@@ -1102,7 +1107,8 @@ pub fn import_bundle(
         let envelope = decode_envelope_file(frame_body)?;
         let already_present =
             object_store.contains_object(prepared_object.object_type, prepared_object.object_id)?;
-        let admitted = admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        let admitted =
+            admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
         let recomputed_outcome = if !already_present {
             AdmissionOutcomeKind::New
         } else if admitted.merged {
@@ -1122,9 +1128,9 @@ pub fn import_bundle(
             )));
         }
         if admitted.merged {
-            merged_object_count = merged_object_count.checked_add(1).ok_or_else(|| {
-                PrikkError::Integrity("merged-object count overflow".to_string())
-            })?;
+            merged_object_count = merged_object_count
+                .checked_add(1)
+                .ok_or_else(|| PrikkError::Integrity("merged-object count overflow".to_string()))?;
         }
         dropped_signatures.extend(admitted.dropped);
         if !already_present {
@@ -1412,9 +1418,9 @@ fn frame_ranges_in_bundle_order(
 fn dependency_order_indices(prepared: &[PreparedObject]) -> Result<Vec<usize>> {
     let mut by_rank: Vec<usize> = (0..prepared.len()).collect();
     by_rank.sort_by_key(|&index| {
-        prepared
-            .get(index)
-            .map_or(u8::MAX, |object| object_type_dependency_rank(object.object_type))
+        prepared.get(index).map_or(u8::MAX, |object| {
+            object_type_dependency_rank(object.object_type)
+        })
     });
 
     let mut result = Vec::with_capacity(prepared.len());
@@ -1466,7 +1472,7 @@ fn same_kind_topological_order_indices(
                 return Err(PrikkError::Integrity(
                     "bundle import: dependency ordering produced an index outside the prepared \
                      set"
-                        .to_string(),
+                    .to_string(),
                 ));
             };
             let ready = object

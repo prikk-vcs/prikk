@@ -3559,8 +3559,11 @@ fn a_pass_two_admission_mismatch_refuses_before_that_objects_write() -> prikk_er
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (_, objects, _, _) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    let (_, objects, _, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     assert_eq!(objects.len(), 5, "seal_two_block_history's own known shape");
     let Some(target_object) = objects.get(3) else {
         panic!("the fixture carries at least four objects");
@@ -3625,8 +3628,11 @@ fn a_pass_two_read_failure_refuses_with_rs_message_shape_and_writes_no_pointer()
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (_, objects, _, _) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    let (_, objects, _, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let Some(target_object) = objects.get(3) else {
         panic!("the fixture carries at least four objects");
     };
@@ -3665,8 +3671,11 @@ fn a_pass_two_digest_mismatch_refuses_with_rs_message_shape() -> prikk_error::Re
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
     let (_, bytes) = export_bundle(&source, "heads/main")?;
-    let (_, objects, _, _) =
-        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    let (_, objects, _, _) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
     let Some(target_object) = objects.get(3) else {
         panic!("the fixture carries at least four objects");
     };
