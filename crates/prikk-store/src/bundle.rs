@@ -1482,7 +1482,7 @@ fn validate_bundle_closure(
 /// one cheap seek-only skip-walk to reach the author-key section ahead of the object frames it
 /// follows in the wire format, and pass 2's own seeks back by recorded range) -- never the whole
 /// bundle materialized at once. `validate_bundle_contents`'s own structural and closure checks now
-/// run inside this same locked streaming pass as admission ([`validate_bundle_closure`]), not
+/// run inside this same locked streaming pass as admission (`validate_bundle_closure`), not
 /// before it: a concurrent writer acting in the window before the lock is now seen by the *whole*
 /// locked decision, not only the author-key-conflict check (Q1's own reasoning for why the two race
 /// tests below keep their seam unchanged).
