@@ -335,7 +335,9 @@ bundle or exchange artifact can raise it, and nothing an import or accept writes
 whole into memory, and decoding costs a multiple of that — measured on a bundle carrying one 255 MiB
 blob, at the defaults, three samples each: `bundle verify` peaks at a median of 787,400 KiB (≈3.0×
 the bundle's own size), `bundle import` at 1,570,984 KiB (≈6.0×). Streaming removes this multiplier;
-it does not exist yet.
+it does not exist yet. A pipe or FIFO input to `bundle import` costs memory in proportion to the
+whole bundle either way — a non-seekable input cannot be read twice, so it is read into memory once,
+in full, before anything else happens, the same as a regular file.
 
 **`prikk config`** is a repository's own small, durable settings file at `.prikk/config` — never in
 the worktree, so a checked-out or imported file can never set one. One `key = value` per line; blank

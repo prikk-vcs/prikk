@@ -3548,3 +3548,153 @@ fn verify_fails_a_received_tip_whose_previous_state_is_absent_and_passes_it_when
     let _ = std::fs::remove_dir_all(source_root);
     Ok(())
 }
+
+/// 0.55.0 step 3 Part 3b-i, K1 row 2: pass 2's own re-admission must agree with pass 1's record
+/// for every object, or the import refuses with an internal error *before* that object's write --
+/// R4's own reasoning ("the store cannot change while the lock is held") made into an assertion,
+/// exercised through the one seam that can disagree with a correctly held lock.
+#[test]
+fn a_pass_two_admission_mismatch_refuses_before_that_objects_write() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-admission-mismatch-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let (_, objects, _, _) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    assert_eq!(objects.len(), 5, "seal_two_block_history's own known shape");
+    let Some(target_object) = objects.get(3) else {
+        panic!("the fixture carries at least four objects");
+    };
+    let target_id = target_object.object_id();
+
+    let target_root = unique_temp_dir("bundle-admission-mismatch-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    crate::bundle::corrupt_admission_outcome_for_test(target_id);
+    let refused = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(
+        matches!(&refused, Err(prikk_error::PrikkError::Integrity(message))
+            if message.contains("admitted differently") && message.contains(&target_id.to_string())),
+        "{refused:?}"
+    );
+    let object_store = FileObjectStore::new(target.clone());
+    assert!(
+        !object_store.contains_object(target_object.object_type, target_id),
+        "the mismatched object itself must not have been written"
+    );
+    assert!(
+        read_received_pointer(&target, "remotes/heads/main")?.is_none(),
+        "no received pointer may be written when pass 2 refuses"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-i, K1 row 2 (companion): the identical bundle, with the seam disarmed,
+/// still imports cleanly -- the assertion above is a real property of the fixture, not an
+/// always-refusing one.
+#[test]
+fn the_same_bundle_imports_cleanly_without_the_admission_mismatch_seam() -> prikk_error::Result<()>
+{
+    let source_root = unique_temp_dir("bundle-admission-mismatch-control-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let target_root = unique_temp_dir("bundle-admission-mismatch-control-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    let report = import_bundle(&target, &bytes, &BundleImportOptions::default_limits())?;
+    assert_eq!(report.written_object_count, 5);
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-i, K1 row 1: a read failure re-finding an object's own frame for pass
+/// 2's check (a truncated, deleted, or otherwise unreadable file between a real file's two reads)
+/// refuses with R3's own message shape -- how many objects were already written and admitted,
+/// that no pointer was written, and that re-running once the file is stable completes the
+/// import. `bytes: &[u8]` is immutable for the whole of this call, so this is exercised through
+/// the one seam built for it, not a real failure -- see the Part 3b-i report's own note on why.
+#[test]
+fn a_pass_two_read_failure_refuses_with_rs_message_shape_and_writes_no_pointer()
+-> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-read-failure-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let (_, objects, _, _) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    let Some(target_object) = objects.get(3) else {
+        panic!("the fixture carries at least four objects");
+    };
+    let target_id = target_object.object_id();
+
+    let target_root = unique_temp_dir("bundle-read-failure-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    crate::bundle::simulate_pass_two_read_failure_for_test(target_id);
+    let refused = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(
+        matches!(&refused, Err(prikk_error::PrikkError::Integrity(message))
+            if message.contains("could not be re-read")
+                && message.contains("were already written")
+                && message.contains("no received pointer was written")
+                && message.contains("re-running the import once the file is stable")),
+        "{refused:?}"
+    );
+    assert!(
+        read_received_pointer(&target, "remotes/heads/main")?.is_none(),
+        "no received pointer may be written when pass 2 refuses"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-i, R3: a per-frame digest mismatch between the two passes refuses with
+/// the same message shape as a read failure -- "what is kept," never "(nothing written)" (the
+/// 2A2 review's own correction to an earlier, wrong draft of this message). Exercised through its
+/// own seam for the identical reason the read-failure row is: `bytes: &[u8]` cannot actually
+/// change between this function's two passes.
+#[test]
+fn a_pass_two_digest_mismatch_refuses_with_rs_message_shape() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-digest-mismatch-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let (_, objects, _, _) =
+        decode_bundle(&bytes, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_OBJECT_BYTES)?;
+    let Some(target_object) = objects.get(3) else {
+        panic!("the fixture carries at least four objects");
+    };
+    let target_id = target_object.object_id();
+
+    let target_root = unique_temp_dir("bundle-digest-mismatch-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    crate::bundle::corrupt_frame_digest_for_test(target_id);
+    let refused = import_bundle(&target, &bytes, &BundleImportOptions::default_limits());
+    assert!(
+        matches!(&refused, Err(prikk_error::PrikkError::Integrity(message))
+            if message.contains("changed between validation and writing")
+                && message.contains("were already written")
+                && message.contains("no received pointer was written")
+                && message.contains("re-running the import once the file is stable")),
+        "{refused:?}"
+    );
+    let object_store = FileObjectStore::new(target.clone());
+    assert!(
+        !object_store.contains_object(target_object.object_type, target_id),
+        "the mismatched object itself must not have been written"
+    );
+    assert!(
+        read_received_pointer(&target, "remotes/heads/main")?.is_none(),
+        "no received pointer may be written when pass 2 refuses"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}

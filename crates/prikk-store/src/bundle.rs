@@ -70,6 +70,7 @@
 //! it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 mod preview;
 
@@ -898,7 +899,7 @@ pub fn import_bundle(
     options: &BundleImportOptions,
 ) -> Result<BundleImportReport> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
-    let contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
+    let mut contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
     let received_ref_name = format!("remotes/{}", contents.origin_ref_name);
     crate::received::validate_received_ref(&received_ref_name)?;
 
@@ -944,11 +945,29 @@ pub fn import_bundle(
     }
     let mut object_store = ObjectWriteSession::open(layout)?;
 
-    // RFC 156 §4 rules 1–3, format 7: for every carried object this repository already holds, which of
-    // its signatures may join the stored record. Verified here, before anything is written; an invalid
-    // one refuses the whole import. A format-6 repository keeps one record per id, so its store refuses
-    // the second envelope below instead.
-    let admission = admit_carried_signatures(layout, &object_store, &contents.objects, |key_id| {
+    // 0.55.0 step 3 Part 3b-i (R1/R3/R4): pass 1, under this same held lock, decides -- for every
+    // carried object -- everything that can refuse: RFC 156 §4 signature admission and the
+    // store's own write decision (`check_write`). It keeps only each object's cheap identity and
+    // same-kind dependency ids (R1), its own frame's byte range and digest (R3), and which
+    // admission outcome it reached (R4) -- never the decoded envelope itself past its own turn,
+    // and never a second or third full copy of the bundle's objects sitting alongside the one
+    // `validate_bundle_contents` already built. Pass 2, below, re-derives each envelope from
+    // `bytes` by its own recorded byte range, recomputes both the digest and the admission
+    // decision, and asserts each still agrees with pass 1's record before writing it -- "the
+    // store cannot change while the lock is held" (R4), so a mismatch there is an internal error,
+    // never a legitimate outcome.
+    let frame_ranges = frame_ranges_in_bundle_order(bytes, options.max_object_count, options.max_object_bytes)?;
+    let object_count = frame_ranges.len();
+    if object_count != contents.objects.len() {
+        return Err(PrikkError::Integrity(format!(
+            "bundle import: {object_count} frame ranges traced but {} objects decoded from the \
+             same bytes -- the two scans disagree",
+            contents.objects.len()
+        )));
+    }
+
+    let admitter = CarriedSignatureAdmitter::new(layout)?;
+    let mut author_material_closure = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
         let mut entries = lookup_author_key_entries(layout, key_id)?;
         entries.extend(
             contents
@@ -958,36 +977,162 @@ pub fn import_bundle(
                 .cloned(),
         );
         Ok(entries)
-    })?;
+    };
 
-    // The store's own write decision for every object, before any of them is written: an envelope the
-    // format rejects, or — in format 6 — an id this repository already holds under other envelope bytes.
-    for envelope in &admission.envelopes {
-        object_store.check_write(envelope)?;
+    let mut prepared: Vec<PreparedObject> = Vec::with_capacity(frame_ranges.len());
+    for (envelope, frame_range) in std::mem::take(&mut contents.objects)
+        .into_iter()
+        .zip(frame_ranges)
+    {
+        let object_id = envelope.object_id();
+        let already_present = object_store.contains_object(envelope.object_type, object_id)?;
+        // RFC 156 §4 rules 1-3, format 7: for every carried object this repository already holds,
+        // which of its signatures may join the stored record. Verified here, before anything is
+        // written; an invalid one refuses the whole import. A format-6 repository keeps one
+        // record per id, so its store refuses the second envelope below instead.
+        let admitted = admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        // The store's own write decision, before any object is written: an envelope the format
+        // rejects, or -- in format 6 -- an id this repository already holds under other envelope
+        // bytes.
+        object_store.check_write(&admitted.envelope)?;
+        let mut admission_outcome = if !already_present {
+            AdmissionOutcomeKind::New
+        } else if admitted.merged {
+            AdmissionOutcomeKind::Merged
+        } else {
+            AdmissionOutcomeKind::AlreadyPresent
+        };
+        #[cfg(test)]
+        {
+            admission_outcome = corrupted_admission_outcome_for_test(object_id, admission_outcome);
+        }
+        let same_kind_dependencies = same_kind_dependencies(&envelope)?;
+        let mut frame_digest = prikk_hash::sha256(bytes.get(frame_range.clone()).ok_or_else(|| {
+            PrikkError::Integrity(
+                "bundle import: a frame range traced from the bundle's own bytes no longer \
+                 resolves against them"
+                    .to_string(),
+            )
+        })?);
+        #[cfg(test)]
+        {
+            frame_digest = corrupted_frame_digest_for_test(object_id, frame_digest);
+        }
+        prepared.push(PreparedObject {
+            object_id,
+            object_type: envelope.object_type,
+            same_kind_dependencies,
+            frame_range,
+            frame_digest,
+            admission_outcome,
+        });
     }
 
-    // 0.49.0 step 0, finding 3: the bundle's own carried order (whatever the exporter produced) is
-    // not necessarily dependency order across types -- a `Block` could precede the `Patch`/`Blob` it
-    // names. Reordered here, after every check above (which do not depend on write order) and before
-    // the first durable write, so a kill partway through this loop never leaves a later-typed object
-    // durable while an earlier one it depends on is still missing.
-    let admission_envelopes = objects_in_dependency_order(admission.envelopes)?;
+    // 0.55.0 step 3 Part 3b-i: a bundle may carry the same id twice with byte-identical bytes
+    // ("an exact repeat is harmless and allowed," `validate_bundle_contents`'s own duplicate-id
+    // check above, which already refused a *non*-identical repeat before pass 1 began). Pass 1
+    // alone can't see that -- it never writes, so both occurrences are decided against the same
+    // unwritten store state and both record `New`. Pass 2 writes as it goes, so a later
+    // occurrence of the same id would see the earlier one already durable and recompute
+    // `AlreadyPresent`, tripping R4's own cross-pass assertion over a difference this import
+    // itself created, not a sign the store changed under the lock. Deduplicated here, by id, kept
+    // in first-occurrence order -- `object_count` above is already the bundle's own raw frame
+    // count and is not reduced by this.
+    let mut prepared_ids_seen: BTreeSet<ObjectId> = BTreeSet::new();
+    prepared.retain(|object| prepared_ids_seen.insert(object.object_id));
+
+    // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely
+    // over `prepared`'s own cheap `(id, type, dependency ids)` metadata -- the bundle's own
+    // carried order (whatever the exporter produced) is not necessarily dependency order across
+    // types, so a kill partway through pass 2's write loop below must never leave a later-typed
+    // object durable while an earlier one it depends on is still missing.
+    let write_order = dependency_order_indices(&prepared)?;
 
     // Past this point only I/O can stop the import -- never a decision about the bundle's content,
     // and never a concurrent writer: `_container_locks` already holds `ObjectStore` for the whole
     // loop (0.55.0 step 3 Part 2), so `write_object_under_held_lock` only re-checks that the lock is
     // still held, rather than acquiring and releasing it once per object.
     let mut written_object_count = 0_usize;
+    let mut merged_object_count = 0_usize;
+    let mut dropped_signatures: Vec<crate::DroppedSignature> = Vec::new();
     #[cfg(feature = "test-support")]
     let mut test_support_objects_written_so_far = 0_usize;
-    for envelope in &admission_envelopes {
-        let id = envelope.object_id();
-        if !object_store.contains_object(envelope.object_type, id)? {
+    for index in write_order {
+        let Some(prepared_object) = prepared.get(index) else {
+            return Err(PrikkError::Integrity(
+                "bundle import: dependency ordering produced an index outside the prepared set"
+                    .to_string(),
+            ));
+        };
+        check_simulated_pass_two_read_failure_for_test(
+            prepared_object.object_id,
+            written_object_count,
+            object_count,
+        )?;
+        let Some(frame) = bytes.get(prepared_object.frame_range.clone()) else {
+            return Err(PrikkError::Integrity(format!(
+                "bundle import: object {} could not be re-read for its own pass-2 check -- \
+                 {written_object_count} of {object_count} objects were already written, each \
+                 validated and admitted before being written; no received pointer was written; \
+                 re-running the import once the file is stable will complete it",
+                prepared_object.object_id
+            )));
+        };
+        // R3: the per-frame digest, recomputed from the same bytes pass 1 read and re-verified
+        // before this object is admitted or written again. K2: this is not the manifest digest
+        // `bundle.rs:209`-`215` declined to add -- that field would duplicate the check that an
+        // object's id is already a content hash of its own bytes. This digest is a private,
+        // in-memory record kept only between this function's own two passes, covering the whole
+        // frame including its signatures, which the object id does not cover.
+        if prikk_hash::sha256(frame) != prepared_object.frame_digest {
+            return Err(PrikkError::Integrity(format!(
+                "bundle import: object {} changed between validation and writing -- \
+                 {written_object_count} of {object_count} objects were already written, each \
+                 validated and admitted before being written; no received pointer was written; \
+                 re-running the import once the file is stable will complete it",
+                prepared_object.object_id
+            )));
+        }
+        let Some(frame_body) = frame.get(8..) else {
+            return Err(PrikkError::Integrity(
+                "bundle import: a prepared object's own frame is shorter than its length prefix"
+                    .to_string(),
+            ));
+        };
+        let envelope = decode_envelope_file(frame_body)?;
+        let already_present =
+            object_store.contains_object(prepared_object.object_type, prepared_object.object_id)?;
+        let admitted = admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        let recomputed_outcome = if !already_present {
+            AdmissionOutcomeKind::New
+        } else if admitted.merged {
+            AdmissionOutcomeKind::Merged
+        } else {
+            AdmissionOutcomeKind::AlreadyPresent
+        };
+        // R4's own assertion: the store cannot change while this lock is held, so pass 2 must
+        // reach the identical outcome pass 1 recorded. A mismatch here is an internal error,
+        // before this object's write -- never a legitimate result.
+        if recomputed_outcome != prepared_object.admission_outcome {
+            return Err(PrikkError::Integrity(format!(
+                "bundle import: object {} admitted differently on its second pass ({recomputed_outcome:?}) \
+                 than its first ({:?}) -- the store must not change while the import's own lock is \
+                 held; refusing before this object's write",
+                prepared_object.object_id, prepared_object.admission_outcome
+            )));
+        }
+        if admitted.merged {
+            merged_object_count = merged_object_count.checked_add(1).ok_or_else(|| {
+                PrikkError::Integrity("merged-object count overflow".to_string())
+            })?;
+        }
+        dropped_signatures.extend(admitted.dropped);
+        if !already_present {
             written_object_count = written_object_count.checked_add(1).ok_or_else(|| {
                 PrikkError::Integrity("bundle import written-object count overflow".to_string())
             })?;
         }
-        object_store.write_object_under_held_lock(envelope, &_container_locks)?;
+        object_store.write_object_under_held_lock(&admitted.envelope, &_container_locks)?;
         #[cfg(feature = "test-support")]
         {
             test_support_objects_written_so_far =
@@ -1017,10 +1162,10 @@ pub fn import_bundle(
     Ok(BundleImportReport {
         ref_name: received_ref_name,
         ref_state_id: contents.ref_state_id,
-        object_count: contents.objects.len(),
+        object_count,
         written_object_count,
-        merged_object_count: admission.merged_object_count,
-        dropped_signatures: admission.dropped,
+        merged_object_count,
+        dropped_signatures,
         recorded_author_key_count,
     })
 }
@@ -1192,6 +1337,258 @@ pub(crate) fn objects_in_dependency_order(
         result.extend(same_kind_topological_order(group)?);
     }
     Ok(result)
+}
+
+/// 0.55.0 step 3 Part 3b-i (R4): what pass 1 keeps for one carried object between `import_bundle`'s
+/// own two passes -- never its decoded envelope, payload, or signatures. `frame_range` is where
+/// pass 2 re-finds the object's own bytes in the original bundle bytes (length prefix included);
+/// `frame_digest` (R3) and `admission_outcome` (R4) are what pass 2 must reproduce exactly, from
+/// those bytes alone, before writing.
+struct PreparedObject {
+    object_id: ObjectId,
+    object_type: ObjectType,
+    same_kind_dependencies: Vec<ObjectId>,
+    frame_range: Range<usize>,
+    frame_digest: prikk_hash::Sha256Digest,
+    admission_outcome: AdmissionOutcomeKind,
+}
+
+/// 0.55.0 step 3 Part 3b-i (R4): the admission outcome pass 1 decided for one object, which pass 2
+/// must reach again, from the same unchanged lock-held store state, before writing it -- a
+/// different outcome the second time is an internal error, not a legitimate result ("the store
+/// cannot change while the lock is held," R4's own reasoning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionOutcomeKind {
+    /// Not held locally before this import; stored as carried.
+    New,
+    /// Held locally already, and this bundle's own copy added no signature.
+    AlreadyPresent,
+    /// Held locally already, and this bundle's own copy added at least one signature (RFC 156
+    /// format 7).
+    Merged,
+}
+
+/// 0.55.0 step 3 Part 3b-i (R3): replays [`decode_bundle`]'s own framing walk (magic, ref name,
+/// declared count, then each object's own length-prefixed frame) far enough to record every
+/// object frame's exact byte range in `bytes` -- length prefix included, so a caller can hash or
+/// re-read "the length-prefixed frame exactly as read." Only ever called on bytes
+/// `validate_bundle_contents` (which calls `decode_bundle` itself) already decoded successfully
+/// moments earlier in the same function call, over the identical, unchanged slice -- so this walk
+/// does not re-check the magic's own value, only replays the same fixed-position header fields
+/// every accepted magic shares before the object-frame loop begins. A second, small,
+/// self-contained walk rather than widening `decode_bundle`'s own four-tuple return, which dozens
+/// of existing test call sites destructure positionally -- this walk decodes nothing past the
+/// frame boundaries themselves, so it carries none of the risk a signature change there would.
+fn frame_ranges_in_bundle_order(
+    bytes: &[u8],
+    max_object_count: usize,
+    max_object_bytes: usize,
+) -> Result<Vec<Range<usize>>> {
+    let mut cursor = ByteCursor::new(bytes);
+    let _magic = cursor.read_array::<8>()?;
+    let _ref_name_bytes = cursor.read_bytes_u64()?;
+    let count = cursor.read_u64()?;
+    if count > len_to_u64(max_object_count)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle declares {count} objects, over the configured limit of {max_object_count}"
+        )));
+    }
+    let mut ranges = Vec::new();
+    for _ in 0..count {
+        let start = cursor.position();
+        let _frame = read_bounded_object_frame(&mut cursor, max_object_bytes)?;
+        let end = cursor.position();
+        ranges.push(start..end);
+    }
+    Ok(ranges)
+}
+
+/// 0.55.0 step 3 Part 3b-i (R1): [`objects_in_dependency_order`]'s own two-stage algorithm --
+/// cross-kind rank, then same-kind topological order -- as a thin wrapper over `prepared`'s own
+/// cheap `(id, type, dependency ids)` metadata, returning a permutation of indices into `prepared`
+/// rather than cloning or moving any envelope. The ranking and topological-sort logic themselves
+/// are unchanged from [`object_type_dependency_rank`]/[`same_kind_topological_order`]; only the
+/// carried payload (an index, not an envelope) differs.
+fn dependency_order_indices(prepared: &[PreparedObject]) -> Result<Vec<usize>> {
+    let mut by_rank: Vec<usize> = (0..prepared.len()).collect();
+    by_rank.sort_by_key(|&index| {
+        prepared
+            .get(index)
+            .map_or(u8::MAX, |object| object_type_dependency_rank(object.object_type))
+    });
+
+    let mut result = Vec::with_capacity(prepared.len());
+    let mut group: Vec<usize> = Vec::new();
+    let mut group_type: Option<ObjectType> = None;
+    for index in by_rank {
+        let Some(object) = prepared.get(index) else {
+            return Err(PrikkError::Integrity(
+                "bundle import: dependency ordering produced an index outside the prepared set"
+                    .to_string(),
+            ));
+        };
+        if let Some(current_type) = group_type {
+            if current_type != object.object_type {
+                result.extend(same_kind_topological_order_indices(
+                    prepared,
+                    std::mem::take(&mut group),
+                )?);
+            }
+        }
+        group_type = Some(object.object_type);
+        group.push(index);
+    }
+    if !group.is_empty() {
+        result.extend(same_kind_topological_order_indices(prepared, group)?);
+    }
+    Ok(result)
+}
+
+/// [`same_kind_topological_order`]'s own Kahn's-algorithm body, over indices into `prepared`
+/// instead of over owned envelopes -- see [`dependency_order_indices`].
+fn same_kind_topological_order_indices(
+    prepared: &[PreparedObject],
+    group: Vec<usize>,
+) -> Result<Vec<usize>> {
+    let present: BTreeSet<ObjectId> = group
+        .iter()
+        .filter_map(|&index| prepared.get(index).map(|object| object.object_id))
+        .collect();
+
+    let mut pending = group;
+    let mut written: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut ordered = Vec::with_capacity(pending.len());
+    while !pending.is_empty() {
+        let before = pending.len();
+        let mut still_pending = Vec::with_capacity(pending.len());
+        for index in pending {
+            let Some(object) = prepared.get(index) else {
+                return Err(PrikkError::Integrity(
+                    "bundle import: dependency ordering produced an index outside the prepared \
+                     set"
+                        .to_string(),
+                ));
+            };
+            let ready = object
+                .same_kind_dependencies
+                .iter()
+                .all(|dependency| !present.contains(dependency) || written.contains(dependency));
+            if ready {
+                written.insert(object.object_id);
+                ordered.push(index);
+            } else {
+                still_pending.push(index);
+            }
+        }
+        pending = still_pending;
+        if pending.len() == before {
+            // Cannot happen for real content -- see `same_kind_topological_order`'s own identical
+            // reasoning; refuse rather than write an arbitrary order if a malformed bundle somehow
+            // produces one.
+            return Err(PrikkError::Integrity(
+                "bundle contents: a same-kind object reference forms a cycle among carried objects"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(ordered)
+}
+
+#[cfg(test)]
+thread_local! {
+    static CORRUPT_ADMISSION_OUTCOME_FOR_TEST: std::cell::Cell<Option<ObjectId>> =
+        const { std::cell::Cell::new(None) };
+    static SIMULATE_PASS_TWO_READ_FAILURE_FOR_TEST: std::cell::Cell<Option<ObjectId>> =
+        const { std::cell::Cell::new(None) };
+    static CORRUPT_FRAME_DIGEST_FOR_TEST: std::cell::Cell<Option<ObjectId>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test seam, unreachable from production: pass 1 will record a deliberately wrong admission
+/// outcome for the named object, so pass 2's own, correct recomputation disagrees with it -- the
+/// only way to exercise R4's cross-pass assertion, which a correctly held lock makes otherwise
+/// unreachable (K1's second case-table row).
+#[cfg(test)]
+pub(crate) fn corrupt_admission_outcome_for_test(object_id: ObjectId) {
+    CORRUPT_ADMISSION_OUTCOME_FOR_TEST.with(|slot| slot.set(Some(object_id)));
+}
+
+/// Test seam, unreachable from production: pass 1 will record a deliberately wrong frame digest
+/// for the named object, so pass 2's own, correct recomputation (from the identical, unchanged
+/// bytes) disagrees with it -- R3's digest check exists to catch the frame changing between a
+/// real file's two reads; `bytes: &[u8]` is immutable for the whole of one `import_bundle` call,
+/// so that cannot happen for real against this entry point, and this seam is the only way to
+/// exercise the check's own message shape.
+#[cfg(test)]
+pub(crate) fn corrupt_frame_digest_for_test(object_id: ObjectId) {
+    CORRUPT_FRAME_DIGEST_FOR_TEST.with(|slot| slot.set(Some(object_id)));
+}
+
+#[cfg(test)]
+fn corrupted_frame_digest_for_test(
+    object_id: ObjectId,
+    digest: prikk_hash::Sha256Digest,
+) -> prikk_hash::Sha256Digest {
+    if CORRUPT_FRAME_DIGEST_FOR_TEST.with(std::cell::Cell::get) != Some(object_id) {
+        return digest;
+    }
+    let mut corrupted = digest;
+    if let Some(first_byte) = corrupted.first_mut() {
+        *first_byte ^= 0x01;
+    }
+    corrupted
+}
+
+#[cfg(test)]
+fn corrupted_admission_outcome_for_test(
+    object_id: ObjectId,
+    outcome: AdmissionOutcomeKind,
+) -> AdmissionOutcomeKind {
+    if CORRUPT_ADMISSION_OUTCOME_FOR_TEST.with(std::cell::Cell::get) != Some(object_id) {
+        return outcome;
+    }
+    match outcome {
+        AdmissionOutcomeKind::New => AdmissionOutcomeKind::AlreadyPresent,
+        AdmissionOutcomeKind::AlreadyPresent | AdmissionOutcomeKind::Merged => {
+            AdmissionOutcomeKind::New
+        }
+    }
+}
+
+/// Test seam, unreachable from production: pass 2 will refuse as though it could not re-read the
+/// named object's own frame, with the same message shape a real read failure would produce (K1's
+/// first case-table row). `bytes: &[u8]` is immutable for the whole of one `import_bundle` call,
+/// so a real read failure between the two passes cannot occur against this entry point today --
+/// see the Part 3b-i report's own note on this.
+#[cfg(test)]
+pub(crate) fn simulate_pass_two_read_failure_for_test(object_id: ObjectId) {
+    SIMULATE_PASS_TWO_READ_FAILURE_FOR_TEST.with(|slot| slot.set(Some(object_id)));
+}
+
+#[cfg(test)]
+fn check_simulated_pass_two_read_failure_for_test(
+    object_id: ObjectId,
+    written_object_count: usize,
+    object_count: usize,
+) -> Result<()> {
+    if SIMULATE_PASS_TWO_READ_FAILURE_FOR_TEST.with(std::cell::Cell::get) != Some(object_id) {
+        return Ok(());
+    }
+    Err(PrikkError::Integrity(format!(
+        "bundle import: object {object_id} could not be re-read for its own pass-2 check -- \
+         {written_object_count} of {object_count} objects were already written, each validated \
+         and admitted before being written; no received pointer was written; re-running the \
+         import once the file is stable will complete it"
+    )))
+}
+
+#[cfg(not(test))]
+fn check_simulated_pass_two_read_failure_for_test(
+    _object_id: ObjectId,
+    _written_object_count: usize,
+    _object_count: usize,
+) -> Result<()> {
+    Ok(())
 }
 
 /// Every carried envelope as it will be handed to the store, after RFC 156 §4's admission.

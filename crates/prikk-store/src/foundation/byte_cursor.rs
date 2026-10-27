@@ -29,6 +29,13 @@ impl<'a> ByteCursor<'a> {
         self.pos == self.bytes.len()
     }
 
+    /// 0.55.0 step 3 Part 3b-i: the cursor's own current byte offset into the slice it was built
+    /// from -- a caller that needs a frame's exact byte range (R3's per-frame digest) reads this
+    /// before and after consuming the frame, rather than this type copying the frame out twice.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     /// Read a fixed-size array.
     pub(crate) fn read_array<const N: usize>(&mut self) -> Result<[u8; N]> {
         let slice = self.read_exact(N)?;
