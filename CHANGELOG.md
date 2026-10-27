@@ -62,14 +62,21 @@ be read twice. `bundle verify` and `bundle preview` are also unchanged for now, 
 old multiplier.
 
 For a bundle of many ordinary-sized objects, the effect is large: importing one commit of 9,997
-small files (10,001 objects) peaked at 185,848 KiB before, 22,388 KiB after — about 2.2 KiB held
+small files (10,001 objects) peaked at 185,848 KiB before, 22,000 KiB after — about 2.2 KiB held
 per object, not a multiple of the whole 44 MiB bundle. A mixed bundle of 524 objects from 2 KiB to
-2 MiB peaked at 87,208 KiB before, 14,240 KiB after. For a bundle carrying one very large object,
-the win is smaller: one 16 MiB object peaked at 103,896–104,412 KiB before, 87,600–87,720 KiB
-after — still several times the object's own size, because catching a bundle that changes between
-being decided and being written needs reading and checking it twice, independently, and that cost
-scales with the size of the largest single object a bundle carries, not with how many objects it
-holds.
+2 MiB peaked at 87,208 KiB before, 14,240 KiB after.
+
+For a bundle carrying one very large object, the win is smaller, and for a real reason: writing an
+object still needs the bytes as read (to check they have not changed since they were decided), the
+decoded copy (to re-check that decision), and a further buffer to write the record — three buffer
+widths, each the size of the object, alive together for a moment. An earlier measurement also found
+memory the operating system had not yet taken back from an already-freed buffer, large enough that
+a differently-sized request straight after could not reuse it; releasing each large buffer as soon
+as its own last use ends, instead of waiting for it to go out of scope naturally, fixed that. One 16
+MiB object now peaks at about 70,700–71,100 KiB (previously 103,900–104,400 KiB before this change,
+87,600–87,700 KiB at the midpoint) — still several times the object's own size, but down to what
+the three buffers above actually need, not inflated further by memory the allocator was holding
+onto.
 
 **Measured, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
 (10,001 objects), tmpfs:**
@@ -82,10 +89,7 @@ holds.
 
 About 6–8% slower, from reading and decoding each object a second time rather than keeping a copy
 in memory across the whole operation. On the `/home` disk, one clean alternated round showed no
-real difference (30.15 s before, 30.57 s after); a second round was contaminated by unrelated
-concurrent load on the machine (64.4 s before, 73.6 s after, both about twice the clean round) and
-is reported for completeness, not as a measurement of this change — fsync cost already dominates
-disk timing at this object count, and the extra read work does not show against it.
+real difference (30.15 s before, 30.57 s after).
 
 ### Fixed
 
