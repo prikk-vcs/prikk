@@ -51,41 +51,41 @@ About twice as fast; the disk is noisy, but the direction held in every round.
 
 ### Changed — `bundle import` against a regular file no longer buffers the whole bundle
 
-`bundle import` used to read a bundle file whole into memory before doing anything else — its own
-peak memory followed the size of the whole bundle, several times over. Against a regular file (not
-a pipe or FIFO), it now streams: it reads and re-reads the open file in place, so its own peak
-memory follows the largest single object the bundle carries, not the whole bundle. A pipe or FIFO
-input is unchanged — still read into memory in full, since a non-seekable input cannot be read
-twice.
+`bundle import` used to read a bundle file whole into memory before doing anything else, and
+decode every object before writing any of them — its own peak memory followed the size of the
+whole bundle, several times over. Against a regular file (not a pipe or FIFO), it now streams: it
+reads and re-reads the open file in place, decoding and admitting one object at a time, and writes
+each one from the bytes it already read wherever that is sound rather than re-encoding them. Its
+own peak memory now follows what the bundle actually carries, not a multiple of the whole file. A
+pipe or FIFO input is unchanged — still read into memory in full, since a non-seekable input cannot
+be read twice. `bundle verify` and `bundle preview` are also unchanged for now, and still carry the
+old multiplier.
+
+For a bundle of many ordinary-sized objects, the effect is large: importing one commit of 9,997
+small files (10,001 objects) peaked at 185,848 KiB before, 22,388 KiB after — about 2.2 KiB held
+per object, not a multiple of the whole 44 MiB bundle. A mixed bundle of 524 objects from 2 KiB to
+2 MiB peaked at 87,208 KiB before, 14,240 KiB after. For a bundle carrying one very large object,
+the win is smaller: one 16 MiB object peaked at 103,896–104,412 KiB before, 87,600–87,720 KiB
+after — still several times the object's own size, because catching a bundle that changes between
+being decided and being written needs reading and checking it twice, independently, and that cost
+scales with the size of the largest single object a bundle carries, not with how many objects it
+holds.
 
 **Measured, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
-(10,001 objects)**:
-
-tmpfs:
+(10,001 objects), tmpfs:**
 
 | round | before | after |
 |---|---|---|
-| 1 | 0.4018 s | 0.4289 s |
-| 2 | 0.3999 s | 0.4281 s |
-| 3 | 0.3972 s | 0.4298 s |
+| 1 | 0.4164 s | 0.4530 s |
+| 2 | 0.4260 s | 0.4494 s |
+| 3 | 0.4275 s | 0.4526 s |
 
-the `/home` disk (both pass 1 and pass 2 now read the file again rather than slicing an in-memory
-buffer, so each import costs more read syscalls than before; on this shared machine the disk figure
-is noisy enough that a clean before/after ratio did not hold across samples):
-
-| round | before | after |
-|---|---|---|
-| 1 | 73.2 s | 72.0 s |
-| 2 | 94.4 s | 76.3 s |
-
-Consistently about 7% slower on tmpfs, from re-deriving each object a second time rather than
-keeping extra copies in memory; no consistent direction on disk, where fsync cost already
-dominates and this machine's own disk measurements are noisy enough (shared with other work) that
-a few percent either way does not separate from the noise. **Peak memory, one 16 MiB object,
-tmpfs:** 87,444 KiB (≈5.3× the object's own size) after
-this part, down from 103,464 KiB (≈6.3×) before it — in the right direction, but still above the
-3× target a later part reaches by moving `bundle preview`/`bundle verify` onto the same streaming
-path.
+About 6–8% slower, from reading and decoding each object a second time rather than keeping a copy
+in memory across the whole operation. On the `/home` disk, one clean alternated round showed no
+real difference (30.15 s before, 30.57 s after); a second round was contaminated by unrelated
+concurrent load on the machine (64.4 s before, 73.6 s after, both about twice the clean round) and
+is reported for completeness, not as a measurement of this change — fsync cost already dominates
+disk timing at this object count, and the extra read work does not show against it.
 
 ### Fixed
 
