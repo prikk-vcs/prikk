@@ -49,6 +49,44 @@ before the next one begins.
 
 About twice as fast; the disk is noisy, but the direction held in every round.
 
+### Changed — `bundle import` against a regular file no longer buffers the whole bundle
+
+`bundle import` used to read a bundle file whole into memory before doing anything else — its own
+peak memory followed the size of the whole bundle, several times over. Against a regular file (not
+a pipe or FIFO), it now streams: it reads and re-reads the open file in place, so its own peak
+memory follows the largest single object the bundle carries, not the whole bundle. A pipe or FIFO
+input is unchanged — still read into memory in full, since a non-seekable input cannot be read
+twice.
+
+**Measured, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
+(10,001 objects)**:
+
+tmpfs:
+
+| round | before | after |
+|---|---|---|
+| 1 | 0.4018 s | 0.4289 s |
+| 2 | 0.3999 s | 0.4281 s |
+| 3 | 0.3972 s | 0.4298 s |
+
+the `/home` disk (both pass 1 and pass 2 now read the file again rather than slicing an in-memory
+buffer, so each import costs more read syscalls than before; on this shared machine the disk figure
+is noisy enough that a clean before/after ratio did not hold across samples):
+
+| round | before | after |
+|---|---|---|
+| 1 | 73.2 s | 72.0 s |
+| 2 | 94.4 s | 76.3 s |
+
+Consistently about 7% slower on tmpfs, from re-deriving each object a second time rather than
+keeping extra copies in memory; no consistent direction on disk, where fsync cost already
+dominates and this machine's own disk measurements are noisy enough (shared with other work) that
+a few percent either way does not separate from the noise. **Peak memory, one 16 MiB object,
+tmpfs:** 87,444 KiB (≈5.3× the object's own size) after
+this part, down from 103,464 KiB (≈6.3×) before it — in the right direction, but still above the
+3× target a later part reaches by moving `bundle preview`/`bundle verify` onto the same streaming
+path.
+
 ### Fixed
 
 - **The Windows uninstaller left an empty `Path` value where none existed before install,** when
