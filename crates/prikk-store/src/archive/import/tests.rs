@@ -2261,7 +2261,7 @@ fn an_untrusted_received_signature_never_blocks_verify_or_import_and_the_destina
     // default, documented `bundle import` outcome. "a" never adopts upstream's maintainer key.
     let a_dir = unique_temp_dir("archive-n1-a");
     let a_layout = RepositoryLayout::init(&a_dir).expect("init a");
-    crate::bundle::import_bundle(
+    crate::bundle::import_bundle_from_bytes(
         &a_layout,
         &bundle_bytes,
         &crate::bundle::BundleImportOptions::default_limits(),

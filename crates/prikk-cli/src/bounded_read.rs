@@ -12,12 +12,20 @@
 //! capacity is `min(declared length, bound)`, never the declared length alone. A non-regular file
 //! is not refused for being non-regular -- reading a FIFO is a legitimate way to feed a bundle --
 //! it simply gets no fast path, since its reported length never exceeds the bound on its own.
+//!
+//! **0.55.0 step 3 Part 3b-i2 split one of the six: `bundle import`.** [`open_bundle_source`] hands
+//! it an open, seekable [`prikk_store::bundle::BundleSource`] instead of a fully buffered `Vec<u8>`
+//! -- a real regular file stays an open handle the store itself streams and seeks within, bounding
+//! memory by the largest object frame rather than the whole bundle (D1). The other five entry
+//! points, and `bundle import` itself for a non-regular input (a FIFO, a pipe), are unchanged: this
+//! module still fully buffers and bounds them the way it always has, via [`read_bounded_file`].
 
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
 use prikk_error::PrikkError;
+use prikk_store::BundleSource;
 
 use crate::commands::CliError;
 
@@ -199,6 +207,47 @@ pub(crate) fn read_bounded_file(
         &mut file,
         bound,
     )
+}
+
+/// 0.55.0 step 3 Part 3b-i2 (Q2): open `path` for `bundle import` specifically. A regular file
+/// stays an open, seekable handle -- `prikk-store` itself streams and bounds it against the real
+/// bytes it reads, independently of this check (the same "metadata can lie" discipline
+/// `read_bounded`'s own two-stage enforcement already follows). A non-regular file (a FIFO, a
+/// pipe) is buffered exactly as every other entry point already is, then wrapped in a `Cursor` so
+/// both branches hand `import_bundle` the identical `Read + Seek` interface.
+pub(crate) fn open_bundle_source(
+    label: &str,
+    path: &Path,
+    bound: &SizeBound,
+) -> Result<BundleSource, CliError> {
+    let mut file = File::open(path)
+        .map_err(|err| format!("failed to open {label} at {}: {err}", path.display()))?;
+    let metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to read metadata for {label} at {}: {err}",
+            path.display()
+        )
+    })?;
+    let declared_len = metadata.len();
+    if declared_len > bound.bytes {
+        return Err(oversized_declared(
+            label,
+            &path.display().to_string(),
+            declared_len,
+            bound,
+        ));
+    }
+    if metadata.is_file() {
+        return Ok(BundleSource::File(file));
+    }
+    let buf = read_bounded(
+        label,
+        &path.display().to_string(),
+        declared_len,
+        &mut file,
+        bound,
+    )?;
+    Ok(BundleSource::Buffered(std::io::Cursor::new(buf)))
 }
 
 fn oversized_declared(

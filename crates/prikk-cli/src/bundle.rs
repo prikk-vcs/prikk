@@ -34,7 +34,7 @@ use std::path::PathBuf;
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
-use crate::bounded_read::{SizeBound, read_bounded_file, render_incoming_error};
+use crate::bounded_read::{SizeBound, open_bundle_source, read_bounded_file, render_incoming_error};
 use crate::commands::CliError;
 use crate::config::resolve_max_object_bytes;
 use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
@@ -98,15 +98,17 @@ fn run_export(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_import_args(args)?;
     let layout = crate::open_repository(root)?;
-    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
-    let bytes = read_bounded_file("bundle", &parsed.input, &bundle_total_size_bound()?)?;
+    // 0.55.0 step 3 Part 3b-i2 (D1/Q2): a regular file stays an open, seekable handle -- memory
+    // follows the largest object, not the whole bundle. A non-regular input (a FIFO, a pipe) is
+    // still fully buffered and bounded before a byte reaches the store, exactly as before.
+    let mut source = open_bundle_source("bundle", &parsed.input, &bundle_total_size_bound()?)?;
     let object_bound = resolve_max_object_bytes(
         parsed.max_object_bytes,
         Some(&layout),
         DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     )?;
     let options = bundle_import_options(&object_bound)?;
-    let report = import_bundle(&layout, &bytes, &options)
+    let report = import_bundle(&layout, &mut source, &options)
         .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("received {}", report.ref_name);
     println!("RefState: {}", report.ref_state_id);

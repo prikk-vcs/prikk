@@ -70,14 +70,15 @@
 //! it.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 
 mod preview;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    AttestationPayload, BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefStatePayload,
-    Signature, SignerRole,
+    AttestationPayload, BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefKind,
+    RefStatePayload, Signature, SignerRole, TagPayload,
 };
 
 use crate::author::author_key_index::{
@@ -887,20 +888,651 @@ pub fn export_bundle(
     ))
 }
 
+/// 0.55.0 step 3 Part 3b-i2 (Q2): what `bundle import` reads from -- an open regular file's own
+/// handle, seekable in place, or (for a non-regular input: a FIFO, a pipe) the existing fully
+/// buffered fallback wrapped in a `Cursor` so both branches satisfy the identical `Read + Seek`
+/// interface pass 1 and pass 2 both need. Built by `prikk-cli`'s `bounded_read` module (which
+/// decides, from the open handle's own metadata, which variant to construct) -- `prikk-store` has
+/// no notion of a CLI bound or a path, and only ever reads from whichever variant it is handed.
+pub enum BundleSource {
+    /// A regular file, already opened by the caller. Pass 1 still enforces the real per-object and
+    /// per-import bounds against the bytes it actually reads, independently of any declared size
+    /// (RFC 158 Stage A's own "metadata can lie" rule) -- this variant carries no promise beyond
+    /// "seekable."
+    File(std::fs::File),
+    /// A non-regular input, already read fully into memory and bounded by the caller -- wrapped so
+    /// it exposes the identical `Read + Seek` surface the file-backed variant does.
+    Buffered(std::io::Cursor<Vec<u8>>),
+}
+
+impl Read for BundleSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Self::File(file) => file.read(buf),
+            Self::Buffered(cursor) => cursor.read(buf),
+        }
+    }
+}
+
+impl Seek for BundleSource {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        match self {
+            Self::File(file) => file.seek(pos),
+            Self::Buffered(cursor) => cursor.seek(pos),
+        }
+    }
+}
+
+fn u64_to_usize(value: u64) -> Result<usize> {
+    usize::try_from(value)
+        .map_err(|_| PrikkError::MalformedData("u64 length does not fit usize".to_string()))
+}
+
+fn stream_position_usize(source: &mut BundleSource) -> Result<usize> {
+    let position = source.stream_position().map_err(|err| {
+        PrikkError::Integrity(format!(
+            "bundle import: failed to read the input's current position: {err}"
+        ))
+    })?;
+    u64_to_usize(position)
+}
+
+fn read_exact_from(source: &mut BundleSource, len: usize) -> Result<Vec<u8>> {
+    let mut buf = vec![0_u8; len];
+    source
+        .read_exact(&mut buf)
+        .map_err(|err| PrikkError::MalformedData(format!("unexpected end of bundle: {err}")))?;
+    Ok(buf)
+}
+
+fn read_array_from<const N: usize>(source: &mut BundleSource) -> Result<[u8; N]> {
+    let bytes = read_exact_from(source, N)?;
+    let mut out = [0_u8; N];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn read_u64_from(source: &mut BundleSource) -> Result<u64> {
+    Ok(u64::from_be_bytes(read_array_from::<8>(source)?))
+}
+
+/// A u64-length-prefixed byte string, read from the stream -- the streaming counterpart of
+/// `ByteCursor::read_bytes_u64`, bounded by `max_len` (the bundle's own declared total size: no
+/// legitimate ref name, author key id, or manifest string can exceed the bundle that carries it).
+fn read_bytes_u64_from(source: &mut BundleSource, max_len: usize) -> Result<Vec<u8>> {
+    let len = read_u64_from(source)?;
+    if len > len_to_u64(max_len)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle declares a {len}-byte field, over the bundle's own declared total size"
+        )));
+    }
+    read_exact_from(source, u64_to_usize(len)?)
+}
+
+/// One object frame's complete raw bytes, length prefix included (R3's own digest range) -- the
+/// streaming counterpart of `read_bounded_object_frame`, reading from an open [`BundleSource`]
+/// instead of an in-memory `ByteCursor`. Refuses on the length prefix, before the frame's body is
+/// read, exactly as the buffered path already does.
+fn read_frame_from(source: &mut BundleSource, max_object_bytes: usize) -> Result<Vec<u8>> {
+    let declared_bytes = read_u64_from(source)?;
+    let bound_bytes = len_to_u64(max_object_bytes)?;
+    if declared_bytes > bound_bytes {
+        return Err(PrikkError::ObjectOverBound {
+            declared_bytes,
+            bound_bytes,
+        });
+    }
+    let body = read_exact_from(source, u64_to_usize(declared_bytes)?)?;
+    let mut frame = Vec::with_capacity(8 + body.len());
+    frame.extend_from_slice(&declared_bytes.to_be_bytes());
+    frame.extend_from_slice(&body);
+    Ok(frame)
+}
+
+/// 0.55.0 step 3 Part 3b-i2: the author-key section comes *after* every object frame in the wire
+/// format (`encode_bundle`'s own section order), but RFC 156 §4 admission needs that section's own
+/// transported material available *while* streaming the object frames, to verify a signature a
+/// newly-carried key_id introduces. Skipped here without reading a single frame's body: each
+/// frame's own length prefix says exactly how far to seek forward, so this walk costs `count` seeks
+/// and transfers no object content -- landing exactly at the author-key section's own first byte.
+fn skip_object_frames(source: &mut BundleSource, count: u64, max_object_bytes: usize) -> Result<()> {
+    let bound_bytes = len_to_u64(max_object_bytes)?;
+    for _ in 0..count {
+        let declared_bytes = read_u64_from(source)?;
+        if declared_bytes > bound_bytes {
+            return Err(PrikkError::ObjectOverBound {
+                declared_bytes,
+                bound_bytes,
+            });
+        }
+        let offset = i64::try_from(declared_bytes).map_err(|_| {
+            PrikkError::MalformedData("u64 length does not fit a seek offset".to_string())
+        })?;
+        source.seek(SeekFrom::Current(offset)).map_err(|err| {
+            PrikkError::Integrity(format!("bundle import: failed to skip an object frame: {err}"))
+        })?;
+    }
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-i2 (Q1): the handful of ids `validate_bundle_contents`'s own closure
+/// checks used to read straight off a fully decoded [`ObjectEnvelope`] -- extracted once, during
+/// the same streaming pass that decides admission, and never the envelope or its payload again.
+/// Default (empty/`None`) for every field a given object type does not carry.
+#[derive(Default)]
+struct ClosureMetadata {
+    /// RefState only.
+    ref_name: Option<String>,
+    /// RefState only.
+    kind: Option<RefKind>,
+    /// RefState only.
+    target_object_id: Option<ObjectId>,
+    /// RefState only.
+    previous_ref_state_id: Option<ObjectId>,
+    /// RefState only.
+    required_attestation_ids: Vec<ObjectId>,
+    /// Block only.
+    patch_ids: Vec<ObjectId>,
+    /// Block only.
+    parent_block_ids: Vec<ObjectId>,
+    /// Block only.
+    snapshot_blob_ref: Option<ObjectId>,
+    /// Patch only.
+    referenced_blob_ids: Vec<ObjectId>,
+    /// Attestation or Tag.
+    target_block_id: Option<ObjectId>,
+}
+
+/// This envelope's own [`same_kind_dependencies`] plus its [`ClosureMetadata`], decoding each
+/// type-specific payload at most once -- never the envelope itself past this call.
+fn closure_metadata_for(envelope: &ObjectEnvelope) -> Result<(Vec<ObjectId>, ClosureMetadata)> {
+    let mut closure = ClosureMetadata::default();
+    let same_kind_dependencies = match envelope.object_type {
+        ObjectType::Block => {
+            let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+            let mut deps = payload.parent_block_ids.clone();
+            deps.extend(payload.merge_baseline_block_id);
+            closure.parent_block_ids = payload.parent_block_ids;
+            closure.patch_ids = payload.patch_ids;
+            closure.snapshot_blob_ref = payload.snapshot_blob_ref;
+            deps
+        }
+        ObjectType::RefState => {
+            let payload = RefStatePayload::decode_canonical(
+                &envelope.canonical_payload,
+                envelope.schema_version,
+            )?;
+            let deps = payload.previous_ref_state_id.into_iter().collect();
+            closure.ref_name = Some(payload.ref_name);
+            closure.kind = Some(payload.kind);
+            closure.target_object_id = Some(payload.target_object_id);
+            closure.previous_ref_state_id = payload.previous_ref_state_id;
+            closure.required_attestation_ids = payload.required_attestation_ids;
+            deps
+        }
+        ObjectType::Patch => {
+            let mut referenced = Vec::new();
+            for operation in
+                decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?
+            {
+                referenced.extend(bundle_referenced_blob_ids(&operation.kind));
+            }
+            closure.referenced_blob_ids = referenced;
+            Vec::new()
+        }
+        ObjectType::Attestation => {
+            let payload = AttestationPayload::decode_canonical(&envelope.canonical_payload)?;
+            closure.target_block_id = Some(payload.target_block_id);
+            Vec::new()
+        }
+        ObjectType::Tag => {
+            let payload = TagPayload::decode_canonical(&envelope.canonical_payload)?;
+            closure.target_block_id = Some(payload.target_block_id);
+            Vec::new()
+        }
+        ObjectType::Blob
+        | ObjectType::RecognitionClaim
+        | ObjectType::RefUpdate
+        | ObjectType::RecoveryNote
+        | ObjectType::BlockSummaryCache => Vec::new(),
+    };
+    Ok((same_kind_dependencies, closure))
+}
+
+/// 0.55.0 step 3 Part 3b-i2: whether a newly-decoded duplicate occurrence of an id already in
+/// `prepared` is a byte-identical repeat (cheap: digests already match) or needs the first
+/// occurrence re-read and decoded to compare full [`ObjectEnvelope`] equality, exactly as
+/// `validate_bundle_contents` used to (its own "same id, different signature bytes" rule, restated
+/// against a real file instead of an in-memory map). Restores the stream's position to where it was
+/// when called, whichever branch it took.
+fn prepared_matches_existing(
+    source: &mut BundleSource,
+    prepared: &[PreparedObject],
+    existing_index: usize,
+    new_digest: prikk_hash::Sha256Digest,
+    new_envelope: &ObjectEnvelope,
+) -> Result<bool> {
+    let Some(existing) = prepared.get(existing_index) else {
+        return Err(PrikkError::Integrity(
+            "bundle import: a duplicate id's first occurrence is no longer in the prepared set"
+                .to_string(),
+        ));
+    };
+    if existing.frame_digest == new_digest {
+        return Ok(true);
+    }
+    let resume_at = stream_position_usize(source)?;
+    source
+        .seek(SeekFrom::Start(existing.frame_range.start as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle import: failed to re-read a duplicate object's first occurrence: {err}"
+            ))
+        })?;
+    let existing_frame = read_exact_from(
+        source,
+        existing.frame_range.end - existing.frame_range.start,
+    )?;
+    source
+        .seek(SeekFrom::Start(resume_at as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle import: failed to resume reading after checking a duplicate object: {err}"
+            ))
+        })?;
+    let Some(existing_body) = existing_frame.get(8..) else {
+        return Err(PrikkError::Integrity(
+            "bundle import: a prepared object's own frame is shorter than its length prefix"
+                .to_string(),
+        ));
+    };
+    let existing_envelope = decode_envelope_file(existing_body)?;
+    Ok(&existing_envelope == new_envelope)
+}
+
+/// 0.55.0 step 3 Part 3b-i2: a carried snapshot blob's own manifest, read for the content-blob ids
+/// it names (RFC 136 increment 1b) -- fetched on demand, by seeking back to that one blob's own
+/// recorded frame range, never more than one frame's content at a time.
+fn carried_snapshot_manifest_blob_ids(
+    source: &mut BundleSource,
+    prepared: &[PreparedObject],
+    blob_index: usize,
+) -> Result<Vec<ObjectId>> {
+    let Some(blob) = prepared.get(blob_index) else {
+        return Err(PrikkError::Integrity(
+            "bundle import: a snapshot blob's own prepared entry is missing".to_string(),
+        ));
+    };
+    let resume_at = stream_position_usize(source)?;
+    source
+        .seek(SeekFrom::Start(blob.frame_range.start as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!("bundle import: failed to re-read a snapshot blob: {err}"))
+        })?;
+    let frame = read_exact_from(source, blob.frame_range.end - blob.frame_range.start)?;
+    source
+        .seek(SeekFrom::Start(resume_at as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle import: failed to resume reading after a snapshot blob: {err}"
+            ))
+        })?;
+    let Some(frame_body) = frame.get(8..) else {
+        return Err(PrikkError::Integrity(
+            "bundle import: a prepared object's own frame is shorter than its length prefix"
+                .to_string(),
+        ));
+    };
+    let envelope = decode_envelope_file(frame_body)?;
+    let manifest = crate::snapshot::SnapshotManifest::decode(&crate::blob_access::decode_snapshot_blob(
+        &envelope.canonical_payload,
+    )?)?;
+    Ok(manifest
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.content {
+            crate::state_root::StateRootContent::Blob(blob_id) => Some(*blob_id),
+            crate::state_root::StateRootContent::Symlink(_) => None,
+        })
+        .collect())
+}
+
+/// 0.55.0 step 3 Part 3b-i2 (Q1): `validate_bundle_contents`'s own closure checks (items 1-4 plus
+/// the manifest cross-check and the bundle-internal author-key consistency check), run against the
+/// cheap per-object metadata the streaming walk collected instead of a full decoded envelope set --
+/// the same checks, in the same order, with the same refusal wording, reusing `local`'s own real
+/// reads for anything satisfied by the receiving repository rather than carried by this bundle
+/// (D7's incremental-import rule, unchanged).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn validate_bundle_closure(
+    source: &mut BundleSource,
+    origin_ref_name: &str,
+    prepared: &[PreparedObject],
+    index_by_id: &BTreeMap<ObjectId, usize>,
+    membership: &BTreeMap<ObjectId, ObjectType>,
+    closure_by_id: &BTreeMap<ObjectId, ClosureMetadata>,
+    local: Option<&ObjectReadSnapshot>,
+    author_keys: &[AuthorKeyEntry],
+    manifest: Option<&DecodedManifest>,
+    object_count: u64,
+) -> Result<(ObjectId, BTreeMap<String, [u8; 32]>)> {
+    let Some(ref_state_object) = prepared.first() else {
+        return Err(PrikkError::MalformedData(
+            "bundle contains no objects".to_string(),
+        ));
+    };
+    if ref_state_object.object_type != ObjectType::RefState {
+        return Err(PrikkError::MalformedData(
+            "bundle's first object must be the exported ref's RefState".to_string(),
+        ));
+    }
+    let ref_state_id = ref_state_object.object_id;
+    let Some(ref_state_closure) = closure_by_id.get(&ref_state_id) else {
+        return Err(PrikkError::Integrity(
+            "bundle import: the exported ref's own RefState has no recorded closure metadata"
+                .to_string(),
+        ));
+    };
+
+    // DC-53 Stage 2, D7/C2: the bundle's own author-key section must not disagree with itself.
+    let mut bundle_key_ids: BTreeMap<String, [u8; 32]> = BTreeMap::new();
+    for entry in author_keys {
+        match bundle_key_ids.get(entry.key_id.as_str()) {
+            Some(existing) if *existing != entry.public_key => {
+                return Err(PrikkError::MalformedData(format!(
+                    "bundle's author-key section carries two different public keys for key_id {} \
+                     -- refusing the whole bundle",
+                    entry.key_id
+                )));
+            }
+            Some(_) => {}
+            None => {
+                bundle_key_ids.insert(entry.key_id.clone(), entry.public_key);
+            }
+        }
+    }
+
+    let local_available = local.is_some();
+    let present = |object_type: ObjectType, id: ObjectId| -> bool {
+        membership.get(&id) == Some(&object_type)
+            || local.is_some_and(|snapshot| snapshot.contains_object(object_type, id))
+    };
+    let missing_clause = if local_available {
+        "neither carried by this bundle nor already present in this repository -- refusing the \
+         whole import, no partial write"
+    } else {
+        "not carried by this bundle -- refusing to verify; an offline check with no repository to \
+         ask cannot know whether a receiver would already hold it"
+    };
+
+    // Item 1: the exported ref's target resolves (`ensure_ref_target_valid`'s own logic, against
+    // this metadata instead of a full `ObjectReader`).
+    match ref_state_closure.kind {
+        Some(RefKind::Branch) => {
+            let target = ref_state_closure.target_object_id.ok_or_else(|| {
+                PrikkError::Integrity(
+                    "bundle import: RefState has no recorded target object id".to_string(),
+                )
+            })?;
+            if !present(ObjectType::Block, target) {
+                return Err(PrikkError::Integrity(format!(
+                    "ref object {ref_state_id} targets missing block {target}"
+                )));
+            }
+        }
+        Some(RefKind::Tag) => {
+            let tag_id = ref_state_closure.target_object_id.ok_or_else(|| {
+                PrikkError::Integrity(
+                    "bundle import: RefState has no recorded target object id".to_string(),
+                )
+            })?;
+            let target_block_id = match closure_by_id.get(&tag_id) {
+                Some(tag_closure) if membership.get(&tag_id) == Some(&ObjectType::Tag) => {
+                    tag_closure.target_block_id.ok_or_else(|| {
+                        PrikkError::Integrity(format!(
+                            "ref object {ref_state_id} targets tag {tag_id}, which has no \
+                             recorded target block"
+                        ))
+                    })?
+                }
+                _ => {
+                    let tag_envelope = local
+                        .and_then(|snapshot| snapshot.read_typed(tag_id, ObjectType::Tag).ok().flatten());
+                    let Some(tag_envelope) = tag_envelope else {
+                        return Err(PrikkError::Integrity(format!(
+                            "ref object {ref_state_id} targets missing tag {tag_id}"
+                        )));
+                    };
+                    TagPayload::decode_canonical(&tag_envelope.canonical_payload)?.target_block_id
+                }
+            };
+            if !present(ObjectType::Block, target_block_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "ref object {ref_state_id} targets missing block {target_block_id}"
+                )));
+            }
+        }
+        None => {
+            return Err(PrikkError::Integrity(
+                "bundle import: RefState has no recorded kind".to_string(),
+            ));
+        }
+    }
+
+    // 0.49.0 step 5, round 2 item 1: the exported ref's own chain and the attestations each link
+    // requires must be present, carried by this bundle or already here.
+    let mut chain_seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut required_attestation_ids = ref_state_closure.required_attestation_ids.clone();
+    let mut previous_ref_state_id = ref_state_closure.previous_ref_state_id;
+    loop {
+        for attestation_id in &required_attestation_ids {
+            if !present(ObjectType::Attestation, *attestation_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
+                )));
+            }
+            let target_block_id = match closure_by_id.get(attestation_id) {
+                Some(attestation_closure)
+                    if membership.get(attestation_id) == Some(&ObjectType::Attestation) =>
+                {
+                    attestation_closure.target_block_id.ok_or_else(|| {
+                        PrikkError::Integrity(format!(
+                            "attestation {attestation_id} has no recorded target block"
+                        ))
+                    })?
+                }
+                _ => {
+                    let envelope = local
+                        .and_then(|snapshot| snapshot.read_object(*attestation_id).ok().flatten())
+                        .ok_or_else(|| {
+                            PrikkError::Integrity(format!(
+                                "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
+                            ))
+                        })?;
+                    AttestationPayload::decode_canonical(&envelope.canonical_payload)?
+                        .target_block_id
+                }
+            };
+            if !present(ObjectType::Block, target_block_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "attestation {attestation_id} targets block {target_block_id}, which is {missing_clause}"
+                )));
+            }
+        }
+        let Some(previous) = previous_ref_state_id else {
+            break;
+        };
+        if !chain_seen.insert(previous) {
+            return Err(PrikkError::MalformedData(format!(
+                "RefState chain for {origin_ref_name} contains a cycle at {previous}"
+            )));
+        }
+        if !present(ObjectType::RefState, previous) {
+            return Err(PrikkError::Integrity(format!(
+                "RefState chain for {origin_ref_name} names previous RefState {previous}, which is {missing_clause}"
+            )));
+        }
+        match closure_by_id.get(&previous) {
+            Some(link_closure) if membership.get(&previous) == Some(&ObjectType::RefState) => {
+                required_attestation_ids = link_closure.required_attestation_ids.clone();
+                previous_ref_state_id = link_closure.previous_ref_state_id;
+            }
+            _ => break,
+        }
+    }
+
+    // DC-44 increment 3, control 4: a manifest that disagrees with the payload is refused.
+    if let Some(raw) = manifest {
+        if raw.declared_ref_name != origin_ref_name {
+            return Err(PrikkError::MalformedData(format!(
+                "bundle's manifest declares ref {}, but the bundle's own header names {} -- \
+                 refusing the whole bundle",
+                raw.declared_ref_name, origin_ref_name
+            )));
+        }
+        let ref_name = ref_state_closure.ref_name.as_deref().unwrap_or_default();
+        if raw.declared_ref_name != ref_name {
+            return Err(PrikkError::MalformedData(format!(
+                "bundle's manifest declares ref {}, but the exported RefState's own signed ref \
+                 name is {} -- refusing the whole bundle",
+                raw.declared_ref_name, ref_name
+            )));
+        }
+        if raw.declared_object_count != object_count {
+            return Err(PrikkError::MalformedData(format!(
+                "bundle's manifest declares {} objects, but the bundle actually carries {} -- \
+                 refusing the whole bundle",
+                raw.declared_object_count, object_count
+            )));
+        }
+    }
+
+    // Items 2 and 3: every blob a carried patch's operations reference, and every patch a carried
+    // block names, must be present.
+    for (id, closure) in closure_by_id {
+        if membership.get(id) != Some(&ObjectType::Patch) {
+            continue;
+        }
+        for blob_id in &closure.referenced_blob_ids {
+            if !present(ObjectType::Blob, *blob_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "patch {id} references blob {blob_id}, which is {missing_clause}"
+                )));
+            }
+        }
+    }
+    for (id, closure) in closure_by_id {
+        if membership.get(id) != Some(&ObjectType::Block) {
+            continue;
+        }
+        let block_id = *id;
+        for patch_id in &closure.patch_ids {
+            if !present(ObjectType::Patch, *patch_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "block {block_id} names patch {patch_id}, which is {missing_clause}"
+                )));
+            }
+        }
+        // Item 4: every parent a carried block names must be present too.
+        for parent_block_id in &closure.parent_block_ids {
+            if !present(ObjectType::Block, *parent_block_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "block {block_id} names parent {parent_block_id}, which is {missing_clause}"
+                )));
+            }
+        }
+        if let Some(snapshot_blob_id) = closure.snapshot_blob_ref {
+            if !present(ObjectType::Blob, snapshot_blob_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "block {block_id} names snapshot blob {snapshot_blob_id}, which is \
+                     {missing_clause}"
+                )));
+            }
+            // RFC 136 increment 1b: a carried manifest names content blobs no patch names. Only
+            // checked when the snapshot blob is itself carried -- a purely local one was checked
+            // when it arrived, exactly as today.
+            if membership.get(&snapshot_blob_id) == Some(&ObjectType::Blob) {
+                if let Some(&blob_index) = index_by_id.get(&snapshot_blob_id) {
+                    for content_blob_id in
+                        carried_snapshot_manifest_blob_ids(source, prepared, blob_index)?
+                    {
+                        if !present(ObjectType::Blob, content_blob_id) {
+                            return Err(PrikkError::Integrity(format!(
+                                "block {block_id} snapshot blob {snapshot_blob_id} names content \
+                                 blob {content_blob_id}, which is {missing_clause}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((ref_state_id, bundle_key_ids))
+}
+
 /// Import a bundle's objects and record a `received` pointer for its ref (DC-78 §D4). Never touches
 /// `refs/by-id/`, never advances a local ref, and never adopts any MAINTAINER key into the local trust
 /// policy — the imported RefState/Blocks remain ordinary, structurally-checkable objects that `verify`
 /// will report as untrusted until the operator explicitly runs `trust maintainer add` for the key that
 /// sealed them. That is a deliberate choice, not an oversight: auto-adopting a key seen in imported
 /// history would be a new, unreviewed trust mechanism, exactly what §D6 rules out.
+///
+/// 0.55.0 step 3 Part 3b-i2 (D1/Q1/Q2): reads `source` forward exactly once for the real work (plus
+/// one cheap seek-only skip-walk to reach the author-key section ahead of the object frames it
+/// follows in the wire format, and pass 2's own seeks back by recorded range) -- never the whole
+/// bundle materialized at once. `validate_bundle_contents`'s own structural and closure checks now
+/// run inside this same locked streaming pass as admission ([`validate_bundle_closure`]), not
+/// before it: a concurrent writer acting in the window before the lock is now seen by the *whole*
+/// locked decision, not only the author-key-conflict check (Q1's own reasoning for why the two race
+/// tests below keep their seam unchanged).
 pub fn import_bundle(
     layout: &RepositoryLayout,
-    bytes: &[u8],
+    source: &mut BundleSource,
     options: &BundleImportOptions,
 ) -> Result<BundleImportReport> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
-    let mut contents = validate_bundle_contents(bytes, options, Some(&read_snapshot))?;
-    let received_ref_name = format!("remotes/{}", contents.origin_ref_name);
+
+    // Header-only checks, before the lock (Q1): the declared total size and the format magic.
+    let total_len = source.seek(SeekFrom::End(0)).map_err(|err| {
+        PrikkError::Integrity(format!("bundle import: failed to measure the input: {err}"))
+    })?;
+    source.seek(SeekFrom::Start(0)).map_err(|err| {
+        PrikkError::Integrity(format!("bundle import: failed to rewind the input: {err}"))
+    })?;
+    if total_len > len_to_u64(options.max_total_bytes)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle is {total_len} bytes, over the configured limit of {} bytes",
+            options.max_total_bytes
+        )));
+    }
+    let magic: [u8; 8] = read_array_from(source)?;
+    let (has_author_key_section, has_manifest_section) = if &magic == BUNDLE_MAGIC {
+        (true, true)
+    } else if &magic == RETIRED_BUNDLE_MAGIC_V2 {
+        (true, false)
+    } else if &magic == RETIRED_BUNDLE_MAGIC_V1 {
+        (false, false)
+    } else {
+        return Err(PrikkError::MalformedData(
+            "invalid bundle magic".to_string(),
+        ));
+    };
+    // The origin ref name is a header field too (distinct from the exported RefState's own signed
+    // `ref_name`, checked against it below) -- cheap, needed for `validate_received_ref` before the
+    // lock, and part of the judgment call Q1 leaves to this implementation.
+    let origin_ref_name = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+        .map_err(|err| PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}")))?;
+    let count = read_u64_from(source)?;
+    if count > len_to_u64(options.max_object_count)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle declares {count} objects, over the configured limit of {}",
+            options.max_object_count
+        )));
+    }
+    let object_count = u64_to_usize(count)?;
+
+    let received_ref_name = format!("remotes/{origin_ref_name}");
     crate::received::validate_received_ref(&received_ref_name)?;
 
     // Gated like its only caller: `bundle`'s tests are Linux-only.
@@ -909,24 +1541,15 @@ pub fn import_bundle(
         change();
     }
 
-    // **A refused import writes nothing.** Every check that can refuse runs before the first object
-    // write, and the locks are held from those checks through the last write:
+    // **A refused import writes nothing.** Every check that can refuse now runs inside this one
+    // locked streaming pass, and the locks are held from here through the last write:
     //
     // - `ActiveLock` serializes author-key recording against every other recorder (`commit`,
-    //   `rollback-draft`, `sync accept`, another import), so the conflict check below cannot be
-    //   invalidated by a key recorded between it and `record_author_key_material`. Holding it across
-    //   the object writes is the order `commit` and `seal` already use.
+    //   `rollback-draft`, `sync accept`, another import).
     // - The received-index lock is taken here rather than just before the pointer write, so a
     //   concurrent compaction refuses this import up front instead of after its objects are written.
-    // - 0.55.0 step 3 Part 2: `ObjectStore` joins this same acquisition, held across every object
-    //   write below (`write_object_under_held_lock`, the shape `archive import` already uses) instead
-    //   of being acquired and released once per object. `acquire_container_locks` sorts by
-    //   `LockableContainer`'s own declared order, and `ObjectStore` is declared last and is a leaf
-    //   (`object_store.rs:237`-`241`), so nothing acquired here changes the documented order --
-    //   nothing else is acquired inside the write loop below.
-    //
-    // Before this, the author-key conflict check ran after every object was written, so a refused
-    // import left the bundle's objects behind -- appended to containers nothing prunes.
+    // - `ObjectStore` joins this same acquisition, held across every object write below
+    //   (`write_object_under_held_lock`, the shape `archive import` already uses).
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     let _container_locks = acquire_container_locks(
         layout,
@@ -935,44 +1558,91 @@ pub fn import_bundle(
             LockableContainer::ObjectStore,
         ],
     )?;
-    // RFC 163 §2, Addendum 1 item 1: the received index's own write-side tail guard belongs here too --
-    // before the first object write, under the same lock the pointer write later runs under, exactly
-    // like the author-key check below. It used to run inside `append_received_index_entry`, after
-    // every object and author-key write; a refused import left them behind.
     crate::received::received_index::require_received_index_clean_tail(layout)?;
-    for (key_id, public_key) in &contents.bundle_key_ids {
-        check_author_key_conflict(layout, key_id, *public_key)?;
+
+    let objects_start = stream_position_usize(source)?;
+    // RFC 156 §4 needs the author-key section's own transported material before admission can run
+    // for a Patch a newly-carried key_id introduces -- skip past the object frames (without reading
+    // any of their bodies) to reach it, read it, then seek back to do the real per-object pass.
+    skip_object_frames(source, count, options.max_object_bytes)?;
+    let mut author_keys: Vec<AuthorKeyEntry> = Vec::new();
+    if has_author_key_section {
+        let author_key_count = read_u64_from(source)?;
+        if author_key_count > len_to_u64(options.max_object_count)? {
+            return Err(PrikkError::MalformedData(format!(
+                "bundle declares {author_key_count} author key entries, over the configured limit \
+                 of {}",
+                options.max_object_count
+            )));
+        }
+        for _ in 0..author_key_count {
+            let key_id = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+                .map_err(|err| {
+                    PrikkError::MalformedData(format!(
+                        "invalid bundle author key_id utf-8: {err}"
+                    ))
+                })?;
+            Signature::validate_key_id(&key_id)?;
+            let public_key = read_array_from::<32>(source)?;
+            author_keys.push(AuthorKeyEntry { key_id, public_key });
+        }
     }
+    let manifest = if has_manifest_section {
+        let repository_format = u32::try_from(read_u64_from(source)?).map_err(|_| {
+            PrikkError::MalformedData(
+                "bundle manifest declares a repository format number that does not fit in u32"
+                    .to_string(),
+            )
+        })?;
+        let tool_version =
+            String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?).map_err(
+                |err| {
+                    PrikkError::MalformedData(format!(
+                        "invalid bundle manifest tool version utf-8: {err}"
+                    ))
+                },
+            )?;
+        let declared_ref_name =
+            String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?).map_err(
+                |err| {
+                    PrikkError::MalformedData(format!(
+                        "invalid bundle manifest ref name utf-8: {err}"
+                    ))
+                },
+            )?;
+        let declared_object_count = read_u64_from(source)?;
+        let scope = BundleScope::from_wire_tag(read_u64_from(source)?)?;
+        Some(DecodedManifest {
+            repository_format,
+            tool_version,
+            scope,
+            declared_ref_name,
+            declared_object_count,
+        })
+    } else {
+        None
+    };
+    let end_position = stream_position_usize(source)?;
+    if end_position as u64 != total_len {
+        return Err(PrikkError::MalformedData(
+            "trailing bytes in bundle".to_string(),
+        ));
+    }
+
+    source
+        .seek(SeekFrom::Start(objects_start as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle import: failed to seek back to the object frames: {err}"
+            ))
+        })?;
+
     let mut object_store = ObjectWriteSession::open(layout)?;
-
-    // 0.55.0 step 3 Part 3b-i (R1/R3/R4): pass 1, under this same held lock, decides -- for every
-    // carried object -- everything that can refuse: RFC 156 §4 signature admission and the
-    // store's own write decision (`check_write`). It keeps only each object's cheap identity and
-    // same-kind dependency ids (R1), its own frame's byte range and digest (R3), and which
-    // admission outcome it reached (R4) -- never the decoded envelope itself past its own turn,
-    // and never a second or third full copy of the bundle's objects sitting alongside the one
-    // `validate_bundle_contents` already built. Pass 2, below, re-derives each envelope from
-    // `bytes` by its own recorded byte range, recomputes both the digest and the admission
-    // decision, and asserts each still agrees with pass 1's record before writing it -- "the
-    // store cannot change while the lock is held" (R4), so a mismatch there is an internal error,
-    // never a legitimate outcome.
-    let frame_ranges =
-        frame_ranges_in_bundle_order(bytes, options.max_object_count, options.max_object_bytes)?;
-    let object_count = frame_ranges.len();
-    if object_count != contents.objects.len() {
-        return Err(PrikkError::Integrity(format!(
-            "bundle import: {object_count} frame ranges traced but {} objects decoded from the \
-             same bytes -- the two scans disagree",
-            contents.objects.len()
-        )));
-    }
-
     let admitter = CarriedSignatureAdmitter::new(layout)?;
     let mut author_material_closure = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
         let mut entries = lookup_author_key_entries(layout, key_id)?;
         entries.extend(
-            contents
-                .author_keys
+            author_keys
                 .iter()
                 .filter(|entry| entry.key_id == key_id)
                 .cloned(),
@@ -980,22 +1650,52 @@ pub fn import_bundle(
         Ok(entries)
     };
 
-    let mut prepared: Vec<PreparedObject> = Vec::with_capacity(frame_ranges.len());
-    for (envelope, frame_range) in std::mem::take(&mut contents.objects)
-        .into_iter()
-        .zip(frame_ranges)
-    {
+    // 0.55.0 step 3 Part 3b-i2 (Q1/Q2, fusing what used to be `validate_bundle_contents`'s own
+    // decode and `import_bundle`'s own pass 1): one forward walk over the object frames, reading
+    // each exactly once, in file order. For every object it decides RFC 156 §4 admission and the
+    // store's own write decision (R4), and extracts the handful of ids `validate_bundle_closure`
+    // below needs (Q1) -- never the decoded envelope itself past its own turn in this loop, and
+    // never more than one frame's content in memory at a time.
+    let mut prepared: Vec<PreparedObject> = Vec::new();
+    let mut index_by_id: BTreeMap<ObjectId, usize> = BTreeMap::new();
+    let mut membership: BTreeMap<ObjectId, ObjectType> = BTreeMap::new();
+    let mut closure_by_id: BTreeMap<ObjectId, ClosureMetadata> = BTreeMap::new();
+    for _ in 0..count {
+        let start = stream_position_usize(source)?;
+        let frame = read_frame_from(source, options.max_object_bytes)?;
+        let end = start.checked_add(frame.len()).ok_or_else(|| {
+            PrikkError::Integrity("bundle import: frame range overflow".to_string())
+        })?;
+        let real_frame_digest = prikk_hash::sha256(&frame);
+        let Some(frame_body) = frame.get(8..) else {
+            return Err(PrikkError::Integrity(
+                "bundle import: a frame is shorter than its own length prefix".to_string(),
+            ));
+        };
+        let envelope = decode_envelope_file(frame_body)?;
         let object_id = envelope.object_id();
+
+        // 0.55.0 step 3 Part 3b-i's own fix, restated for the streaming walk: a bundle may carry
+        // the same id twice with byte-identical bytes ("an exact repeat is harmless and allowed").
+        // Resolved here, as each occurrence is read, rather than after the fact -- the second
+        // occurrence of a harmless repeat is never admitted at all, so R4's cross-pass assertion
+        // can no longer be tripped by this import's own duplicate the way it once was.
+        if let Some(&existing_index) = index_by_id.get(&object_id) {
+            if !prepared_matches_existing(source, &prepared, existing_index, real_frame_digest, &envelope)? {
+                return Err(PrikkError::MalformedData(format!(
+                    "bundle carries object {object_id} twice with different envelopes -- \
+                     refusing the whole bundle"
+                )));
+            }
+            continue;
+        }
+
         let already_present = object_store.contains_object(envelope.object_type, object_id)?;
         // RFC 156 §4 rules 1-3, format 7: for every carried object this repository already holds,
         // which of its signatures may join the stored record. Verified here, before anything is
-        // written; an invalid one refuses the whole import. A format-6 repository keeps one
-        // record per id, so its store refuses the second envelope below instead.
+        // written; an invalid one refuses the whole import.
         let admitted =
             admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
-        // The store's own write decision, before any object is written: an envelope the format
-        // rejects, or -- in format 6 -- an id this repository already holds under other envelope
-        // bytes.
         object_store.check_write(&admitted.envelope)?;
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut admission_outcome = if !already_present {
@@ -1009,54 +1709,71 @@ pub fn import_bundle(
         {
             admission_outcome = corrupted_admission_outcome_for_test(object_id, admission_outcome);
         }
-        let same_kind_dependencies = same_kind_dependencies(&envelope)?;
         #[cfg_attr(not(test), allow(unused_mut))]
-        let mut frame_digest =
-            prikk_hash::sha256(bytes.get(frame_range.clone()).ok_or_else(|| {
-                PrikkError::Integrity(
-                    "bundle import: a frame range traced from the bundle's own bytes no longer \
-                 resolves against them"
-                        .to_string(),
-                )
-            })?);
+        let mut frame_digest = real_frame_digest;
         #[cfg(test)]
         {
             frame_digest = corrupted_frame_digest_for_test(object_id, frame_digest);
         }
+
+        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
+
+        let index = prepared.len();
         prepared.push(PreparedObject {
             object_id,
             object_type: envelope.object_type,
             same_kind_dependencies,
-            frame_range,
+            frame_range: start..end,
             frame_digest,
             admission_outcome,
         });
+        index_by_id.insert(object_id, index);
+        membership.insert(object_id, envelope.object_type);
+        closure_by_id.insert(object_id, closure);
     }
 
-    // 0.55.0 step 3 Part 3b-i: a bundle may carry the same id twice with byte-identical bytes
-    // ("an exact repeat is harmless and allowed," `validate_bundle_contents`'s own duplicate-id
-    // check above, which already refused a *non*-identical repeat before pass 1 began). Pass 1
-    // alone can't see that -- it never writes, so both occurrences are decided against the same
-    // unwritten store state and both record `New`. Pass 2 writes as it goes, so a later
-    // occurrence of the same id would see the earlier one already durable and recompute
-    // `AlreadyPresent`, tripping R4's own cross-pass assertion over a difference this import
-    // itself created, not a sign the store changed under the lock. Deduplicated here, by id, kept
-    // in first-occurrence order -- `object_count` above is already the bundle's own raw frame
-    // count and is not reduced by this.
-    let mut prepared_ids_seen: BTreeSet<ObjectId> = BTreeSet::new();
-    prepared.retain(|object| prepared_ids_seen.insert(object.object_id));
+    // The same structural/closure validation `validate_bundle_contents` used to run before any
+    // lock was even taken (Q1): now run against the cheap metadata collected above, under this
+    // same held lock, after admission -- both are decide-only (neither writes), so running
+    // admission first changes only which refusal surfaces for a bundle invalid on more than one
+    // ground, never the "nothing written on any refusal" guarantee.
+    let (ref_state_id, bundle_key_ids) = validate_bundle_closure(
+        source,
+        &origin_ref_name,
+        &prepared,
+        &index_by_id,
+        &membership,
+        &closure_by_id,
+        Some(&read_snapshot),
+        &author_keys,
+        manifest.as_ref(),
+        count,
+    )?;
+
+    // RFC 163 §2, Addendum 1 item 1 / the author-key conflict check: both still run before the
+    // first object write, under the same lock the pointer write later runs under.
+    for (key_id, public_key) in &bundle_key_ids {
+        check_author_key_conflict(layout, key_id, *public_key)?;
+    }
+
+    // `BundleImportReport` carries no manifest field (unlike `BundleVerifyReport`/
+    // `BundlePreviewReport`) -- `manifest` above was consulted only for the cross-check and is
+    // dropped here, same as the pre-streaming code's own `contents.manifest` was for this caller.
 
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely
-    // over `prepared`'s own cheap `(id, type, dependency ids)` metadata -- the bundle's own
-    // carried order (whatever the exporter produced) is not necessarily dependency order across
-    // types, so a kill partway through pass 2's write loop below must never leave a later-typed
-    // object durable while an earlier one it depends on is still missing.
+    // over `prepared`'s own cheap `(id, type, dependency ids)` metadata.
     let write_order = dependency_order_indices(&prepared)?;
+
+    #[cfg(test)]
+    if let Some(change) = CORRUPT_FILE_BETWEEN_PASSES_FOR_TEST.with(|slot| slot.borrow_mut().take())
+    {
+        change();
+    }
 
     // Past this point only I/O can stop the import -- never a decision about the bundle's content,
     // and never a concurrent writer: `_container_locks` already holds `ObjectStore` for the whole
-    // loop (0.55.0 step 3 Part 2), so `write_object_under_held_lock` only re-checks that the lock is
-    // still held, rather than acquiring and releasing it once per object.
+    // loop, so `write_object_under_held_lock` only re-checks that the lock is still held, rather
+    // than acquiring and releasing it once per object.
     let mut written_object_count = 0_usize;
     let mut merged_object_count = 0_usize;
     let mut dropped_signatures: Vec<crate::DroppedSignature> = Vec::new();
@@ -1074,14 +1791,24 @@ pub fn import_bundle(
             written_object_count,
             object_count,
         )?;
-        let Some(frame) = bytes.get(prepared_object.frame_range.clone()) else {
-            return Err(PrikkError::Integrity(format!(
+        let read_failure_message = || {
+            format!(
                 "bundle import: object {} could not be re-read for its own pass-2 check -- \
                  {written_object_count} of {object_count} objects were already written, each \
                  validated and admitted before being written; no received pointer was written; \
                  re-running the import once the file is stable will complete it",
                 prepared_object.object_id
-            )));
+            )
+        };
+        if let Err(_seek_err) =
+            source.seek(SeekFrom::Start(prepared_object.frame_range.start as u64))
+        {
+            return Err(PrikkError::Integrity(read_failure_message()));
+        }
+        let frame_len = prepared_object.frame_range.end - prepared_object.frame_range.start;
+        let frame = match read_exact_from(source, frame_len) {
+            Ok(frame) => frame,
+            Err(_read_err) => return Err(PrikkError::Integrity(read_failure_message())),
         };
         // R3: the per-frame digest, recomputed from the same bytes pass 1 read and re-verified
         // before this object is admitted or written again. K2: this is not the manifest digest
@@ -1089,7 +1816,7 @@ pub fn import_bundle(
         // object's id is already a content hash of its own bytes. This digest is a private,
         // in-memory record kept only between this function's own two passes, covering the whole
         // frame including its signatures, which the object id does not cover.
-        if prikk_hash::sha256(frame) != prepared_object.frame_digest {
+        if prikk_hash::sha256(&frame) != prepared_object.frame_digest {
             return Err(PrikkError::Integrity(format!(
                 "bundle import: object {} changed between validation and writing -- \
                  {written_object_count} of {object_count} objects were already written, each \
@@ -1153,27 +1880,43 @@ pub fn import_bundle(
     }
 
     // DC-53 Stage 2, D7: import records material, `verify` decides. Every entry was checked above,
-    // under this same lock, so recording cannot meet a conflict here (`multi-key-import-partial-write-
-    // v1.md`'s all-or-nothing rule holds for the same reason it always did).
+    // under this same lock, so recording cannot meet a conflict here.
     let mut recorded_author_key_count = 0_usize;
-    for entry in &contents.author_keys {
+    for entry in &author_keys {
         record_author_key_material(layout, &entry.key_id, entry.public_key, &active_lock)?;
         recorded_author_key_count = recorded_author_key_count.checked_add(1).ok_or_else(|| {
             PrikkError::Integrity("bundle import recorded-author-key count overflow".to_string())
         })?;
     }
 
-    crate::received::write_received_pointer(layout, &received_ref_name, contents.ref_state_id)?;
+    crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
 
     Ok(BundleImportReport {
         ref_name: received_ref_name,
-        ref_state_id: contents.ref_state_id,
+        ref_state_id,
         object_count,
         written_object_count,
         merged_object_count,
         dropped_signatures,
         recorded_author_key_count,
     })
+}
+
+/// Test-only convenience over [`import_bundle`]'s own `bytes: &[u8]`-shaped predecessor: wraps
+/// `bytes` in a [`BundleSource::Buffered`] cursor and calls through. Every existing test built a
+/// whole bundle's bytes in memory already (it is the thing under test, or a fixture built by
+/// `export_bundle`, which still returns `Vec<u8>`) -- this keeps that construction unchanged across
+/// the many existing call sites 0.55.0 step 3 Part 3b-i2's own signature change would otherwise
+/// touch one at a time, with no production behavior difference from calling [`import_bundle`]
+/// directly on a `BundleSource::Buffered` (the same path a real non-regular-file input takes).
+#[cfg(test)]
+pub(crate) fn import_bundle_from_bytes(
+    layout: &RepositoryLayout,
+    bytes: &[u8],
+    options: &BundleImportOptions,
+) -> Result<BundleImportReport> {
+    let mut source = BundleSource::Buffered(std::io::Cursor::new(bytes.to_vec()));
+    import_bundle(layout, &mut source, options)
 }
 
 /// 0.55.0 step 3 Part 3a (R6): the one seam reachable from a real, separately compiled `prikk`
@@ -1374,41 +2117,6 @@ enum AdmissionOutcomeKind {
     Merged,
 }
 
-/// 0.55.0 step 3 Part 3b-i (R3): replays [`decode_bundle`]'s own framing walk (magic, ref name,
-/// declared count, then each object's own length-prefixed frame) far enough to record every
-/// object frame's exact byte range in `bytes` -- length prefix included, so a caller can hash or
-/// re-read "the length-prefixed frame exactly as read." Only ever called on bytes
-/// `validate_bundle_contents` (which calls `decode_bundle` itself) already decoded successfully
-/// moments earlier in the same function call, over the identical, unchanged slice -- so this walk
-/// does not re-check the magic's own value, only replays the same fixed-position header fields
-/// every accepted magic shares before the object-frame loop begins. A second, small,
-/// self-contained walk rather than widening `decode_bundle`'s own four-tuple return, which dozens
-/// of existing test call sites destructure positionally -- this walk decodes nothing past the
-/// frame boundaries themselves, so it carries none of the risk a signature change there would.
-fn frame_ranges_in_bundle_order(
-    bytes: &[u8],
-    max_object_count: usize,
-    max_object_bytes: usize,
-) -> Result<Vec<Range<usize>>> {
-    let mut cursor = ByteCursor::new(bytes);
-    let _magic = cursor.read_array::<8>()?;
-    let _ref_name_bytes = cursor.read_bytes_u64()?;
-    let count = cursor.read_u64()?;
-    if count > len_to_u64(max_object_count)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle declares {count} objects, over the configured limit of {max_object_count}"
-        )));
-    }
-    let mut ranges = Vec::new();
-    for _ in 0..count {
-        let start = cursor.position();
-        let _frame = read_bounded_object_frame(&mut cursor, max_object_bytes)?;
-        let end = cursor.position();
-        ranges.push(start..end);
-    }
-    Ok(ranges)
-}
-
 /// 0.55.0 step 3 Part 3b-i (R1): [`objects_in_dependency_order`]'s own two-stage algorithm --
 /// cross-kind rank, then same-kind topological order -- as a thin wrapper over `prepared`'s own
 /// cheap `(id, type, dependency ids)` metadata, returning a permutation of indices into `prepared`
@@ -1520,11 +2228,10 @@ pub(crate) fn corrupt_admission_outcome_for_test(object_id: ObjectId) {
 }
 
 /// Test seam, unreachable from production: pass 1 will record a deliberately wrong frame digest
-/// for the named object, so pass 2's own, correct recomputation (from the identical, unchanged
-/// bytes) disagrees with it -- R3's digest check exists to catch the frame changing between a
-/// real file's two reads; `bytes: &[u8]` is immutable for the whole of one `import_bundle` call,
-/// so that cannot happen for real against this entry point, and this seam is the only way to
-/// exercise the check's own message shape.
+/// for the named object, so pass 2's own, correct recomputation disagrees with it -- R3's digest
+/// check exists to catch the frame changing between a real file's two reads. 0.55.0 step 3 Part
+/// 3b-i2 made that reachable for real too, through [`corrupt_file_between_passes_for_test`]; this
+/// seam stays for a one-object-targeted test that needs no real file mutation.
 #[cfg(test)]
 pub(crate) fn corrupt_frame_digest_for_test(object_id: ObjectId) {
     CORRUPT_FRAME_DIGEST_FOR_TEST.with(|slot| slot.set(Some(object_id)));
@@ -1563,9 +2270,9 @@ fn corrupted_admission_outcome_for_test(
 
 /// Test seam, unreachable from production: pass 2 will refuse as though it could not re-read the
 /// named object's own frame, with the same message shape a real read failure would produce (K1's
-/// first case-table row). `bytes: &[u8]` is immutable for the whole of one `import_bundle` call,
-/// so a real read failure between the two passes cannot occur against this entry point today --
-/// see the Part 3b-i report's own note on this.
+/// first case-table row). 0.55.0 step 3 Part 3b-i2: a real read failure between the two passes is
+/// now reachable too, through [`corrupt_file_between_passes_for_test`]'s own real file mutation --
+/// this seam stays, for a surgical, single-object-targeted test that needs no real file I/O.
 #[cfg(test)]
 pub(crate) fn simulate_pass_two_read_failure_for_test(object_id: ObjectId) {
     SIMULATE_PASS_TWO_READ_FAILURE_FOR_TEST.with(|slot| slot.set(Some(object_id)));
@@ -1724,10 +2431,17 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static DURING_IMPORT_WRITES: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static CORRUPT_FILE_BETWEEN_PASSES_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
-/// Test seam, unreachable from production: run `change` once, after the bundle is validated and before
-/// `import_bundle` takes its locks — where a concurrent writer could record an author key.
+/// Test seam, unreachable from production: run `change` once, after the bundle's own header is
+/// read (magic, ref name, declared count) and before `import_bundle` takes its locks — where a
+/// concurrent writer could record an author key. 0.55.0 step 3 Part 3b-i2 (Q1): the structural and
+/// closure checks that used to run here too, before any lock, now run *inside* the locked streaming
+/// pass instead -- so a concurrent writer acting in this same window is now seen by the whole
+/// locked per-object decision, not only the author-key-conflict check, and this seam still fires at
+/// the identical point relative to lock acquisition.
 #[cfg(test)]
 pub(crate) fn before_import_lock_for_test(change: impl FnOnce() + 'static) {
     BEFORE_IMPORT_LOCK.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
@@ -1738,6 +2452,19 @@ pub(crate) fn before_import_lock_for_test(change: impl FnOnce() + 'static) {
 #[cfg(test)]
 pub(crate) fn during_import_writes_for_test(change: impl FnOnce() + 'static) {
     DURING_IMPORT_WRITES.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
+}
+
+/// Test seam, unreachable from production: run `change` once, after pass 1 (admission and closure
+/// validation) finishes and before pass 2's first seek -- 0.55.0 step 3 Part 3b-i2 (Q2, K1): now
+/// that `bundle import` holds the file open across both passes instead of a `bytes: &[u8]`
+/// snapshot, a real mutation of the bundle's own backing file (truncate or rewrite specific bytes)
+/// becomes observable here for the first time. The callback closes over the file's own path and
+/// mutates it directly through a second handle -- truncating or rewriting through a second handle
+/// on the same path is visible to the first handle's next read, since file length and content are
+/// properties of the inode, not the handle; `import_bundle` itself never needs that path.
+#[cfg(test)]
+pub(crate) fn corrupt_file_between_passes_for_test(change: impl FnOnce() + 'static) {
+    CORRUPT_FILE_BETWEEN_PASSES_FOR_TEST.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 /// Read a bundle and report whether it is structurally sound and internally consistent, **without
@@ -1794,29 +2521,31 @@ pub fn verify_bundle(bytes: &[u8], options: &BundleImportOptions) -> Result<Bund
     })
 }
 
-/// Everything [`import_bundle`] and [`verify_bundle`] both need from a decoded bundle, after every
-/// read-only check has passed. `bundle_objects_by_id` and `ref_state_payload` are kept (not just
-/// the raw `objects`) because both callers need them again — `import_bundle` for nothing further
-/// (it already has `objects`), `verify_bundle` for `resolve_ref_tip_block`'s own `ObjectReader`
-/// call — without redoing the id-keyed map build or the RefState decode a second time.
+/// Everything [`preview_bundle_reporting_anchor`] and [`verify_bundle`] both need from a decoded
+/// bundle, after every read-only check has passed. 0.55.0 step 3 Part 3b-i2: `import_bundle` no
+/// longer calls this (it runs the equivalent checks itself, streamed, in
+/// [`validate_bundle_closure`]) -- this remains the shared path for the two callers that still
+/// take a bundle as one in-memory `bytes: &[u8]`. `bundle_objects_by_id` and `ref_state_payload`
+/// are kept (not just the raw `objects`) because both remaining callers need them again --
+/// `verify_bundle` for `resolve_ref_tip_block`'s own `ObjectReader` call -- without redoing the
+/// id-keyed map build or the RefState decode a second time.
 struct BundleContents {
     origin_ref_name: String,
     objects: Vec<ObjectEnvelope>,
     author_keys: Vec<AuthorKeyEntry>,
     ref_state_id: ObjectId,
     ref_state_payload: RefStatePayload,
-    bundle_key_ids: BTreeMap<String, [u8; 32]>,
     bundle_objects_by_id: BTreeMap<ObjectId, ObjectEnvelope>,
     /// DC-44 increment 3: `Some` for a `PBNDL003` bundle, already checked for internal agreement
     /// against the payload; `None` for `PBNDL001`/`PBNDL002`, which carry no manifest section.
     manifest: Option<BundleManifest>,
 }
 
-/// Decode `bytes` and run every read-only structural and closure check [`import_bundle`] performs
-/// before its first write — shared, not reimplemented, by [`verify_bundle`] (DC-44 increment 1
-/// handoff §2). `local` is `Some(repository)` for import, where a referenced object may be
-/// satisfied by the bundle *or* the repository's own existing objects (D7's incremental-import
-/// rule); `None` for offline verification, where a reference must resolve within the bundle
+/// Decode `bytes` and run every read-only structural and closure check [`preview_bundle_reporting_anchor`]
+/// and [`verify_bundle`] need -- shared, not reimplemented, by both (DC-44 increment 1 handoff §2).
+/// `local` is `Some(repository)` for a preview, where a referenced object may be satisfied by the
+/// bundle *or* the repository's own existing objects (D7's incremental-import rule); `None` for
+/// offline verification, where a reference must resolve within the bundle
 /// itself — the only thing checkable with no repository to ask (`verify_bundle`'s own doc comment
 /// explains why this is not a weaker check for a real export).
 fn validate_bundle_contents(
@@ -2124,7 +2853,6 @@ fn validate_bundle_contents(
         author_keys,
         ref_state_id,
         ref_state_payload,
-        bundle_key_ids,
         bundle_objects_by_id,
         manifest,
     })

@@ -24,7 +24,8 @@ use prikk_object::{ObjectEnvelope, ObjectType};
 
 use crate::bundle::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
-    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle, export_bundle, import_bundle,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle, export_bundle,
+    import_bundle_from_bytes,
 };
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_after_for_test};
 use crate::patch_exchange::{AcceptOptions, accept_exchange_artifact, export_exchange_artifact};
@@ -459,7 +460,7 @@ fn rfc163_bundle_import_randomized_failpoint_sweep() {
         };
 
         fail_after_for_test(point, ordinal);
-        let first = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+        let first = import_bundle_from_bytes(&layout, &bytes, &BundleImportOptions::default_limits());
 
         if first.is_ok() {
             // The failpoint never fired -- a clean, uneventful iteration.
@@ -506,7 +507,7 @@ fn rfc163_bundle_import_randomized_failpoint_sweep() {
 
         // The natural retry: the same bundle bytes, re-imported (DC-38's mechanism -- §1's own "25
         // of 25 repositories went to verify 0" evidence for this exact operation).
-        let retry = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+        let retry = import_bundle_from_bytes(&layout, &bytes, &BundleImportOptions::default_limits());
         match retry {
             Ok(_) => match verify_repository(&layout) {
                 Ok(verification) => {
@@ -607,7 +608,7 @@ fn rfc163_bundle_import_child_before_parent_randomized_failpoint_sweep() {
         };
 
         fail_after_for_test(point, ordinal);
-        let first = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+        let first = import_bundle_from_bytes(&layout, &bytes, &BundleImportOptions::default_limits());
 
         if first.is_ok() {
             match verify_repository(&layout) {
@@ -646,7 +647,7 @@ fn rfc163_bundle_import_child_before_parent_randomized_failpoint_sweep() {
         let _ = repair_pointer_index_tail(&layout);
         let _ = repair_repository(&layout, DoctorRepairOptions::truncate_wal_tail());
 
-        let retry = import_bundle(&layout, &bytes, &BundleImportOptions::default_limits());
+        let retry = import_bundle_from_bytes(&layout, &bytes, &BundleImportOptions::default_limits());
         match retry {
             Ok(_) => match verify_repository(&layout) {
                 Ok(verification) => {
