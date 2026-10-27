@@ -562,7 +562,11 @@ pub fn import_archive<R: Read + Seek>(
             // own doc comment). A format-6 repository's own store refuses a second envelope for an
             // id it holds instead of merging (`admit_one`'s own `!several_records` branch); nothing
             // here duplicates that rule.
-            let admitted = admitter.admit_one(&object_store, envelope, |key_id| {
+            // 0.55.0 step 3 Part 3b-ii: `admit_one` now takes ownership (so its own two "nothing to
+            // merge" branches can move rather than clone); this callback only ever holds a borrow
+            // from `for_each_object_record`'s own record decode, so it clones here instead -- a
+            // scoped cost for this caller, not `admit_one`'s.
+            let admitted = admitter.admit_one(&object_store, envelope.clone(), |key_id| {
                 let mut entries = lookup_author_key_entries(layout, key_id)?;
                 if let Some(carried) = author_material.get(key_id) {
                     entries.extend(carried.iter().cloned());

@@ -460,10 +460,20 @@ const GUARDED: &[GuardedFunction] = &[
     GuardedFunction {
         name: "append_object_to_container",
         definition: "pub(crate) fn append_object_to_container",
-        locked_calls: &[(
-            "object_store.rs",
-            "append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)",
-        )],
+        // 0.55.0 step 3 Part 3b-ii added a second locked caller: `append_object_under_held_lock_
+        // with_known_body`'s own call to `append_object_to_container_with_known_body` (the
+        // substring match above catches both names) -- the exact same lock-held guarantee, over
+        // the sibling entry point that can skip re-encoding a `New` object's own bytes.
+        locked_calls: &[
+            (
+                "object_store.rs",
+                "append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)",
+            ),
+            (
+                "object_store.rs",
+                "append_object_to_container_with_known_body(layout, object_type, envelope, body_override)",
+            ),
+        ],
     },
     GuardedFunction {
         name: "repair_index_from_containers",

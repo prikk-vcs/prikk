@@ -134,7 +134,39 @@ pub(crate) fn encode_container_record(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
-    let body = encode_envelope_file(envelope)?;
+    encode_container_record_with_known_body(object_type, envelope, None)
+}
+
+/// As [`encode_container_record`], but when the caller already holds bytes it can prove equal
+/// `envelope`'s own canonical encoding (`known_body`), skips the `encode_envelope_file` call and
+/// frames those bytes directly -- 0.55.0 step 3 Part 3b-ii, for `bundle import`'s own `New`
+/// outcome, where `known_body` is the frame body already read and digest-verified from the
+/// carried bundle. `None` here is exactly [`encode_container_record`]'s own body, so every
+/// existing caller of that function is unaffected by this one's existence.
+pub(crate) fn encode_container_record_with_known_body(
+    object_type: ObjectType,
+    envelope: &ObjectEnvelope,
+    known_body: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let body: std::borrow::Cow<'_, [u8]> = match known_body {
+        Some(known) => {
+            // Test-only parity guard: `known_body` must be provably what a fresh encode would
+            // produce (the caller's own argument for this), checked here rather than trusted
+            // silently, so a future change that breaks the invariant fails loudly in tests
+            // instead of writing a quietly wrong record. Never a release-build cost.
+            #[cfg(test)]
+            {
+                let fresh = encode_envelope_file(envelope)?;
+                assert_eq!(
+                    fresh, known,
+                    "known_body hint disagrees with a fresh encode_envelope_file for the same \
+                     envelope -- the caller's own byte-identity claim does not hold"
+                );
+            }
+            std::borrow::Cow::Borrowed(known)
+        }
+        None => std::borrow::Cow::Owned(encode_envelope_file(envelope)?),
+    };
     frame_record(object_type, &body)
 }
 

@@ -1703,11 +1703,15 @@ pub fn import_bundle(
         }
 
         let already_present = object_store.contains_object(envelope.object_type, object_id)?;
+        let object_type = envelope.object_type;
+        // 0.55.0 step 3 Part 3b-ii: extracted before `admit_one`, not after -- closure metadata
+        // never depends on the admission result, and `admit_one` now takes `envelope` by value
+        // (below), so this must read it first.
+        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
         // RFC 156 §4 rules 1-3, format 7: for every carried object this repository already holds,
         // which of its signatures may join the stored record. Verified here, before anything is
         // written; an invalid one refuses the whole import.
-        let admitted =
-            admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        let admitted = admitter.admit_one(&object_store, envelope, &mut author_material_closure)?;
         object_store.check_write(&admitted.envelope)?;
         #[cfg_attr(not(test), allow(unused_mut))]
         let mut admission_outcome = if !already_present {
@@ -1728,19 +1732,17 @@ pub fn import_bundle(
             frame_digest = corrupted_frame_digest_for_test(object_id, frame_digest);
         }
 
-        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
-
         let index = prepared.len();
         prepared.push(PreparedObject {
             object_id,
-            object_type: envelope.object_type,
+            object_type,
             same_kind_dependencies,
             frame_range: start..end,
             frame_digest,
             admission_outcome,
         });
         index_by_id.insert(object_id, index);
-        membership.insert(object_id, envelope.object_type);
+        membership.insert(object_id, object_type);
         closure_by_id.insert(object_id, closure);
     }
 
@@ -1846,8 +1848,7 @@ pub fn import_bundle(
         let envelope = decode_envelope_file(frame_body)?;
         let already_present =
             object_store.contains_object(prepared_object.object_type, prepared_object.object_id)?;
-        let admitted =
-            admitter.admit_one(&object_store, &envelope, &mut author_material_closure)?;
+        let admitted = admitter.admit_one(&object_store, envelope, &mut author_material_closure)?;
         let recomputed_outcome = if !already_present {
             AdmissionOutcomeKind::New
         } else if admitted.merged {
@@ -1877,7 +1878,19 @@ pub fn import_bundle(
                 PrikkError::Integrity("bundle import written-object count overflow".to_string())
             })?;
         }
-        object_store.write_object_under_held_lock(&admitted.envelope, &_container_locks)?;
+        // 0.55.0 step 3 Part 3b-ii: for a `New` object, `admitted.envelope` is `frame_body`
+        // decoded and handed back unchanged (`admit_one`'s own new-object branch) -- its canonical
+        // encoding is provably `frame_body` itself (R3's digest, verified above, is exactly over
+        // these bytes), so the hint lets the write skip re-encoding what it already has. A `Merge`
+        // genuinely changes the content, so it always re-encodes (the write path only honors the
+        // hint when its own fresh decision confirms `New`, never trusting the caller's label
+        // alone).
+        let known_body = (recomputed_outcome == AdmissionOutcomeKind::New).then_some(frame_body);
+        object_store.write_object_under_held_lock_with_known_body(
+            &admitted.envelope,
+            &_container_locks,
+            known_body,
+        )?;
         #[cfg(feature = "test-support")]
         {
             test_support_objects_written_so_far =
@@ -2359,19 +2372,25 @@ impl CarriedSignatureAdmitter {
     /// RFC 156 §4 rules 1-3 for one carried object -- the exact decision [`admit_carried_signatures`]
     /// makes per envelope in its own loop; factored out, not re-derived, so the two never drift
     /// apart.
+    ///
+    /// Takes `envelope` by value (0.55.0 step 3 Part 3b-ii): the two "nothing to merge" branches
+    /// (not already stored, and format 6) move it straight into the returned [`AdmittedOne`]
+    /// instead of cloning it, since neither branch changes it. A caller that still needs the
+    /// original afterward for its own reasons (`admit_carried_signatures`, over a borrowed slice
+    /// it does not own) clones at its own call site -- a scoped cost, not this function's.
     pub(crate) fn admit_one(
         &self,
         stored_objects: &impl ObjectReader,
-        envelope: &ObjectEnvelope,
+        envelope: ObjectEnvelope,
         mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
     ) -> Result<AdmittedOne> {
         // Read through the caller's session, opened under the active lock, so the count below is the one
         // every other importer sees (RFC 156 §7.4 rule 5).
         let Some(stored) = stored_objects.read_object(envelope.object_id())? else {
             // A new object is stored as carried; the bound applies to it as to a merge.
-            crate::signature_admission::require_within_signature_bound(envelope, &self.policy)?;
+            crate::signature_admission::require_within_signature_bound(&envelope, &self.policy)?;
             return Ok(AdmittedOne {
-                envelope: envelope.clone(),
+                envelope,
                 merged: false,
                 dropped: Vec::new(),
             });
@@ -2379,14 +2398,14 @@ impl CarriedSignatureAdmitter {
         if !self.several_records {
             // Format 6: the store keeps the stored record or refuses a different one; nothing merges.
             return Ok(AdmittedOne {
-                envelope: envelope.clone(),
+                envelope,
                 merged: false,
                 dropped: Vec::new(),
             });
         }
         let decided = crate::signature_admission::admit_signatures(
-            &stored,
-            envelope,
+            stored,
+            &envelope,
             &self.policy,
             &mut author_material,
         )?;
@@ -2424,7 +2443,11 @@ pub(crate) fn admit_carried_signatures(
         dropped: Vec::new(),
     };
     for envelope in carried {
-        let admitted = admitter.admit_one(stored_objects, envelope, &mut author_material)?;
+        // 0.55.0 step 3 Part 3b-ii: `admit_one` now takes ownership (so its own two "nothing to
+        // merge" branches can move rather than clone); this loop only ever holds a borrow from
+        // `carried`, so it clones here instead -- a scoped cost for this caller, not `admit_one`'s.
+        let admitted =
+            admitter.admit_one(stored_objects, envelope.clone(), &mut author_material)?;
         if admitted.merged {
             admission.merged_object_count = admission
                 .merged_object_count

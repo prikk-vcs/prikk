@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
+use crate::foundation::index::append_object_to_container_with_known_body;
 use crate::foundation::index::{
     self, IndexEntry, WriteDecision, append_object_to_container, decide_write_outcome,
     read_object_envelope_at,
@@ -301,11 +302,19 @@ fn append_object_under_lock<'a>(
 /// `guard` is checked, not assumed, to actually hold `ObjectStore`
 /// ([`ContainerLockGuard::holds`]) -- a caller cannot reach the container-append primitive while
 /// believing it holds a lock it does not.
-fn append_object_under_held_lock<'a>(
+/// 0.55.0 step 3 Part 3b-ii added `known_body`: an optional known-raw-encoding hint, used only
+/// when `choose`'s own result is `LockedWrite::Append(Cow::Borrowed(..))` (the `New` outcome: the
+/// candidate is appended unchanged), never for `Cow::Owned` (`Merge`: the content genuinely
+/// differs from any hint taken before the merge). This is a structural check against the exact
+/// value this call's own decision just produced, not a trust of what the caller claims. This
+/// function's only caller (`write_object_under_held_lock_with_known_body`) passes `None` on every
+/// path but `bundle import`'s pass 2, so every other write keeps today's behavior exactly.
+fn append_object_under_held_lock_with_known_body<'a>(
     layout: &RepositoryLayout,
     guard: &ContainerLockGuard,
     object_type: ObjectType,
     choose: impl FnOnce() -> Result<LockedWrite<'a>>,
+    known_body: Option<&[u8]>,
 ) -> Result<ObjectId> {
     if !guard.holds(LockableContainer::ObjectStore) {
         return Err(PrikkError::LockConflict(
@@ -318,8 +327,13 @@ fn append_object_under_held_lock<'a>(
         LockedWrite::AlreadyPresent(id) => return Ok(id),
         LockedWrite::Append(envelope) => envelope,
     };
+    let body_override = match &appended {
+        std::borrow::Cow::Borrowed(_) => known_body,
+        std::borrow::Cow::Owned(_) => None,
+    };
     let envelope: &ObjectEnvelope = &appended;
-    append_object_to_container(layout, object_type, envelope).map(|entry| entry.object_id)
+    append_object_to_container_with_known_body(layout, object_type, envelope, body_override)
+        .map(|entry| entry.object_id)
 }
 
 /// The index file's current raw byte length, independent of what any decode of it produced --
@@ -784,6 +798,24 @@ impl ObjectWriteSession {
         envelope: &ObjectEnvelope,
         guard: &ContainerLockGuard,
     ) -> Result<ObjectId> {
+        self.write_object_under_held_lock_with_known_body(envelope, guard, None)
+    }
+
+    /// As [`Self::write_object_under_held_lock`], but with an optional known-raw-encoding hint
+    /// (`known_body`) -- 0.55.0 step 3 Part 3b-ii, for a caller that already holds bytes it can
+    /// prove equal `envelope`'s own canonical encoding (`bundle import`'s pass 2, for the already
+    /// digest-verified bundle frame it just re-read). `decide_write` -- the one decision every
+    /// "refused import writes nothing" guarantee in this codebase rests on -- still runs exactly
+    /// as it always does; only the final serialization step, deeper in
+    /// `append_object_under_held_lock_with_known_body`, may skip re-encoding, and only for the
+    /// `New` outcome. `None` here is exactly [`Self::write_object_under_held_lock`]'s own body, so
+    /// every existing caller of that method is unaffected by this one's existence.
+    pub(crate) fn write_object_under_held_lock_with_known_body(
+        &mut self,
+        envelope: &ObjectEnvelope,
+        guard: &ContainerLockGuard,
+        known_body: Option<&[u8]>,
+    ) -> Result<ObjectId> {
         match self.decide_write(envelope)? {
             WriteDecision::AlreadyPresent(id) => Ok(id),
             WriteDecision::New | WriteDecision::Merge(_) => {
@@ -794,12 +826,17 @@ impl ObjectWriteSession {
                 }
                 let layout = &self.layout;
                 let snapshot = &mut self.snapshot;
-                let object_id =
-                    append_object_under_held_lock(layout, guard, envelope.object_type, || {
+                let object_id = append_object_under_held_lock_with_known_body(
+                    layout,
+                    guard,
+                    envelope.object_type,
+                    || {
                         snapshot.ensure_current_locked(layout)?;
                         let existing = snapshot.lookup(envelope.object_id()).copied();
                         locked_write(layout, envelope, existing.as_ref())
-                    })?;
+                    },
+                    known_body,
+                )?;
                 self.snapshot.ensure_current(&self.layout)?;
                 Ok(object_id)
             }

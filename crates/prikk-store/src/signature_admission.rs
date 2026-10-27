@@ -159,8 +159,13 @@ pub(crate) struct Admission {
 /// repository's recorded entries plus the import's own carried ones. When the two envelopes differ in
 /// more than signatures, nothing is admitted and `incoming` is returned unchanged, so the store's own
 /// decision refuses it as the corruption it is.
+///
+/// `stored` is taken by value, not cloned here, since 0.55.0 step 3 Part 3b-ii's own caller
+/// (`CarriedSignatureAdmitter::admit_one`) already owns it (freshly read from the object store) and
+/// has no further use for it afterward -- the one place this function needed a working copy to add
+/// signatures to (`union`) now reuses that ownership instead of cloning it first.
 pub(crate) fn admit_signatures(
-    stored: &ObjectEnvelope,
+    stored: ObjectEnvelope,
     incoming: &ObjectEnvelope,
     policy: &MaintainerTrustPolicy,
     mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
@@ -176,12 +181,18 @@ pub(crate) fn admit_signatures(
         });
     }
     let object_id = incoming.object_id();
-    let mut union = stored.clone();
+    // The fixed, pre-loop signature set, checked below instead of `union`'s own (growing) one --
+    // a true duplicate tuple *within* `incoming` must still reach `union.add_signature`'s own
+    // refusal (unchanged behavior), not be silently skipped as "already present" because an
+    // earlier turn of this same loop just added it. Cloning the (small) signature list, not the
+    // envelope's own (potentially large) `canonical_payload`, keeps 0.55.0 step 3 Part 3b-ii's own
+    // point: `stored` itself still moves into `union` below, unduplicated.
+    let stored_signatures = stored.signatures.clone();
+    let mut union = stored;
     let mut adds_signatures = false;
     let mut dropped = Vec::new();
     for signature in &incoming.signatures {
-        if stored
-            .signatures
+        if stored_signatures
             .binary_search_by(|existing| existing.canonical_cmp(signature))
             .is_ok()
         {

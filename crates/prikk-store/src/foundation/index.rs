@@ -674,8 +674,34 @@ pub(crate) fn append_object_to_container(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<IndexEntry> {
-    let object_id = envelope.object_id();
     let record_bytes = container::encode_container_record(object_type, envelope)?;
+    append_encoded_object_record(layout, object_type, envelope.object_id(), record_bytes)
+}
+
+/// As [`append_object_to_container`], but threading an optional known-raw-encoding hint through to
+/// [`container::encode_container_record_with_known_body`] -- 0.55.0 step 3 Part 3b-ii. `None` here
+/// takes the identical path [`append_object_to_container`] does, so every existing caller of that
+/// function is unaffected by this one's existence.
+pub(crate) fn append_object_to_container_with_known_body(
+    layout: &RepositoryLayout,
+    object_type: ObjectType,
+    envelope: &ObjectEnvelope,
+    known_body: Option<&[u8]>,
+) -> Result<IndexEntry> {
+    let record_bytes =
+        container::encode_container_record_with_known_body(object_type, envelope, known_body)?;
+    append_encoded_object_record(layout, object_type, envelope.object_id(), record_bytes)
+}
+
+/// The durable-append tail shared by [`append_object_to_container`] and
+/// [`append_object_to_container_with_known_body`], once each has its own `record_bytes` in hand --
+/// everything below is unchanged from before 0.55.0 step 3 Part 3b-ii split the encode step out.
+fn append_encoded_object_record(
+    layout: &RepositoryLayout,
+    object_type: ObjectType,
+    object_id: ObjectId,
+    record_bytes: Vec<u8>,
+) -> Result<IndexEntry> {
     let container_relative =
         layout.repository_relative(&layout.container_slot_path(object_type, ContainerSlot::A))?;
 
