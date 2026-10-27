@@ -16,8 +16,8 @@ use crate::author::author_key_index::{
 use crate::author::author_signing::{AuthorSigner, author_signature};
 use crate::bundle::{
     BundleImportOptions, BundleManifest, BundleScope, BundleSource,
-    DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle,
-    encode_bundle, encode_bundle_v1_for_test, encode_bundle_v2_for_test, export_bundle,
+    DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle,
+    encode_bundle_v1_for_test, encode_bundle_v2_for_test, export_bundle,
     first_over_bound_object_index, import_bundle, import_bundle_from_bytes, verify_bundle,
 };
 use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
@@ -305,7 +305,8 @@ fn export_then_import_carries_the_full_genesis_complete_closure() -> prikk_error
 
     let target_root = unique_temp_dir("bundle-import-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(import_report.ref_name, "remotes/heads/main");
     assert_eq!(import_report.object_count, 5);
     assert_eq!(import_report.written_object_count, 5);
@@ -348,7 +349,8 @@ fn export_then_import_carries_genuine_v1_edit_text_history() -> prikk_error::Res
 
     let target_root = unique_temp_dir("bundle-v1-edittext-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(import_report.ref_name, "remotes/heads/main");
     assert_eq!(import_report.object_count, report.object_count);
     assert_eq!(import_report.written_object_count, report.object_count);
@@ -382,7 +384,9 @@ fn import_refuses_while_received_index_lock_is_externally_held() -> prikk_error:
     let target = RepositoryLayout::init(target_root.clone())?;
 
     let held = acquire_container_locks(&target, &[LockableContainer::ReceivedIndex])?;
-    assert!(import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits()).is_err());
+    assert!(
+        import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits()).is_err()
+    );
     assert!(read_received_pointer(&target, "remotes/heads/main")?.is_none());
     drop(held);
 
@@ -574,7 +578,8 @@ fn dc53_stage2_vector7_omitted_material_imports_as_unverifiable() -> prikk_error
 
     let target_root = unique_temp_dir("dc53-vector7-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(import_report.recorded_author_key_count, 0);
 
     let imported_patch = find_imported_transport_patch(&target)?;
@@ -605,7 +610,8 @@ fn dc53_stage2_transported_material_imports_as_sound() -> prikk_error::Result<()
 
     let target_root = unique_temp_dir("dc53-vector-sound-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(import_report.recorded_author_key_count, 1);
 
     let imported_patch = find_imported_transport_patch(&target)?;
@@ -646,7 +652,8 @@ fn dc53_stage2_vector8_a_transported_key_that_does_not_verify_reads_failed()
 
     let target_root = unique_temp_dir("dc53-vector8-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits())?;
     assert_eq!(
         import_report.recorded_author_key_count, 1,
         "import records material without checking it, D7"
@@ -697,7 +704,8 @@ fn import_rejects_a_bundle_whose_author_key_section_disagrees_with_itself()
     let target_root = unique_temp_dir("dc53-bundle-internal-conflict-target");
     let target = RepositoryLayout::init(target_root.clone())?;
     let before = crate::verify_repository(&target)?.checked_objects;
-    let result = import_bundle_from_bytes(&target, &hostile, &BundleImportOptions::default_limits());
+    let result =
+        import_bundle_from_bytes(&target, &hostile, &BundleImportOptions::default_limits());
     assert!(
         result.is_err(),
         "a bundle whose own author-key section disagrees with itself must be refused"
@@ -804,7 +812,8 @@ fn import_rejects_a_later_conflicting_key_without_recording_an_earlier_one()
     record_author_key_material(&target, signer_b.key_id(), [0xdd; 32], &active_lock)?;
     drop(active_lock);
 
-    let result = import_bundle_from_bytes(&target, &hostile, &BundleImportOptions::default_limits());
+    let result =
+        import_bundle_from_bytes(&target, &hostile, &BundleImportOptions::default_limits());
     assert!(
         result.is_err(),
         "a later transported key conflicting with local material must refuse the whole import"
@@ -976,7 +985,8 @@ fn a_pbndl001_bundle_imports_and_its_patch_reads_unverifiable() -> prikk_error::
 
     let target_root = unique_temp_dir("dc53-pbndl001-import-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let import_report = import_bundle_from_bytes(&target, &v1_bytes, &BundleImportOptions::default_limits())?;
+    let import_report =
+        import_bundle_from_bytes(&target, &v1_bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(
         import_report.recorded_author_key_count, 0,
         "a PBNDL001 bundle carries no author-key section to record"
@@ -1468,7 +1478,8 @@ fn row6_a_refused_import_writes_no_pointer_and_records_no_key_material() -> prik
 
     let target_root = unique_temp_dir("dc78-closure-row6-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let good_report = import_bundle_from_bytes(&target, &good_bytes, &BundleImportOptions::default_limits())?;
+    let good_report =
+        import_bundle_from_bytes(&target, &good_bytes, &BundleImportOptions::default_limits())?;
 
     let unrelated_signer = transport_test_signer(0xc6)?;
     let unrelated_lock = ActiveLock::acquire(&target, DEFAULT_ACTIVE_NAME)?;
@@ -1644,7 +1655,8 @@ fn a_pbndl002_bundle_imports_with_no_manifest_but_recorded_author_key_material()
 
     let target_root = unique_temp_dir("dc44-manifest-pbndl002-target");
     let target = RepositoryLayout::init(target_root.clone())?;
-    let report = import_bundle_from_bytes(&target, &v2_bytes, &BundleImportOptions::default_limits())?;
+    let report =
+        import_bundle_from_bytes(&target, &v2_bytes, &BundleImportOptions::default_limits())?;
     assert_eq!(report.recorded_author_key_count, 1);
     assert!(read_received_pointer(&target, "remotes/heads/main")?.is_some());
     let repository_report = crate::verify_repository(&target)?;
@@ -2791,7 +2803,10 @@ fn a_bundle_carrying_one_id_twice_with_different_envelopes_is_refused_before_wri
         "offline verification refuses it"
     );
     let before = crate::test_gates::test_support::repository_bytes(&target)?;
-    assert!(import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits()).is_err());
+    assert!(
+        import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits())
+            .is_err()
+    );
     assert_eq!(
         crate::test_gates::test_support::repository_bytes(&target)?,
         before
@@ -2920,7 +2935,8 @@ fn an_invalid_signature_for_a_held_object_refuses_the_import_with_nothing_writte
     let target = RepositoryLayout::init(root.clone())?;
     import_bundle_from_bytes(&target, &bundle_a, &BundleImportOptions::default_limits())?;
     let before = crate::test_gates::test_support::repository_bytes(&target)?;
-    let refused = import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits());
+    let refused =
+        import_bundle_from_bytes(&target, &tampered, &BundleImportOptions::default_limits());
     assert!(
         matches!(refused, Err(prikk_error::PrikkError::InvalidSignature(_))),
         "{refused:?}"
@@ -2962,7 +2978,8 @@ fn a_non_adopted_maintainer_signature_for_a_held_object_is_dropped_and_reported(
     let target = RepositoryLayout::init(root.clone())?;
     import_bundle_from_bytes(&target, &bundle_a, &BundleImportOptions::default_limits())?;
     let stored_before = stored(&target, block_id)?;
-    let report = import_bundle_from_bytes(&target, &extended, &BundleImportOptions::default_limits())?;
+    let report =
+        import_bundle_from_bytes(&target, &extended, &BundleImportOptions::default_limits())?;
     assert_eq!(report.merged_object_count, 0);
     assert_eq!(report.dropped_signatures.len(), 1, "{report:?}");
     let [dropped] = report.dropped_signatures.as_slice() else {
@@ -3621,7 +3638,10 @@ fn a_pass_two_file_truncated_between_passes_refuses_with_rs_message_shape_and_wr
     bundle_path.push("exported.bundle");
     std::fs::write(&bundle_path, &bytes)?;
     let total_len = std::fs::metadata(&bundle_path)?.len();
-    assert!(total_len > 8, "the fixture bundle must carry more than a bare header");
+    assert!(
+        total_len > 8,
+        "the fixture bundle must carry more than a bare header"
+    );
 
     let target_root = unique_temp_dir("bundle-real-truncate-target");
     let target = RepositoryLayout::init(target_root.clone())?;
@@ -3666,8 +3686,8 @@ fn a_pass_two_file_truncated_between_passes_refuses_with_rs_message_shape_and_wr
 /// but the bytes it reads no longer match the digest pass 1 recorded.
 #[test]
 #[allow(clippy::expect_used)]
-fn a_pass_two_file_rewritten_between_passes_refuses_with_rs_message_shape() -> prikk_error::Result<()>
-{
+fn a_pass_two_file_rewritten_between_passes_refuses_with_rs_message_shape()
+-> prikk_error::Result<()> {
     let source_root = unique_temp_dir("bundle-real-rewrite-source");
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
@@ -3732,8 +3752,8 @@ fn a_pass_two_file_rewritten_between_passes_refuses_with_rs_message_shape() -> p
 /// this module exercises through `import_bundle_from_bytes`), with no corruption seam armed,
 /// imports exactly as the buffered path does.
 #[test]
-fn bundle_import_against_a_real_file_succeeds_without_the_corruption_seam() -> prikk_error::Result<()>
-{
+fn bundle_import_against_a_real_file_succeeds_without_the_corruption_seam()
+-> prikk_error::Result<()> {
     let source_root = unique_temp_dir("bundle-real-file-control-source");
     let source = RepositoryLayout::init(source_root.clone())?;
     seal_two_block_history(&source)?;
@@ -3751,12 +3771,18 @@ fn bundle_import_against_a_real_file_succeeds_without_the_corruption_seam() -> p
         &mut source_handle,
         &BundleImportOptions::default_limits(),
     )?;
-    assert_eq!(report.written_object_count, 5, "seal_two_block_history's own known shape");
+    assert_eq!(
+        report.written_object_count, 5,
+        "seal_two_block_history's own known shape"
+    );
 
     let reference_target_root = unique_temp_dir("bundle-real-file-control-reference");
     let reference_target = RepositoryLayout::init(reference_target_root.clone())?;
-    let reference_report =
-        import_bundle_from_bytes(&reference_target, &bytes, &BundleImportOptions::default_limits())?;
+    let reference_report = import_bundle_from_bytes(
+        &reference_target,
+        &bytes,
+        &BundleImportOptions::default_limits(),
+    )?;
     assert_eq!(
         report, reference_report,
         "the real-file path and the buffered path must land the identical report"

@@ -995,7 +995,11 @@ fn read_frame_from(source: &mut BundleSource, max_object_bytes: usize) -> Result
 /// newly-carried key_id introduces. Skipped here without reading a single frame's body: each
 /// frame's own length prefix says exactly how far to seek forward, so this walk costs `count` seeks
 /// and transfers no object content -- landing exactly at the author-key section's own first byte.
-fn skip_object_frames(source: &mut BundleSource, count: u64, max_object_bytes: usize) -> Result<()> {
+fn skip_object_frames(
+    source: &mut BundleSource,
+    count: u64,
+    max_object_bytes: usize,
+) -> Result<()> {
     let bound_bytes = len_to_u64(max_object_bytes)?;
     for _ in 0..count {
         let declared_bytes = read_u64_from(source)?;
@@ -1009,7 +1013,9 @@ fn skip_object_frames(source: &mut BundleSource, count: u64, max_object_bytes: u
             PrikkError::MalformedData("u64 length does not fit a seek offset".to_string())
         })?;
         source.seek(SeekFrom::Current(offset)).map_err(|err| {
-            PrikkError::Integrity(format!("bundle import: failed to skip an object frame: {err}"))
+            PrikkError::Integrity(format!(
+                "bundle import: failed to skip an object frame: {err}"
+            ))
         })?;
     }
     Ok(())
@@ -1167,7 +1173,9 @@ fn carried_snapshot_manifest_blob_ids(
     source
         .seek(SeekFrom::Start(blob.frame_range.start as u64))
         .map_err(|err| {
-            PrikkError::Integrity(format!("bundle import: failed to re-read a snapshot blob: {err}"))
+            PrikkError::Integrity(format!(
+                "bundle import: failed to re-read a snapshot blob: {err}"
+            ))
         })?;
     let frame = read_exact_from(source, blob.frame_range.end - blob.frame_range.start)?;
     source
@@ -1184,9 +1192,9 @@ fn carried_snapshot_manifest_blob_ids(
         ));
     };
     let envelope = decode_envelope_file(frame_body)?;
-    let manifest = crate::snapshot::SnapshotManifest::decode(&crate::blob_access::decode_snapshot_blob(
-        &envelope.canonical_payload,
-    )?)?;
+    let manifest = crate::snapshot::SnapshotManifest::decode(
+        &crate::blob_access::decode_snapshot_blob(&envelope.canonical_payload)?,
+    )?;
     Ok(manifest
         .entries
         .iter()
@@ -1296,8 +1304,9 @@ fn validate_bundle_closure(
                     })?
                 }
                 _ => {
-                    let tag_envelope = local
-                        .and_then(|snapshot| snapshot.read_typed(tag_id, ObjectType::Tag).ok().flatten());
+                    let tag_envelope = local.and_then(|snapshot| {
+                        snapshot.read_typed(tag_id, ObjectType::Tag).ok().flatten()
+                    });
                     let Some(tag_envelope) = tag_envelope else {
                         return Err(PrikkError::Integrity(format!(
                             "ref object {ref_state_id} targets missing tag {tag_id}"
@@ -1522,7 +1531,9 @@ pub fn import_bundle(
     // `ref_name`, checked against it below) -- cheap, needed for `validate_received_ref` before the
     // lock, and part of the judgment call Q1 leaves to this implementation.
     let origin_ref_name = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-        .map_err(|err| PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}")))?;
+        .map_err(|err| {
+            PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}"))
+        })?;
     let count = read_u64_from(source)?;
     if count > len_to_u64(options.max_object_count)? {
         return Err(PrikkError::MalformedData(format!(
@@ -1578,10 +1589,8 @@ pub fn import_bundle(
         for _ in 0..author_key_count {
             let key_id = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
                 .map_err(|err| {
-                    PrikkError::MalformedData(format!(
-                        "invalid bundle author key_id utf-8: {err}"
-                    ))
-                })?;
+                PrikkError::MalformedData(format!("invalid bundle author key_id utf-8: {err}"))
+            })?;
             Signature::validate_key_id(&key_id)?;
             let public_key = read_array_from::<32>(source)?;
             author_keys.push(AuthorKeyEntry { key_id, public_key });
@@ -1594,22 +1603,19 @@ pub fn import_bundle(
                     .to_string(),
             )
         })?;
-        let tool_version =
-            String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?).map_err(
-                |err| {
-                    PrikkError::MalformedData(format!(
-                        "invalid bundle manifest tool version utf-8: {err}"
-                    ))
-                },
-            )?;
-        let declared_ref_name =
-            String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?).map_err(
-                |err| {
-                    PrikkError::MalformedData(format!(
-                        "invalid bundle manifest ref name utf-8: {err}"
-                    ))
-                },
-            )?;
+        let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+            .map_err(|err| {
+                PrikkError::MalformedData(format!(
+                    "invalid bundle manifest tool version utf-8: {err}"
+                ))
+            })?;
+        let declared_ref_name = String::from_utf8(read_bytes_u64_from(
+            source,
+            options.max_total_bytes,
+        )?)
+        .map_err(|err| {
+            PrikkError::MalformedData(format!("invalid bundle manifest ref name utf-8: {err}"))
+        })?;
         let declared_object_count = read_u64_from(source)?;
         let scope = BundleScope::from_wire_tag(read_u64_from(source)?)?;
         Some(DecodedManifest {
@@ -1681,7 +1687,13 @@ pub fn import_bundle(
         // occurrence of a harmless repeat is never admitted at all, so R4's cross-pass assertion
         // can no longer be tripped by this import's own duplicate the way it once was.
         if let Some(&existing_index) = index_by_id.get(&object_id) {
-            if !prepared_matches_existing(source, &prepared, existing_index, real_frame_digest, &envelope)? {
+            if !prepared_matches_existing(
+                source,
+                &prepared,
+                existing_index,
+                real_frame_digest,
+                &envelope,
+            )? {
                 return Err(PrikkError::MalformedData(format!(
                     "bundle carries object {object_id} twice with different envelopes -- \
                      refusing the whole bundle"

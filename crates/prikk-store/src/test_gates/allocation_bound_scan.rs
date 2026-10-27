@@ -111,6 +111,12 @@ const ALLOWED: &[Allowed] = &[
         bound: "RFC 155 Part I-A: the import journal's own declared landing-plan entry count, checked against `MAX_JOURNAL_LANDING_COUNT` before this capacity is requested",
         witness: "ObjectOverBound",
     },
+    Allowed {
+        file: "bundle.rs",
+        expr: "len",
+        bound: "0.55.0 step 3 Part 3b-i2: `read_exact_from`'s own one allocation site, called only with a length already checked against `ObjectOverBound`'s own bound -- freshly, by every caller that reads a fresh length-prefixed field or frame straight off the wire (`read_bytes_u64_from`, `read_frame_from`), or transitively, by a caller that re-derives a `PreparedObject.frame_range`'s own width, which was itself bounded the same way when that frame was first read",
+        witness: "ObjectOverBound",
+    },
 ];
 
 fn source_roots() -> Vec<(&'static str, PathBuf)> {

@@ -34,7 +34,9 @@ use std::path::PathBuf;
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
-use crate::bounded_read::{SizeBound, open_bundle_source, read_bounded_file, render_incoming_error};
+use crate::bounded_read::{
+    SizeBound, open_bundle_source, read_bounded_file, render_incoming_error,
+};
 use crate::commands::CliError;
 use crate::config::resolve_max_object_bytes;
 use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
