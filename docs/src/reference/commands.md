@@ -331,18 +331,26 @@ repository), else the default. The bound is never taken from the input it bounds
 bundle or exchange artifact can raise it, and nothing an import or accept writes can reach
 `.prikk/config`.
 
-**What is still true for `bundle verify` and `bundle preview`, and for `bundle import` against a
-non-seekable input**: an artifact under its bound is still read whole into memory, and decoding
-costs a multiple of that — measured on a bundle carrying one 255 MiB blob, at the defaults, three
-samples each (before `bundle import` streamed a regular file): `bundle verify` peaks at a median of
-787,400 KiB (≈3.0× the bundle's own size), `bundle import` at 1,570,984 KiB (≈6.0×). A pipe or FIFO
-input is read into memory in full, the same as this — a non-seekable input cannot be read twice, so
-it must be buffered before anything else happens.
+**All three bundle-reading commands now stream a regular file** rather than buffering it whole
+before the store sees a byte, but by different amounts, because each needs a different amount held
+in memory while it works:
 
-**`bundle import` against a regular file is different**: it stays an open file, read and re-read in
-place rather than buffered, so its own memory follows the largest single object the bundle carries,
-not the whole bundle. `bundle verify`/`bundle preview`, and `bundle import` fed a pipe or FIFO, are
-unchanged and still carry the multiplier above.
+- **`bundle import`** stays an open file the store reads and re-reads in place, deciding and
+  writing one object at a time; its own memory follows roughly the size of the largest single
+  object the bundle carries, not the whole bundle (measured, one 16 MiB object: about four times
+  the object's own size).
+- **`bundle verify`** also decodes one object at a time, but keeps every decoded object (not the
+  raw file) until the whole bundle's closure has been checked — its own memory follows the
+  bundle's own decoded content, once, not the two or three copies it used to hold (measured, one
+  16 MiB object: from about 3.3× down to about 2.3× the object's own size).
+- **`bundle preview`** needs the most: computing what a bundle would change requires reading any
+  carried object's content in whatever order the comparison visits it, so it keeps the same
+  decoded content `verify` does, for as long as that comparison runs — its own win is the same
+  "no second or third copy" as `verify`'s, not `import`'s "follows the largest object" shape
+  (measured, one 16 MiB object: from about 5.3× down to about 3.3×).
+
+A pipe or FIFO input to any of the three is unchanged: a non-seekable input cannot be read twice,
+so it is still read into memory whole before anything else happens.
 
 **`prikk config`** is a repository's own small, durable settings file at `.prikk/config` — never in
 the worktree, so a checked-out or imported file can never set one. One `key = value` per line; blank

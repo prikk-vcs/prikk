@@ -58,25 +58,19 @@ reads and re-reads the open file in place, decoding and admitting one object at 
 each one from the bytes it already read wherever that is sound rather than re-encoding them. Its
 own peak memory now follows what the bundle actually carries, not a multiple of the whole file. A
 pipe or FIFO input is unchanged — still read into memory in full, since a non-seekable input cannot
-be read twice. `bundle verify` and `bundle preview` are also unchanged for now, and still carry the
-old multiplier.
+be read twice. `bundle verify` and `bundle preview` stream a regular file too, by a different
+amount each — see the next entry.
 
 For a bundle of many ordinary-sized objects, the effect is large: importing one commit of 9,997
 small files (10,001 objects) peaked at 185,848 KiB before, 22,000 KiB after — about 2.2 KiB held
 per object, not a multiple of the whole 44 MiB bundle. A mixed bundle of 524 objects from 2 KiB to
 2 MiB peaked at 87,208 KiB before, 14,240 KiB after.
 
-For a bundle carrying one very large object, the win is smaller, and for a real reason: writing an
-object still needs the bytes as read (to check they have not changed since they were decided), the
-decoded copy (to re-check that decision), and a further buffer to write the record — three buffer
-widths, each the size of the object, alive together for a moment. An earlier measurement also found
-memory the operating system had not yet taken back from an already-freed buffer, large enough that
-a differently-sized request straight after could not reuse it; releasing each large buffer as soon
-as its own last use ends, instead of waiting for it to go out of scope naturally, fixed that. One 16
-MiB object now peaks at about 70,700–71,100 KiB (previously 103,900–104,400 KiB before this change,
-87,600–87,700 KiB at the midpoint) — still several times the object's own size, but down to what
-the three buffers above actually need, not inflated further by memory the allocator was holding
-onto.
+For a bundle carrying one very large object, the win is smaller: writing an object reads the bytes
+as read, holds a decoded copy, and writes a further buffer for the record — three buffer widths,
+each the size of the object, alive together for a moment, the way this code works today. One 16
+MiB object now peaks at about 70,700–71,100 KiB, down from 103,900–104,400 KiB before this change —
+still about four times the object's own size.
 
 **Measured, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
 (10,001 objects), tmpfs:**
@@ -90,6 +84,34 @@ onto.
 About 6–8% slower, from reading and decoding each object a second time rather than keeping a copy
 in memory across the whole operation. On the `/home` disk, one clean alternated round showed no
 real difference (30.15 s before, 30.57 s after).
+
+### Changed — `bundle verify` and `bundle preview` against a regular file no longer buffer it whole either
+
+Both used to read a bundle file whole into memory, decode every object into a second copy, and
+build a third, separate lookup copy before doing anything else. Against a regular file, both now
+read the open file in place and decode straight into that one lookup copy — never a separate raw
+buffer, never a second decoded copy alongside it.
+
+`bundle verify` needs nothing more than that one copy, so its own peak now follows the bundle's
+decoded content once, not three times over. `bundle preview` needs more: deciding what a bundle
+would change means reading any carried object's content in whatever order the comparison visits
+it, so it keeps that one copy in memory for as long as the comparison runs — its own win is the
+same "one copy instead of three," not `bundle import`'s "follows the largest object" shape, because
+`preview` cannot discard content the way `import`/`verify` can.
+
+**Measured, release build, peak RSS only, against `main` before the streaming work began:**
+
+| | `bundle verify` | `bundle preview` |
+|---|---|---|
+| one 16 MiB object, before | 53,936 KiB (≈3.3×) | 87,240 KiB (≈5.3×) |
+| one 16 MiB object, after | 37,260 KiB (≈2.3×) | 54,516 KiB (≈3.3×) |
+| 9,997 × 4 KiB files (10,001 objects), before | 140,184 KiB | 186,808 KiB |
+| 9,997 × 4 KiB files (10,001 objects), after | 53,704 KiB | 99,552 KiB |
+| 524 objects, 2 KiB–2 MiB, before | 1,663,228 KiB | 2,229,040 KiB |
+| 524 objects, 2 KiB–2 MiB, after | 575,292 KiB | 1,126,412 KiB |
+
+A pipe or FIFO input to either command is unchanged — still read into memory in full, since a
+non-seekable input cannot be read twice.
 
 ### Fixed
 
