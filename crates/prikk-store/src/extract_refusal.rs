@@ -83,7 +83,13 @@ pub enum ExtractRefusalKind {
 
 /// [`ExtractRefusalKind::ClaimParentNotSealed`]'s own payload, boxed there for the reason that
 /// variant's own doc comment gives.
+///
+/// Release 0.55.0 prep: `#[non_exhaustive]`, matching its siblings
+/// ([`ArchiveUnreferencedRemnant`](crate::ArchiveUnreferencedRemnant),
+/// [`UnreferencedRemnant`](crate::UnreferencedRemnant)) -- a future field (for example, more
+/// context on why the parent is not sealed) must not break an existing exhaustive match.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClaimParentNotSealedInfo {
     /// The claim being extracted.
     pub claim: prikk_object::ObjectId,

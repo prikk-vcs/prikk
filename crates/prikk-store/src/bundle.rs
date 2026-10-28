@@ -930,6 +930,14 @@ pub fn export_bundle(
 /// interface pass 1 and pass 2 both need. Built by `prikk-cli`'s `bounded_read` module (which
 /// decides, from the open handle's own metadata, which variant to construct) -- `prikk-store` has
 /// no notion of a CLI bound or a path, and only ever reads from whichever variant it is handed.
+///
+/// Release 0.55.0 prep: deliberately not `#[non_exhaustive]`. A library caller of `import_bundle`/
+/// `verify_bundle`/`preview_bundle` needs to construct a variant directly -- its own open `File`,
+/// or its own buffered bytes -- and this crate provides no separate constructor function for
+/// either; `#[non_exhaustive]` would block exactly that construction. The two variants are also a
+/// complete classification of what a `Read + Seek` source over a bundle can be (seekable, or not);
+/// a third kind would be a visible, deliberate addition worth its own match-arm update at every
+/// call site, not something to hide behind a forward-compatibility attribute.
 pub enum BundleSource {
     /// A regular file, already opened by the caller. Pass 1 still enforces the real per-object and
     /// per-import bounds against the bytes it actually reads, independently of any declared size
