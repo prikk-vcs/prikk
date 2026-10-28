@@ -91,3 +91,8 @@ smoke passes 36 sections, and sections 31f and 35 fail on 0.54.0.
   about 48 bytes per index entry, an accepted cost under C2.
 - **Cite both candidate runs** (`…158611` at 1.8688×, `…161227` at 1.853×).
 - **Restore the per-object memory cost in the CHANGELOG's index-lookup entry,** in user words.
+
+**P3 ACCEPTED 2026-10-28** (`6f9c0c0b`, `0e8598d6`, `b1394a64`; review `release-0.55.0-prep-P3-review-v1`).
+**`b1394a64` is the candidate:** CI 17/17. The architect re-ran `matrix.py` (byte-identical to 0.54.1 at both depths) and
+`reproduce.sh` (identical exit codes). **The dev team's part is complete.** External review letter 037 is drafted; the
+tag waits for its answer and the owner's word.
