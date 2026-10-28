@@ -2846,8 +2846,8 @@ pub(crate) fn corrupt_file_between_passes_for_test(change: impl FnOnce() + 'stat
 /// Read a bundle and report whether it is structurally sound and internally consistent, **without
 /// writing anything and without needing a repository** (DC-44 increment 1,
 /// `bundle-offline-verify-handoff-v1.md`). Runs the exact same decode and closure validation
-/// [`import_bundle`] runs before its first write, via [`decode_bundle_closure_metadata`] and
-/// [`validate_bundle_closure`] — §2's "reuse the decode path, do not re-implement it," now one
+/// [`import_bundle`] runs before its first write, via `decode_bundle_closure_metadata` and
+/// `validate_bundle_closure` — §2's "reuse the decode path, do not re-implement it," now one
 /// validator for all three commands rather than two that had to be kept in agreement by hand
 /// (0.55.0 step 3 Part 3b-iv).
 ///
