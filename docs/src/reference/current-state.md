@@ -267,16 +267,10 @@ planned for.
   planned for a future increment, not this one.
 - **A `commit` holds all new file content in memory at once.** 64 files of 4 MiB each peaks at about
   284 MiB. Streaming and chunking (large objects, Stages B–D) are not yet built.
-- **The object index's own lookup is a linear scan**, and the whole index is held resident in memory for
-  the duration of a write session. Not yet fixed.
-- **`bundle import` peaks at about 4.6 times the bundle's size in memory** (5.26 GiB for a 1.15 GiB
-  bundle), from whole-file and whole-object buffering. Found during RFC 155's design round, outside
-  that RFC's own scope; a candidate for a later release. `prikk archive import` does not share this
-  defect: it processes one object at a time, so its own peak RSS is bounded by the single largest
-  object the archive carries, not by the archive's own total size — measured at about 5 times the
-  largest object's own size (an earlier version held a whole object type's own batch at once,
-  measured at 2.25 times the archive's own size for 1 GiB concentrated in one type; fixed before
-  0.51.0 shipped).
+- **The object index's own lookup is now constant-time** (a small id-to-position map kept alongside
+  the existing entry list, updated on every path that changes it), fixed in 0.55.0 — `verify` and
+  `bundle import` no longer slow down faster than the repository grows. The whole index is still
+  held resident in memory for the duration of a write session; that part is not yet fixed.
 - **`prikk extract`'s own peak memory tracks the largest single file it actually reads, not the
   point's own total content size** (0.54.0): every file whose content has not changed since
   the admitted anchor streams straight from its stored blob id, one at a time, and only a text file
