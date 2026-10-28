@@ -69,6 +69,7 @@
 //! offered, instead of importing and failing a later `verify` with no indication of which import caused
 //! it.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
@@ -101,7 +102,7 @@ use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
 };
-use crate::refs::{RefStore, ensure_ref_target_valid};
+use crate::refs::RefStore;
 
 /// DC-44 increment 3, `bundle-manifest-handoff-v1.md`: the format bump that made room for the
 /// self-describing manifest section. Always emitted on export; `PBNDL001` and `PBNDL002` are both
@@ -484,28 +485,50 @@ pub fn preview_bundle_reporting_anchor(
     Vec<crate::patch_replay::SnapshotAnchorFallback>,
 )> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
-    let contents = validate_bundle_contents(source, options, Some(&read_snapshot))?;
+    let metadata = decode_bundle_closure_metadata(source, options)?;
+    // No lock: this never writes, so there is nothing to protect. `local: Some(&read_snapshot)`
+    // -- a referenced object may be satisfied by the bundle or the repository's own existing
+    // objects (D7's incremental-import rule). `validate_bundle_closure` already resolves and
+    // present-checks the bundle's own exported-ref tip as part of item 1, so `bundle_target` is
+    // returned here rather than re-derived with a second `resolve_ref_tip_block` call.
+    let (ref_state_id, _bundle_key_ids, bundle_target) = validate_bundle_closure(
+        source,
+        &metadata.origin_ref_name,
+        &metadata.prepared,
+        &metadata.index_by_id,
+        &metadata.membership,
+        &metadata.closure_by_id,
+        Some(&read_snapshot),
+        &metadata.author_keys,
+        metadata.manifest.as_ref(),
+        metadata.object_count,
+    )?;
 
-    // 0.55.0 step 3 Part 3b-iii: the exported ref's own RefState envelope, looked up by the id the
-    // decode already recorded, rather than kept in a separate `objects.first()` -- the map is the
-    // only copy now.
-    let sealed_by: Vec<String> = contents
-        .bundle_objects_by_id
-        .get(&contents.ref_state_id)
+    // 0.55.0 step 3 Part 3b-iv: one shared seekable source and one shared decode cache behind
+    // both readers built from it below -- a read through either reuses a decode the other
+    // already paid for, and `source` is borrowed, never duplicated (there is only one real
+    // handle to seek).
+    let source_cell: RefCell<&mut BundleSource> = RefCell::new(source);
+    let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
+    let bundle_only_reader = BundleAndLocalReader {
+        source: &source_cell,
+        prepared: &metadata.prepared,
+        index_by_id: &metadata.index_by_id,
+        cache: &cache,
+        local: None,
+    };
+
+    // 0.55.0 step 3 Part 3b-iv: the exported ref's own RefState envelope, read on demand through
+    // the same reader everything else here uses, rather than kept in a full map.
+    let sealed_by: Vec<String> = bundle_only_reader
+        .read_object(ref_state_id)?
         .into_iter()
-        .flat_map(|envelope| envelope.signatures.iter())
+        .flat_map(|envelope| envelope.signatures.into_iter())
         .filter(|signature| signature.signer_role == SignerRole::Maintainer)
-        .map(|signature| signature.key_id.clone())
+        .map(|signature| signature.key_id)
         .collect();
 
     let local_ref_state_id = RefStore::new(layout.clone()).read_current_ref_state_id(ref_name)?;
-
-    let bundle_only_reader = BundleAndLocalReader {
-        bundle_objects: &contents.bundle_objects_by_id,
-        local: None,
-    };
-    let (bundle_target, _) =
-        crate::refs::resolve_ref_tip_block(&bundle_only_reader, &contents.ref_state_payload)?;
 
     // §4n.1: a local ref with no published RefState at all -- not merely an empty one -- has no
     // target to compare against, so this is answered without ever attempting
@@ -534,7 +557,10 @@ pub fn preview_bundle_reporting_anchor(
             let (local_target, _) =
                 crate::refs::resolve_ref_tip_block(&read_snapshot, &local_ref_state_payload)?;
             let combined_reader = BundleAndLocalReader {
-                bundle_objects: &contents.bundle_objects_by_id,
+                source: &source_cell,
+                prepared: &metadata.prepared,
+                index_by_id: &metadata.index_by_id,
+                cache: &cache,
                 local: Some(&read_snapshot),
             };
             preview::preview_impact(
@@ -581,13 +607,17 @@ pub fn preview_bundle_reporting_anchor(
 
     Ok((
         BundlePreviewReport {
-            bundle_ref_name: contents.origin_ref_name,
+            bundle_ref_name: metadata.origin_ref_name,
             local_ref_name: ref_name.to_string(),
             connectivity,
             conflict,
             sealed_by,
             effects,
-            manifest: contents.manifest,
+            manifest: metadata.manifest.map(|raw| BundleManifest {
+                repository_format: raw.repository_format,
+                tool_version: raw.tool_version,
+                scope: raw.scope,
+            }),
         },
         anchor_fallbacks,
     ))
@@ -1214,6 +1244,46 @@ fn carried_snapshot_manifest_blob_ids(
         .collect())
 }
 
+/// 0.55.0 step 3 Part 3b-iv: seek to `prepared[index]`'s own recorded frame range, read exactly
+/// that many bytes, decode the envelope, then seek back to wherever `source` was positioned
+/// before this call -- the same on-demand re-read shape `prepared_matches_existing`/
+/// `carried_snapshot_manifest_blob_ids` above already use inline, factored out here as its own
+/// function because `BundleAndLocalReader`'s own on-demand reader (below) needs the identical
+/// seek-read-decode-and-resume sequence, by index rather than by a frame range it already has in
+/// hand.
+fn read_prepared_object_at(
+    source: &mut BundleSource,
+    prepared: &[PreparedObject],
+    index: usize,
+) -> Result<ObjectEnvelope> {
+    let Some(object) = prepared.get(index) else {
+        return Err(PrikkError::Integrity(
+            "bundle decode: a prepared object's own entry is missing".to_string(),
+        ));
+    };
+    let resume_at = stream_position_usize(source)?;
+    source
+        .seek(SeekFrom::Start(object.frame_range.start as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!("bundle decode: failed to re-read an object: {err}"))
+        })?;
+    let frame = read_exact_from(source, object.frame_range.end - object.frame_range.start)?;
+    source
+        .seek(SeekFrom::Start(resume_at as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle decode: failed to resume reading after an on-demand re-read: {err}"
+            ))
+        })?;
+    let Some(frame_body) = frame.get(8..) else {
+        return Err(PrikkError::Integrity(
+            "bundle decode: a prepared object's own frame is shorter than its length prefix"
+                .to_string(),
+        ));
+    };
+    decode_envelope_file(frame_body)
+}
+
 /// 0.55.0 step 3 Part 3b-i2 (Q1): `validate_bundle_contents`'s own closure checks (items 1-4 plus
 /// the manifest cross-check and the bundle-internal author-key consistency check), run against the
 /// cheap per-object metadata the streaming walk collected instead of a full decoded envelope set --
@@ -1232,7 +1302,7 @@ fn validate_bundle_closure(
     author_keys: &[AuthorKeyEntry],
     manifest: Option<&DecodedManifest>,
     object_count: u64,
-) -> Result<(ObjectId, BTreeMap<String, [u8; 32]>)> {
+) -> Result<(ObjectId, BTreeMap<String, [u8; 32]>, ObjectId)> {
     let Some(ref_state_object) = prepared.first() else {
         return Err(PrikkError::MalformedData(
             "bundle contains no objects".to_string(),
@@ -1283,8 +1353,11 @@ fn validate_bundle_closure(
     };
 
     // Item 1: the exported ref's target resolves (`ensure_ref_target_valid`'s own logic, against
-    // this metadata instead of a full `ObjectReader`).
-    match ref_state_closure.kind {
+    // this metadata instead of a full `ObjectReader`). 0.55.0 step 3 Part 3b-iv: the resolved
+    // block is returned too -- `verify`/`preview` both need exactly this value (`resolve_ref_
+    // tip_block`'s own result), and it is already present-checked by the time this function
+    // returns `Ok`, so returning it here means neither caller re-derives it a second time.
+    let tip_block_id = match ref_state_closure.kind {
         Some(RefKind::Branch) => {
             let target = ref_state_closure.target_object_id.ok_or_else(|| {
                 PrikkError::Integrity(
@@ -1296,6 +1369,7 @@ fn validate_bundle_closure(
                     "ref object {ref_state_id} targets missing block {target}"
                 )));
             }
+            target
         }
         Some(RefKind::Tag) => {
             let tag_id = ref_state_closure.target_object_id.ok_or_else(|| {
@@ -1329,13 +1403,14 @@ fn validate_bundle_closure(
                     "ref object {ref_state_id} targets missing block {target_block_id}"
                 )));
             }
+            target_block_id
         }
         None => {
             return Err(PrikkError::Integrity(
                 "bundle import: RefState has no recorded kind".to_string(),
             ));
         }
-    }
+    };
 
     // 0.49.0 step 5, round 2 item 1: the exported ref's own chain and the attestations each link
     // requires must be present, carried by this bundle or already here.
@@ -1486,7 +1561,210 @@ fn validate_bundle_closure(
         }
     }
 
-    Ok((ref_state_id, bundle_key_ids))
+    Ok((ref_state_id, bundle_key_ids, tip_block_id))
+}
+
+/// `decode_bundle_closure_metadata`'s own return shape -- everything [`validate_bundle_closure`]
+/// needs, for a caller that never writes and runs no admission. 0.55.0 step 3 Part 3b-iv.
+struct BundleClosureMetadata {
+    origin_ref_name: String,
+    prepared: Vec<PreparedObject>,
+    index_by_id: BTreeMap<ObjectId, usize>,
+    membership: BTreeMap<ObjectId, ObjectType>,
+    closure_by_id: BTreeMap<ObjectId, ClosureMetadata>,
+    author_keys: Vec<AuthorKeyEntry>,
+    manifest: Option<DecodedManifest>,
+    object_count: u64,
+}
+
+/// 0.55.0 step 3 Part 3b-iv (P1): the lean sibling [`verify_bundle`]/[`preview_bundle_reporting_
+/// anchor`] call instead of their own now-removed `validate_bundle_contents` -- the same header
+/// parsing and per-object decode loop [`import_bundle`]'s own pass 1 runs (same order: decode,
+/// then the duplicate-id short-circuit, then closure-metadata extraction, so a harmless exact-
+/// duplicate frame costs exactly what it costs there, never twice), but with no admission and no
+/// lock: neither caller here writes anything, so there is nothing an admission decision or a held
+/// lock would protect. `import_bundle`'s own loop is deliberately **not** changed to call this --
+/// it keeps interleaving admission inline, in the one pass its own already-measured memory
+/// profile depends on; this function duplicates the *mechanical* per-object walk, not the
+/// *closure rules* themselves (`validate_bundle_closure`, called by all three commands,
+/// unchanged, and the actual drift risk this split exists to remove).
+fn decode_bundle_closure_metadata(
+    source: &mut BundleSource,
+    options: &BundleImportOptions,
+) -> Result<BundleClosureMetadata> {
+    let total_len = source.seek(SeekFrom::End(0)).map_err(|err| {
+        PrikkError::Integrity(format!("bundle decode: failed to measure the input: {err}"))
+    })?;
+    source.seek(SeekFrom::Start(0)).map_err(|err| {
+        PrikkError::Integrity(format!("bundle decode: failed to rewind the input: {err}"))
+    })?;
+    if total_len > len_to_u64(options.max_total_bytes)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle is {total_len} bytes, over the configured limit of {} bytes",
+            options.max_total_bytes
+        )));
+    }
+    let magic: [u8; 8] = read_array_from(source)?;
+    let (has_author_key_section, has_manifest_section) = if &magic == BUNDLE_MAGIC {
+        (true, true)
+    } else if &magic == RETIRED_BUNDLE_MAGIC_V2 {
+        (true, false)
+    } else if &magic == RETIRED_BUNDLE_MAGIC_V1 {
+        (false, false)
+    } else {
+        return Err(PrikkError::MalformedData(
+            "invalid bundle magic".to_string(),
+        ));
+    };
+    let origin_ref_name = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+        .map_err(|err| {
+            PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}"))
+        })?;
+    let count = read_u64_from(source)?;
+    if count > len_to_u64(options.max_object_count)? {
+        return Err(PrikkError::MalformedData(format!(
+            "bundle declares {count} objects, over the configured limit of {}",
+            options.max_object_count
+        )));
+    }
+
+    let objects_start = stream_position_usize(source)?;
+    skip_object_frames(source, count, options.max_object_bytes)?;
+    let mut author_keys: Vec<AuthorKeyEntry> = Vec::new();
+    if has_author_key_section {
+        let author_key_count = read_u64_from(source)?;
+        if author_key_count > len_to_u64(options.max_object_count)? {
+            return Err(PrikkError::MalformedData(format!(
+                "bundle declares {author_key_count} author key entries, over the configured limit \
+                 of {}",
+                options.max_object_count
+            )));
+        }
+        for _ in 0..author_key_count {
+            let key_id = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+                .map_err(|err| {
+                PrikkError::MalformedData(format!("invalid bundle author key_id utf-8: {err}"))
+            })?;
+            Signature::validate_key_id(&key_id)?;
+            let public_key = read_array_from::<32>(source)?;
+            author_keys.push(AuthorKeyEntry { key_id, public_key });
+        }
+    }
+    let manifest = if has_manifest_section {
+        let repository_format = u32::try_from(read_u64_from(source)?).map_err(|_| {
+            PrikkError::MalformedData(
+                "bundle manifest declares a repository format number that does not fit in u32"
+                    .to_string(),
+            )
+        })?;
+        let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
+            .map_err(|err| {
+                PrikkError::MalformedData(format!(
+                    "invalid bundle manifest tool version utf-8: {err}"
+                ))
+            })?;
+        let declared_ref_name = String::from_utf8(read_bytes_u64_from(
+            source,
+            options.max_total_bytes,
+        )?)
+        .map_err(|err| {
+            PrikkError::MalformedData(format!("invalid bundle manifest ref name utf-8: {err}"))
+        })?;
+        let declared_object_count = read_u64_from(source)?;
+        let scope = BundleScope::from_wire_tag(read_u64_from(source)?)?;
+        Some(DecodedManifest {
+            repository_format,
+            tool_version,
+            scope,
+            declared_ref_name,
+            declared_object_count,
+        })
+    } else {
+        None
+    };
+    let end_position = stream_position_usize(source)?;
+    if end_position as u64 != total_len {
+        return Err(PrikkError::MalformedData(
+            "trailing bytes in bundle".to_string(),
+        ));
+    }
+
+    source
+        .seek(SeekFrom::Start(objects_start as u64))
+        .map_err(|err| {
+            PrikkError::Integrity(format!(
+                "bundle decode: failed to seek back to the object frames: {err}"
+            ))
+        })?;
+
+    let mut prepared: Vec<PreparedObject> = Vec::new();
+    let mut index_by_id: BTreeMap<ObjectId, usize> = BTreeMap::new();
+    let mut membership: BTreeMap<ObjectId, ObjectType> = BTreeMap::new();
+    let mut closure_by_id: BTreeMap<ObjectId, ClosureMetadata> = BTreeMap::new();
+    for _ in 0..count {
+        let start = stream_position_usize(source)?;
+        let (declared_bytes, body) = read_frame_body_from(source, options.max_object_bytes)?;
+        let end = start
+            .checked_add(8)
+            .and_then(|v| v.checked_add(body.len()))
+            .ok_or_else(|| {
+                PrikkError::Integrity("bundle decode: frame range overflow".to_string())
+            })?;
+        let real_frame_digest = prikk_hash::sha256_parts(&[&declared_bytes.to_be_bytes(), &body]);
+        let envelope = decode_envelope_file(&body)?;
+        drop(body);
+        let object_id = envelope.object_id();
+
+        // Same ordering as `import_bundle`'s own pass 1 (0.55.0 step 3 Part 3b-i): a harmless,
+        // byte-identical duplicate frame never pays `closure_metadata_for`'s own decode cost a
+        // second time -- the short-circuit below runs before that call, just as it does there.
+        if let Some(&existing_index) = index_by_id.get(&object_id) {
+            if !prepared_matches_existing(
+                source,
+                &prepared,
+                existing_index,
+                real_frame_digest,
+                &envelope,
+            )? {
+                return Err(PrikkError::MalformedData(format!(
+                    "bundle carries object {object_id} twice with different envelopes -- \
+                     refusing the whole bundle"
+                )));
+            }
+            continue;
+        }
+
+        let object_type = envelope.object_type;
+        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
+        drop(envelope);
+
+        let index = prepared.len();
+        prepared.push(PreparedObject {
+            object_id,
+            object_type,
+            same_kind_dependencies,
+            frame_range: start..end,
+            frame_digest: real_frame_digest,
+            // Unused by this function's own callers (`validate_bundle_closure` never reads this
+            // field, confirmed by reading its full body) -- neither `verify` nor `preview` admits
+            // anything, so there is no real outcome to record.
+            admission_outcome: AdmissionOutcomeKind::New,
+        });
+        index_by_id.insert(object_id, index);
+        membership.insert(object_id, object_type);
+        closure_by_id.insert(object_id, closure);
+    }
+
+    Ok(BundleClosureMetadata {
+        origin_ref_name,
+        prepared,
+        index_by_id,
+        membership,
+        closure_by_id,
+        author_keys,
+        manifest,
+        object_count: count,
+    })
 }
 
 /// Import a bundle's objects and record a `received` pointer for its ref (DC-78 §D4). Never touches
@@ -1769,7 +2047,10 @@ pub fn import_bundle(
     // same held lock, after admission -- both are decide-only (neither writes), so running
     // admission first changes only which refusal surfaces for a bundle invalid on more than one
     // ground, never the "nothing written on any refusal" guarantee.
-    let (ref_state_id, bundle_key_ids) = validate_bundle_closure(
+    // 0.55.0 step 3 Part 3b-iv: `validate_bundle_closure` also returns the resolved tip block --
+    // `import` itself has no use for it (a received pointer names a RefState, not a Block), so
+    // it's discarded here; `verify`/`preview` are the callers that need it.
+    let (ref_state_id, bundle_key_ids, _tip_block_id) = validate_bundle_closure(
         source,
         &origin_ref_name,
         &prepared,
@@ -2178,7 +2459,7 @@ pub(crate) fn objects_in_dependency_order(
 /// pass 2 re-finds the object's own bytes in the original bundle bytes (length prefix included);
 /// `frame_digest` (R3) and `admission_outcome` (R4) are what pass 2 must reproduce exactly, from
 /// those bytes alone, before writing.
-struct PreparedObject {
+pub(crate) struct PreparedObject {
     object_id: ObjectId,
     object_type: ObjectType,
     same_kind_dependencies: Vec<ObjectId>,
@@ -2565,8 +2846,10 @@ pub(crate) fn corrupt_file_between_passes_for_test(change: impl FnOnce() + 'stat
 /// Read a bundle and report whether it is structurally sound and internally consistent, **without
 /// writing anything and without needing a repository** (DC-44 increment 1,
 /// `bundle-offline-verify-handoff-v1.md`). Runs the exact same decode and closure validation
-/// [`import_bundle`] runs before its first write, via `validate_bundle_contents` — §2's "reuse
-/// the decode path, do not re-implement it."
+/// [`import_bundle`] runs before its first write, via [`decode_bundle_closure_metadata`] and
+/// [`validate_bundle_closure`] — §2's "reuse the decode path, do not re-implement it," now one
+/// validator for all three commands rather than two that had to be kept in agreement by hand
+/// (0.55.0 step 3 Part 3b-iv).
 ///
 /// **What this proves**: the bundle decodes under the same rules `import_bundle` would apply
 /// (magic, framing, declared counts against actual content, every object's envelope structurally
@@ -2602,487 +2885,34 @@ pub fn verify_bundle(
     source: &mut BundleSource,
     options: &BundleImportOptions,
 ) -> Result<BundleVerifyReport> {
-    let contents = validate_bundle_contents(source, options, None)?;
-    let combined_reader = BundleAndLocalReader {
-        bundle_objects: &contents.bundle_objects_by_id,
-        local: None,
-    };
-    let (tip_block_id, _tag_envelope) =
-        crate::refs::resolve_ref_tip_block(&combined_reader, &contents.ref_state_payload)?;
+    let metadata = decode_bundle_closure_metadata(source, options)?;
+    // No lock, `local: None` -- offline verification has no repository to ask (this function's
+    // own doc comment, "what this cannot prove" section), and nothing here writes, so there is
+    // nothing a lock would protect. `validate_bundle_closure` already resolves and present-checks
+    // the ref's own tip as part of item 1, so it is returned here rather than re-derived.
+    let (ref_state_id, _bundle_key_ids, tip_block_id) = validate_bundle_closure(
+        source,
+        &metadata.origin_ref_name,
+        &metadata.prepared,
+        &metadata.index_by_id,
+        &metadata.membership,
+        &metadata.closure_by_id,
+        None,
+        &metadata.author_keys,
+        metadata.manifest.as_ref(),
+        metadata.object_count,
+    )?;
     Ok(BundleVerifyReport {
-        ref_name: contents.origin_ref_name,
-        ref_state_id: contents.ref_state_id,
+        ref_name: metadata.origin_ref_name,
+        ref_state_id,
         tip_block_id,
-        object_count: u64_to_usize(contents.object_count)?,
-        author_key_count: contents.author_keys.len(),
-        manifest: contents.manifest,
-    })
-}
-
-/// Everything [`preview_bundle_reporting_anchor`] and [`verify_bundle`] both need from a decoded
-/// bundle, after every read-only check has passed. 0.55.0 step 3 Part 3b-i2: `import_bundle` no
-/// longer calls this (it runs the equivalent checks itself, streamed, in
-/// [`validate_bundle_closure`]) -- this remains the shared path for the two callers that still
-/// read a bundle as one object (0.55.0 step 3 Part 3b-iii: through a seekable [`BundleSource`],
-/// not a fully buffered `bytes: &[u8]`). `bundle_objects_by_id` and `ref_state_payload` are kept
-/// (not just a count) because both remaining callers need them again -- `verify_bundle` for
-/// `resolve_ref_tip_block`'s own `ObjectReader` call -- without redoing the id-keyed map build or
-/// the RefState decode a second time. There is deliberately no separate `objects: Vec<ObjectEnvelope>`
-/// field any more: the pre-3b-iii code decoded every object once into that `Vec` and then cloned
-/// each envelope a second time into `bundle_objects_by_id` -- this version decodes each frame
-/// exactly once, straight into the map.
-struct BundleContents {
-    origin_ref_name: String,
-    author_keys: Vec<AuthorKeyEntry>,
-    ref_state_id: ObjectId,
-    ref_state_payload: RefStatePayload,
-    bundle_objects_by_id: BTreeMap<ObjectId, ObjectEnvelope>,
-    /// The bundle's own declared object count (every frame decoded, duplicates included --
-    /// `bundle_objects_by_id.len()` can be smaller, since a harmless exact-duplicate frame is
-    /// decoded but not re-inserted). The same count [`decode_bundle`]'s own `objects.len()` always
-    /// equalled.
-    object_count: u64,
-    /// DC-44 increment 3: `Some` for a `PBNDL003` bundle, already checked for internal agreement
-    /// against the payload; `None` for `PBNDL001`/`PBNDL002`, which carry no manifest section.
-    manifest: Option<BundleManifest>,
-}
-
-/// Decode a bundle from `source` and run every read-only structural and closure check
-/// [`preview_bundle_reporting_anchor`] and [`verify_bundle`] need -- shared, not reimplemented, by
-/// both (DC-44 increment 1 handoff §2). `local` is `Some(repository)` for a preview, where a
-/// referenced object may be satisfied by the bundle *or* the repository's own existing objects
-/// (D7's incremental-import rule); `None` for offline verification, where a reference must resolve
-/// within the bundle itself — the only thing checkable with no repository to ask (`verify_bundle`'s
-/// own doc comment explains why this is not a weaker check for a real export).
-///
-/// 0.55.0 step 3 Part 3b-iii: reads `source` forward, in the same two-phase shape `import_bundle`
-/// already uses (Q1/Q2) -- the header fields, then a cheap seek-past-every-frame skip to reach the
-/// author-key/manifest sections the wire format places after the object frames, then a seek back
-/// to decode each frame exactly once, straight into `bundle_objects_by_id`. Unlike `import_bundle`,
-/// there is no lock and no second pass: neither caller here writes anything, so there is nothing
-/// for a second, re-verifying pass to protect (R3/R4 exist to catch the bundle's own backing file
-/// changing between deciding to write an object and writing it; a read-only decode never writes,
-/// so that race cannot arise here).
-fn validate_bundle_contents(
-    source: &mut BundleSource,
-    options: &BundleImportOptions,
-    local: Option<&ObjectReadSnapshot>,
-) -> Result<BundleContents> {
-    let total_len = source.seek(SeekFrom::End(0)).map_err(|err| {
-        PrikkError::Integrity(format!("bundle decode: failed to measure the input: {err}"))
-    })?;
-    source.seek(SeekFrom::Start(0)).map_err(|err| {
-        PrikkError::Integrity(format!("bundle decode: failed to rewind the input: {err}"))
-    })?;
-    if total_len > len_to_u64(options.max_total_bytes)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle is {total_len} bytes, over the configured limit of {} bytes",
-            options.max_total_bytes
-        )));
-    }
-    let magic: [u8; 8] = read_array_from(source)?;
-    let (has_author_key_section, has_manifest_section) = if &magic == BUNDLE_MAGIC {
-        (true, true)
-    } else if &magic == RETIRED_BUNDLE_MAGIC_V2 {
-        (true, false)
-    } else if &magic == RETIRED_BUNDLE_MAGIC_V1 {
-        (false, false)
-    } else {
-        return Err(PrikkError::MalformedData(
-            "invalid bundle magic".to_string(),
-        ));
-    };
-    let origin_ref_name = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-        .map_err(|err| {
-            PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}"))
-        })?;
-    let count = read_u64_from(source)?;
-    if count > len_to_u64(options.max_object_count)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle declares {count} objects, over the configured limit of {}",
-            options.max_object_count
-        )));
-    }
-
-    let objects_start = stream_position_usize(source)?;
-    skip_object_frames(source, count, options.max_object_bytes)?;
-    let mut author_keys: Vec<AuthorKeyEntry> = Vec::new();
-    if has_author_key_section {
-        let author_key_count = read_u64_from(source)?;
-        if author_key_count > len_to_u64(options.max_object_count)? {
-            return Err(PrikkError::MalformedData(format!(
-                "bundle declares {author_key_count} author key entries, over the configured limit \
-                 of {}",
-                options.max_object_count
-            )));
-        }
-        for _ in 0..author_key_count {
-            let key_id = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-                .map_err(|err| {
-                PrikkError::MalformedData(format!("invalid bundle author key_id utf-8: {err}"))
-            })?;
-            Signature::validate_key_id(&key_id)?;
-            let public_key = read_array_from::<32>(source)?;
-            author_keys.push(AuthorKeyEntry { key_id, public_key });
-        }
-    }
-    let decoded_manifest = if has_manifest_section {
-        let repository_format = u32::try_from(read_u64_from(source)?).map_err(|_| {
-            PrikkError::MalformedData(
-                "bundle manifest declares a repository format number that does not fit in u32"
-                    .to_string(),
-            )
-        })?;
-        let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-            .map_err(|err| {
-                PrikkError::MalformedData(format!(
-                    "invalid bundle manifest tool version utf-8: {err}"
-                ))
-            })?;
-        let declared_ref_name = String::from_utf8(read_bytes_u64_from(
-            source,
-            options.max_total_bytes,
-        )?)
-        .map_err(|err| {
-            PrikkError::MalformedData(format!("invalid bundle manifest ref name utf-8: {err}"))
-        })?;
-        let declared_object_count = read_u64_from(source)?;
-        let scope = BundleScope::from_wire_tag(read_u64_from(source)?)?;
-        Some(DecodedManifest {
-            repository_format,
-            tool_version,
-            scope,
-            declared_ref_name,
-            declared_object_count,
-        })
-    } else {
-        None
-    };
-    let end_position = stream_position_usize(source)?;
-    if end_position as u64 != total_len {
-        return Err(PrikkError::MalformedData(
-            "trailing bytes in bundle".to_string(),
-        ));
-    }
-
-    source
-        .seek(SeekFrom::Start(objects_start as u64))
-        .map_err(|err| {
-            PrikkError::Integrity(format!(
-                "bundle decode: failed to seek back to the object frames: {err}"
-            ))
-        })?;
-
-    // DC-78 closure-validation handoff §2/§3: everything below is read-only. For import, it must
-    // run, and pass, before the first object write -- a refused bundle must leave no pointer at
-    // all, and the pointer is written last, so validating up front is what makes that true. §2's
-    // own definition of "present" when `local` is `Some`: carried by this bundle, or already in
-    // this repository -- an incremental import onto a repository that already holds part of the
-    // history must not be refused for objects it already has (D7's rule again).
-    // `accept_exchange_artifact` (`patch_exchange/accept.rs`) already gets this right for the
-    // patch-exchange path; this makes `import_bundle` match it rather than "align" it to something
-    // new (§6's own instruction). When `local` is `None`, "present" narrows to "carried by this
-    // bundle" -- see `verify_bundle`'s own doc comment for why that is the correct offline check.
-    //
-    // One id, one envelope. An object id does not cover signatures, so a bundle can carry the same
-    // id twice with different signature bytes; collecting into a map used to keep the last silently,
-    // and `import_bundle` then wrote the first and was refused by the store on the second -- a
-    // refusal after a write. Refused here instead, so `verify` and `import` agree and import's own
-    // refusal still comes before anything is written. An exact repeat is harmless and allowed.
-    //
-    // 0.55.0 step 3 Part 3b-iii: each frame is decoded exactly once, here, straight into
-    // `bundle_objects_by_id` -- never a separate `Vec<ObjectEnvelope>` built first and then cloned
-    // into this map the way the pre-streaming code did.
-    let mut bundle_objects_by_id: BTreeMap<ObjectId, ObjectEnvelope> = BTreeMap::new();
-    let mut first_object_id: Option<ObjectId> = None;
-    for _ in 0..count {
-        let (_declared_bytes, body) = read_frame_body_from(source, options.max_object_bytes)?;
-        let envelope = decode_envelope_file(&body)?;
-        drop(body);
-        let id = envelope.object_id();
-        if first_object_id.is_none() {
-            first_object_id = Some(id);
-        }
-        match bundle_objects_by_id.get(&id) {
-            Some(existing) if existing != &envelope => {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle carries object {id} twice with different envelopes -- refusing the \
-                     whole bundle"
-                )));
-            }
-            Some(_) => {}
-            None => {
-                bundle_objects_by_id.insert(id, envelope);
-            }
-        }
-    }
-    let Some(ref_state_id) = first_object_id else {
-        return Err(PrikkError::MalformedData(
-            "bundle contains no objects".to_string(),
-        ));
-    };
-    let Some(ref_state_envelope) = bundle_objects_by_id.get(&ref_state_id) else {
-        return Err(PrikkError::Integrity(
-            "bundle decode: the bundle's own first object has no recorded entry".to_string(),
-        ));
-    };
-    if ref_state_envelope.object_type != ObjectType::RefState {
-        return Err(PrikkError::MalformedData(
-            "bundle's first object must be the exported ref's RefState".to_string(),
-        ));
-    }
-
-    // DC-53 Stage 2, D7/C2: reject the whole import/verification before any write if the bundle's
-    // own author-key section already disagrees with itself -- a hostile or stale bundle must not
-    // be able to leave a receiver with an unresolvable, permanently unverifiable key_id.
-    // `record_author_key_material` (import-only, after this function returns) still catches a
-    // conflict against *this repository's* existing material; this catches a conflict *within the
-    // bundle*, which that call alone wouldn't see if the bundle's own two conflicting entries
-    // happened to be processed in an order where the first one matched nothing local yet.
-    let mut bundle_key_ids: BTreeMap<String, [u8; 32]> = BTreeMap::new();
-    for entry in &author_keys {
-        match bundle_key_ids.get(entry.key_id.as_str()) {
-            Some(existing) if *existing != entry.public_key => {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle's author-key section carries two different public keys for key_id {} \
-                     -- refusing the whole bundle",
-                    entry.key_id
-                )));
-            }
-            Some(_) => {}
-            None => {
-                bundle_key_ids.insert(entry.key_id.clone(), entry.public_key);
-            }
-        }
-    }
-
-    let local_available = local.is_some();
-    let present = |object_type: ObjectType, id: ObjectId| -> bool {
-        bundle_objects_by_id.contains_key(&id)
-            || local.is_some_and(|snapshot| snapshot.contains_object(object_type, id))
-    };
-    let missing_clause = if local_available {
-        "neither carried by this bundle nor already present in this repository -- refusing the \
-         whole import, no partial write"
-    } else {
-        "not carried by this bundle -- refusing to verify; an offline check with no repository to \
-         ask cannot know whether a receiver would already hold it"
-    };
-
-    // Item 1: the exported ref's target resolves. Reuses `ensure_ref_target_valid`
-    // (`refs/verify/scan.rs`) unchanged -- it is already kind-aware (one hop for a Branch, two for a
-    // Tag) and already `pub(crate)` at `crate::refs`, so no visibility widening was needed to reach it
-    // from here.
-    let ref_state_payload = RefStatePayload::decode_canonical(
-        &ref_state_envelope.canonical_payload,
-        ref_state_envelope.schema_version,
-    )?;
-
-    // 0.49.0 step 5, round 2 item 1 (ruled): the exported ref's own chain and the attestations each link requires
-    // must be present, carried by this bundle or already here. The walk follows carried RefStates only; a link
-    // the bundle does not carry must be present locally, and a local link ends the walk.
-    let mut chain_seen: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut link = ref_state_payload.clone();
-    loop {
-        for attestation_id in &link.required_attestation_ids {
-            if !present(ObjectType::Attestation, *attestation_id) {
-                return Err(PrikkError::Integrity(format!(
-                    "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
-                )));
-            }
-            // 0.50.0 step 2 Part B: an attestation's own `target_block_id` must be present too --
-            // carried by this bundle, or already local -- the same "before any write" check as the
-            // attestation's own presence above, reusing the identical bundle-or-local `present`
-            // closure and the identical refusal wording. Read from whichever side carries the
-            // attestation: the bundle may ship an attestation whose target arrives in the same
-            // import (the case table's "an attestation arriving by bundle before its block" row --
-            // the block still has to be present somewhere in this same check, bundle or local, for
-            // the import to proceed; nothing here assumes a particular order between the two).
-            let attestation_envelope = match bundle_objects_by_id.get(attestation_id) {
-                Some(envelope) => envelope.clone(),
-                None => local
-                    .and_then(|snapshot| snapshot.read_object(*attestation_id).ok().flatten())
-                    .ok_or_else(|| {
-                        PrikkError::Integrity(format!(
-                            "RefState for {origin_ref_name} requires attestation {attestation_id}, which is {missing_clause}"
-                        ))
-                    })?,
-            };
-            let attestation_payload =
-                AttestationPayload::decode_canonical(&attestation_envelope.canonical_payload)?;
-            if !present(ObjectType::Block, attestation_payload.target_block_id) {
-                return Err(PrikkError::Integrity(format!(
-                    "attestation {attestation_id} targets block {}, which is {missing_clause}",
-                    attestation_payload.target_block_id
-                )));
-            }
-        }
-        let Some(previous) = link.previous_ref_state_id else {
-            break;
-        };
-        if !chain_seen.insert(previous) {
-            return Err(PrikkError::MalformedData(format!(
-                "RefState chain for {origin_ref_name} contains a cycle at {previous}"
-            )));
-        }
-        if !present(ObjectType::RefState, previous) {
-            return Err(PrikkError::Integrity(format!(
-                "RefState chain for {origin_ref_name} names previous RefState {previous}, which is {missing_clause}"
-            )));
-        }
-        match bundle_objects_by_id.get(&previous) {
-            Some(envelope) => {
-                link = RefStatePayload::decode_canonical(
-                    &envelope.canonical_payload,
-                    envelope.schema_version,
-                )?;
-            }
-            None => break,
-        }
-    }
-
-    // DC-44 increment 3, control 4: a manifest that disagrees with the payload is refused, the
-    // same shape as the bundle-internal author-key self-consistency check above. `declared_ref_-
-    // name`/`declared_object_count` exist on the wire only to be checked here -- checked against
-    // two independent sources, not one: the bundle's own top-level header (`origin_ref_name`,
-    // unrelated to the manifest section, decoded straight from the wire) and the exported RefState's
-    // own *signed* `ref_name` field, the strongest available source of truth. `PBNDL001`/`PBNDL002`
-    // carry no manifest section (`decoded_manifest` is `None`), so this check does not run for
-    // them at all -- their decode and validation path is unchanged (§4.2).
-    let manifest = match decoded_manifest {
-        Some(raw) => {
-            if raw.declared_ref_name != origin_ref_name {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle's manifest declares ref {}, but the bundle's own header names {} -- \
-                     refusing the whole bundle",
-                    raw.declared_ref_name, origin_ref_name
-                )));
-            }
-            if raw.declared_ref_name != ref_state_payload.ref_name {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle's manifest declares ref {}, but the exported RefState's own signed \
-                     ref name is {} -- refusing the whole bundle",
-                    raw.declared_ref_name, ref_state_payload.ref_name
-                )));
-            }
-            let actual_object_count = count;
-            if raw.declared_object_count != actual_object_count {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle's manifest declares {} objects, but the bundle actually carries {} -- \
-                     refusing the whole bundle",
-                    raw.declared_object_count, actual_object_count
-                )));
-            }
-            Some(BundleManifest {
-                repository_format: raw.repository_format,
-                tool_version: raw.tool_version,
-                scope: raw.scope,
-            })
-        }
-        None => None,
-    };
-
-    let combined_reader = BundleAndLocalReader {
-        bundle_objects: &bundle_objects_by_id,
-        local,
-    };
-    ensure_ref_target_valid(
-        &combined_reader,
-        ref_state_payload.kind,
-        ref_state_payload.target_object_id,
-        ref_state_id,
-    )?;
-
-    // Items 2 and 3: every blob a carried patch's operations reference, and every patch a carried
-    // block names, must be present. Mirrors `accept_exchange_artifact`'s Phase B item 6 exactly,
-    // including the "or already present locally" half when `local` is `Some`. 0.55.0 step 3 Part
-    // 3b-iii: iterates `bundle_objects_by_id`'s own values -- the same decoded set the old,
-    // separately-held `objects: Vec<ObjectEnvelope>` carried, now with no second copy.
-    for envelope in bundle_objects_by_id.values() {
-        if envelope.object_type != ObjectType::Patch {
-            continue;
-        }
-        for operation in
-            decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?
-        {
-            for blob_id in bundle_referenced_blob_ids(&operation.kind) {
-                if !present(ObjectType::Blob, blob_id) {
-                    return Err(PrikkError::Integrity(format!(
-                        "patch {} references blob {blob_id}, which is {missing_clause}",
-                        envelope.object_id()
-                    )));
-                }
-            }
-        }
-    }
-    for envelope in bundle_objects_by_id.values() {
-        if envelope.object_type != ObjectType::Block {
-            continue;
-        }
-        let block_id = envelope.object_id();
-        let block_payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-        for patch_id in &block_payload.patch_ids {
-            if !present(ObjectType::Patch, *patch_id) {
-                return Err(PrikkError::Integrity(format!(
-                    "block {block_id} names patch {patch_id}, which is {missing_clause}"
-                )));
-            }
-        }
-        // Item 4: every parent a carried block names must be present too. `export_bundle` walks the
-        // full ancestor closure, so this holds for anything the current exporter produces -- checking
-        // it is set membership and costs nothing (handoff §2 item 4).
-        for parent_block_id in &block_payload.parent_block_ids {
-            if !present(ObjectType::Block, *parent_block_id) {
-                return Err(PrikkError::Integrity(format!(
-                    "block {block_id} names parent {parent_block_id}, which is {missing_clause}"
-                )));
-            }
-        }
-        // Review condition (`DC-78-import-closure-validation-review-v1.md` §3): a Block's own
-        // `snapshot_blob_ref` is a blob reference too, same rule as a Patch's operation-level ones --
-        // `export_bundle` already puts it in the same `blob_ids` set as those, so every legitimate
-        // export already satisfies this; the check exists for the untrusted, hand-crafted case, which
-        // is exactly the case this whole increment is for.
-        if let Some(snapshot_blob_id) = block_payload.snapshot_blob_ref {
-            if !present(ObjectType::Blob, snapshot_blob_id) {
-                return Err(PrikkError::Integrity(format!(
-                    "block {block_id} names snapshot blob {snapshot_blob_id}, which is \
-                     {missing_clause}"
-                )));
-            }
-            // RFC 136 increment 1b: a carried manifest names content blobs no patch names; each is a
-            // blob reference on the same terms. A manifest already in this repository was checked
-            // when it arrived.
-            if let Some(manifest_envelope) = bundle_objects_by_id.get(&snapshot_blob_id) {
-                let manifest = crate::snapshot::SnapshotManifest::decode(
-                    &crate::blob_access::decode_snapshot_blob(
-                        &manifest_envelope.canonical_payload,
-                    )?,
-                )?;
-                for entry in &manifest.entries {
-                    if let crate::state_root::StateRootContent::Blob(content_blob_id) =
-                        &entry.content
-                    {
-                        if !present(ObjectType::Blob, *content_blob_id) {
-                            return Err(PrikkError::Integrity(format!(
-                                "block {block_id} snapshot blob {snapshot_blob_id} names content \
-                                 blob {content_blob_id}, which is {missing_clause}"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(BundleContents {
-        origin_ref_name,
-        author_keys,
-        ref_state_id,
-        ref_state_payload,
-        bundle_objects_by_id,
-        object_count: count,
-        manifest,
+        object_count: u64_to_usize(metadata.object_count)?,
+        author_key_count: metadata.author_keys.len(),
+        manifest: metadata.manifest.map(|raw| BundleManifest {
+            repository_format: raw.repository_format,
+            tool_version: raw.tool_version,
+            scope: raw.scope,
+        }),
     })
 }
 
@@ -3131,24 +2961,44 @@ fn read_required(
         .ok_or_else(|| PrikkError::Integrity(format!("missing {object_type} object: {id}")))
 }
 
-/// `validate_bundle_contents`'s own view of §2's "present" definition: carried by this bundle, or
-/// already in this repository when one is available. Checked before any bundle object is written,
-/// so a bundle-carried object is not yet reachable through `local` even once import succeeds --
-/// `bundle_objects` is what makes it visible during validation. `local` is `None` for offline
-/// verification (`verify_bundle`), which has no repository to fall back to.
+/// `preview_bundle_reporting_anchor`'s own "present" definition: carried by this bundle, or
+/// already in this repository when one is available. `local` is `None` for a bundle-only view
+/// (the bundle's own ancestor walk must never be credited with local objects it did not itself
+/// carry); `Some` for the composed view the actual comparison runs against.
+///
+/// 0.55.0 step 3 Part 3b-iv (P1): random access by id is not whole-bundle residency. This reads
+/// each bundle-carried object on demand -- seeking to `prepared[index_by_id[id]]`'s own recorded
+/// frame range through `source` and decoding just that one frame -- instead of holding a
+/// `BTreeMap<ObjectId, ObjectEnvelope>` of the whole bundle. `source`/`cache` are shared (via
+/// `&RefCell`, not owned) across every `BundleAndLocalReader` built from the same bundle in one
+/// `preview` call, so the bundle-only and composed views reuse one decode per id between them,
+/// and the replay machinery's own repeat lookups (confirmed real: the same Block id is read
+/// 2-4+ times within one `preview_impact` call, by the ancestor-closure walk, the anchor search,
+/// and the main replay loop) cost one seek-and-decode each, not one per call.
 ///
 /// `pub(crate)` (RFC 144 §4m.3): this is the "composed, read-only reader -- the repository's
-/// object store overlaid with the bundle's own object set held in memory" the bundle-impact
-/// preview needs, reused rather than reimplemented -- see `preview_bundle`'s own doc comment.
+/// object store overlaid with the bundle's own object set" the bundle-impact preview needs,
+/// reused rather than reimplemented -- see `preview_bundle`'s own doc comment.
 pub(crate) struct BundleAndLocalReader<'a> {
-    pub(crate) bundle_objects: &'a BTreeMap<ObjectId, ObjectEnvelope>,
+    pub(crate) source: &'a RefCell<&'a mut BundleSource>,
+    pub(crate) prepared: &'a [PreparedObject],
+    pub(crate) index_by_id: &'a BTreeMap<ObjectId, usize>,
+    pub(crate) cache: &'a RefCell<BTreeMap<ObjectId, ObjectEnvelope>>,
     pub(crate) local: Option<&'a ObjectReadSnapshot>,
 }
 
 impl ObjectReader for BundleAndLocalReader<'_> {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
-        if let Some(envelope) = self.bundle_objects.get(&id) {
-            return Ok(Some(envelope.clone()));
+        if let Some(cached) = self.cache.borrow().get(&id) {
+            return Ok(Some(cached.clone()));
+        }
+        if let Some(&index) = self.index_by_id.get(&id) {
+            let envelope = {
+                let mut guard = self.source.borrow_mut();
+                read_prepared_object_at(&mut guard, self.prepared, index)?
+            };
+            self.cache.borrow_mut().insert(id, envelope.clone());
+            return Ok(Some(envelope));
         }
         match self.local {
             Some(local) => local.read_object(id),

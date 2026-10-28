@@ -18,8 +18,8 @@ use crate::bundle::{
     BundleImportOptions, BundleManifest, BundleScope, BundleSource,
     DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT, decode_bundle, encode_bundle,
     encode_bundle_v1_for_test, encode_bundle_v2_for_test, export_bundle,
-    first_over_bound_object_index, import_bundle, import_bundle_from_bytes, verify_bundle,
-    verify_bundle_from_bytes,
+    first_over_bound_object_index, import_bundle, import_bundle_from_bytes,
+    preview_bundle_from_bytes, verify_bundle, verify_bundle_from_bytes,
 };
 use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 use crate::foundation::fsutil::len_to_u64;
@@ -1285,6 +1285,91 @@ fn row3_a_bundle_missing_a_blocks_patch_is_refused() -> prikk_error::Result<()> 
 
     let _ = std::fs::remove_dir_all(source_root);
     let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}
+
+/// 0.55.0 step 3 Part 3b-iv (P1): `import`, `verify`, and `preview` all decide the manifest's own
+/// declared-object-count cross-check through the identical `validate_bundle_closure` call -- not
+/// three separately-maintained copies of the same check. Chosen over row 4's own rule
+/// deliberately: a missing block parent is also independently caught by `preview`'s own replay
+/// walk (which fails to read the same absent block for an unrelated reason), so disabling only
+/// `validate_bundle_closure`'s own copy of that rule would not, by itself, prove `preview` is
+/// going through the shared validator rather than a redundant safety net. The manifest
+/// cross-check has no such overlap -- nothing in the replay machinery ever reads the manifest --
+/// so this is the cleaner proof that the same one function's own decision now reaches all three.
+/// Verified by hand (see the report): with the check disabled inside `validate_bundle_closure`,
+/// all three calls below wrongly return `Ok`; restored, this test is green.
+#[test]
+fn the_shared_closure_validator_enforces_the_same_rule_for_all_three_commands()
+-> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("dc78-closure-shared-validator-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+    let (ref_name, objects, author_keys, manifest) = decode_bundle(
+        &bytes,
+        DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+        DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    )?;
+    let Some(manifest) = manifest else {
+        return Err(prikk_error::PrikkError::Integrity(
+            "fixture sanity: a real export carries a manifest".to_string(),
+        ));
+    };
+    let manifest = BundleManifest {
+        repository_format: manifest.repository_format,
+        tool_version: manifest.tool_version,
+        scope: manifest.scope,
+    };
+    let broken_bytes = encode_bundle_with_wrong_manifest_object_count(
+        &ref_name,
+        &objects,
+        &author_keys,
+        &manifest,
+    )?;
+    let options = BundleImportOptions::default_limits();
+
+    let import_target_root = unique_temp_dir("dc78-closure-shared-validator-import-target");
+    let import_target = RepositoryLayout::init(import_target_root.clone())?;
+    let import_err = match import_bundle_from_bytes(&import_target, &broken_bytes, &options) {
+        Ok(report) => {
+            panic!("import must refuse a manifest whose declared object count is wrong: {report:?}")
+        }
+        Err(err) => err,
+    };
+    assert!(
+        import_err.to_string().contains("declares"),
+        "unexpected error: {import_err}"
+    );
+
+    let verify_err = match verify_bundle_from_bytes(&broken_bytes, &options) {
+        Ok(report) => {
+            panic!("verify must refuse a manifest whose declared object count is wrong: {report:?}")
+        }
+        Err(err) => err,
+    };
+    assert!(
+        verify_err.to_string().contains("declares"),
+        "unexpected error: {verify_err}"
+    );
+
+    let preview_target_root = unique_temp_dir("dc78-closure-shared-validator-preview-target");
+    let preview_target = RepositoryLayout::init(preview_target_root.clone())?;
+    let preview_err =
+        match preview_bundle_from_bytes(&preview_target, &broken_bytes, &options, "heads/main") {
+            Ok(report) => panic!(
+                "preview must refuse a manifest whose declared object count is wrong: {report:?}"
+            ),
+            Err(err) => err,
+        };
+    assert!(
+        preview_err.to_string().contains("declares"),
+        "unexpected error: {preview_err}"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(import_target_root);
+    let _ = std::fs::remove_dir_all(preview_target_root);
     Ok(())
 }
 
