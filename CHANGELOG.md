@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.55.0 — 2026-10-28
+## 0.55.0 — 2026-10-29
 
 ### Upgrading
 
@@ -26,6 +26,12 @@
   now refuses `claim-parent-not-sealed`,** naming the claim and its declared parent, instead of
   `damaged-repository` — the repository was never damaged in this case; the parent simply has not
   arrived.
+- **A damaged bundle's own "ran out of bytes" refusal reads differently** for `bundle import`,
+  `bundle verify`, and `bundle preview` alike: `error: malformed persisted data: unexpected end of
+  bundle: failed to fill whole buffer`, where 0.54.x said `error: malformed persisted data:
+  unexpected end of record`. Both describe the same thing — the file is shorter than what it
+  itself declares — in the words of this release's own streaming reader rather than the old
+  in-memory decoder's.
 
 ### Fixed
 
