@@ -68,3 +68,16 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
     of seven, which bears on their `sync accept` throughput);
   - **stikk:** the new refusal ids;
   - **inklkunn:** the reply drafted 2026-10-28, if not sent before.
+
+**P1 ACCEPTED 2026-10-28** (`dc10e079`, `b5b69720`; review `release-0.55.0-prep-P1-review-v1`). **Next: P2,** unchanged.
+
+**P3 carries four rulings first:**
+- **R1:** no `### Security` entry.
+- **R2:**
+  - `ExtractRefusalKind` gained `ClaimParentNotSealed` on what was an exhaustive public enum. Add `#[non_exhaustive]`,
+    and correct its "new in this very release" doc;
+  - `### Upgrading` names both breaks (the `BundleSource` signatures, and the non-exhaustive enum);
+  - paste `cargo public-api diff 0.54.1..HEAD` on the candidate.
+- **R3:** `concurrency-locking.md:267` names `bundle verify` and `bundle preview` among the commands that take no lock.
+- **R4:** `current-state.md` gains this release's known limits: one large object at about 4.3× in `import` and about
+  2.4× in `preview` (the rest is 0.56.0 work), and `preview` into a new repository holding every created file at once.
