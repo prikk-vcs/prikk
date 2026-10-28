@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Upgrading
+
+- **`import_bundle`, `verify_bundle`, `preview_bundle`, and `preview_bundle_reporting_anchor`
+  (`prikk-store`) now take a `&mut BundleSource` instead of `bytes: &[u8]`.** Wrap an owned
+  `Vec<u8>` in `BundleSource::Buffered(std::io::Cursor::new(bytes))` for the identical behavior
+  the old signature gave; hand `BundleSource::File(std::fs::File::open(path)?)` for a real
+  seekable file to get this release's own streaming behavior instead.
+- **`ExtractRefusalKind` (`prikk-store`) is now `#[non_exhaustive]`,** having gained a variant
+  (`ClaimParentNotSealed`) for the first time since it shipped. An exhaustive `match` over it
+  needs a wildcard arm (`_ => ...`) to keep compiling, now and across any release that adds
+  another refusal id.
+
 ### Output changes
 
 - **`extract` refuses a destination inside the repository.** The target, and its temporary
@@ -14,6 +26,14 @@
   now refuses `claim-parent-not-sealed`,** naming the claim and its declared parent, instead of
   `damaged-repository` — the repository was never damaged in this case; the parent simply has not
   arrived.
+
+### Fixed
+
+- **The Windows uninstaller left an empty `Path` value where none existed before install,** when
+  this installer's own entry was the only one present. The installer's own marker now records
+  whether it created the value from nothing; the uninstaller deletes the value only when the
+  marker says so and nothing else remains in it. Any other value, or a marker from an older
+  install with no such record, is left exactly as it already was.
 
 ### Changed — `verify` and `bundle import` now take time in proportion to the number of objects
 
@@ -122,14 +142,6 @@ keeping it — small against the memory this gives back, and the re-read pattern
 blob read at most a handful of times per `preview` call, since the same content can legitimately be
 named by more than one path) never grew enough to need a bounded cache instead of simply never
 caching a `Blob` at all.
-
-### Fixed
-
-- **The Windows uninstaller left an empty `Path` value where none existed before install,** when
-  this installer's own entry was the only one present. The installer's own marker now records
-  whether it created the value from nothing; the uninstaller deletes the value only when the
-  marker says so and nothing else remains in it. Any other value, or a marker from an older
-  install with no such record, is left exactly as it already was.
 
 ## 0.54.1 — 2026-10-24
 
