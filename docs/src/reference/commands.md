@@ -339,15 +339,17 @@ in memory while it works:
   writing one object at a time; its own memory follows roughly the size of the largest single
   object the bundle carries, not the whole bundle (measured, one 16 MiB object: about four times
   the object's own size).
-- **`bundle verify`** also decodes one object at a time, but keeps every decoded object (not the
-  raw file) until the whole bundle's closure has been checked — its own memory follows the
-  bundle's own decoded content, once, not the two or three copies it used to hold (measured, one
-  16 MiB object: from about 3.3× down to about 2.3× the object's own size).
-- **`bundle preview`** needs the most: computing what a bundle would change requires reading any
-  carried object's content in whatever order the comparison visits it, so it keeps the same
-  decoded content `verify` does, for as long as that comparison runs — its own win is the same
-  "no second or third copy" as `verify`'s, not `import`'s "follows the largest object" shape
-  (measured, one 16 MiB object: from about 5.3× down to about 3.3×).
+- **`bundle verify`** decodes one object at a time and keeps nothing past its own turn, the same
+  shape as `bundle import` — its own memory also follows roughly the largest single object, a
+  little lower than `import`'s own figure since it never writes (measured, one 16 MiB object:
+  about 2.3 times the object's own size, down from about 3.3 times before).
+- **`bundle preview`** needs more: deciding what a bundle would change means reading any carried
+  object's content in whatever order the comparison visits it, so it keeps one full decoded copy
+  of the bundle in memory for as long as the comparison runs, plus whatever the comparison itself
+  holds — its own win is "one copy instead of two or three," never `import`/`verify`'s "follows
+  the largest object" shape (measured, one 16 MiB object: about 3.3 times the object's own size,
+  down from about 5.3 times before; a mixed 158 MiB bundle still peaks around 332 MiB, tracking
+  the bundle's own size, where `import`/`verify` on the identical bundle peak under 15 MiB).
 
 A pipe or FIFO input to any of the three is unchanged: a non-seekable input cannot be read twice,
 so it is still read into memory whole before anything else happens.

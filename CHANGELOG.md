@@ -49,31 +49,42 @@ before the next one begins.
 
 About twice as fast; the disk is noisy, but the direction held in every round.
 
-### Changed — `bundle import` against a regular file no longer buffers the whole bundle
+### Changed — `bundle import`, `bundle verify`, and `bundle preview` against a regular file no longer buffer the whole bundle
 
-`bundle import` used to read a bundle file whole into memory before doing anything else, and
-decode every object before writing any of them — its own peak memory followed the size of the
-whole bundle, several times over. Against a regular file (not a pipe or FIFO), it now streams: it
-reads and re-reads the open file in place, decoding and admitting one object at a time, and writes
-each one from the bytes it already read wherever that is sound rather than re-encoding them. Its
-own peak memory now follows what the bundle actually carries, not a multiple of the whole file. A
-pipe or FIFO input is unchanged — still read into memory in full, since a non-seekable input cannot
-be read twice. `bundle verify` and `bundle preview` stream a regular file too, by a different
-amount each — see the next entry.
+All three used to read a bundle file whole into memory before doing anything else, decode every
+object into a second copy, and (for `verify`/`preview`) build a third, separate lookup copy on top
+of that — several multiples of the whole bundle's own size, regardless of which single object
+actually mattered. Against a regular file (not a pipe or FIFO), all three now read the open file in
+place instead: `bundle import` decides and writes one object at a time, from the bytes it already
+read wherever that is sound, rather than re-encoding them; `bundle verify` decodes one object at a
+time and keeps nothing past its own turn, the same shape as `import`; `bundle preview` decodes
+straight into its one lookup copy as it reads, never building that copy as a second pass over an
+already-decoded set. A pipe or FIFO input to any of the three is unchanged — still read into memory
+in full, since a non-seekable input cannot be read twice.
 
-For a bundle of many ordinary-sized objects, the effect is large: importing one commit of 9,997
-small files (10,001 objects) peaked at 185,848 KiB before, 22,000 KiB after — about 2.2 KiB held
-per object, not a multiple of the whole 44 MiB bundle. A mixed bundle of 524 objects from 2 KiB to
-2 MiB peaked at 87,208 KiB before, 14,240 KiB after.
+`bundle import` and `bundle verify` now both follow roughly the size of the largest single object a
+bundle carries, not the whole bundle — `verify`'s own peak is in fact a little lower than
+`import`'s, since it never writes. `bundle preview` is different: deciding what a bundle would
+change means reading any carried object's content in whatever order the comparison visits it, so it
+still keeps one full decoded copy of the bundle in memory for as long as the comparison runs, plus
+whatever that comparison itself holds (the files it is diffing against). Its own win is "one copy
+instead of two or three," not `import`/`verify`'s "follows the largest object" shape.
 
-For a bundle carrying one very large object, the win is smaller: writing an object reads the bytes
-as read, holds a decoded copy, and writes a further buffer for the record — three buffer widths,
-each the size of the object, alive together for a moment, the way this code works today. One 16
-MiB object now peaks at about 70,700–71,100 KiB, down from 103,900–104,400 KiB before this change —
-still about four times the object's own size.
+**Measured, release build, peak RSS only, against `main` before this work began, the same three
+fixtures used for all three commands:**
 
-**Measured, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
-(10,001 objects), tmpfs:**
+| fixture | `bundle import` before → after | `bundle verify` before → after | `bundle preview` before → after |
+|---|---|---|---|
+| one 16 MiB object (one 16 MiB bundle) | 103,956 → 71,100–71,308 KiB | 53,540 → 37,260–37,512 KiB | 87,504 → 54,296–55,028 KiB |
+| one commit of 9,997 × 4 KiB files (10,001 objects, a 42 MiB bundle) | 186,368 → 23,192 KiB | 140,676 → 18,724 KiB | 185,536 → 107,280 KiB |
+| a mixed commit of 524 files, 2 KiB–2 MiB each (a 158 MiB bundle) | 658,796 → 14,620 KiB | 489,872 → 12,400 KiB | 655,272 → 332,304 KiB |
+
+`import`'s and `verify`'s own peaks barely move between the many-small-objects and mixed shapes
+(both dominated by their largest single object, 4 KiB and ~2 MiB respectively) while `preview`'s
+own peak tracks the whole bundle's size in every row — the concrete shape of the distinction above.
+
+**Wall time, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
+(10,001 objects), tmpfs, `bundle import` only:**
 
 | round | before | after |
 |---|---|---|
@@ -84,34 +95,6 @@ still about four times the object's own size.
 About 6–8% slower, from reading and decoding each object a second time rather than keeping a copy
 in memory across the whole operation. On the `/home` disk, one clean alternated round showed no
 real difference (30.15 s before, 30.57 s after).
-
-### Changed — `bundle verify` and `bundle preview` against a regular file no longer buffer it whole either
-
-Both used to read a bundle file whole into memory, decode every object into a second copy, and
-build a third, separate lookup copy before doing anything else. Against a regular file, both now
-read the open file in place and decode straight into that one lookup copy — never a separate raw
-buffer, never a second decoded copy alongside it.
-
-`bundle verify` needs nothing more than that one copy, so its own peak now follows the bundle's
-decoded content once, not three times over. `bundle preview` needs more: deciding what a bundle
-would change means reading any carried object's content in whatever order the comparison visits
-it, so it keeps that one copy in memory for as long as the comparison runs — its own win is the
-same "one copy instead of three," not `bundle import`'s "follows the largest object" shape, because
-`preview` cannot discard content the way `import`/`verify` can.
-
-**Measured, release build, peak RSS only, against `main` before the streaming work began:**
-
-| | `bundle verify` | `bundle preview` |
-|---|---|---|
-| one 16 MiB object, before | 53,936 KiB (≈3.3×) | 87,240 KiB (≈5.3×) |
-| one 16 MiB object, after | 37,260 KiB (≈2.3×) | 54,516 KiB (≈3.3×) |
-| 9,997 × 4 KiB files (10,001 objects), before | 140,184 KiB | 186,808 KiB |
-| 9,997 × 4 KiB files (10,001 objects), after | 53,704 KiB | 99,552 KiB |
-| 524 objects, 2 KiB–2 MiB, before | 1,663,228 KiB | 2,229,040 KiB |
-| 524 objects, 2 KiB–2 MiB, after | 575,292 KiB | 1,126,412 KiB |
-
-A pipe or FIFO input to either command is unchanged — still read into memory in full, since a
-non-seekable input cannot be read twice.
 
 ### Fixed
 
