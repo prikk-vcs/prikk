@@ -2971,10 +2971,19 @@ fn read_required(
 /// frame range through `source` and decoding just that one frame -- instead of holding a
 /// `BTreeMap<ObjectId, ObjectEnvelope>` of the whole bundle. `source`/`cache` are shared (via
 /// `&RefCell`, not owned) across every `BundleAndLocalReader` built from the same bundle in one
-/// `preview` call, so the bundle-only and composed views reuse one decode per id between them,
-/// and the replay machinery's own repeat lookups (confirmed real: the same Block id is read
-/// 2-4+ times within one `preview_impact` call, by the ancestor-closure walk, the anchor search,
-/// and the main replay loop) cost one seek-and-decode each, not one per call.
+/// `preview` call, so the bundle-only and composed views reuse one decode per id between them.
+///
+/// 0.55.0 step 3 Part 3b-v (Q1): `cache` holds every non-`Blob` envelope it reads (RefStates,
+/// Blocks, Patches, Attestations, Tags), never evicted for the life of one `preview` call -- the
+/// replay machinery's own repeat lookups are real (the same Block id is read 2-4+ times within
+/// one `preview_impact` call, by the ancestor-closure walk, the anchor search, and the main
+/// replay loop) and these are confirmed small. A `Blob` is read fresh from its own recorded range
+/// every time it is asked for and never cached: it carries the file's own content, so caching it
+/// the same way reconstructs the old whole-bundle map one blob at a time -- the exact shape Q1
+/// found (332,304 KiB peak on a 158 MiB bundle, about 2x the bundle itself). Blobs are measured
+/// re-read at most a handful of times per `preview` call (content-addressed, so a handful of
+/// distinct paths can share one id) -- a plain "always re-read, never cache" came out faster in
+/// wall time than it cost, once measured (see the report), so no byte-bounded cache was needed.
 ///
 /// `pub(crate)` (RFC 144 §4m.3): this is the "composed, read-only reader -- the repository's
 /// object store overlaid with the bundle's own object set" the bundle-impact preview needs,
@@ -2987,6 +2996,21 @@ pub(crate) struct BundleAndLocalReader<'a> {
     pub(crate) local: Option<&'a ObjectReadSnapshot>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// 0.55.0 step 3 Part 3b-v: counts real seek-and-decode calls `BundleAndLocalReader::
+    /// read_object` makes for a `Blob` id, so a test can prove a Blob genuinely never gets served
+    /// from `cache` (a bug here would silently make this stay at 1 even when the same blob id is
+    /// asked for twice).
+    static BLOB_REREAD_COUNT_FOR_TEST: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Read and reset [`BLOB_REREAD_COUNT_FOR_TEST`] -- test-only.
+#[cfg(test)]
+pub(crate) fn take_blob_reread_count_for_test() -> u32 {
+    BLOB_REREAD_COUNT_FOR_TEST.with(|cell| cell.replace(0))
+}
+
 impl ObjectReader for BundleAndLocalReader<'_> {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
         if let Some(cached) = self.cache.borrow().get(&id) {
@@ -2997,7 +3021,16 @@ impl ObjectReader for BundleAndLocalReader<'_> {
                 let mut guard = self.source.borrow_mut();
                 read_prepared_object_at(&mut guard, self.prepared, index)?
             };
-            self.cache.borrow_mut().insert(id, envelope.clone());
+            // 0.55.0 step 3 Part 3b-v (Q1): a Blob carries file content, not closure metadata --
+            // caching it here reconstructs the old whole-bundle map one blob at a time. Every
+            // other type is small and genuinely re-read several times per `preview` call, so it
+            // stays cached.
+            if envelope.object_type == ObjectType::Blob {
+                #[cfg(test)]
+                BLOB_REREAD_COUNT_FOR_TEST.with(|cell| cell.set(cell.get() + 1));
+            } else {
+                self.cache.borrow_mut().insert(id, envelope.clone());
+            }
             return Ok(Some(envelope));
         }
         match self.local {

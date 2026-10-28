@@ -4166,3 +4166,74 @@ fn bundle_preview_simple_wrapper_accepts_a_real_file() -> prikk_error::Result<()
     let _ = std::fs::remove_dir_all(target_root);
     Ok(())
 }
+
+/// 0.55.0 step 3 Part 3b-v (Q1): `BundleAndLocalReader` never serves a `Blob` from `cache` --
+/// every lookup for the same blob id is a real seek-and-decode. Built directly against the
+/// reader (not through a full `preview` call) so the test controls exactly how many times the
+/// same blob id is asked for, rather than relying on the replay machinery to happen to revisit
+/// it. Every non-`Blob` type keeps the existing cache-after-first-read behavior, confirmed
+/// unchanged by every other `bundle::`/`preview::` test in this module still passing unmodified.
+#[test]
+fn bundle_and_local_reader_never_caches_a_blob() -> prikk_error::Result<()> {
+    let source_root = unique_temp_dir("bundle-blob-not-cached-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    let tip_block_id = seal_two_block_history(&source)?;
+    let (_, bytes) = export_bundle(&source, "heads/main")?;
+
+    let blob_id = signed_patch_blob_envelope().object_id();
+
+    let mut source_handle = BundleSource::Buffered(std::io::Cursor::new(bytes));
+    let metadata = crate::bundle::decode_bundle_closure_metadata(
+        &mut source_handle,
+        &BundleImportOptions::default_limits(),
+    )?;
+    assert!(
+        metadata.index_by_id.contains_key(&blob_id),
+        "the fixture's own patch blob must be carried by the bundle"
+    );
+
+    let source_cell = std::cell::RefCell::new(&mut source_handle);
+    let cache = std::cell::RefCell::new(std::collections::BTreeMap::new());
+    let reader = crate::bundle::BundleAndLocalReader {
+        source: &source_cell,
+        prepared: &metadata.prepared,
+        index_by_id: &metadata.index_by_id,
+        cache: &cache,
+        local: None,
+    };
+
+    let _ = crate::bundle::take_blob_reread_count_for_test(); // clear any prior test's count
+    let Some(first) = reader.read_object(blob_id)? else {
+        return Err(prikk_error::PrikkError::Integrity(
+            "fixture sanity: the patch blob must be present on the first read".to_string(),
+        ));
+    };
+    let Some(second) = reader.read_object(blob_id)? else {
+        return Err(prikk_error::PrikkError::Integrity(
+            "fixture sanity: the patch blob must be present on the second read".to_string(),
+        ));
+    };
+    assert_eq!(
+        first, second,
+        "both real reads must decode the identical envelope"
+    );
+    assert_eq!(
+        crate::bundle::take_blob_reread_count_for_test(),
+        2,
+        "a Blob asked for twice must be read from the file twice, never served from cache"
+    );
+    assert!(
+        !cache.borrow().contains_key(&blob_id),
+        "a Blob must never be inserted into the cache"
+    );
+
+    // A non-Blob id (the tip Block) is the control: it must be cached after its first read.
+    let _ = reader.read_object(tip_block_id)?;
+    assert!(
+        cache.borrow().contains_key(&tip_block_id),
+        "a non-Blob id must still be cached after its first read"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    Ok(())
+}
