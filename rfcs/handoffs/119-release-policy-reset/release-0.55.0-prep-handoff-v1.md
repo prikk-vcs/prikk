@@ -96,3 +96,23 @@ smoke passes 36 sections, and sections 31f and 35 fail on 0.54.0.
 **`b1394a64` is the candidate:** CI 17/17. The architect re-ran `matrix.py` (byte-identical to 0.54.1 at both depths) and
 `reproduce.sh` (identical exit codes). **The dev team's part is complete.** External review letter 037 is drafted; the
 tag waits for its answer and the owner's word.
+
+## P4 — one Output-changes line and the tag-day date (live 2026-10-29, about 20 min, `release-0.55.0-prep-P4-report.md`)
+
+**External review 037: nothing blocks the tag** (reading `.git-exclude/reviewed/external-review-037-reading-v1.md`). It
+reproduced the matrix, `reproduce.sh` and every figure.
+
+**The owner decided, 2026-10-29:** *"Add the line, then tag,"* and *"Tag and crates.io."*
+
+1. **One `### Output changes` line in the 0.55.0 section:** a damaged bundle's refusal now reads differently for
+   `bundle import`, `verify` and `preview`. Take both messages from the candidate binary, not from this text:
+   - a truncated bundle: "unexpected end of bundle: failed to fill whole buffer", where 0.54.x said "unexpected end of
+     record";
+   - a length field over the declared bounds is now refused by the size bound, naming the declared size.
+
+   Show both on 0.54.0's binary and on the candidate, and paste the exact lines.
+2. **Re-date the heading to the day you commit** (`## 0.55.0 — 2026-10-29` if today). If the tag lands on a later day,
+   the architect asks for a one-line re-date then.
+3. **The 14 gates on the final commit.** No other file changes.
+
+**Then:** the architect pushes, reads CI on that commit, and tags it.
