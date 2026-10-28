@@ -116,3 +116,12 @@ reproduced the matrix, `reproduce.sh` and every figure.
 3. **The 14 gates on the final commit.** No other file changes.
 
 **Then:** the architect pushes, reads CI on that commit, and tags it.
+
+**P4 ACCEPTED, and 0.55.0 RELEASED 2026-10-29** (review `release-0.55.0-prep-P4-review-v1`).
+- **Tag:** signed `0.55.0` on `511d6dab`, with CI 17/17.
+- **Release run `40778633249`:** 12/12.
+- **Assets and smoke:** verified (447 ok on the published binary).
+- **AUR:** 0.55.0.
+- **crates.io:** all eight crates published.
+
+**This handoff is complete.**
