@@ -32,6 +32,13 @@
   unexpected end of record`. Both describe the same thing — the file is shorter than what it
   itself declares — in the words of this release's own streaming reader rather than the old
   in-memory decoder's.
+- **A field whose own declared length is larger than the bundle's own declared total size now
+  names that size**, for the same three commands: `error: malformed persisted data: bundle
+  declares a 536870912-byte field, over the bundle's own declared total size`, where 0.54.x said
+  only `error: malformed persisted data: unexpected end of record` — no size named. This is the
+  bundle's own header fields (the ref name, an author key id, the manifest's own strings), checked
+  against the bundle's declared size before the field is read at all, not an object's own content,
+  which was already bounded this way before 0.55.0.
 
 ### Fixed
 
