@@ -18,7 +18,10 @@
 ### Changed — `verify` and `bundle import` now take time in proportion to the number of objects
 
 `verify` and `bundle import` used to slow down faster than the repository grew: twice the objects
-could cost more than twice the time. Both now take time in proportion to the number of objects.
+could cost more than twice the time. Both now take time in proportion to the number of objects,
+by keeping a small id-to-position lookup alongside the existing list of objects — it costs about
+48 bytes of memory per object stored, in exchange for that lookup never getting slower as the
+repository grows.
 
 **Measured, release build, tmpfs, interleaved before/after samples, one commit of N × 4 KiB
 files**:

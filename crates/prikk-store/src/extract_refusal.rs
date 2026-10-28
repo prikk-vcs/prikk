@@ -15,12 +15,13 @@
 //! is this project's first machine-readable refusal document, designed as a precedent other
 //! commands adopt when next touched, not a retrofit onto every existing refusal today.
 //!
-//! **Deliberately not `#[non_exhaustive]`.** [`ExtractRefusalKind`] is new in this very release
-//! cycle (unreleased), has exactly the five members `prikk-cli`'s own classifying `match` needs,
-//! and growing it is this command's own `prikk-store` change to make alongside the match that
-//! reads it -- there is no cross-crate compatibility reason yet to force every reader to carry a
-//! wildcard arm, and the whole point of `refusal-v1`'s own "exhaustive by construction" design is
-//! that a `match` over the refusal ids has none.
+//! **`#[non_exhaustive]` since 0.55.0.** [`ExtractRefusalKind`] gained a sixth member
+//! (`ClaimParentNotSealed`) in its second release, after shipping exhaustive in 0.54.0 --
+//! refusal ids keep coming (0.56.0 is already known to add a rollback refusal), so a library
+//! caller's own exhaustive `match` must carry a wildcard arm to keep compiling across a release
+//! that adds one. `refusal-v1`'s own "exhaustive by construction" design is still true of the
+//! wire-level id strings themselves; it is this Rust enum's own compile-time exhaustiveness that
+//! cannot be promised release to release.
 
 use prikk_error::PrikkError;
 
@@ -52,6 +53,7 @@ pub enum NoCheckpointReason {
 /// come from the point resolver unchanged (`point-not-found`), or fall back to a classification of
 /// the underlying [`PrikkError`]'s own variant (`damaged-repository`, `io-failure`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExtractRefusalKind {
     /// `claim-not-found`: no such claim.
     ClaimNotFound,

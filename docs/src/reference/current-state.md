@@ -271,6 +271,16 @@ planned for.
   the existing entry list, updated on every path that changes it), fixed in 0.55.0 — `verify` and
   `bundle import` no longer slow down faster than the repository grows. The whole index is still
   held resident in memory for the duration of a write session; that part is not yet fixed.
+- **One very large object still costs `bundle import` about 4.3 times its own size in memory**
+  (`bundle preview` about 2.4 times), even though 0.55.0's own streaming work made both follow the
+  largest single object rather than the whole bundle. The two remaining copies — a decoded envelope
+  that borrows the frame instead of owning a second copy of it, and a container append written as
+  its header and body separately under one sync instead of one combined buffer — are 0.56.0 work,
+  owner-decided 2026-10-28.
+- **`bundle preview` into a repository that creates many files at once holds every created file's
+  own content at once**, for as long as that one comparison runs, to report what changed — a
+  per-file diff that dropped each file's content once its own effect was known would remove this,
+  and is a later candidate, not yet built.
 - **`prikk extract`'s own peak memory tracks the largest single file it actually reads, not the
   point's own total content size** (0.54.0): every file whose content has not changed since
   the admitted anchor streams straight from its stored blob id, one at a time, and only a text file

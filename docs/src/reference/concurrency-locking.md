@@ -264,8 +264,9 @@ The current model is conservative:
   once per object — a concurrent writer meets the refusal for that whole span rather than only in
   the gaps between objects;
 - the default active WAL still serializes public command flows that author then seal active state;
-- read-only verification, doctor analysis, history inspection, checkout planning, merge evidence, and
-  merge planning do not create these lock files, though they still read mutable repository state.
+- read-only verification, doctor analysis, history inspection, checkout planning, merge evidence,
+  merge planning, `bundle verify`, and `bundle preview` do not create these lock files, though they
+  still read mutable repository state.
 
 This does not mean Prikk supports multi-user concurrent repository mutation, branch transactions,
 remote synchronization, or race-free behavior under arbitrary concurrent filesystem modification.

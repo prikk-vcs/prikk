@@ -132,11 +132,10 @@ fn classify_resolve_point_error(error: &prikk_error::PrikkError) -> ExtractRefus
 }
 
 /// `prepare_extract_plan`/`prepare_extract_plan_for_claim`'s own `ExtractError`, classified: the
-/// five cases `prikk-store` already tagged at their own raise site (`err.kind`) map directly;
-/// everything else (`kind: None`) falls back to [`classify_prikk_error_fallback`]. This `match` is
-/// exhaustive over `prikk_store::ExtractRefusalKind` with no wildcard -- that type is deliberately
-/// not `#[non_exhaustive]` (its own module doc) so this cross-crate match can make exactly that
-/// promise.
+/// six cases `prikk-store` already tagged at their own raise site (`err.kind`) map directly;
+/// everything else (`kind: None`, or any future variant `prikk_store::ExtractRefusalKind` adds --
+/// `#[non_exhaustive]` since 0.55.0, its own module doc) falls back to
+/// [`classify_prikk_error_fallback`], the same fallback the `None` case already uses.
 fn classify_extract_plan_error(
     error: &prikk_store::ExtractError,
 ) -> (ExtractRefusalId, Option<&'static str>) {
@@ -155,6 +154,9 @@ fn classify_extract_plan_error(
             Some(no_checkpoint_reason_id(*reason)),
         ),
         None => (classify_prikk_error_fallback(&error.error), None),
+        // `ExtractRefusalKind` is `#[non_exhaustive]` since 0.55.0 (R2): any later variant this
+        // match does not yet know falls back exactly like an unclassified error.
+        Some(_) => (classify_prikk_error_fallback(&error.error), None),
     }
 }
 
