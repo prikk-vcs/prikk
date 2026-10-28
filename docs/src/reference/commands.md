@@ -343,13 +343,16 @@ in memory while it works:
   shape as `bundle import` — its own memory also follows roughly the largest single object, a
   little lower than `import`'s own figure since it never writes (measured, one 16 MiB object:
   about 2.3 times the object's own size, down from about 3.3 times before).
-- **`bundle preview`** needs more: deciding what a bundle would change means reading any carried
-  object's content in whatever order the comparison visits it, so it keeps one full decoded copy
-  of the bundle in memory for as long as the comparison runs, plus whatever the comparison itself
-  holds — its own win is "one copy instead of two or three," never `import`/`verify`'s "follows
-  the largest object" shape (measured, one 16 MiB object: about 3.3 times the object's own size,
-  down from about 5.3 times before; a mixed 158 MiB bundle still peaks around 332 MiB, tracking
-  the bundle's own size, where `import`/`verify` on the identical bundle peak under 15 MiB).
+- **`bundle preview`** reads an object by seeking to its own range too, and never keeps a decoded
+  `Blob` past the one call that read it (a `Blob` is file content, not closure metadata, so
+  holding every one read would rebuild the whole bundle in memory one blob at a time). What is
+  left is the comparison's own real working set: for one object, that is the object itself
+  (measured, one 16 MiB object: close to `import`/`verify`'s own figure on the identical bundle);
+  for a bundle that creates many files at once, the comparison genuinely holds each file's own
+  content once while it decides what changed, so its own peak still grows with how much a bundle
+  changes, not with the bundle's own size on disk (a mixed 158 MiB bundle peaks around 162 MiB,
+  down from about 640 MiB before this release's own streaming work, where `import`/`verify` on the
+  identical bundle peak under 15 MiB).
 
 A pipe or FIFO input to any of the three is unchanged: a non-seekable input cannot be read twice,
 so it is still read into memory whole before anything else happens.

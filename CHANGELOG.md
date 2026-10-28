@@ -64,27 +64,36 @@ in full, since a non-seekable input cannot be read twice.
 
 `bundle import` and `bundle verify` now both follow roughly the size of the largest single object a
 bundle carries, not the whole bundle — `verify`'s own peak is in fact a little lower than
-`import`'s, since it never writes. `bundle preview` is different: deciding what a bundle would
-change means reading any carried object's content in whatever order the comparison visits it, so it
-still keeps one full decoded copy of the bundle in memory for as long as the comparison runs, plus
-whatever that comparison itself holds (the files it is diffing against). Its own win is "one copy
-instead of two or three," not `import`/`verify`'s "follows the largest object" shape.
+`import`'s, since it never writes. `bundle preview` is closer to that shape than it first looks: its
+own reader reads an object by seeking to its own range rather than holding the whole bundle
+decoded, and now also stops keeping a decoded `Blob` after reading it — a `Blob` carries a file's
+own content, not closure metadata, and holding every one read ends up holding the bundle again, one
+blob at a time. What is left afterward is the comparison's own real working set: for a bundle that
+creates many files at once, the comparison genuinely holds each file's own content once while it
+decides what changed, so its own peak still grows with how much a bundle actually changes, not with
+the bundle's own size on disk — for one single large object, the two are the same thing, and
+`preview`'s own peak there now sits close to `import`/`verify`'s own figure on the identical bundle.
 
 **Measured, release build, peak RSS only, against `main` before this work began, the same three
 fixtures used for all three commands:**
 
 | fixture | `bundle import` before → after | `bundle verify` before → after | `bundle preview` before → after |
 |---|---|---|---|
-| one 16 MiB object (one 16 MiB bundle) | 103,956 → 71,100–71,308 KiB | 53,540 → 37,260–37,512 KiB | 87,504 → 54,296–55,028 KiB |
-| one commit of 9,997 × 4 KiB files (10,001 objects, a 42 MiB bundle) | 186,368 → 23,192 KiB | 140,676 → 18,724 KiB | 185,536 → 107,280 KiB |
-| a mixed commit of 524 files, 2 KiB–2 MiB each (a 158 MiB bundle) | 658,796 → 14,620 KiB | 489,872 → 12,400 KiB | 655,272 → 332,304 KiB |
+| one 16 MiB object (one 16 MiB bundle) | 103,956 → 71,100–71,308 KiB | 53,540 → 37,260–37,512 KiB | 87,504 → 38,340–38,812 KiB |
+| one commit of 9,997 × 4 KiB files (10,001 objects, a 42 MiB bundle) | 186,368 → 23,192 KiB | 140,676 → 18,724 KiB | 185,536 → 63,240–65,136 KiB |
+| a mixed commit of 524 files, 2 KiB–2 MiB each (a 158 MiB bundle) | 658,796 → 14,620 KiB | 489,872 → 12,400 KiB | 642,096–642,580 → 165,320–165,916 KiB |
 
 `import`'s and `verify`'s own peaks barely move between the many-small-objects and mixed shapes
-(both dominated by their largest single object, 4 KiB and ~2 MiB respectively) while `preview`'s
-own peak tracks the whole bundle's size in every row — the concrete shape of the distinction above.
+(both dominated by their largest single object, 4 KiB and ~2 MiB respectively). `bundle preview`
+moves too, in the same direction, but not as far — on the single 16 MiB object it lands within a
+few MiB of `import`/`verify`'s own figure; on the two many-file shapes, where a preview into an
+empty repository creates every file at once, it still holds noticeably more, because holding each
+newly created file's own content once for the duration of that comparison is real, counted work,
+not a leftover copy of the bundle.
 
-**Wall time, release build, alternated before/after samples, one commit of 9,997 × 4 KiB files
-(10,001 objects), tmpfs, `bundle import` only:**
+**Wall time, release build, alternated before/after samples:**
+
+one commit of 9,997 × 4 KiB files (10,001 objects), tmpfs, `bundle import`:
 
 | round | before | after |
 |---|---|---|
@@ -95,6 +104,21 @@ own peak tracks the whole bundle's size in every row — the concrete shape of t
 About 6–8% slower, from reading and decoding each object a second time rather than keeping a copy
 in memory across the whole operation. On the `/home` disk, one clean alternated round showed no
 real difference (30.15 s before, 30.57 s after).
+
+`bundle preview`, release build, alternated samples on tmpfs, the same three fixtures above (peak
+RSS repeated for comparison):
+
+| fixture | peak RSS before → after | wall time before → after |
+|---|---|---|
+| one 16 MiB object | 86,876–87,212 → 38,340–38,812 KiB | 0.033–0.034 s → 0.041–0.042 s |
+| 9,997 × 4 KiB files (10,001 objects) | 185,068–186,576 → 63,240–65,136 KiB | 0.090–0.107 s → 0.107–0.114 s |
+| 524 files, 2 KiB–2 MiB mixed | 642,096–642,580 → 165,320–165,916 KiB | 0.185–0.186 s → 0.202 s |
+
+A few percent to about 20% slower, from re-reading each `Blob` fresh instead of decoding it once and
+keeping it — small against the memory this gives back, and the re-read pattern measured here (each
+blob read at most a handful of times per `preview` call, since the same content can legitimately be
+named by more than one path) never grew enough to need a bounded cache instead of simply never
+caching a `Blob` at all.
 
 ### Fixed
 
