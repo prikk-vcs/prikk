@@ -81,3 +81,13 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
 - **R3:** `concurrency-locking.md:267` names `bundle verify` and `bundle preview` among the commands that take no lock.
 - **R4:** `current-state.md` gains this release's known limits: one large object at about 4.3× in `import` and about
   2.4× in `preview` (the rest is 0.56.0 work), and `preview` into a new repository holding every created file at once.
+
+**P2 ACCEPTED 2026-10-28** (no commits; review `release-0.55.0-prep-P2-review-v1`). Every CHANGELOG figure holds. The
+smoke passes 36 sections, and sections 31f and 35 fail on 0.54.0.
+
+**Next: P3, with R1–R4 from P1 and R5 from P2.**
+- **R5, the cause of the profile change:** the release-gate absolute medians rose about 2.6–4.0 MB at 32,000 and
+  64,000 nodes (58,656 → 61.2–61.5 MB; 110,368 → 114.0–114.4 MB). That is the 2C id map in `commit`'s write session,
+  about 48 bytes per index entry, an accepted cost under C2.
+- **Cite both candidate runs** (`…158611` at 1.8688×, `…161227` at 1.853×).
+- **Restore the per-object memory cost in the CHANGELOG's index-lookup entry,** in user words.
