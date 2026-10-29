@@ -7,6 +7,8 @@
 mod received;
 #[path = "sync_and_exchange/release_0_52_0_p3b_received_ref_failure_named.rs"]
 mod release_0_52_0_p3b_received_ref_failure_named;
+#[path = "sync_and_exchange/release_0_56_0_step1a_sync_pending_json.rs"]
+mod release_0_56_0_step1a_sync_pending_json;
 #[path = "sync_and_exchange/rfc116_sync_cli.rs"]
 mod rfc116_sync_cli;
 #[path = "sync_and_exchange/rfc132_absent_and_received_refs.rs"]

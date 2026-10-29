@@ -67,7 +67,7 @@ prikk sync compare --summary <file>
 prikk sync have <ref> --output <file>
 prikk sync build <ref> --have <file> --output <file> [--force]
 prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]
-prikk sync pending
+prikk sync pending [--format json]
 prikk sync seal <ref> --claim <id>
 prikk sync seal <ref> --claims <file>
 prikk sync tags
@@ -164,6 +164,31 @@ block can have more than one parent, so there is no single next entry to walk th
 `RefState.previous_ref_state_id` gives one; `log`'s own history is the publication chain of a ref,
 not a block's own ancestry. This closes a prior gap where `log --ref <block id>` exited `0` with an
 empty history instead of refusing.
+
+**`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches this
+repository has accepted (`sync accept`) and not yet sealed (RFC 115 Stage 3's own derived query:
+patch objects present, minus those reachable from a local ref's own tip block). **This is not "every
+patch this repository has not sealed":** a patch held only through `archive import`'s received
+history can still appear here. By default, `archive import` lands every ref — even one naming the
+exporter's own local branch — under `remotes/…` through the received-index, which this query never
+walks; only a ref landed with `--adopt` becomes a real local ref, reachable, and therefore excluded.
+`--format json`'s one document, `sync-pending-v1`, adds the recognition claim(s) naming each pending
+patch: `patches[]`, each `{"patch_id", "claims"}`; `claims[]`, each `{"claim_id", "parent_block_id",
+"signature"}`, where `signature` is `{"outcome": "sound"|"unverifiable", "key_id"}` from the claim's
+own MAINTAINER signature. The outcome is reported, never gated on — except a signature that fails to
+verify against a key this repository has since adopted, a detected forgery, which refuses the same
+way every other caller of this check already refuses one. `parent_block_id` is the claim's own
+`block_id` (the block it says these patches are sealed into), not its `parent_block_ids` (plural —
+that field mirrors `block_id`'s own parents, used only to order a batch of claims for sealing).
+**A patch no held claim names appears with `"claims": []`:** ordinary, since one exchange artifact's
+patch and claim sections are independent — a patch can arrive without, or before, any claim naming
+it. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's own
+`claims[]` is ordered by claim id. The text form itself (the count line and one id per line) is
+unchanged.
+
+```json
+{"schema_version": "sync-pending-v1", "patches": [{"patch_id": "<id>", "claims": [{"claim_id": "<id>", "parent_block_id": "<id>", "signature": {"outcome": "sound", "key_id": "<key-id>"}}]}]}
+```
 
 **Reading a point: `tree`.** `tree` lists the files present at a point — a ref, or a bare block id — with
 each one's mode, exact size and whether it is text or binary, by the same classification `checkout

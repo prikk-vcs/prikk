@@ -16,6 +16,7 @@ mod merge_evidence;
 mod patch_plan;
 mod show;
 mod status;
+mod sync;
 mod tag;
 mod trust;
 pub(crate) mod verification;
@@ -28,6 +29,7 @@ pub(crate) use merge_evidence::{print_merge_evidence, print_merge_plan};
 pub(crate) use patch_plan::print_patch_plan_content_json;
 pub(crate) use show::{print_show, print_show_json};
 pub(crate) use status::{QueueTarget, QueueThresholdStatus, print_status_json};
+pub(crate) use sync::print_sync_pending_json;
 pub(crate) use tag::{TagListEntry, print_tag_list_json};
 pub(crate) use trust::{
     print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,

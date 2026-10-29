@@ -254,8 +254,9 @@ pub use patch_checkout::{
 pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
-    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, accept_exchange_artifact,
-    accepted_but_unsealed_patch_ids, export_exchange_artifact,
+    DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, PendingPatchClaim,
+    PendingPatchEntry, accept_exchange_artifact, accepted_but_unsealed_patch_ids,
+    export_exchange_artifact, pending_patches_with_claims,
 };
 pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,

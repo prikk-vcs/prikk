@@ -51,7 +51,8 @@ use prikk_store::{
     ReceivedTagResolution, SealFromAcceptedOutcome, SyncArtifactOutcome, TagSignatureVerification,
     accept_exchange_artifact, accepted_but_unsealed_patch_ids, adopt_tag, build_have_list,
     build_sync_artifact, build_sync_summary, compare_sync_summary, decode_sync_summary,
-    list_received_tags, order_claims_for_sealing, seal_from_accepted_claim,
+    list_received_tags, order_claims_for_sealing, pending_patches_with_claims,
+    seal_from_accepted_claim,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -298,15 +299,45 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     Ok(())
 }
 
+/// `prikk sync pending` -- pending here means accepted into this repository's own queue
+/// (`sync accept`) and not yet sealed; it is not a general "every patch this repository has not
+/// sealed" listing, so a patch this repository only holds through `archive import`'s received
+/// history can still appear here, for a reason named at the `--format json` doc in `commands.md`
+/// (owner ruling F's own text does not hold for that case -- see this round's report).
 fn run_pending(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
-    require_no_args(args, "sync pending")?;
+    let format_json = parse_pending_args(args)?;
     let layout = crate::open_repository(root)?;
+    if format_json {
+        let entries = pending_patches_with_claims(&layout).map_err(|err| err.to_string())?;
+        crate::output::print_sync_pending_json(&entries);
+        return Ok(());
+    }
     let patch_ids = accepted_but_unsealed_patch_ids(&layout).map_err(|err| err.to_string())?;
     println!("pending (accepted, unsealed) patches: {}", patch_ids.len());
     for patch_id in &patch_ids {
         println!("  {patch_id}");
     }
     Ok(())
+}
+
+fn parse_pending_args(args: Vec<String>) -> std::result::Result<bool, CliError> {
+    let mut format_json = false;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--format" => {
+                let value = flag_value(&mut iter, "sync pending --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "sync pending --format does not support {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
+            other => return Err(unknown_argument("sync pending", other)),
+        }
+    }
+    Ok(format_json)
 }
 
 /// `prikk sync tags` -- list received tags with their name, live signature outcome, and current
