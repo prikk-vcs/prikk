@@ -311,13 +311,6 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                 // reachability check at all), but no longer reachable from any tip. The same
                 // membership the bare-Patch branch already used decides this, not a hardcoded
                 // `Sealed`.
-                // 0.56.0 step 1b2, R2: this patch may be reachable from no tip this repository
-                // holds (its own or received) even though it is sealed into *this* block -- a
-                // `received remove` on the only pointer that ever reached this block leaves the
-                // block itself still readable by its own id (RFC 142 §1's bare-id read has no
-                // reachability check at all), but no longer reachable from any tip. The same
-                // membership the bare-Patch branch already used decides this, not a hardcoded
-                // `Sealed`.
                 let patch_state = if pending_set.contains(patch_id) {
                     PatchState::Pending
                 } else {
