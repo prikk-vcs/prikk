@@ -15,8 +15,8 @@ use prikk_object::{
 };
 
 use crate::bundle::{
-    BundleImportOptions, BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffectKind,
-    export_bundle, preview_bundle_from_bytes,
+    BundleConnectivityClass, BundleImportOptions, BundlePreviewConflict, BundlePreviewConnectivity,
+    BundlePreviewEffectKind, RefStateChainRelation, export_bundle, preview_bundle_from_bytes,
 };
 use crate::test_gates::test_support::{
     dummy_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
@@ -198,6 +198,11 @@ fn bundle_preview_writes_nothing() {
         BundlePreviewConnectivity::AlreadyIncluded,
         "the local fork already has the exact history it was forked from"
     );
+    // 0.56.0 step 3a (A2): the finer class and the RefState-chain relation, additive alongside
+    // the unchanged `connectivity` field above -- the bundle's own RefState is byte-identical to
+    // the local ref's current one, so the chain trivially "extends" (zero hops).
+    assert_eq!(report.class, BundleConnectivityClass::AlreadyAtTip);
+    assert_eq!(report.ref_state_chain, Some(RefStateChainRelation::Extends));
     let after = directory_digest(&local_root);
     assert_eq!(
         before, after,
@@ -260,6 +265,11 @@ fn does_not_connect_is_reported_not_errored() {
     );
     assert!(report.conflict.is_none(), "{:?}", report.conflict);
     assert!(report.effects.is_empty(), "{:?}", report.effects);
+    assert_eq!(report.class, BundleConnectivityClass::DoesNotConnect);
+    assert_eq!(
+        report.ref_state_chain,
+        Some(RefStateChainRelation::Unrelated)
+    );
 
     let _ = std::fs::remove_dir_all(&source_root);
     let _ = std::fs::remove_dir_all(&local_root);
@@ -286,6 +296,8 @@ fn fast_forward_reports_the_new_file_as_created() {
     let options = BundleImportOptions::default_limits();
     let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(report.connectivity, BundlePreviewConnectivity::FastForward);
+    assert_eq!(report.class, BundleConnectivityClass::FastForward);
+    assert_eq!(report.ref_state_chain, Some(RefStateChainRelation::Extends));
     assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
     assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
     assert_eq!(report.effects[0].path, "b.txt");
@@ -331,6 +343,11 @@ fn diverged_with_disjoint_paths_applies_cleanly() {
     let options = BundleImportOptions::default_limits();
     let report = preview_bundle_from_bytes(&local_layout, &bytes, &options, "heads/main").unwrap();
     assert_eq!(report.connectivity, BundlePreviewConnectivity::Diverged);
+    assert_eq!(report.class, BundleConnectivityClass::Diverged);
+    assert_eq!(
+        report.ref_state_chain,
+        Some(RefStateChainRelation::Unrelated)
+    );
     assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
     assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
     assert_eq!(report.effects[0].path, "from-source.txt");
@@ -422,6 +439,11 @@ fn already_included_reports_no_effects() {
     );
     assert!(report.conflict.is_none(), "{:?}", report.conflict);
     assert!(report.effects.is_empty(), "{:?}", report.effects);
+    // 0.56.0 step 3a (A2): the bundle's own target is a strict ancestor of local's current
+    // target (local moved on past it) -- `connectivity` stays the unchanged `AlreadyIncluded`,
+    // but the finer `class` must say `Rollback`, not `AlreadyAtTip`.
+    assert_eq!(report.class, BundleConnectivityClass::Rollback);
+    assert_eq!(report.ref_state_chain, Some(RefStateChainRelation::Older));
 
     let _ = std::fs::remove_dir_all(&source_root);
     let _ = std::fs::remove_dir_all(&local_root);
@@ -447,6 +469,8 @@ fn no_local_history_reports_the_whole_bundle_as_created() {
         report.connectivity,
         BundlePreviewConnectivity::NoLocalHistory
     );
+    assert_eq!(report.class, BundleConnectivityClass::NoLocalHistory);
+    assert_eq!(report.ref_state_chain, None);
     assert_eq!(report.conflict, Some(BundlePreviewConflict::AppliesCleanly));
     assert_eq!(report.effects.len(), 1, "{:?}", report.effects);
     assert_eq!(report.effects[0].path, "a.txt");

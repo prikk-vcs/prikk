@@ -107,7 +107,8 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         Some(&layout),
         DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     )?;
-    let options = bundle_import_options(&object_bound)?;
+    let options = bundle_import_options(&object_bound)?
+        .with_allow_non_fast_forward(parsed.allow_non_fast_forward);
     let report = import_bundle(&layout, &mut source, &options)
         .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("received {}", report.ref_name);
@@ -132,16 +133,31 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         "author key material: {} recorded (continuity only, not a trust decision)",
         report.recorded_author_key_count
     );
-    // The note says what the import gave and stops there. It used to advise `merge`, which refuses in a
-    // fresh repository (`ref heads/main is not published`): a received ref cannot become a local branch
-    // today, by any route, and `docs/src/guide/backup-restore.md` says so.
-    println!(
-        "note: no local ref was created or advanced, and no MAINTAINER key was trusted; this \
-         repository now holds the received history at {ref_name}, which `prikk log --ref {ref_name}` \
-         and `prikk show` read, and `prikk verify` checks once `trust maintainer add` trusts the \
-         sealing key",
-        ref_name = report.ref_name
-    );
+    // 0.56.0 step 3a: class and ref_state_chain, shown so a plain-text import reads the same
+    // classification `--format json` will carry once 3b lands (not this round).
+    println!("class: {}", report.class.as_str());
+    if let Some(chain) = report.ref_state_chain {
+        println!("ref state chain: {}", chain.as_str());
+    }
+    if report.pointer_updated {
+        // The note says what the import gave and stops there. It used to advise `merge`, which refuses in a
+        // fresh repository (`ref heads/main is not published`): a received ref cannot become a local branch
+        // today, by any route, and `docs/src/guide/backup-restore.md` says so.
+        println!(
+            "note: no local ref was created or advanced, and no MAINTAINER key was trusted; this \
+             repository now holds the received history at {ref_name}, which `prikk log --ref \
+             {ref_name}` and `prikk show` read, and `prikk verify` checks once `trust maintainer \
+             add` trusts the sealing key",
+            ref_name = report.ref_name
+        );
+    } else {
+        println!(
+            "note: every object was written, but the pointer at {ref_name} was left unchanged -- \
+             it already names history at least as recent as this delivery, and advancing it would \
+             move its own record backward",
+            ref_name = report.ref_name
+        );
+    }
     Ok(())
 }
 
@@ -402,11 +418,13 @@ fn parse_export_args(args: Vec<String>) -> std::result::Result<ExportArgs, CliEr
 struct ImportArgs {
     input: PathBuf,
     max_object_bytes: Option<u64>,
+    allow_non_fast_forward: bool,
 }
 
 fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliError> {
     let mut input = None;
     let mut max_object_bytes = None;
+    let mut allow_non_fast_forward = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -419,6 +437,9 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
                 let parsed = crate::bounded_read::parse_max_object_bytes_value(&value)?;
                 max_object_bytes.set_once("--max-object-bytes", parsed)?;
             }
+            "--allow-non-fast-forward" => {
+                mark_seen(&mut allow_non_fast_forward, "--allow-non-fast-forward")?;
+            }
             other => return Err(unknown_argument("bundle import", other)),
         }
     }
@@ -427,6 +448,7 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
     Ok(ImportArgs {
         input,
         max_object_bytes,
+        allow_non_fast_forward,
     })
 }
 

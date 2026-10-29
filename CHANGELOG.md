@@ -19,8 +19,27 @@
   a held lock is ordinary during a live write. Before this, a crash during `bundle import`, which
   writes no interrupted-import journal, left `doctor` completely silent about the locks it left
   behind. The `lock conflict` refusal message itself now also names `prikk unlock` directly.
+- **`bundle import` now refuses a rollback, a divergent rewrite, or an unrelated history, against
+  the received pointer it would replace, unless `--allow-non-fast-forward` is given.** Before this,
+  any delivery that decoded and admitted cleanly overwrote the received pointer outright, including
+  one that moved it backward or onto an unrelated history, with no warning and no way to require a
+  plain extension. The refusal names which of the three applies and happens before any object is
+  written; a delivery with no existing pointer to replace, or one that is already at the same tip or
+  a genuine fast-forward, is never affected. A delivery that is already at the same tip but whose own
+  publication history is older than what is already there now writes every object it carries while
+  leaving the pointer itself untouched, and exits `0` rather than silently moving the pointer's own
+  record backward.
 
 ### Added
+
+- **`bundle preview --format json` and `bundle import`'s own text output now report a finer,
+  six-value `"class"`** (`no-local-history`, `already-at-tip`, `rollback`, `fast-forward`,
+  `diverged`, `does-not-connect`), from one shared classifier both commands now call. This is purely
+  additive: `bundle preview`'s existing `"connectivity"` field keeps its original five values
+  unchanged (`already-at-tip` and `rollback` both still read `"already-included"` there), so nothing
+  a script already reads changes. Both commands also report `"ref_state_chain"` (`"extends"`,
+  `"older"`, or `"unrelated"`): how the delivery's own publication history relates to the pointer it
+  would replace, independent of the class above.
 
 - **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
   this repository and not sealed by any history it holds, its own or received. Each entry carries

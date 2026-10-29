@@ -1,5 +1,6 @@
 //! Bundle export/import tests.
 
+mod non_fast_forward;
 mod preview;
 mod proptest_decode_bundle;
 

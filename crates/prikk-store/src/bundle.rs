@@ -145,17 +145,22 @@ pub struct BundleImportOptions {
     /// RFC 158 Stage A §3: maximum encoded byte length any *one* object frame in the bundle may
     /// have. Refused on the length prefix, before that frame is copied or decoded.
     pub max_object_bytes: usize,
+    /// 0.56.0 step 3a (A3): accept a delivery that does not simply extend the received pointer it
+    /// would replace. `false` by default -- `rollback`, `diverged` and `does-not-connect` all
+    /// refuse when a pointer already exists, unless this is set.
+    pub allow_non_fast_forward: bool,
 }
 
 impl BundleImportOptions {
     /// [`DEFAULT_BUNDLE_MAX_OBJECT_COUNT`], [`DEFAULT_BUNDLE_MAX_TOTAL_BYTES`], and
-    /// [`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`].
+    /// [`DEFAULT_BUNDLE_MAX_OBJECT_BYTES`]; `allow_non_fast_forward` defaults to `false`.
     #[must_use]
     pub const fn default_limits() -> Self {
         Self {
             max_object_count: DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
             max_total_bytes: DEFAULT_BUNDLE_MAX_TOTAL_BYTES,
             max_object_bytes: DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+            allow_non_fast_forward: false,
         }
     }
 
@@ -177,6 +182,13 @@ impl BundleImportOptions {
     #[must_use]
     pub const fn with_max_object_bytes(mut self, max_object_bytes: usize) -> Self {
         self.max_object_bytes = max_object_bytes;
+        self
+    }
+
+    /// Override `allow_non_fast_forward` (0.56.0 step 3a, A3).
+    #[must_use]
+    pub const fn with_allow_non_fast_forward(mut self, allow_non_fast_forward: bool) -> Self {
+        self.allow_non_fast_forward = allow_non_fast_forward;
         self
     }
 }
@@ -298,6 +310,88 @@ pub struct BundleImportReport {
     /// grants no admission judgement, only lets `verify` distinguish Sound from Unverifiable for the
     /// Patches it covers.
     pub recorded_author_key_count: usize,
+    /// 0.56.0 step 3a (A2): this delivery's own class against the received pointer it would
+    /// replace (`NoLocalHistory` when none existed).
+    pub class: BundleConnectivityClass,
+    /// 0.56.0 step 3a (A2): how the delivered `RefState` chain relates to the prior pointer's own
+    /// chain. `None` only when no prior pointer existed.
+    pub ref_state_chain: Option<RefStateChainRelation>,
+    /// 0.56.0 step 3a (A2): `false` only for `class == AlreadyAtTip` with
+    /// `ref_state_chain == Some(Older)` -- the one case that writes every object but leaves the
+    /// received pointer itself untouched, since the content is identical and advancing the pointer
+    /// would move its own record backward.
+    pub pointer_updated: bool,
+}
+
+/// The six block-content connectivity classes (0.56.0 step 3a, design review v2 ruling A2), from
+/// one shared classifier (`bundle::preview::classify_connectivity`) that `bundle preview`,
+/// `bundle import`, and (a later step) `archive import` all call. **Additive, not a replacement**
+/// for [`BundlePreviewConnectivity`]'s own five-value `"connectivity"` field, which planeter already
+/// reads and which keeps its existing values unchanged -- `AlreadyAtTip` and `Rollback` here both
+/// still map to [`BundlePreviewConnectivity::AlreadyIncluded`] there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleConnectivityClass {
+    /// The local side (the ref being previewed against, or the pointer a delivery would replace)
+    /// has never been published -- there is no local target to compare against at all.
+    NoLocalHistory,
+    /// The delivered target is exactly the local target: nothing would change.
+    AlreadyAtTip,
+    /// The delivered target is a strict ancestor of the local target -- content already superseded
+    /// locally.
+    Rollback,
+    /// The local target is a strict ancestor of the delivered target: a fast-forward.
+    FastForward,
+    /// Both sides carry history since their common ancestor.
+    Diverged,
+    /// No shared ancestry with the local side at all.
+    DoesNotConnect,
+}
+
+impl BundleConnectivityClass {
+    /// Stable CLI/JSON label (kebab-case, matching [`BundlePreviewConnectivity::as_str`]'s own
+    /// convention).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoLocalHistory => "no-local-history",
+            Self::AlreadyAtTip => "already-at-tip",
+            Self::Rollback => "rollback",
+            Self::FastForward => "fast-forward",
+            Self::Diverged => "diverged",
+            Self::DoesNotConnect => "does-not-connect",
+        }
+    }
+}
+
+/// How a delivered `RefState`'s own `previous_ref_state_id` chain relates to the pointer it would
+/// replace (0.56.0 step 3a, A2) -- independent of [`BundleConnectivityClass`]'s own block-content
+/// classification: a block-level fast-forward can still regress or diverge in `RefState`-chain
+/// terms, since a `RefState` names a target block **and** carries its own `update_seq`/
+/// `previous_ref_state_id`. A boolean would hide which of the two problems (`Older` vs `Unrelated`)
+/// applies, so this is a three-value field instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefStateChainRelation {
+    /// The prior pointer's own RefState id appears in the delivered RefState's own chain: the
+    /// delivery genuinely continues from it.
+    Extends,
+    /// The delivered RefState's own id appears in the prior pointer's own chain: the delivery is
+    /// an ancestor state of the pointer being replaced -- the chain regressed, even if the block
+    /// classification alone reads `AlreadyAtTip`.
+    Older,
+    /// Neither chain contains the other's id.
+    Unrelated,
+}
+
+impl RefStateChainRelation {
+    /// Stable CLI/JSON label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Extends => "extends",
+            Self::Older => "older",
+            Self::Unrelated => "unrelated",
+        }
+    }
 }
 
 /// How a bundle's own history relates to the local ref it was previewed against (RFC 144 §4m.3
@@ -443,6 +537,13 @@ pub struct BundlePreviewReport {
     /// This bundle's own self-describing manifest, if it carries one -- same semantics as
     /// [`BundleVerifyReport::manifest`].
     pub manifest: Option<BundleManifest>,
+    /// 0.56.0 step 3a (A2): the finer six-value class -- see [`BundleConnectivityClass`] for how
+    /// it relates to `connectivity` above.
+    pub class: BundleConnectivityClass,
+    /// 0.56.0 step 3a (A2): how the bundle's own delivered `RefState` chain relates to the local
+    /// ref's current `RefState`. `None` only when `class` is `NoLocalHistory` -- there is no local
+    /// `RefState` to compare against.
+    pub ref_state_chain: Option<RefStateChainRelation>,
 }
 
 /// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
@@ -536,12 +637,15 @@ pub fn preview_bundle_reporting_anchor(
     // `init` -> `commit` -> `seal`, so nothing is published until the first seal); it is a
     // legitimate connectivity state (§4m.3 rule 1's own family), not an error.
     let mut anchor_fallbacks = Vec::new();
-    let preview = match local_ref_state_id {
-        None => preview::preview_new_repository_impact(
-            &bundle_only_reader,
-            bundle_target,
-            &mut anchor_fallbacks,
-        )?,
+    let (preview, ref_state_chain) = match local_ref_state_id {
+        None => (
+            preview::preview_new_repository_impact(
+                &bundle_only_reader,
+                bundle_target,
+                &mut anchor_fallbacks,
+            )?,
+            None,
+        ),
         Some(local_ref_state_id) => {
             let local_ref_state_envelope = read_snapshot
                 .read_typed(local_ref_state_id, ObjectType::RefState)?
@@ -563,13 +667,24 @@ pub fn preview_bundle_reporting_anchor(
                 cache: &cache,
                 local: Some(&read_snapshot),
             };
-            preview::preview_impact(
+            let preview = preview::preview_impact(
                 &combined_reader,
                 &bundle_only_reader,
                 local_target,
                 bundle_target,
                 &mut anchor_fallbacks,
-            )?
+            )?;
+            // 0.56.0 step 3a (A2): the RefState-chain relation, independent of the block-content
+            // class above -- `bundle_only_reader` resolves the bundle's own delivered chain
+            // (falling back to local for any shared tail it does not itself carry), `read_snapshot`
+            // resolves the local ref's own chain, which is always already fully local.
+            let chain = classify_ref_state_chain(
+                &bundle_only_reader,
+                ref_state_id,
+                &read_snapshot,
+                local_ref_state_id,
+            )?;
+            (preview, Some(chain))
         }
     };
 
@@ -579,6 +694,15 @@ pub fn preview_bundle_reporting_anchor(
         preview::BundleConnectivity::AlreadyIncluded => BundlePreviewConnectivity::AlreadyIncluded,
         preview::BundleConnectivity::FastForward => BundlePreviewConnectivity::FastForward,
         preview::BundleConnectivity::Diverged => BundlePreviewConnectivity::Diverged,
+    };
+    // 0.56.0 step 3a (A2): the finer six-value class, additive alongside `connectivity` above.
+    let class = match preview.class {
+        preview::ConnectivityClass::NoLocalHistory => BundleConnectivityClass::NoLocalHistory,
+        preview::ConnectivityClass::AlreadyAtTip => BundleConnectivityClass::AlreadyAtTip,
+        preview::ConnectivityClass::Rollback => BundleConnectivityClass::Rollback,
+        preview::ConnectivityClass::FastForward => BundleConnectivityClass::FastForward,
+        preview::ConnectivityClass::Diverged => BundleConnectivityClass::Diverged,
+        preview::ConnectivityClass::DoesNotConnect => BundleConnectivityClass::DoesNotConnect,
     };
     let conflict = preview.conflict.map(|answer| match answer {
         preview::ConflictAnswer::AppliesCleanly => BundlePreviewConflict::AppliesCleanly,
@@ -618,6 +742,8 @@ pub fn preview_bundle_reporting_anchor(
                 tool_version: raw.tool_version,
                 scope: raw.scope,
             }),
+            class,
+            ref_state_chain,
         },
         anchor_fallbacks,
     ))
@@ -2058,7 +2184,7 @@ pub fn import_bundle(
     // 0.55.0 step 3 Part 3b-iv: `validate_bundle_closure` also returns the resolved tip block --
     // `import` itself has no use for it (a received pointer names a RefState, not a Block), so
     // it's discarded here; `verify`/`preview` are the callers that need it.
-    let (ref_state_id, bundle_key_ids, _tip_block_id) = validate_bundle_closure(
+    let (ref_state_id, bundle_key_ids, tip_block_id) = validate_bundle_closure(
         source,
         &origin_ref_name,
         &prepared,
@@ -2080,6 +2206,51 @@ pub fn import_bundle(
     // `BundleImportReport` carries no manifest field (unlike `BundleVerifyReport`/
     // `BundlePreviewReport`) -- `manifest` above was consulted only for the cross-check and is
     // dropped here, same as the pre-streaming code's own `contents.manifest` was for this caller.
+
+    // 0.56.0 step 3a (A2/A3): read the pointer this delivery would replace, classify it, and
+    // refuse a non-fast-forward by default -- all still before the first object write (R4's own
+    // discipline below), under the `ReceivedIndex`/`ObjectStore` locks already held continuously
+    // since before pass 1. Pass 1 has already finished, so the delivered tip's full closure
+    // (including whatever RefState chain it carries) is already resolved in `prepared`.
+    let received_pointer = crate::received::read_received_pointer(layout, &received_ref_name)?;
+    // Purely over pass-1 metadata already in memory (`closure_by_id`) -- no reader, no re-decode
+    // of anything the bundle carries; see `classify_import_connectivity`'s own doc.
+    let (connectivity_class, ref_state_chain) = match &received_pointer {
+        None => (BundleConnectivityClass::NoLocalHistory, None),
+        Some(pointer) => {
+            let (class, chain) = classify_import_connectivity(
+                &read_snapshot,
+                &closure_by_id,
+                pointer,
+                tip_block_id,
+                ref_state_id,
+                &received_ref_name,
+            )?;
+            (class, Some(chain))
+        }
+    };
+    #[cfg(test)]
+    let connectivity_class = force_connectivity_class_for_test(connectivity_class);
+    // A3: when a pointer already existed, a rollback, a divergent rewrite, or an unrelated history
+    // all refuse by default -- naming the class, as its own `refusal-v1` id would once `bundle
+    // import --format json` exists (0.56.0 step 3b, not this round).
+    if received_pointer.is_some()
+        && matches!(
+            connectivity_class,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        )
+        && !options.allow_non_fast_forward
+    {
+        return Err(PrikkError::Precondition(format!(
+            "bundle import: this delivery is a {} against {received_ref_name}'s current pointer \
+             -- refusing rather than silently rewriting received history; pass \
+             --allow-non-fast-forward to accept a delivery that does not simply extend the \
+             pointer it would replace",
+            connectivity_class.as_str()
+        )));
+    }
 
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely
     // over `prepared`'s own cheap `(id, type, dependency ids)` metadata.
@@ -2221,7 +2392,20 @@ pub fn import_bundle(
         })?;
     }
 
-    crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
+    // 0.56.0 step 3a (A2): `already-at-tip` with `ref_state_chain: older` writes every object
+    // above but not the pointer itself -- the content is identical, and advancing the pointer
+    // would move its own record backward (`log` walks this chain). Every other combination writes
+    // exactly as before this round.
+    let pointer_updated = !matches!(
+        (connectivity_class, ref_state_chain),
+        (
+            BundleConnectivityClass::AlreadyAtTip,
+            Some(RefStateChainRelation::Older)
+        )
+    );
+    if pointer_updated {
+        crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
+    }
 
     Ok(BundleImportReport {
         ref_name: received_ref_name,
@@ -2231,6 +2415,9 @@ pub fn import_bundle(
         merged_object_count,
         dropped_signatures,
         recorded_author_key_count,
+        class: connectivity_class,
+        ref_state_chain,
+        pointer_updated,
     })
 }
 
@@ -2590,6 +2777,30 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CORRUPT_FRAME_DIGEST_FOR_TEST: std::cell::Cell<Option<ObjectId>> =
         const { std::cell::Cell::new(None) };
+    /// 0.56.0 step 3a red control: forces `import_bundle`'s own classification to a fixed value,
+    /// regardless of what `classify_connectivity` actually decided -- proves the refusal tests
+    /// below are genuinely exercising the classifier, not merely matching by coincidence (see
+    /// `the_classifier_forced_to_fast_forward_defeats_every_refusal_test`).
+    static FORCE_CONNECTIVITY_CLASS_FOR_TEST: std::cell::Cell<Option<BundleConnectivityClass>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test seam, unreachable from production: see `FORCE_CONNECTIVITY_CLASS_FOR_TEST`'s own doc.
+#[cfg(test)]
+pub(crate) fn force_connectivity_class_to_for_test(class: BundleConnectivityClass) {
+    FORCE_CONNECTIVITY_CLASS_FOR_TEST.with(|slot| slot.set(Some(class)));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_forced_connectivity_class_for_test() {
+    FORCE_CONNECTIVITY_CLASS_FOR_TEST.with(|slot| slot.set(None));
+}
+
+#[cfg(test)]
+fn force_connectivity_class_for_test(class: BundleConnectivityClass) -> BundleConnectivityClass {
+    FORCE_CONNECTIVITY_CLASS_FOR_TEST
+        .with(std::cell::Cell::get)
+        .unwrap_or(class)
 }
 
 /// Test seam, unreachable from production: pass 1 will record a deliberately wrong admission
@@ -3091,6 +3302,193 @@ fn resolve_ref_target_block(
         tag_envelopes.push(tag_envelope);
     }
     Ok(target_block_id)
+}
+
+/// Read a `RefState` object's payload by id, without requiring its embedded `ref_name` to match
+/// anything -- unlike `history.rs`'s own `read_ref_state`, which enforces that a chain's every link
+/// shares one ref's name (right for a single ref's own history walk). [`classify_ref_state_chain`]'s
+/// own walk compares two chains that may legitimately carry *different* embedded names (`bundle
+/// preview`'s bundle may have been exported from a different ref than the local one it is
+/// previewed against), so this reads the payload alone and lets the caller decide what, if
+/// anything, the name must agree with.
+fn read_ref_state_payload_for_chain(
+    reader: &impl ObjectReader,
+    ref_state_id: ObjectId,
+) -> Result<RefStatePayload> {
+    let envelope = reader
+        .read_object(ref_state_id)?
+        .ok_or_else(|| PrikkError::Integrity(format!("RefState {ref_state_id} is missing")))?;
+    if envelope.object_type != ObjectType::RefState {
+        return Err(PrikkError::Integrity(format!(
+            "object {ref_state_id} is {}, expected RefState",
+            envelope.object_type
+        )));
+    }
+    RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
+}
+
+/// Does `start`'s own `previous_ref_state_id` chain contain `target` (at zero or more hops,
+/// `start == target` included)? Cycle-guarded the same way `history.rs`'s `load_ref_history` is --
+/// a cycle here is a genuine integrity defect, not a reportable classification.
+fn ref_state_chain_contains(
+    reader: &impl ObjectReader,
+    start: ObjectId,
+    target: ObjectId,
+) -> Result<bool> {
+    let mut current = Some(start);
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    while let Some(id) = current {
+        if id == target {
+            return Ok(true);
+        }
+        if !seen.insert(id) {
+            return Err(PrikkError::Integrity(format!(
+                "RefState chain contains a cycle at {id}"
+            )));
+        }
+        current = read_ref_state_payload_for_chain(reader, id)?.previous_ref_state_id;
+    }
+    Ok(false)
+}
+
+/// Does `start`'s own `previous_ref_state_id` chain, walked purely through `closure_by_id`
+/// (`import_bundle`'s own pass-1 metadata -- no reader, no re-decode), contain `target`? The
+/// bundle-side counterpart of [`ref_state_chain_contains`], for a chain that is guaranteed
+/// genesis-complete within the bundle itself (`export_bundle`'s own closure walk already carries
+/// every earlier `RefState` a ref ever published, not only its tip).
+fn bundle_ref_state_chain_contains(
+    closure_by_id: &BTreeMap<ObjectId, ClosureMetadata>,
+    start: ObjectId,
+    target: ObjectId,
+) -> Result<bool> {
+    let mut current = Some(start);
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    while let Some(id) = current {
+        if id == target {
+            return Ok(true);
+        }
+        if !seen.insert(id) {
+            return Err(PrikkError::Integrity(format!(
+                "RefState chain contains a cycle at {id}"
+            )));
+        }
+        let Some(meta) = closure_by_id.get(&id) else {
+            return Err(PrikkError::Integrity(format!(
+                "bundle import: RefState {id} is not among this bundle's own carried objects -- \
+                 closure validation should already have refused this bundle"
+            )));
+        };
+        current = meta.previous_ref_state_id;
+    }
+    Ok(false)
+}
+
+/// Every ancestor block id reachable from `target` (`target` included), walked purely through
+/// `closure_by_id` -- the bundle-side counterpart of `crate::merge::evidence::ancestors_inclusive`,
+/// over pass-1 metadata rather than decoded `BlockPayload`s. Sound only because `export_bundle`'s
+/// own carried closure is genesis-complete: every ancestor block a bundle's own tip names is
+/// itself among the bundle's own carried objects, which `validate_bundle_closure` has already
+/// checked before this function is ever called.
+fn bundle_block_ancestor_ids(
+    closure_by_id: &BTreeMap<ObjectId, ClosureMetadata>,
+    target: ObjectId,
+) -> Result<BTreeSet<ObjectId>> {
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut stack = vec![target];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(meta) = closure_by_id.get(&id) else {
+            return Err(PrikkError::Integrity(format!(
+                "bundle import: block {id} is not among this bundle's own carried objects -- \
+                 closure validation should already have refused this bundle"
+            )));
+        };
+        stack.extend(meta.parent_block_ids.iter().copied());
+    }
+    Ok(seen)
+}
+
+/// `import_bundle`'s own pre-write classification (0.56.0 step 3a, A2/A3): given the prior
+/// received pointer and the delivered tip, the block-content class and the `RefState`-chain
+/// relation. `local_reader` resolves the prior pointer's own target block and chain -- always
+/// fully local, by the genesis-completeness invariant every prior import already established;
+/// `closure_by_id` is `import_bundle`'s own pass-1 metadata, resolving the delivered tip's own
+/// ancestry and chain with no reader and no re-decode of anything the bundle carries.
+fn classify_import_connectivity(
+    local_reader: &ObjectReadSnapshot,
+    closure_by_id: &BTreeMap<ObjectId, ClosureMetadata>,
+    prior_pointer: &crate::received::ReceivedPointer,
+    tip_block_id: ObjectId,
+    delivered_ref_state_id: ObjectId,
+    received_ref_name: &str,
+) -> Result<(BundleConnectivityClass, RefStateChainRelation)> {
+    let prior_ref_state_envelope = local_reader
+        .read_typed(prior_pointer.ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "received pointer {received_ref_name} names missing RefState {}",
+                prior_pointer.ref_state_id
+            ))
+        })?;
+    let prior_ref_state_payload = RefStatePayload::decode_canonical(
+        &prior_ref_state_envelope.canonical_payload,
+        prior_ref_state_envelope.schema_version,
+    )?;
+    let (prior_target_block_id, _tag_envelope) =
+        crate::refs::resolve_ref_tip_block(local_reader, &prior_ref_state_payload)?;
+    let local_ancestors =
+        crate::merge::evidence::ancestors_inclusive(local_reader, prior_target_block_id)?
+            .keys()
+            .copied()
+            .collect();
+    let bundle_ancestors = bundle_block_ancestor_ids(closure_by_id, tip_block_id)?;
+    let preview_class = preview::classify_connectivity(
+        &local_ancestors,
+        &bundle_ancestors,
+        prior_target_block_id,
+        tip_block_id,
+    );
+    let class = match preview_class {
+        preview::ConnectivityClass::NoLocalHistory => BundleConnectivityClass::NoLocalHistory,
+        preview::ConnectivityClass::AlreadyAtTip => BundleConnectivityClass::AlreadyAtTip,
+        preview::ConnectivityClass::Rollback => BundleConnectivityClass::Rollback,
+        preview::ConnectivityClass::FastForward => BundleConnectivityClass::FastForward,
+        preview::ConnectivityClass::Diverged => BundleConnectivityClass::Diverged,
+        preview::ConnectivityClass::DoesNotConnect => BundleConnectivityClass::DoesNotConnect,
+    };
+    let chain = if bundle_ref_state_chain_contains(
+        closure_by_id,
+        delivered_ref_state_id,
+        prior_pointer.ref_state_id,
+    )? {
+        RefStateChainRelation::Extends
+    } else if ref_state_chain_contains(
+        local_reader,
+        prior_pointer.ref_state_id,
+        delivered_ref_state_id,
+    )? {
+        RefStateChainRelation::Older
+    } else {
+        RefStateChainRelation::Unrelated
+    };
+    Ok((class, chain))
+}
+
+pub(crate) fn classify_ref_state_chain<R1: ObjectReader, R2: ObjectReader>(
+    delivered_reader: &R1,
+    delivered_ref_state_id: ObjectId,
+    prior_reader: &R2,
+    prior_ref_state_id: ObjectId,
+) -> Result<RefStateChainRelation> {
+    if ref_state_chain_contains(delivered_reader, delivered_ref_state_id, prior_ref_state_id)? {
+        return Ok(RefStateChainRelation::Extends);
+    }
+    if ref_state_chain_contains(prior_reader, prior_ref_state_id, delivered_ref_state_id)? {
+        return Ok(RefStateChainRelation::Older);
+    }
+    Ok(RefStateChainRelation::Unrelated)
 }
 
 pub(crate) fn encode_bundle(

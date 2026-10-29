@@ -184,6 +184,30 @@ fn import(installation: &Installation, repo: &Path, bundle: &Path) -> Output {
     )
 }
 
+/// As [`import`], but for a call site that deliberately replaces an already-received pointer
+/// with a *second*, genuinely unrelated history (another `distinct_history` call, a fresh repo
+/// each time) -- 0.56.0 step 3a's own `does-not-connect` refusal (A3) would otherwise block this
+/// test's own key-id routing scenario, which is not what this file is exercising. `#[cfg(unix)]`
+/// because both call sites are themselves inside `#[cfg(unix)]` blocks (the `key generate --out`
+/// route) -- otherwise unused on a non-unix target, which `-D warnings` catches as dead code.
+#[cfg(unix)]
+fn import_allowing_non_fast_forward(
+    installation: &Installation,
+    repo: &Path,
+    bundle: &Path,
+) -> Output {
+    installation.run(
+        repo,
+        &[
+            "bundle",
+            "import",
+            "--input",
+            bundle.to_str().unwrap(),
+            "--allow-non-fast-forward",
+        ],
+    )
+}
+
 fn is_derived(id: &str) -> bool {
     id.len() == 24
         && id.strip_prefix("ed25519-").is_some_and(|hex| {
@@ -561,7 +585,7 @@ fn control6_the_maintainer_refusal_names_a_route_that_runs() {
             "adopt the generated key under its id",
         );
         support::ok(
-            &import(&a, &repo_a, &bundle),
+            &import_allowing_non_fast_forward(&a, &repo_a, &bundle),
             "import generated-key history",
         );
         let verify = a.run(&repo_a, &["verify"]);
@@ -615,7 +639,7 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
         let env = [("PRIKK_AUTHOR_SEED_FILE", author_seed.to_str().unwrap())];
         let bundle = distinct_history(&b, &env, "keyids-c6a-b3");
         support::ok(
-            &import(&a, &repo_a, &bundle),
+            &import_allowing_non_fast_forward(&a, &repo_a, &bundle),
             "generated-key history imports",
         );
     }

@@ -471,10 +471,23 @@ fn export_a_bundle(tag: &str, file_name: &str) -> PathBuf {
     bundle
 }
 
+/// Every call site in this file imports a bundle from a *distinct*, freshly built sender repo
+/// (`export_a_bundle`'s own doc) into the same receiver, by design -- building three real,
+/// independent received-index records this way, not one coherent push history. 0.56.0 step 3a's
+/// own `does-not-connect` refusal (A3) would otherwise block the second and third of these; passing
+/// `--allow-non-fast-forward` unconditionally is harmless for the first import too (the flag only
+/// changes behaviour when a pointer already exists and the delivery is a rollback, a divergent
+/// rewrite, or an unrelated history -- never for the first import into an empty received name).
 fn import_bundle(repo: &Path, bundle: &Path) -> (Option<i32>, String) {
     run(
         repo,
-        &["bundle", "import", "--input", bundle.to_str().unwrap()],
+        &[
+            "bundle",
+            "import",
+            "--input",
+            bundle.to_str().unwrap(),
+            "--allow-non-fast-forward",
+        ],
     )
 }
 

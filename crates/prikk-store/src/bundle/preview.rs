@@ -81,6 +81,63 @@ pub(crate) enum BundleConnectivity {
     Diverged,
 }
 
+/// The six block-content connectivity classes (0.56.0 step 3a, design review v2 ruling A2),
+/// factored out of `preview_impact`'s own control flow so `import_bundle` (and, in a later part,
+/// `archive import`) can reuse the identical decision at no effects-diff cost -- see
+/// [`classify_connectivity`]. Finer than [`BundleConnectivity`]: `AlreadyIncluded` there splits into
+/// `AlreadyAtTip` and `Rollback` here. `crate::bundle::BundleConnectivityClass` is the public mirror
+/// of this type, the same split `BundlePreviewConnectivity`/`BundleConnectivity` already have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnectivityClass {
+    /// The local side has never been published -- there is no local target to compare against.
+    NoLocalHistory,
+    /// The delivered target is exactly the local target: nothing would change.
+    AlreadyAtTip,
+    /// The delivered target is a strict ancestor of the local target -- content already superseded
+    /// locally.
+    Rollback,
+    /// The local target is a strict ancestor of the delivered target: a fast-forward.
+    FastForward,
+    /// Both sides carry history since their common ancestor.
+    Diverged,
+    /// No shared ancestry at all.
+    DoesNotConnect,
+}
+
+/// The pure classification decision (A2): given both sides' own inclusive ancestor **id sets**
+/// and their own targets, which of the six classes applies. Only set membership is ever
+/// consulted -- never a `BlockPayload`'s own fields -- so this takes plain `BTreeSet<ObjectId>`s
+/// rather than the heavier `ancestors_inclusive` maps `preview_impact`'s own other work (the
+/// lowest-common-ancestor search) still needs; a caller than has only ids in hand
+/// (`import_bundle`'s own pass 1, before any object is written, has no decoded `BlockPayload` for
+/// the bundle's own blocks at all) can call this at no extra cost. Never produces
+/// [`ConnectivityClass::NoLocalHistory`] -- a caller with no local target to pass in must not call
+/// this at all; see [`preview_new_repository_impact`] for that case.
+pub(crate) fn classify_connectivity(
+    local_ancestors: &BTreeSet<ObjectId>,
+    bundle_ancestors: &BTreeSet<ObjectId>,
+    local_target: ObjectId,
+    bundle_target: ObjectId,
+) -> ConnectivityClass {
+    if !local_ancestors
+        .iter()
+        .any(|id| bundle_ancestors.contains(id))
+    {
+        return ConnectivityClass::DoesNotConnect;
+    }
+    if local_ancestors.contains(&bundle_target) {
+        return if bundle_target == local_target {
+            ConnectivityClass::AlreadyAtTip
+        } else {
+            ConnectivityClass::Rollback
+        };
+    }
+    if bundle_ancestors.contains(&local_target) {
+        return ConnectivityClass::FastForward;
+    }
+    ConnectivityClass::Diverged
+}
+
 /// The answer to "would it conflict" (§4m.3 #2), computed only when [`BundleConnectivity::Diverged`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConflictAnswer {
@@ -118,6 +175,8 @@ pub(crate) enum BundleImpactEffectKind {
 /// Full result of previewing a bundle's target block against a local ref's current target.
 pub(crate) struct BundlePreviewResult {
     pub(crate) connectivity: BundleConnectivity,
+    /// 0.56.0 step 3a (A2): the finer six-value class, from [`classify_connectivity`].
+    pub(crate) class: ConnectivityClass,
     pub(crate) conflict: Option<ConflictAnswer>,
     pub(crate) effects: Vec<BundleImpactEffect>,
 }
@@ -238,6 +297,7 @@ pub(crate) fn preview_new_repository_impact(
     );
     Ok(BundlePreviewResult {
         connectivity: BundleConnectivity::NoLocalHistory,
+        class: ConnectivityClass::NoLocalHistory,
         conflict: Some(ConflictAnswer::AppliesCleanly),
         effects,
     })
@@ -259,77 +319,90 @@ pub(crate) fn preview_impact(
     let local_ancestors = ancestors_inclusive(reader, local_target)?;
     let bundle_ancestors = ancestors_inclusive(bundle_only_reader, bundle_target)?;
 
-    if !local_ancestors
-        .keys()
-        .any(|id| bundle_ancestors.contains_key(id))
-    {
-        return Ok(BundlePreviewResult {
+    let class = classify_connectivity(
+        &local_ancestors.keys().copied().collect(),
+        &bundle_ancestors.keys().copied().collect(),
+        local_target,
+        bundle_target,
+    );
+
+    match class {
+        ConnectivityClass::DoesNotConnect => Ok(BundlePreviewResult {
             connectivity: BundleConnectivity::DoesNotConnect,
+            class,
             conflict: None,
             effects: Vec::new(),
-        });
-    }
-
-    if local_ancestors.contains_key(&bundle_target) {
-        return Ok(BundlePreviewResult {
+        }),
+        ConnectivityClass::AlreadyAtTip | ConnectivityClass::Rollback => Ok(BundlePreviewResult {
             connectivity: BundleConnectivity::AlreadyIncluded,
+            class,
             conflict: None,
             effects: Vec::new(),
-        });
-    }
-
-    if bundle_ancestors.contains_key(&local_target) {
-        // Fast-forward: local_target is a real ancestor of bundle_target, so the bundle's own
-        // candidate operations since local_target are, by construction, exactly what is new.
-        let (current_files, current_live) = walk_and_replay(
-            reader,
-            &single_parent_chain(reader, local_target)?,
-            fallbacks,
-        )?;
-        let operations = candidate_operations(reader, local_target, bundle_target)?;
-        let (effects, _) =
-            apply_new_operations_and_diff(reader, current_files, current_live, operations)?;
-        return Ok(BundlePreviewResult {
-            connectivity: BundleConnectivity::FastForward,
-            conflict: Some(ConflictAnswer::AppliesCleanly),
-            effects,
-        });
-    }
-
-    let lowest_common_ancestors = find_lowest_common_ancestors(&local_ancestors, &bundle_ancestors);
-    let [baseline] = lowest_common_ancestors.as_slice() else {
-        return Ok(BundlePreviewResult {
-            connectivity: BundleConnectivity::Diverged,
-            conflict: Some(ConflictAnswer::Undetermined {
-                reason: format!(
-                    "{} common ancestors share equal claim to being the merge base -- a genuinely \
-                     ambiguous history this preview does not guess among",
-                    lowest_common_ancestors.len()
-                ),
-            }),
-            effects: Vec::new(),
-        });
-    };
-
-    let (current_files, current_live) = walk_and_replay(
-        reader,
-        &single_parent_chain(reader, local_target)?,
-        fallbacks,
-    )?;
-    let operations = candidate_operations(reader, *baseline, bundle_target)?;
-    match apply_new_operations_and_diff(reader, current_files, current_live, operations) {
-        Ok((effects, _)) => Ok(BundlePreviewResult {
-            connectivity: BundleConnectivity::Diverged,
-            conflict: Some(ConflictAnswer::AppliesCleanly),
-            effects,
         }),
-        Err(err) => Ok(BundlePreviewResult {
-            connectivity: BundleConnectivity::Diverged,
-            conflict: Some(ConflictAnswer::Conflict {
-                detail: err.to_string(),
-            }),
-            effects: Vec::new(),
-        }),
+        ConnectivityClass::FastForward => {
+            // Fast-forward: local_target is a real ancestor of bundle_target, so the bundle's own
+            // candidate operations since local_target are, by construction, exactly what is new.
+            let (current_files, current_live) = walk_and_replay(
+                reader,
+                &single_parent_chain(reader, local_target)?,
+                fallbacks,
+            )?;
+            let operations = candidate_operations(reader, local_target, bundle_target)?;
+            let (effects, _) =
+                apply_new_operations_and_diff(reader, current_files, current_live, operations)?;
+            Ok(BundlePreviewResult {
+                connectivity: BundleConnectivity::FastForward,
+                class,
+                conflict: Some(ConflictAnswer::AppliesCleanly),
+                effects,
+            })
+        }
+        ConnectivityClass::Diverged => {
+            let lowest_common_ancestors =
+                find_lowest_common_ancestors(&local_ancestors, &bundle_ancestors);
+            let [baseline] = lowest_common_ancestors.as_slice() else {
+                return Ok(BundlePreviewResult {
+                    connectivity: BundleConnectivity::Diverged,
+                    class,
+                    conflict: Some(ConflictAnswer::Undetermined {
+                        reason: format!(
+                            "{} common ancestors share equal claim to being the merge base -- a \
+                             genuinely ambiguous history this preview does not guess among",
+                            lowest_common_ancestors.len()
+                        ),
+                    }),
+                    effects: Vec::new(),
+                });
+            };
+
+            let (current_files, current_live) = walk_and_replay(
+                reader,
+                &single_parent_chain(reader, local_target)?,
+                fallbacks,
+            )?;
+            let operations = candidate_operations(reader, *baseline, bundle_target)?;
+            match apply_new_operations_and_diff(reader, current_files, current_live, operations) {
+                Ok((effects, _)) => Ok(BundlePreviewResult {
+                    connectivity: BundleConnectivity::Diverged,
+                    class,
+                    conflict: Some(ConflictAnswer::AppliesCleanly),
+                    effects,
+                }),
+                Err(err) => Ok(BundlePreviewResult {
+                    connectivity: BundleConnectivity::Diverged,
+                    class,
+                    conflict: Some(ConflictAnswer::Conflict {
+                        detail: err.to_string(),
+                    }),
+                    effects: Vec::new(),
+                }),
+            }
+        }
+        ConnectivityClass::NoLocalHistory => Err(PrikkError::Integrity(
+            "classify_connectivity must not return NoLocalHistory when both a local and a \
+             bundle target were given -- this is an internal defect, not a reportable state"
+                .to_string(),
+        )),
     }
 }
 

@@ -26,6 +26,15 @@ pub(crate) fn print_bundle_preview_json(report: &BundlePreviewReport) {
     json.push_str(&escape_json_string(&report.local_ref_name));
     json.push_str(",\n  \"connectivity\": ");
     json.push_str(&escape_json_string(report.connectivity.as_str()));
+    // 0.56.0 step 3a (A2): additive -- "connectivity" above keeps its existing five values
+    // unchanged (planeter already reads it); "class" carries the finer six-value split.
+    json.push_str(",\n  \"class\": ");
+    json.push_str(&escape_json_string(report.class.as_str()));
+    json.push_str(",\n  \"ref_state_chain\": ");
+    match report.ref_state_chain {
+        Some(chain) => json.push_str(&escape_json_string(chain.as_str())),
+        None => json.push_str("null"),
+    }
 
     json.push_str(",\n  \"conflict\": ");
     match &report.conflict {
@@ -106,6 +115,10 @@ pub(crate) fn print_bundle_preview_plain(report: &BundlePreviewReport) {
     println!("bundle: {}", report.bundle_ref_name);
     println!("previewed against: {}", report.local_ref_name);
     println!("connectivity: {}", report.connectivity.as_str());
+    println!("class: {}", report.class.as_str());
+    if let Some(chain) = report.ref_state_chain {
+        println!("ref state chain: {}", chain.as_str());
+    }
     match &report.conflict {
         Some(BundlePreviewConflict::AppliesCleanly) => println!("conflict: none, applies cleanly"),
         Some(BundlePreviewConflict::Conflict { detail }) => {

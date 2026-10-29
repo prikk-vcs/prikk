@@ -56,7 +56,7 @@ prikk config set <key> <value>
 prikk config unset <key>
 prikk config list
 prikk bundle export --ref REF --output <file> [--force]
-prikk bundle import --input <file> [--max-object-bytes N]
+prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward]
 prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
@@ -140,6 +140,26 @@ repository at open. See [Release Compatibility](release-compatibility.md).
   (`merge --from`).
 - **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
   <path>"), decided when the repository is opened, in every command that opens one.
+
+**`bundle import` and `bundle preview` classify a delivery against the pointer it would replace,
+in six classes:** `no-local-history` (nothing to compare against), `already-at-tip` (identical to
+what is already there), `rollback` (the delivery is older than what is already there),
+`fast-forward` (the delivery extends what is already there), `diverged` (both sides moved since a
+shared point), and `does-not-connect` (no shared history at all). `bundle preview --format json`
+reports this as a new, additive `"class"` field — its existing `"connectivity"` field keeps its
+original five values unchanged (`already-at-tip` and `rollback` both still read
+`"already-included"` there), so nothing a script already reads changes. Both commands also report
+`"ref_state_chain"`: `"extends"`, `"older"`, or `"unrelated"` — how the delivery's own publication
+history relates to the pointer it would replace, which can disagree with the class above (a
+`fast-forward` by content can still be `"older"` in its own publication history).
+- **`bundle import` refuses a `rollback`, a `diverged` delivery, or one that `does-not-connect`,
+  whenever a received pointer already exists for that name** — naming the class, exit `1` — unless
+  `--allow-non-fast-forward` is given. A delivery with no existing pointer to replace, or one that
+  is `already-at-tip` or a genuine `fast-forward`, is never refused on this ground.
+- **An `already-at-tip` delivery whose own publication history reads `"older"` writes every object
+  it carries, but leaves the received pointer itself unchanged, and exits `0`.** The content is
+  identical either way, and moving the pointer backward would only make its own publication
+  history read incorrectly later; the text form says plainly that the pointer was left as it was.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
