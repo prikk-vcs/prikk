@@ -170,12 +170,12 @@ empty history instead of refusing.
 only in this repository's own active WAL), `"pending"` (accepted and not sealed by any history
 this repository holds, its own or received — the same membership `sync pending` itself reports),
 or `"sealed"` (reached from a block, through this repository's own local ref history or a received
-pointer's — including a block that is itself no longer reachable from any tip, when `show` is
-given that block's own id or one of its patch's ids directly: a bare-id read never checks
-reachability, so the same patch always reads the same state, whichever id names it). `"pending"`
-and `"sealed"` cannot both hold for the same patch; `"queued"` and `"pending"` cannot either, under
-ordinary operation, since a queued patch has no written object yet at all. `"queued"` and
-`"sealed"` can genuinely, briefly overlap across a real crash window between sealing a block and
+pointer's). `state` is the same whichever id names the patch, a block's own bare id included: a
+patch no tip reaches reads `"pending"` — the same membership `sync pending` itself lists — even
+while its own block is still held and readable by its own id directly, since a bare-id read never
+checks reachability. `"pending"` and `"sealed"` cannot both hold for the same patch; `"queued"` and
+`"pending"` cannot either, under ordinary operation, since a queued patch has no written object yet
+at all. `"queued"` and `"sealed"` can briefly overlap across the window between sealing a block and
 clearing the queue afterward — `show` resolves this by looking for a real object before ever
 falling back to the queue, so `"sealed"` wins.
 
