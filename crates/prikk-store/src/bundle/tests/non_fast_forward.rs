@@ -252,7 +252,9 @@ fn rollback_against_a_pointer_refuses_and_writes_nothing() -> prikk_error::Resul
     let before = repository_bytes(&target)?;
     let result = import_bundle_from_bytes(&target, &bytes1, &BundleImportOptions::default_limits());
     assert!(
-        matches!(result, Err(prikk_error::PrikkError::Precondition(ref message)) if message.contains("rollback")),
+        // 0.56.0 step 3b: the refusal carries `class` structurally now (`BundleNonFastForward`,
+        // not `Precondition`) -- matched on the field, never the message text.
+        matches!(result, Err(prikk_error::PrikkError::BundleNonFastForward { class, .. }) if class == "rollback"),
         "a rollback must refuse by name: {result:?}"
     );
     let after = repository_bytes(&target)?;
@@ -326,7 +328,8 @@ fn diverged_against_a_pointer_refuses_and_writes_nothing() -> prikk_error::Resul
     let result =
         import_bundle_from_bytes(&target, &bytes_b, &BundleImportOptions::default_limits());
     assert!(
-        matches!(result, Err(prikk_error::PrikkError::Precondition(ref message)) if message.contains("diverged")),
+        // 0.56.0 step 3b: same structural match as the rollback case above.
+        matches!(result, Err(prikk_error::PrikkError::BundleNonFastForward { class, .. }) if class == "diverged"),
         "a diverged delivery must refuse by name: {result:?}"
     );
     let after = repository_bytes(&target)?;
@@ -395,7 +398,8 @@ fn does_not_connect_against_a_pointer_refuses_and_writes_nothing() -> prikk_erro
         &BundleImportOptions::default_limits(),
     );
     assert!(
-        matches!(result, Err(prikk_error::PrikkError::Precondition(ref message)) if message.contains("does-not-connect")),
+        // 0.56.0 step 3b: same structural match as the rollback case above.
+        matches!(result, Err(prikk_error::PrikkError::BundleNonFastForward { class, .. }) if class == "does-not-connect"),
         "an unrelated delivery must refuse by name: {result:?}"
     );
     let after = repository_bytes(&target)?;

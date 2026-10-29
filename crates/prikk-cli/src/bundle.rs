@@ -37,7 +37,10 @@ use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::bounded_read::{SizeBound, open_bundle_source, render_incoming_error};
 use crate::commands::CliError;
 use crate::config::resolve_max_object_bytes;
-use crate::output::{print_bundle_preview_json, print_bundle_preview_plain};
+use crate::output::verification::escape_json_string;
+use crate::output::{
+    print_bundle_import_json, print_bundle_preview_json, print_bundle_preview_plain,
+};
 use crate::stdout::println;
 use prikk_store::{
     BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
@@ -97,6 +100,7 @@ fn run_export(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 
 fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_import_args(args)?;
+    let format_json = parsed.format_json;
     let layout = crate::open_repository(root)?;
     // 0.55.0 step 3 Part 3b-i2 (D1/Q2): a regular file stays an open, seekable handle -- memory
     // follows the largest object, not the whole bundle. A non-regular input (a FIFO, a pipe) is
@@ -109,8 +113,31 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     )?;
     let options = bundle_import_options(&object_bound)?
         .with_allow_non_fast_forward(parsed.allow_non_fast_forward);
-    let report = import_bundle(&layout, &mut source, &options)
-        .map_err(|err| render_incoming_error(err, &object_bound))?;
+    let report = import_bundle(&layout, &mut source, &options).map_err(|err| {
+        // 0.56.0 step 3b (A4): a `refusal-v1` document on exactly the three connectivity-based
+        // refusals 3a added -- the one condition this round classifies structurally, via the
+        // `BundleNonFastForward` variant 3b added to `PrikkError`, never by matching `err`'s own
+        // message text. Printed before `render_incoming_error` consumes `err` by value below;
+        // stderr's own text and the exit code are unaffected either way (`refuse`'s own idiom in
+        // `crate::extract`).
+        if format_json {
+            if let prikk_error::PrikkError::BundleNonFastForward { class, .. } = &err {
+                print_bundle_import_refusal_json(class, &err.to_string());
+            }
+        }
+        render_incoming_error(err, &object_bound)
+    })?;
+    if format_json {
+        print_bundle_import_json(&report);
+    } else {
+        print_bundle_import_plain(&report);
+    }
+    Ok(())
+}
+
+/// `bundle import`'s plain-text form -- unchanged by 0.56.0 step 3b, which only adds the
+/// `--format json` branch alongside it (`run_import`, above).
+fn print_bundle_import_plain(report: &prikk_store::BundleImportReport) {
     println!("received {}", report.ref_name);
     println!("RefState: {}", report.ref_state_id);
     println!("objects: {}", report.object_count);
@@ -134,7 +161,7 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         report.recorded_author_key_count
     );
     // 0.56.0 step 3a: class and ref_state_chain, shown so a plain-text import reads the same
-    // classification `--format json` will carry once 3b lands (not this round).
+    // classification `--format json` carries (0.56.0 step 3b).
     println!("class: {}", report.class.as_str());
     if let Some(chain) = report.ref_state_chain {
         println!("ref state chain: {}", chain.as_str());
@@ -158,7 +185,27 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
             ref_name = report.ref_name
         );
     }
-    Ok(())
+}
+
+/// `refusal-v1`'s own document for `bundle import` (0.56.0 step 3b, A4) -- this project's reusable
+/// refusal shape (`docs/src/reference/commands.md`'s own "This is this project's own, reusable
+/// form for a JSON refusal"), its second adopter after `extract`. `id` is one of `bundle import`'s
+/// own three connectivity-based refusal ids (`"rollback"`, `"diverged"`, `"does-not-connect"` --
+/// `BundleConnectivityClass::as_str()`'s own values), and `reason` is always `null`: unlike
+/// `extract`'s own `no-checkpoint-in-reach`, none of these three carries a further sub-reason.
+/// `message` is `err.to_string()` -- the same text `render_incoming_error` would otherwise turn
+/// into `CliError::Failure`'s own message, without the generic `error: ` prefix the top-level
+/// stderr printer adds, the same convention `extract`'s own `print_refusal_json` uses.
+fn print_bundle_import_refusal_json(id: &str, message: &str) {
+    let mut json = String::new();
+    json.push_str(
+        "{\"schema_version\": \"refusal-v1\", \"command\": \"bundle-import\", \"refusal\": ",
+    );
+    json.push_str(&escape_json_string(id));
+    json.push_str(", \"reason\": null, \"message\": ");
+    json.push_str(&escape_json_string(message));
+    json.push('}');
+    println!("{json}");
 }
 
 fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
@@ -419,12 +466,14 @@ struct ImportArgs {
     input: PathBuf,
     max_object_bytes: Option<u64>,
     allow_non_fast_forward: bool,
+    format_json: bool,
 }
 
 fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliError> {
     let mut input = None;
     let mut max_object_bytes = None;
     let mut allow_non_fast_forward = false;
+    let mut format_json = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -440,6 +489,17 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
             "--allow-non-fast-forward" => {
                 mark_seen(&mut allow_non_fast_forward, "--allow-non-fast-forward")?;
             }
+            // 0.56.0 step 3b (A4): the same parallel branch `bundle preview`'s own
+            // `parse_preview_args` already has for its own `--format json`.
+            "--format" => {
+                let value = flag_value(&mut iter, "bundle import --format")?;
+                if value != "json" {
+                    return Err(CliError::Usage(format!(
+                        "bundle import --format only accepts \"json\", got {value:?}"
+                    )));
+                }
+                mark_seen(&mut format_json, "--format")?;
+            }
             other => return Err(unknown_argument("bundle import", other)),
         }
     }
@@ -449,6 +509,7 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
         input,
         max_object_bytes,
         allow_non_fast_forward,
+        format_json,
     })
 }
 

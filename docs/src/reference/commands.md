@@ -56,7 +56,7 @@ prikk config set <key> <value>
 prikk config unset <key>
 prikk config list
 prikk bundle export --ref REF --output <file> [--force]
-prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward]
+prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward] [--format json]
 prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
@@ -160,6 +160,22 @@ history relates to the pointer it would replace, which can disagree with the cla
   it carries, but leaves the received pointer itself unchanged, and exits `0`.** The content is
   identical either way, and moving the pointer backward would only make its own publication
   history read incorrectly later; the text form says plainly that the pointer was left as it was.
+
+**`bundle import --format json`: `bundle-import-report-v1`.** On success it carries the same
+fields the text form already prints — `ref_name`, `ref_state_id`, `object_count`,
+`written_object_count`, `merged_object_count`, `dropped_signatures` (each
+`{"object_type", "object_id", "key_id", "reason"}`, the same four-field shape `archive import`'s
+own `prepo-import-report-v1` already uses for this type), `recorded_author_key_count` — plus
+`class` and `ref_state_chain` (the same names and values as `bundle-preview-v1`'s own fields,
+above) and `pointer_updated` (`false` only for the `already-at-tip`-with-`"older"` case just
+described, which writes every object but leaves the pointer itself untouched). The text form
+itself is unchanged by this.
+- **On a refusal, `bundle import --format json` prints a `refusal-v1` document** (the same shape
+  `extract`'s own `refusal-v1` uses, see below) with `"command": "bundle-import"`, to stdout, on
+  stderr and the exit code otherwise unchanged — for exactly the three refusals above
+  (`"refusal"`: `"rollback"`, `"diverged"`, or `"does-not-connect"`), never for `bundle import`'s
+  other, pre-existing refusals (a damaged bundle, a digest mismatch, an author-key conflict, and so
+  on), which this round leaves unclassified. `"reason"` is always `null` for these three.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
@@ -349,9 +365,11 @@ has not adopted — adopt the key), `not-recorded` (a checkpoint in reach, never
 applied to every command's own error, never part of the refusal's own text itself; the JSON document never
 paraphrases it.
 
-**This is this project's own, reusable form for a JSON refusal** — `refusal-v1` is `extract`'s own
-document today, but its shape (`schema_version`, `command`, `refusal`, `reason`, `message`) is designed as
-a precedent other commands adopt when next touched, not a one-off specific to `extract`.
+**This is this project's own, reusable form for a JSON refusal** — `refusal-v1`'s shape
+(`schema_version`, `command`, `refusal`, `reason`, `message`) was designed as a precedent other
+commands adopt when next touched, not a one-off specific to `extract`. `bundle import` is its
+second adopter (see above), for exactly three of its own refusals; `extract`'s own fifteen ids
+above are unaffected.
 
 **Removing a received pointer: `received remove`.** `received remove <remotes/…> [--plan-only]`
 removes one received ref's own pointer from the received-index container — the same container

@@ -2243,13 +2243,20 @@ pub fn import_bundle(
         )
         && !options.allow_non_fast_forward
     {
-        return Err(PrikkError::Precondition(format!(
-            "bundle import: this delivery is a {} against {received_ref_name}'s current pointer \
-             -- refusing rather than silently rewriting received history; pass \
-             --allow-non-fast-forward to accept a delivery that does not simply extend the \
-             pointer it would replace",
-            connectivity_class.as_str()
-        )));
+        // 0.56.0 step 3b (A4): `BundleNonFastForward`, not `Precondition`, so `bundle import
+        // --format json`'s own `refusal-v1` document can name the class structurally, never by
+        // matching this message's own words. `Display` renders identically to what `Precondition`
+        // would have for this same message -- stderr's own text is unchanged by this round.
+        return Err(PrikkError::BundleNonFastForward {
+            class: connectivity_class.as_str(),
+            message: format!(
+                "bundle import: this delivery is a {} against {received_ref_name}'s current \
+                 pointer -- refusing rather than silently rewriting received history; pass \
+                 --allow-non-fast-forward to accept a delivery that does not simply extend the \
+                 pointer it would replace",
+                connectivity_class.as_str()
+            ),
+        });
     }
 
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely

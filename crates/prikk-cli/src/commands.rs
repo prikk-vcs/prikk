@@ -201,7 +201,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_bundle,
         help_lines: &[
             "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
-            "  prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward]  Import a bundle as an untrusted received pointer; refuses a rollback, a divergent rewrite, or an unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
+            "  prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward] [--format json]  Import a bundle as an untrusted received pointer; refuses a rollback, a divergent rewrite, or an unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
             "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
             "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
             "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",

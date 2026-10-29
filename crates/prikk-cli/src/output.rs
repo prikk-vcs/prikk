@@ -10,6 +10,7 @@ use prikk_store::{
 };
 
 mod branch;
+mod bundle_import;
 mod bundle_preview;
 mod help;
 mod merge_evidence;
@@ -23,6 +24,7 @@ pub(crate) mod verification;
 mod worktree;
 
 pub(crate) use branch::{BranchListEntry, ReceivedListEntry, print_branch_list_json};
+pub(crate) use bundle_import::print_bundle_import_json;
 pub(crate) use bundle_preview::{print_bundle_preview_json, print_bundle_preview_plain};
 pub(crate) use help::{print_command_help, print_help};
 pub(crate) use merge_evidence::{print_merge_evidence, print_merge_plan};

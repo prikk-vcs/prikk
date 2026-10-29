@@ -41,6 +41,13 @@
   `"older"`, or `"unrelated"`): how the delivery's own publication history relates to the pointer it
   would replace, independent of the class above.
 
+- **`bundle import --format json`** (`bundle-import-report-v1`): carries the same fields the text
+  form already prints, plus `"class"` and `"ref_state_chain"` (the same fields and values
+  `bundle preview --format json` already reports) and `"pointer_updated"`. On exactly the three
+  refusals above (a rollback, a divergent rewrite, or a history that does not connect), it also
+  prints a `refusal-v1` document naming the refused class, the same reusable shape `extract` already
+  uses for its own refusals.
+
 - **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
   this repository and not sealed by any history it holds, its own or received. Each entry carries
   the recognition claim(s) naming the patch, each claim's own `target_block_id` (the block it

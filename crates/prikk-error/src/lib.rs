@@ -95,6 +95,25 @@ pub enum PrikkError {
         /// The bound that was exceeded.
         bound_count: u64,
     },
+    /// 0.56.0 step 3b (A4): `bundle import`'s own refusal of a rollback, a diverged rewrite, or a
+    /// history that does not connect to the received pointer it would replace (0.56.0 step 3a,
+    /// A3). Exists apart from [`Self::Precondition`] for the same reason
+    /// [`Self::IncompletePublication`] does: `prikk-cli`'s own `refusal-v1` document must classify
+    /// this refusal structurally, never by matching this error's own message text (an edit to the
+    /// text could silently drop the classification). Its own `Display` text is unchanged from what
+    /// `Precondition` would have rendered for the identical message; only a caller that needs the
+    /// class itself matches the variant.
+    BundleNonFastForward {
+        /// The connectivity class that was refused: one of `"rollback"`, `"diverged"`, or
+        /// `"does-not-connect"` (`prikk_store::BundleConnectivityClass::as_str`'s own values for
+        /// those three variants). Kept as a plain `&'static str` here, not `prikk-store`'s own
+        /// enum: `prikk-error` sits below `prikk-store` in the dependency graph and must not depend
+        /// on it.
+        class: &'static str,
+        /// The fully rendered message, exactly what `Precondition`'s own `Display` would have
+        /// carried for this refusal.
+        message: String,
+    },
     /// An I/O failure. `kind` is `Some` only when this value was built from a real
     /// `std::io::Error` via [`From`] -- every explicit construction site elsewhere in the workspace
     /// (a caller-precondition violation, a platform-capability refusal, or a validation failure
@@ -127,6 +146,9 @@ impl fmt::Display for PrikkError {
             Self::LockConflict(msg) => write!(f, "lock conflict: {msg}"),
             Self::Precondition(msg) => write!(f, "precondition not met: {msg}"),
             Self::IncompletePublication(msg) => write!(f, "precondition not met: {msg}"),
+            Self::BundleNonFastForward { message, .. } => {
+                write!(f, "precondition not met: {message}")
+            }
             Self::AmbiguousGenerationLog(msg) => write!(f, "ambiguous generation log: {msg}"),
             Self::UnsupportedObjectType(msg) => write!(f, "unsupported object type: {msg}"),
             Self::ObjectOverBound {
