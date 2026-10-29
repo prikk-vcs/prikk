@@ -377,17 +377,22 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
 struct ImportArgs {
     input: PathBuf,
     adopt: bool,
+    allow_non_fast_forward: bool,
     format_json: bool,
 }
 
 fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliError> {
     let mut input = None;
     let mut adopt = false;
+    let mut allow_non_fast_forward = false;
     let mut format_json = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--adopt" => mark_seen(&mut adopt, "--adopt")?,
+            "--allow-non-fast-forward" => {
+                mark_seen(&mut allow_non_fast_forward, "--allow-non-fast-forward")?
+            }
             "--format" => {
                 let value = flag_value(&mut iter, "archive import --format")?;
                 match value.as_str() {
@@ -410,13 +415,15 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
     Ok(ImportArgs {
         input,
         adopt,
+        allow_non_fast_forward,
         format_json,
     })
 }
 
-/// `prikk archive import <file> [--adopt] [--format json]` (§9.8/§9.9). Opens the destination
-/// repository and reads `parsed.input` -- every refusal before the journal's own first write
-/// leaves the repository untouched (§9.1/§9.5); past it, see `import_archive`'s own doc comment.
+/// `prikk archive import <file> [--adopt] [--allow-non-fast-forward] [--format json]`
+/// (§9.8/§9.9; the second flag, 0.56.0 step 3c). Opens the destination repository and reads
+/// `parsed.input` -- every refusal before the journal's own first write leaves the repository
+/// untouched (§9.1/§9.5); past it, see `import_archive`'s own doc comment.
 fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_import_args(args)?;
     let layout = crate::open_repository(root)?;
@@ -429,6 +436,7 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     let mut reader = std::io::BufReader::new(file);
     let mut options = ArchiveImportOptions::default();
     options.adopt = parsed.adopt;
+    options.allow_non_fast_forward = parsed.allow_non_fast_forward;
     let report = prikk_store::import_archive(&layout, &mut reader, &options)
         .map_err(|err| err.to_string())?;
 
@@ -475,7 +483,11 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
                     .unwrap_or_default()
             );
         } else if landing.adopted {
-            println!("{}: adopted as a local branch", landing.ref_name);
+            if let Some(reason) = &landing.remote_reason {
+                println!("{}: adopted as a local branch ({reason})", landing.ref_name);
+            } else {
+                println!("{}: adopted as a local branch", landing.ref_name);
+            }
         } else if let Some(reason) = &landing.remote_reason {
             println!(
                 "{}: landed as {} (not adopted -- {reason})",

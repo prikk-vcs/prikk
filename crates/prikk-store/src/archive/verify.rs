@@ -236,6 +236,16 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     for entry in &manifest.entries {
         if let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind {
             let outcome = for_each_object_record(source, entry, object_type, |envelope| {
+                // 0.56.0 step 3c (A5): the identical operation-level decode `bundle import`'s own
+                // admission runs, so `archive verify` refuses exactly what `bundle verify`
+                // refuses for a `Patch` whose operations do not decode -- see
+                // `decode_patch_operations_for_admission`'s own doc comment.
+                if object_type == ObjectType::Patch {
+                    crate::patch_replay::decode::decode_patch_operations_for_admission(
+                        &envelope.canonical_payload,
+                        envelope.schema_version,
+                    )?;
+                }
                 ids.insert(envelope.object_id());
                 Ok(())
             })?;
@@ -337,6 +347,15 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
             continue;
         };
         for_each_object_record(source, entry, object_type, |envelope| {
+            // 0.56.0 step 3c (A5): same admission decode as pass 1's own call above, run again
+            // here since this pass re-streams the section independently -- see
+            // `decode_patch_operations_for_admission`'s own doc comment.
+            if object_type == ObjectType::Patch {
+                crate::patch_replay::decode::decode_patch_operations_for_admission(
+                    &envelope.canonical_payload,
+                    envelope.schema_version,
+                )?;
+            }
             id_to_expansion.insert(envelope.object_id(), expand_frontier(envelope));
             classify_references(envelope, &ids, &mut block_candidates)?;
             if reader_holds_type(envelope.object_type) {

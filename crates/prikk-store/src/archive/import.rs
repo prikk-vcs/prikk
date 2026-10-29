@@ -97,7 +97,10 @@ use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload, Signe
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
 };
-use crate::bundle::{CarriedSignatureAdmitter, object_type_dependency_rank};
+use crate::bundle::{
+    BundleConnectivityClass, CarriedSignatureAdmitter, RefStateChainRelation,
+    classify_landing_connectivity, object_type_dependency_rank,
+};
 use crate::foundation::fsutil::{
     create_new_file_required, ensure_directory_required, read_file_if_exists,
     remove_file_if_present_required, truncate_existing_file_required,
@@ -260,7 +263,9 @@ fn journal_short_id(archive_identity: &[u8; 32]) -> String {
     crate::foundation::import_journal_marker::short_id(archive_identity)
 }
 
-/// `prikk archive import <file> [--adopt]` (§9.8).
+/// `prikk archive import <file> [--adopt] [--allow-non-fast-forward]` (§9.8; the second flag,
+/// 0.56.0 step 3c, design review v2 ruling A3, extending 3a's own `bundle import` flag of the
+/// same name to this importer).
 #[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
 pub struct ArchiveImportOptions {
@@ -269,6 +274,12 @@ pub struct ArchiveImportOptions {
     /// every other ref (and every [`LandingOrigin::Received`] one, always) still lands under
     /// `remotes/`, with the reason named.
     pub adopt: bool,
+    /// 0.56.0 step 3c (A3): accept a landing that is a `rollback`, `diverged`, or
+    /// `does-not-connect` against the pointer it would replace -- a received landing's own
+    /// current received pointer of the same name, or (under `--adopt`) the received pointer
+    /// already held at the destination this entry would otherwise land at. `false` by default,
+    /// matching `bundle import`'s own flag of the same name (0.56.0 step 3a).
+    pub allow_non_fast_forward: bool,
 }
 
 /// How one planned landing actually resolved at stage 3.
@@ -287,7 +298,15 @@ pub struct LandingOutcome {
     /// Why this landed as a received pointer instead of a real local ref, when `--adopt` was
     /// requested but one of §9.6's four conditions did not hold. `None` when `--adopt` was not
     /// requested, when this is a [`LandingOrigin::Received`] entry (adoption never applies), or
-    /// when adoption actually succeeded.
+    /// when adoption actually succeeded with nothing worth naming.
+    ///
+    /// 0.56.0 step 3c (A3): also carries the connectivity class (`"rollback"`, `"diverged"`, or
+    /// `"does-not-connect"`) when adoption proceeded *despite* that class, against a received
+    /// pointer already held at this entry's own destination, because `--allow-non-fast-forward`
+    /// was given -- a genuinely new fact about the repository worth naming even though nothing
+    /// refused and adoption succeeded. Never set for `already-at-tip`/`fast-forward` (nothing to
+    /// name: see this field's own doc note above, "when adoption actually succeeded" is still the
+    /// default for the ordinary, safe case).
     pub remote_reason: Option<String>,
     /// `false` only when this entry was not landed at all, because it collided with another ref's
     /// own, already-landed destination (RFC 155 §9.6, amended 2026-10-12, external review 023: the
@@ -579,6 +598,17 @@ pub fn import_archive<R: Read + Seek>(
                 })?;
             }
             dropped_signatures.extend(admitted.dropped);
+            // 0.56.0 step 3c (A5): the identical operation-level decode `bundle import`'s own
+            // admission already runs, before this (or any) object write -- see
+            // `decode_patch_operations_for_admission`'s own doc comment for why this must be the
+            // same function `archive verify` calls too, not a second copy that happens to call
+            // the same lower-level decoder.
+            if object_type == ObjectType::Patch {
+                crate::patch_replay::decode::decode_patch_operations_for_admission(
+                    &admitted.envelope.canonical_payload,
+                    admitted.envelope.schema_version,
+                )?;
+            }
             let id = admitted.envelope.object_id();
             let already_present = object_store.contains_object(object_type, id)?;
             object_store.write_object_under_held_lock(&admitted.envelope, &_container_locks)?;
@@ -873,6 +903,8 @@ fn land_one_ref(
                 layout,
                 &landing.ref_name,
                 landing.ref_state_id,
+                object_store,
+                options,
                 container_locks,
             )?;
             Ok((
@@ -892,19 +924,21 @@ fn land_one_ref(
         }
         LandingOrigin::Local if options.adopt => {
             match try_adopt_local_ref(
+                layout,
                 ref_store,
                 adopted_policy,
                 landing,
+                options,
                 object_store,
                 ref_log_records,
                 container_locks,
             )? {
-                AdoptOutcome::Adopted => Ok((
+                AdoptOutcome::Adopted { remote_reason } => Ok((
                     LandingOutcome {
                         ref_name: landing.ref_name.clone(),
                         landed_as: landing.ref_name.clone(),
                         adopted: true,
-                        remote_reason: None,
+                        remote_reason,
                         landed: true,
                         collision_target: None,
                         origin: landing.origin,
@@ -918,6 +952,8 @@ fn land_one_ref(
                         layout,
                         &landing.destination,
                         landing.ref_state_id,
+                        object_store,
+                        options,
                         container_locks,
                     )?;
                     Ok((
@@ -942,6 +978,8 @@ fn land_one_ref(
                 layout,
                 &landing.destination,
                 landing.ref_state_id,
+                object_store,
+                options,
                 container_locks,
             )?;
             Ok((
@@ -965,28 +1003,89 @@ fn land_one_ref(
 /// Write (or idempotently re-write) a received pointer, returning whether the pointer's own
 /// target actually changed -- `write_received_pointer` itself is unconditional (last-entry-wins,
 /// no CAS: see its own doc note), so this reads the prior value first purely to report
-/// [`ArchiveImportReport::already_imported`] accurately, never to decide whether to write.
+/// [`ArchiveImportReport::already_imported`] accurately, and -- 0.56.0 step 3c (A2/A3) -- to
+/// classify this landing against it before deciding whether to write at all.
+///
+/// **Refuses** a `rollback`, `diverged`, or `does-not-connect` landing against an existing
+/// pointer of this name, unless `options.allow_non_fast_forward` is set, the identical rule 3a
+/// built for `bundle import`. `object_store` resolves both sides: by the time stage 3 runs this
+/// (after stage 1's own unconditional object writes), the delivered tip and the pointer it would
+/// replace are both genuinely local (`classify_landing_connectivity`'s own doc comment) -- this
+/// refusal is specifically about *this landing's own pointer write*, the one write it is still
+/// possible to withhold at this point in the run; it is not a claim that nothing was written by
+/// this import at all (stage 1's own object writes already happened, unconditionally, before any
+/// landing is even planned to run -- see `import_archive`'s own doc comment on why that is this
+/// module's own pre-existing, unchanged shape, not something this round restructures).
+///
+/// An `already-at-tip` landing with an `older` `RefState` chain writes nothing here either (A2):
+/// the content is unchanged, and writing would move the pointer's own record backward.
+///
 /// `container_locks` must already hold `ReceivedIndex` -- checked, not assumed, by
 /// [`crate::received::write_received_pointer_under_held_lock`].
 fn land_as_received_pointer(
     layout: &RepositoryLayout,
     ref_name: &str,
     ref_state_id: ObjectId,
+    object_store: &ObjectWriteSession,
+    options: &ArchiveImportOptions,
     container_locks: &ContainerLockGuard,
 ) -> Result<bool> {
     let before = crate::received::read_received_pointer(layout, ref_name)?;
-    crate::received::write_received_pointer_under_held_lock(
-        layout,
-        ref_name,
-        ref_state_id,
-        container_locks,
-    )?;
+    let (class, chain) = match &before {
+        None => (BundleConnectivityClass::NoLocalHistory, None),
+        Some(pointer) => {
+            let (class, chain) =
+                classify_landing_connectivity(object_store, ref_state_id, pointer.ref_state_id)?;
+            (class, Some(chain))
+        }
+    };
+    if before.is_some()
+        && matches!(
+            class,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        )
+        && !options.allow_non_fast_forward
+    {
+        return Err(PrikkError::Precondition(format!(
+            "archive import: landing {ref_name} is a {} against its current received pointer -- \
+             refusing rather than silently rewriting received history; pass \
+             --allow-non-fast-forward to accept a landing that does not simply extend the \
+             pointer it would replace",
+            class.as_str()
+        )));
+    }
+    let pointer_updated = !matches!(
+        (class, chain),
+        (
+            BundleConnectivityClass::AlreadyAtTip,
+            Some(RefStateChainRelation::Older)
+        )
+    );
+    if pointer_updated {
+        crate::received::write_received_pointer_under_held_lock(
+            layout,
+            ref_name,
+            ref_state_id,
+            container_locks,
+        )?;
+    }
     Ok(before.map(|pointer| pointer.ref_state_id) != Some(ref_state_id))
 }
 
 enum AdoptOutcome {
-    Adopted,
-    FellThrough { reason: String },
+    /// 0.56.0 step 3c (A3): `remote_reason` is `Some` only when a received pointer already held
+    /// at this entry's own destination classified as `rollback`/`diverged`/`does-not-connect`
+    /// against the delivered tip, and `--allow-non-fast-forward` let adoption proceed despite it
+    /// -- see [`LandingOutcome::remote_reason`]'s own doc comment for why the ordinary,
+    /// fast-forward/already-at-tip case still carries `None` here.
+    Adopted {
+        remote_reason: Option<String>,
+    },
+    FellThrough {
+        reason: String,
+    },
 }
 
 /// §9.6's narrowed `--adopt`: land `landing` (a [`LandingOrigin::Local`] ref) as a real local ref
@@ -1004,10 +1103,13 @@ enum AdoptOutcome {
 /// re-signs or re-derives anything, only replays what the archive's own maintainer already
 /// produced. Idempotent on retry: a step already landed reads as [`PublicationState::Complete`]
 /// inside `publish` itself (unchanged, pre-existing behavior this function does not touch).
+#[allow(clippy::too_many_arguments)]
 fn try_adopt_local_ref(
+    layout: &RepositoryLayout,
     ref_store: &RefStore,
     adopted_policy: &crate::trust::MaintainerTrustPolicy,
     landing: &PlannedRefLanding,
+    options: &ArchiveImportOptions,
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
     container_locks: &ContainerLockGuard,
@@ -1026,6 +1128,51 @@ fn try_adopt_local_ref(
                      is RFC 154's"
                 .to_string(),
         });
+    }
+
+    // 0.56.0 step 3c (A3): `try_adopt_local_ref` used to read nothing from the received index at
+    // all (2A v2's own measured R1 finding) -- classify the archive's own delivered tip against
+    // the received pointer already held at this entry's own destination (`remotes/<ref_name>`,
+    // the name it would land under absent adoption), if one exists. A `rollback`/`diverged`/
+    // `does-not-connect` landing against it refuses, under the same `--allow-non-fast-forward`
+    // flag 3a built for `bundle import` and this round extended to received landings
+    // (`land_as_received_pointer`, above) -- adopting a real local ref must not silently erase
+    // what this repository had already received at that name.
+    let received_at_destination =
+        crate::received::read_received_pointer(layout, &landing.destination)?;
+    let mut adopt_remote_reason: Option<String> = None;
+    if let Some(pointer) = &received_at_destination {
+        let (class, _chain) = classify_landing_connectivity(
+            &*object_store,
+            landing.ref_state_id,
+            pointer.ref_state_id,
+        )?;
+        if matches!(
+            class,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        ) {
+            if !options.allow_non_fast_forward {
+                return Err(PrikkError::Precondition(format!(
+                    "archive import --adopt: adopting {} would be a {} against the received \
+                     pointer already held at {} -- refusing rather than silently rewriting \
+                     received history; pass --allow-non-fast-forward to adopt it anyway",
+                    landing.ref_name,
+                    class.as_str(),
+                    landing.destination
+                )));
+            }
+            // A genuine fact worth naming even though adoption proceeds (A3: "the class in
+            // remote_reason") -- never set for the ordinary fast-forward/already-at-tip case,
+            // see `LandingOutcome::remote_reason`'s own doc comment.
+            adopt_remote_reason = Some(format!(
+                "adopted despite a {} against the received pointer already held at {} \
+                 (--allow-non-fast-forward)",
+                class.as_str(),
+                landing.destination
+            ));
+        }
     }
 
     // This ref's own subsequence, in order -- filtered from the archive's whole, interleaved
@@ -1086,7 +1233,9 @@ fn try_adopt_local_ref(
         )?;
         expected_previous = Some(update.new_ref_state_id);
     }
-    Ok(AdoptOutcome::Adopted)
+    Ok(AdoptOutcome::Adopted {
+        remote_reason: adopt_remote_reason,
+    })
 }
 
 fn compute_landing_plan(

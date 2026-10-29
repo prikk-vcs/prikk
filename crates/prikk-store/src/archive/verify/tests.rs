@@ -14,6 +14,7 @@ use prikk_object::CanonicalEncode;
 
 use crate::archive::tests::{
     decode_manifest_for_test, insert_tail_bytes_into_section_for_test, seal_one_block,
+    seal_one_block_with_an_undecodable_patch,
 };
 use crate::archive::{export_archive, export_archive_bypassing_blocking_ref_publication_for_test};
 use crate::maintainer_signing::MaintainerSigner;
@@ -58,6 +59,33 @@ fn build_one_block_archive() -> Vec<u8> {
     let mut buffer = Vec::new();
     export_archive(&layout, &mut buffer).expect("export");
     buffer
+}
+
+/// 0.56.0 step 3c (A5): an archive whose own carried `Patch` payload does not decode.
+fn build_one_block_archive_with_an_undecodable_patch() -> Vec<u8> {
+    let dir = unique_temp_dir("archive-verify-undecodable-patch-fixture");
+    let layout = RepositoryLayout::init(&dir).expect("init");
+    seal_one_block_with_an_undecodable_patch(&layout).expect("seal");
+    let mut buffer = Vec::new();
+    export_archive(&layout, &mut buffer).expect("export");
+    buffer
+}
+
+/// 0.56.0 step 3c (A5, 2C v2 §R7): on 0.55.0, `archive verify` exited 0 on exactly this archive --
+/// a `Patch` whose own operations do not decode -- while `bundle verify` already refused the same
+/// shape. `archive verify` must now refuse it too, through the one shared admission decode
+/// (`decode_patch_operations_for_admission`) `bundle import`'s own admission already runs.
+#[test]
+fn verify_refuses_an_archive_carrying_an_undecodable_patch() {
+    let bytes = build_one_block_archive_with_an_undecodable_patch();
+    let mut cursor = Cursor::new(bytes);
+    let error =
+        verify_archive(&mut cursor).expect_err("a patch that does not decode must refuse verify");
+    assert!(
+        error.to_string().contains("PatchPurpose")
+            || error.to_string().to_lowercase().contains("patch"),
+        "the refusal should be attributable to the patch's own decode failure: {error}"
+    );
 }
 
 /// The manifest's own `(offset, length)`, read from the end trailer the same way

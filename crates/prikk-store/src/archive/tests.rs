@@ -70,6 +70,60 @@ pub(crate) fn seal_one_block(layout: &RepositoryLayout) -> prikk_error::Result<O
     Ok(root_block_id)
 }
 
+/// 0.56.0 step 3c (design review v2, ruling A5): like [`seal_one_block`], but the sealed `Patch`'s
+/// own canonical payload is truncated by one byte **after** being encoded by the ordinary,
+/// validating `PatchPayload::to_canonical_bytes()` path -- the envelope itself (its checksum, its
+/// placeholder signature, the frame it is written in) is computed fresh over these already-
+/// truncated bytes, so nothing at the framing/signature layer is disturbed; only
+/// `decode_patch_operations`'s own semantic parse of the payload's own operation TLV fails. This
+/// is deliberately **not** the Unicode-path shape 2C v2/A6 found (that is 0.56.0 step 3d's own,
+/// later scope, and this round must not classify it) -- any decode failure proves A5's rule, and a
+/// truncated record is the cheapest one to construct by hand, the same way 2C v2's own fixtures
+/// were built directly rather than through the ordinary, validating CLI pipeline. `pub(crate)`:
+/// both `archive::import`'s and `archive::verify`'s own test modules need it.
+pub(crate) fn seal_one_block_with_an_undecodable_patch(
+    layout: &RepositoryLayout,
+) -> prikk_error::Result<ObjectId> {
+    let mut object_store = FileObjectStore::new(layout.clone());
+    object_store.write_object(&crate::test_gates::test_support::signed_patch_blob_envelope())?;
+
+    let mut patch = signed_patch_envelope();
+    // Rebuild with a one-byte-shorter payload, signed fresh over exactly those bytes -- see this
+    // function's own doc comment above for why this is safe at every layer except the one this
+    // test means to exercise.
+    let mut truncated_payload = patch.canonical_payload.clone();
+    truncated_payload.pop();
+    patch = prikk_object::ObjectEnvelope::unsigned(ObjectType::Patch, 1, truncated_payload);
+    patch.add_signature(crate::test_gates::test_support::rollback_author_signature())?;
+    let patch_id = object_store.write_object(&patch)?;
+
+    let root_block = signed_block(BlockKind::Root, Vec::new(), vec![patch_id], None);
+    let root_block_id = object_store.write_object(&root_block)?;
+
+    let ref_store = RefStore::new(layout.clone());
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        root_block_id,
+        1,
+    );
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+    Ok(root_block_id)
+}
+
 /// Decode one manifest entry's own `(kind, offset, length, checksum)`, test-only -- the real
 /// decoder is Part V's job. Returns `(repository_format, tool_version, entries)`. `pub(in
 /// crate::archive)`: `archive::verify`'s own tests need to locate a specific section's own byte

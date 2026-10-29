@@ -388,6 +388,42 @@ fn import_refuses_an_inconsistent_archive_and_writes_nothing() {
     assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
 }
 
+/// 0.56.0 step 3c (A5, 2C v2 §R7): on 0.55.0, `archive import` landed a `Patch` whose own
+/// operations do not decode, with exit 0, while `bundle import` refused the identical shape --
+/// confirmed missing admission parity. `import_archive`'s own stage 0 reuses `verify_archive`
+/// directly (this module's own doc comment), and `verify_archive` itself now refuses this archive
+/// (see `archive::verify::tests::verify_refuses_an_archive_carrying_an_undecodable_patch`) -- so
+/// this refusal fires at stage 0, before the journal even exists, and nothing at all is written,
+/// the same strength [`import_refuses_an_inconsistent_archive_and_writes_nothing`] proves for a
+/// flipped byte.
+#[test]
+fn import_refuses_an_archive_carrying_an_undecodable_patch_and_writes_nothing() {
+    let source_dir = unique_temp_dir("archive-import-undecodable-patch-source");
+    let layout = RepositoryLayout::init(&source_dir).expect("init");
+    crate::archive::tests::seal_one_block_with_an_undecodable_patch(&layout).expect("seal");
+    let bytes = export_bytes(&layout);
+
+    let dest_dir = unique_temp_dir("archive-import-undecodable-patch-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    let fingerprint_before = directory_fingerprint(&dest_dir);
+
+    let mut cursor = Cursor::new(bytes);
+    let error = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
+        .expect_err("a patch that does not decode must refuse the import");
+    assert!(
+        error.to_string().contains("PatchPurpose")
+            || error.to_string().contains("not internally consistent"),
+        "{error}"
+    );
+    assert_eq!(
+        fingerprint_before,
+        directory_fingerprint(&dest_dir),
+        "a refused import must write nothing -- the refusal fires at stage 0, before the journal \
+         or any object write"
+    );
+    assert!(interrupted_import_short_id(&dest_layout).unwrap().is_none());
+}
+
 #[test]
 fn killed_right_after_the_journal_blocks_writers_and_doctor_sees_it_then_resumes() {
     let source_dir = unique_temp_dir("archive-import-kill-journal-source");
@@ -775,7 +811,10 @@ fn concurrent_publish_refuses_while_stage_3_holds_the_ref_side_locks() {
     import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import completes normally");
 
@@ -1197,7 +1236,10 @@ fn adopt_lands_a_ref_signed_by_an_adopted_key_as_a_real_local_branch() {
     let report = import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import with --adopt");
 
@@ -1245,7 +1287,10 @@ fn adopt_lands_a_ref_signed_by_a_non_adopted_key_under_remotes_instead() {
     let report = import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import with --adopt");
 
@@ -1540,7 +1585,10 @@ fn carry_forward_story_end_to_end_and_round_trip() {
     let import_report = import_archive(
         &dest_layout,
         &mut Cursor::new(bytes),
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import --adopt");
 
@@ -1702,7 +1750,10 @@ fn adopt_over_an_existing_local_ref_falls_through_to_remotes_instead_of_overwrit
     let report = import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import with --adopt over an existing ref must not fail the whole import");
 
@@ -1887,7 +1938,10 @@ fn landing_collision_is_not_a_collision_at_all_once_adopt_succeeds() {
     let report = import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import with --adopt");
 
@@ -1945,7 +1999,10 @@ fn landing_collision_still_wins_when_adopt_falls_through() {
     let report = import_archive(
         &dest_layout,
         &mut cursor,
-        &ArchiveImportOptions { adopt: true },
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
     )
     .expect("import with --adopt");
 
@@ -2118,8 +2175,22 @@ fn control_disabling_the_collision_rule_lets_the_received_pointer_overwrite_the_
     let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
     crate::archive::import::disable_landing_collision_rule_for_test();
     let mut cursor = Cursor::new(bytes);
-    let report = import_archive(&dest_layout, &mut cursor, &ArchiveImportOptions::default())
-        .expect("import");
+    // 0.56.0 step 3c: within this one import, the `Local` landing writes `remotes/heads/main`
+    // first (the exporter's own ref, absent `--adopt`); the planted, genuinely unrelated
+    // `Received` entry then lands at the identical destination second (the collision rule is
+    // disabled here, on purpose, to reproduce the old bug) -- against the pointer the first
+    // landing just wrote, that is a `does-not-connect`, which this round's own new refusal would
+    // otherwise catch. `--allow-non-fast-forward` keeps this control testing only what it is
+    // for (the disabled collision rule, not connectivity).
+    let report = import_archive(
+        &dest_layout,
+        &mut cursor,
+        &ArchiveImportOptions {
+            allow_non_fast_forward: true,
+            ..ArchiveImportOptions::default()
+        },
+    )
+    .expect("import");
 
     assert!(
         report.landing_outcomes.iter().all(|outcome| outcome.landed),
@@ -2364,5 +2435,435 @@ fn an_untrusted_received_signature_never_blocks_verify_or_import_and_the_destina
         issue_immediately.is_none(),
         "a destination that already trusts the key must read clean immediately after import: \
          {issue_immediately:?}"
+    );
+}
+
+// 0.56.0 step 3c (A2/A3): `archive import` classifies a received landing (and, below, a
+// `--adopt` landing) against the pointer it would replace, and refuses a `rollback`, `diverged`,
+// or `does-not-connect` landing by default, the identical rule 3a built for `bundle import`.
+
+/// Extends [`build_signed_source_repository`]'s own one-block fixture with a second, child block
+/// (`block1b`, a fast-forward child of the root `build_signed_source_repository` already builds),
+/// published as a second `RefState` (`update_seq: 2`, chaining `previous_ref_state_id`) at the
+/// same `heads/main` -- 3a's own fixture shape (`block1`, then `block1b`, a child of it),
+/// reused here for `archive import` instead of `bundle import`. Returns the archive bytes at
+/// **both** points: `(archive_at_block1, archive_at_block1b)`.
+fn build_two_generation_source_archives(dir: &std::path::Path) -> (Vec<u8>, Vec<u8>) {
+    let (layout, block1_id, author_key_id) = build_signed_source_repository(dir);
+    let archive_at_block1 = export_bytes(&layout);
+
+    let author_signer =
+        Ed25519AuthorSigner::from_seed("import-test-author", &[0x11; 32]).expect("author signer");
+    assert_eq!(
+        author_signer.key_id(),
+        author_key_id,
+        "same seed must reproduce the same key id"
+    );
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("import-test-maintainer", &[0x22; 32])
+            .expect("maintainer signer");
+
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_payload = BlobPayload::new(BlobKind::Text, b"second generation\n".to_vec());
+    let blob_bytes = blob_payload
+        .to_canonical_bytes()
+        .expect("encode blob payload");
+    let blob_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob_bytes);
+    let blob_id = blob_envelope.object_id();
+    store.write_object(&blob_envelope).expect("write blob");
+
+    let patch_payload = prikk_object::PatchPayload {
+        operations: vec![prikk_object::Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: prikk_object::OperationKind::CreateFile(prikk_object::CreateFile {
+                path: "b.txt".to_string(),
+                node_id: prikk_object::NodeId::from_bytes([0x52; 32]),
+                blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: prikk_object::PatchPurpose::Normal,
+        message: None,
+    };
+    let patch_bytes = patch_payload
+        .to_canonical_bytes()
+        .expect("encode patch payload");
+    let mut patch_envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, patch_bytes);
+    let patch_id = patch_envelope.object_id();
+    patch_envelope
+        .add_signature(author_signature(&author_signer, patch_id).expect("sign the patch"))
+        .expect("attach the real author signature");
+    store.write_object(&patch_envelope).expect("write patch");
+
+    let block_payload = BlockPayload {
+        parent_block_ids: vec![block1_id],
+        kind: BlockKind::Normal,
+        patch_ids: vec![patch_id],
+        state_merkle_root: MerkleRoot([0u8; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block1b_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block1b_id)
+                .expect("sign the block"),
+        )
+        .expect("attach the real maintainer signature");
+    store.write_object(&block_envelope).expect("write block");
+
+    let previous_ref_state_id = RefStore::new(layout.clone())
+        .read_current_ref_state_id("heads/main")
+        .expect("read current ref state")
+        .expect("heads/main must already be published");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block1b_id,
+        update_seq: 2,
+        previous_ref_state_id: Some(previous_ref_state_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, ref_state_id)
+                .expect("sign the ref state"),
+        )
+        .expect("attach the real maintainer signature");
+
+    let ref_update_envelope = signed_ref_update_envelope(
+        "heads/main",
+        Some(previous_ref_state_id),
+        ref_state_id,
+        block1b_id,
+        2,
+    );
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: Some(previous_ref_state_id),
+            ref_state: ref_state_envelope,
+            ref_update: ref_update_envelope,
+        })
+        .expect("publish the second generation");
+
+    let archive_at_block1b = export_bytes(&layout);
+    (archive_at_block1, archive_at_block1b)
+}
+
+#[test]
+fn received_landing_fast_forward_does_not_refuse() {
+    let source_dir = unique_temp_dir("archive-3c-received-ff-source");
+    let (archive_at_block1, archive_at_block1b) = build_two_generation_source_archives(&source_dir);
+
+    let dest_dir = unique_temp_dir("archive-3c-received-ff-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("the first, no-local-history landing must never refuse");
+
+    let before = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("a pointer must be present after the first landing");
+
+    let report = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1b),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("a fast-forward landing must not refuse");
+    assert!(
+        report.landing_outcomes.iter().all(|landing| landing.landed),
+        "{:?}",
+        report.landing_outcomes
+    );
+    let after = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("a pointer must still be present");
+    assert_ne!(
+        before.ref_state_id, after.ref_state_id,
+        "the pointer must have advanced to the fast-forwarded tip"
+    );
+}
+
+#[test]
+fn received_landing_rollback_refuses_and_leaves_the_pointer_unchanged() {
+    let source_dir = unique_temp_dir("archive-3c-received-rollback-source");
+    let (archive_at_block1, archive_at_block1b) = build_two_generation_source_archives(&source_dir);
+
+    let dest_dir = unique_temp_dir("archive-3c-received-rollback-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1b),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("landing the tip first must never refuse");
+    let before = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("a pointer must be present");
+
+    let error = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1.clone()),
+        &ArchiveImportOptions::default(),
+    )
+    .expect_err("a rollback against the current received pointer must refuse by default");
+    assert!(
+        error.to_string().contains("rollback"),
+        "the refusal must name the class: {error}"
+    );
+    let after = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("the pointer must still be present");
+    assert_eq!(
+        before.ref_state_id, after.ref_state_id,
+        "a refused landing must leave the received pointer exactly as it was"
+    );
+
+    // The same delivery, with the flag, succeeds -- the import journal left by the refused
+    // attempt above (same archive bytes, same identity) lets this resume rather than redo stage
+    // 1's own object writes.
+    let report = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1),
+        &ArchiveImportOptions {
+            allow_non_fast_forward: true,
+            ..ArchiveImportOptions::default()
+        },
+    )
+    .expect("the same rollback, with the flag, must succeed");
+    assert!(report.landing_outcomes.iter().all(|landing| landing.landed));
+}
+
+#[test]
+fn received_landing_does_not_connect_refuses_and_leaves_the_pointer_unchanged() {
+    let dest_dir = unique_temp_dir("archive-3c-received-unrelated-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    let source_a_dir = unique_temp_dir("archive-3c-received-unrelated-source-a");
+    let (layout_a, _block_a, _author_key_a) = build_signed_source_repository(&source_a_dir);
+    let archive_a = export_bytes(&layout_a);
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_a),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("the first landing must never refuse");
+    let before = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("a pointer must be present");
+
+    // A second, genuinely unrelated source repository -- same ref name, no shared ancestry at
+    // all (a fresh seed's own fresh genesis block).
+    let source_c_dir = unique_temp_dir("archive-3c-received-unrelated-source-c");
+    let layout_c = RepositoryLayout::init(&source_c_dir).expect("init source c");
+    let maintainer_c =
+        Ed25519MaintainerSigner::from_seed("unrelated-maintainer-c", &[0x44; 32]).expect("signer");
+    let mut store_c = FileObjectStore::new(layout_c.clone());
+    let block_c_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: crate::compute_state_root(&[]).expect("empty state root"),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_c_bytes = block_c_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+    let mut block_c_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_c_bytes);
+    let block_c_id = block_c_envelope.object_id();
+    block_c_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_c, ObjectType::Block, block_c_id)
+                .expect("sign the block"),
+        )
+        .expect("attach the real maintainer signature");
+    store_c
+        .write_object(&block_c_envelope)
+        .expect("write block");
+    let ref_state_c_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_c_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_c_bytes = ref_state_c_payload
+        .to_canonical_bytes()
+        .expect("encode ref-state payload");
+    let mut ref_state_c_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_c_bytes);
+    let ref_state_c_id = ref_state_c_envelope.object_id();
+    ref_state_c_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_c, ObjectType::RefState, ref_state_c_id)
+                .expect("sign the ref state"),
+        )
+        .expect("attach the real maintainer signature");
+    let ref_update_c_envelope =
+        signed_ref_update_envelope("heads/main", None, ref_state_c_id, block_c_id, 1);
+    RefStore::new(layout_c.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: ref_state_c_envelope,
+            ref_update: ref_update_c_envelope,
+        })
+        .expect("publish heads/main");
+    let archive_c = export_bytes(&layout_c);
+
+    let error = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_c.clone()),
+        &ArchiveImportOptions::default(),
+    )
+    .expect_err("an unrelated landing against the current received pointer must refuse");
+    assert!(
+        error.to_string().contains("does-not-connect"),
+        "the refusal must name the class: {error}"
+    );
+    let after = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("the pointer must still be present");
+    assert_eq!(
+        before.ref_state_id, after.ref_state_id,
+        "a refused landing must leave the received pointer exactly as it was"
+    );
+
+    let report = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_c),
+        &ArchiveImportOptions {
+            allow_non_fast_forward: true,
+            ..ArchiveImportOptions::default()
+        },
+    )
+    .expect("the same unrelated landing, with the flag, must succeed");
+    assert!(report.landing_outcomes.iter().all(|landing| landing.landed));
+}
+
+/// 2A v2's own measured `--adopt` case, reproduced: a destination (`repoB`) already holds a
+/// **received** pointer at `remotes/heads/main` (from an earlier, ordinary import); a third,
+/// completely unrelated archive (`repoE`) also names `heads/main`, with no local `heads/main` at
+/// the destination. Before this round, `--adopt` adopted it as a real local branch with no
+/// mention anywhere of the received pointer of the identical name already held. After this
+/// round, it refuses by default.
+#[test]
+fn adopt_refuses_an_unrelated_received_pointer_at_the_destination_by_default() {
+    let dest_dir = unique_temp_dir("archive-3c-adopt-unrelated-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    let repo_a_dir = unique_temp_dir("archive-3c-adopt-unrelated-repo-a");
+    let (layout_a, _block_a, _author_key_a) = build_signed_source_repository(&repo_a_dir);
+    let archive_a = export_bytes(&layout_a);
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_a),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("the ordinary received landing must never refuse");
+    assert_eq!(
+        RefStore::new(dest_layout.clone())
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        None,
+        "heads/main must still be absent locally -- only received"
+    );
+
+    let repo_e_dir = unique_temp_dir("archive-3c-adopt-unrelated-repo-e");
+    let (layout_e, _ref_state_e_id, maintainer_e_key_id, maintainer_e_public_key_hex) =
+        build_adoptable_source_repository(&repo_e_dir, "heads/main");
+    crate::add_trusted_maintainer(
+        &dest_layout,
+        &maintainer_e_key_id,
+        &maintainer_e_public_key_hex,
+    )
+    .expect(
+        "adopt repo e's maintainer key at the destination, so --adopt's own trust check passes",
+    );
+    let archive_e = export_bytes(&layout_e);
+
+    let error = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_e.clone()),
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: false,
+        },
+    )
+    .expect_err(
+        "adopting an unrelated history against an existing received pointer of the same name \
+         must refuse",
+    );
+    assert!(
+        error.to_string().contains("does-not-connect"),
+        "the refusal must name the class: {error}"
+    );
+    assert_eq!(
+        RefStore::new(dest_layout.clone())
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        None,
+        "a refused adoption must not create the local ref"
+    );
+    crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+        .expect("read received pointer")
+        .expect("the received pointer must still be present after the refused adoption");
+
+    let report = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_e),
+        &ArchiveImportOptions {
+            adopt: true,
+            allow_non_fast_forward: true,
+        },
+    )
+    .expect("the same adoption, with the flag, must succeed");
+    let landing = report
+        .landing_outcomes
+        .iter()
+        .find(|landing| landing.ref_name == "heads/main")
+        .expect("heads/main must be among the landings");
+    assert!(landing.adopted, "{landing:?}");
+    assert_eq!(
+        landing
+            .remote_reason
+            .as_deref()
+            .map(|reason| reason.contains("does-not-connect")),
+        Some(true),
+        "remote_reason must name the class even though adoption succeeded: {landing:?}"
+    );
+    assert!(
+        RefStore::new(dest_layout.clone())
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state")
+            .is_some(),
+        "the second attempt, with the flag, must have adopted a real local heads/main"
     );
 }

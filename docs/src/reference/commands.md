@@ -61,7 +61,7 @@ prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
 prikk archive verify <file> [--format json]
-prikk archive import <file> [--adopt] [--format json]
+prikk archive import <file> [--adopt] [--allow-non-fast-forward] [--format json]
 prikk sync summary --output <file>
 prikk sync compare --summary <file>
 prikk sync have <ref> --output <file>
@@ -176,6 +176,31 @@ itself is unchanged by this.
   (`"refusal"`: `"rollback"`, `"diverged"`, or `"does-not-connect"`), never for `bundle import`'s
   other, pre-existing refusals (a damaged bundle, a digest mismatch, an author-key conflict, and so
   on), which this round leaves unclassified. `"reason"` is always `null` for these three.
+
+**`archive import` applies the identical classification and refusal to its own landings, plus
+`--adopt`.**
+- **A received landing** (the default, and `--adopt`'s own fallback for a ref it did not adopt)
+  classifies against the received pointer of the same name and refuses a `rollback`, a `diverged`
+  landing, or one that `does-not-connect`, naming the class, exit `1`, unless
+  `--allow-non-fast-forward` is given — the same three names and the same flag `bundle import`
+  uses. A landing with no existing pointer to replace, or one that is `already-at-tip` or a genuine
+  `fast-forward`, is never refused on this ground, and an `already-at-tip` landing whose own
+  publication history reads `"older"` leaves the received pointer itself unchanged, the same as
+  `bundle import`.
+- **`--adopt` now also checks the received pointer already held at the name a ref would otherwise
+  land under** (`remotes/<ref>`), before adopting it as a real local branch — previously, adopting a
+  ref read nothing at all from the received index, so an archive naming an unrelated or rolled-back
+  history at a name this repository had already received landed as a trusted local branch with no
+  warning. The same three classes refuse the same way, under the same flag. When the flag lets the
+  adoption through anyway, the landing's own `"remote_reason"` names the class, even though
+  adoption itself succeeded — the one case this field now carries something other than why a ref
+  fell through to `remotes/` instead of being adopted.
+
+**`archive import` and `archive verify` now refuse a `Patch` whose own operations do not decode,
+before anything is written** — the identical check `bundle import`'s own admission already runs.
+Before this, such a change could land through `archive import` with no warning, or pass
+`archive verify` as internally consistent, while `bundle import` already refused the identical
+change; this closes that gap, through one shared check both importers now run.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a

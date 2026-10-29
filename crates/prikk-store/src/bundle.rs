@@ -99,9 +99,7 @@ use crate::foundation::layout::{
 };
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
-use crate::patch_replay::decode::{
-    DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
-};
+use crate::patch_replay::decode::{DecodedDeletePreimage, DecodedOperationKind};
 use crate::refs::RefStore;
 
 /// DC-44 increment 3, `bundle-manifest-handoff-v1.md`: the format bump that made room for the
@@ -1250,10 +1248,16 @@ fn closure_metadata_for(envelope: &ObjectEnvelope) -> Result<(Vec<ObjectId>, Clo
             deps
         }
         ObjectType::Patch => {
+            // 0.56.0 step 3c (A5): routed through the one shared admission decode
+            // (`decode_patch_operations_for_admission`), not `decode_patch_operations` directly
+            // -- see that function's own doc comment for why `archive import`/`archive verify`
+            // must call the identical function, not a second copy that happens to call the same
+            // lower-level decoder.
             let mut referenced = Vec::new();
-            for operation in
-                decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?
-            {
+            for operation in crate::patch_replay::decode::decode_patch_operations_for_admission(
+                &envelope.canonical_payload,
+                envelope.schema_version,
+            )? {
                 referenced.extend(bundle_referenced_blob_ids(&operation.kind));
             }
             closure.referenced_blob_ids = referenced;
@@ -3496,6 +3500,57 @@ pub(crate) fn classify_ref_state_chain<R1: ObjectReader, R2: ObjectReader>(
         return Ok(RefStateChainRelation::Older);
     }
     Ok(RefStateChainRelation::Unrelated)
+}
+
+/// `archive import`'s own pre-write classification (0.56.0 step 3c, A2/A3), for a landing whose
+/// both sides already resolve entirely through the local object store -- unlike `import_bundle`'s
+/// own [`classify_import_connectivity`], which must resolve the delivered tip's own ancestry from
+/// an in-memory, not-yet-admitted pass-1 metadata map (`closure_by_id`), because a *bundle*'s own
+/// objects are not locally admitted until pass 2 writes them. An archive's own stage 1 already
+/// writes every object it carries, under the same held locks, before stage 3's ref landing ever
+/// runs this classification (`import_archive`'s own doc comment) -- so both the delivered
+/// `RefState` and the pointer it would replace are genuinely local by this point, and one reader
+/// classifies both sides; a caller passes its already-open `ObjectWriteSession` (which implements
+/// [`ObjectReader`]) as that one reader.
+pub(crate) fn classify_landing_connectivity(
+    reader: &impl ObjectReader,
+    delivered_ref_state_id: ObjectId,
+    prior_ref_state_id: ObjectId,
+) -> Result<(BundleConnectivityClass, RefStateChainRelation)> {
+    let delivered_payload = read_ref_state_payload_for_chain(reader, delivered_ref_state_id)?;
+    let (delivered_target_block_id, _tag_envelope) =
+        crate::refs::resolve_ref_tip_block(reader, &delivered_payload)?;
+    let prior_payload = read_ref_state_payload_for_chain(reader, prior_ref_state_id)?;
+    let (prior_target_block_id, _tag_envelope) =
+        crate::refs::resolve_ref_tip_block(reader, &prior_payload)?;
+
+    let local_ancestors: BTreeSet<ObjectId> =
+        crate::merge::evidence::ancestors_inclusive(reader, prior_target_block_id)?
+            .keys()
+            .copied()
+            .collect();
+    let delivered_ancestors: BTreeSet<ObjectId> =
+        crate::merge::evidence::ancestors_inclusive(reader, delivered_target_block_id)?
+            .keys()
+            .copied()
+            .collect();
+    let preview_class = preview::classify_connectivity(
+        &local_ancestors,
+        &delivered_ancestors,
+        prior_target_block_id,
+        delivered_target_block_id,
+    );
+    let class = match preview_class {
+        preview::ConnectivityClass::NoLocalHistory => BundleConnectivityClass::NoLocalHistory,
+        preview::ConnectivityClass::AlreadyAtTip => BundleConnectivityClass::AlreadyAtTip,
+        preview::ConnectivityClass::Rollback => BundleConnectivityClass::Rollback,
+        preview::ConnectivityClass::FastForward => BundleConnectivityClass::FastForward,
+        preview::ConnectivityClass::Diverged => BundleConnectivityClass::Diverged,
+        preview::ConnectivityClass::DoesNotConnect => BundleConnectivityClass::DoesNotConnect,
+    };
+    let chain =
+        classify_ref_state_chain(reader, delivered_ref_state_id, reader, prior_ref_state_id)?;
+    Ok((class, chain))
 }
 
 pub(crate) fn encode_bundle(

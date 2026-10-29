@@ -209,6 +209,25 @@ pub(crate) fn applied_operation_kind_label(kind: &DecodedOperationKind) -> &'sta
     }
 }
 
+/// 0.56.0 step 3c (design review v2, ruling A5): the one operation-level decode that decides
+/// whether a `Patch` object is admitted at all -- `bundle import`'s own admission
+/// (`bundle::closure_metadata_for`), `archive import`'s stage 1, and `archive verify`'s own two
+/// passes all call this identically, before a `Patch` is ever written, so a path a newer
+/// validator rule would allow but this binary's own decoder refuses can never land through one
+/// importer while the other refuses it (confirmed missing from both archive files on 0.55.0, 2C
+/// v2 §R7: `archive import`/`archive verify` exited 0 on exactly this case while `bundle import`
+/// refused it). A pure, trivial pass-through to [`decode_patch_operations`] -- the point of this
+/// wrapper is the one name every admission call site shares, not new decode logic. A caller that
+/// only needs the admission decision, not the decoded content, discards the `Ok` value (both
+/// `archive` call sites); `bundle::closure_metadata_for` is the one caller that keeps it, for its
+/// own `referenced_blob_ids` extraction.
+pub(crate) fn decode_patch_operations_for_admission(
+    canonical_payload: &[u8],
+    schema_version: u32,
+) -> Result<Vec<DecodedPatchOperation>> {
+    decode_patch_operations(canonical_payload, schema_version)
+}
+
 /// Decode every FDD-03 §9.3 operation kind from canonical patch payload bytes into
 /// typed [`DecodedPatchOperation`]s. Decoding validates structure/identity only;
 /// applicability is gated separately by [`ensure_apply_supported`] (erratum P1).

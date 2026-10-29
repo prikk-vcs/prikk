@@ -29,6 +29,18 @@
   publication history is older than what is already there now writes every object it carries while
   leaving the pointer itself untouched, and exits `0` rather than silently moving the pointer's own
   record backward.
+- **`archive import` now applies the identical rule.** Landing a ref as a received pointer (the
+  default, and `--adopt`'s own fallback) refuses a rollback, a divergent rewrite, or an unrelated
+  history against the pointer it would replace, unless `--allow-non-fast-forward` is given — the
+  same flag, the same three names, `bundle import` already has. `--adopt` itself now also checks
+  the received pointer already held at the name it would otherwise land under before adopting a
+  real local branch: adopting onto an unrelated or rolled-back received history refuses the same
+  way, under the same flag, and the note explaining why a ref landed under `remotes/` instead of as
+  a real local branch now also names this case when the flag let it through anyway.
+- **`archive import` and `archive verify` now refuse a carried change whose own recorded edits do
+  not decode, before anything is written.** Before this, `archive import` could land such a change
+  with no warning at all, and `archive verify` reported the archive as internally consistent —
+  while `bundle import` already refused the identical change. All three now apply the same check.
 
 ### Added
 
