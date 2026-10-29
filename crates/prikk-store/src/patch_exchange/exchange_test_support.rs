@@ -78,16 +78,30 @@ pub(super) fn signed_author_patch_envelope(
 
 /// A MAINTAINER-signed `RecognitionClaim` envelope naming `block_id`/`patch_ids`.
 /// `parent_block_ids` is always empty -- none of Stage 3's own fixtures need a multi-block claim;
-/// see `seal_from_accepted`'s own test support for one that does.
+/// see [`signed_claim_envelope_with_parents`] for one that does, or `seal_from_accepted`'s own
+/// test support.
 pub(super) fn signed_claim_envelope(
     signer: &Ed25519MaintainerSigner,
     block_id: ObjectId,
     patch_ids: Vec<ObjectId>,
 ) -> Result<ObjectEnvelope> {
+    signed_claim_envelope_with_parents(signer, block_id, patch_ids, Vec::new())
+}
+
+/// A MAINTAINER-signed `RecognitionClaim` envelope naming `block_id`/`patch_ids`/
+/// `parent_block_ids` explicitly (0.56.0 step 1b2, R1's own new merge-claim coverage: a claim
+/// naming more than one parent block, reported in full by `pending_patches_with_claims` rather
+/// than refused).
+pub(super) fn signed_claim_envelope_with_parents(
+    signer: &Ed25519MaintainerSigner,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> Result<ObjectEnvelope> {
     let payload = RecognitionClaimPayload {
         block_id,
         patch_ids,
-        parent_block_ids: Vec::new(),
+        parent_block_ids,
     };
     let mut envelope = ObjectEnvelope::unsigned(
         ObjectType::RecognitionClaim,

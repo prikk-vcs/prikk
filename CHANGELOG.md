@@ -24,16 +24,24 @@
 
 - **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
   this repository and not sealed by any history it holds, its own or received. Each entry carries
-  the recognition claim(s) naming the patch, each claim's own parent block id, and that claim's
-  own MAINTAINER signature outcome: sound, unverifiable and why, or invalid (a detected forgery,
-  reported for that one claim rather than refusing the whole listing). A patch no held claim names
-  reports `"claims": []`. The text form's own shape (a count and one id per line) is unchanged.
+  the recognition claim(s) naming the patch, each claim's own `target_block_id` (the block it
+  recognizes, the same field `extract-report-v1`'s own `target_block_id` carries) and
+  `parent_block_ids` (the block(s) it declares as that block's own parents, as a list — the same
+  meaning as `extract-report-v1`'s own `claim_parent_block_id`, but reporting a merge-shaped claim
+  in full rather than refusing one), and that claim's own MAINTAINER signature outcome: sound,
+  unverifiable and why, or invalid (a detected forgery, reported for that one claim rather than
+  refusing the whole listing). A patch no held claim names reports `"claims": []`. The text form's
+  own shape (a count and one id per line) is unchanged.
 - **`show --format json` now reports each patch's own `"state"`**: `"queued"`, `"pending"`, or
-  `"sealed"`. A pending text edit's path now resolves, when the recognition claim naming it names
-  a single parent block this repository already holds; where it cannot (no claim names the patch,
-  the claim's own parent is itself only pending, or the claim names more than one parent), the
-  existing `"unresolved_node_id"` now carries a `"reason"` alongside it, naming which applies,
-  rather than leaving the reader to guess.
+  `"sealed"` — the same whichever id names the patch, a block's own bare id included. A pending
+  text edit's path resolves when a recognition claim naming it names a single parent block this
+  repository already holds; the claim that resolved it is named by the patch's own
+  `"resolved_through_claim_id"` (`null` otherwise). A claim whose own MAINTAINER signature is
+  invalid, or whose own patches do not fold against its own declared parent, is skipped rather than
+  used, and never makes `show` itself refuse. Where no claim resolves the path (no claim names the
+  patch, every claim's own parent is itself only pending, or every claim names more than one parent
+  with no mainline to pick), the existing `"unresolved_node_id"` carries a `"reason"` alongside it,
+  naming the most specific of these that applies, rather than leaving the reader to guess.
 
 ## 0.55.0 — 2026-10-29
 

@@ -214,7 +214,12 @@ fn pending_claims_one_claim_naming_two_pending_patches_appears_on_both() -> Resu
         );
         let claim_entry = &entry.claims[0];
         assert_eq!(claim_entry.claim_id, claim_id);
-        assert_eq!(claim_entry.parent_block_id, block_id);
+        assert_eq!(claim_entry.target_block_id, block_id);
+        assert_eq!(
+            claim_entry.parent_block_ids,
+            Vec::<ObjectId>::new(),
+            "this fixture's claim names no parent -- `signed_claim_envelope`'s own default"
+        );
         assert_eq!(
             claim_entry.signature,
             PendingClaimSignatureOutcome::Sound {
@@ -374,6 +379,59 @@ fn pending_claims_a_forged_signature_under_an_adopted_key_is_reported_invalid() 
         }
         other => panic!("a forged signature under an adopted key must report Invalid: {other:?}"),
     }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// 0.56.0 step 1b2, R1: a claim naming more than one parent block (a merge-shaped claim) reports
+/// every one of them, in the payload's own order -- not refused, and not truncated to one. Unlike
+/// `extract --claim` (which refuses such a claim outright, having no `mainline_parent_id` to pick
+/// a mainline from), a listing has no such need: it just reports what the claim states.
+#[test]
+fn pending_claims_a_merge_shaped_claim_reports_every_parent_block_id() -> Result<()> {
+    let root = unique_temp_dir("pexch-pending-claims-merge");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+
+    let signer = super::exchange_test_support::maintainer_signer(0x80)?;
+    add_trusted_maintainer(
+        &layout,
+        signer.key_id(),
+        &super::exchange_test_support::public_key_hex(&signer),
+    )?;
+
+    let author = super::exchange_test_support::author_signer(0x81)?;
+    let blob_id = objects.write_object(&super::exchange_test_support::signed_blob_envelope(
+        b"merge claim\n",
+    )?)?;
+    let patch_id =
+        objects.write_object(&super::exchange_test_support::signed_author_patch_envelope(
+            &author, "m.txt", 0x82, blob_id,
+        )?)?;
+
+    let block_id = ObjectId::from_bytes([0xF0; 32]);
+    let first_parent = ObjectId::from_bytes([0xF1; 32]);
+    let second_parent = ObjectId::from_bytes([0xF2; 32]);
+    let claim_id = objects.write_object(
+        &super::exchange_test_support::signed_claim_envelope_with_parents(
+            &signer,
+            block_id,
+            vec![patch_id],
+            vec![first_parent, second_parent],
+        )?,
+    )?;
+
+    let entries = pending_patches_with_claims(&layout)?;
+    assert_eq!(entries.len(), 1, "the listing must not refuse: {entries:?}");
+    assert_eq!(entries[0].claims.len(), 1);
+    let claim_entry = &entries[0].claims[0];
+    assert_eq!(claim_entry.claim_id, claim_id);
+    assert_eq!(claim_entry.target_block_id, block_id);
+    assert_eq!(
+        claim_entry.parent_block_ids,
+        vec![first_parent, second_parent],
+        "both parents must be reported, in the payload's own order, not refused or truncated"
+    );
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

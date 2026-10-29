@@ -29,9 +29,16 @@ pub(crate) fn print_sync_pending_json(entries: &[PendingPatchEntry]) {
             }
             json.push_str("\n      {\"claim_id\": ");
             json.push_str(&escape_json_string(&claim.claim_id.to_string()));
-            json.push_str(", \"parent_block_id\": ");
-            json.push_str(&escape_json_string(&claim.parent_block_id.to_string()));
-            json.push_str(", \"signature\": ");
+            json.push_str(", \"target_block_id\": ");
+            json.push_str(&escape_json_string(&claim.target_block_id.to_string()));
+            json.push_str(", \"parent_block_ids\": [");
+            for (parent_index, parent_block_id) in claim.parent_block_ids.iter().enumerate() {
+                if parent_index > 0 {
+                    json.push_str(", ");
+                }
+                json.push_str(&escape_json_string(&parent_block_id.to_string()));
+            }
+            json.push_str("], \"signature\": ");
             push_signature(&mut json, &claim.signature);
             json.push('}');
         }

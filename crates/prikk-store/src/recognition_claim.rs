@@ -46,7 +46,7 @@ use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::object_store::ObjectReader;
-use crate::trust::MaintainerTrustPolicy;
+use crate::trust::{MaintainerTrustPolicy, load_maintainer_trust_policy_or_empty};
 
 /// Which field of a `RecognitionClaimPayload` a `RecognitionClaimConsistency::Contradicted`
 /// outcome names as the one that disagreed with the held block (N3 §4) -- lets a caller
@@ -320,14 +320,34 @@ pub fn order_claims_for_sealing(
     Ok(order)
 }
 
+/// One recognition claim naming a pending patch, as [`claims_naming_patch`] hands it back to
+/// `show` (0.56.0 step 1b2, R4): the claim's own id, its full payload (`show` needs
+/// `parent_block_ids` and `patch_ids`, which `patch_exchange::PendingPatchClaim` -- built for
+/// `sync-pending-v1` alone -- does not carry), and whether this claim's own MAINTAINER signature
+/// is usable at all.
+pub(crate) struct ClaimNamingPatch {
+    /// The claim's own content-addressed id.
+    pub(crate) claim_id: ObjectId,
+    /// The claim's full payload.
+    pub(crate) payload: RecognitionClaimPayload,
+    /// `Some(reason)` when this claim's own MAINTAINER signature failed to verify
+    /// ([`verify_claim_signature`] returned `Err`) -- the same case `sync-pending-v1` reports as
+    /// `"invalid"`, "the one value a tool must treat as an alarm." `None` when the signature is
+    /// usable (`Sound` or `Unverifiable` -- both usable here; unlike `sync-pending-v1`, `show`
+    /// does not otherwise distinguish them, since neither blocks using the claim to resolve a
+    /// path).
+    pub(crate) invalid_signature_reason: Option<String>,
+}
+
 /// Every held recognition claim naming `patch_id`, sorted by claim id (0.56.0 step 1b: `show`'s
-/// own need, resolving a pending patch's path through the claim that names it). Distinct from
-/// `patch_exchange::PendingPatchClaim`, which keeps only `block_id` and a signature outcome for
-/// `sync-pending-v1` -- this caller needs the claim's full payload, specifically
-/// `parent_block_ids`, which that summarized type does not carry. Same container-walk shape,
-/// one further scan of `RecognitionClaim`, not reused from `patch_exchange::pending_patches_with_claims`
-/// since that function already discards the full payload once it has extracted what `sync
-/// pending` itself needs.
+/// own need, resolving a pending patch's path through the claim that names it; step 1b2, R4: each
+/// claim's own signature outcome, so `show` can skip one that is `invalid` rather than resolving a
+/// path through it). Distinct from `patch_exchange::PendingPatchClaim`/
+/// `pending_patches_with_claims`, which serve `sync-pending-v1`'s own fuller report -- this caller
+/// needs the claim's full payload (specifically `parent_block_ids`), not a summary, and only cares
+/// whether a signature is usable, not `sync-pending-v1`'s three-way `sound`/`unverifiable`/
+/// `invalid` breakdown. Same container-walk shape, one further scan of `RecognitionClaim`, not
+/// reused from `patch_exchange::pending_patches_with_claims` for that reason.
 ///
 /// **Lives here, not in `patch_exchange`**, for the identical reason `patch_set_digest` now hosts
 /// `accepted_but_unsealed_patch_ids` (0.56.0 step 1b): `show` needs this, and the boundary-check
@@ -336,13 +356,14 @@ pub fn order_claims_for_sealing(
 pub(crate) fn claims_naming_patch(
     layout: &RepositoryLayout,
     patch_id: ObjectId,
-) -> Result<Vec<(ObjectId, RecognitionClaimPayload)>> {
+) -> Result<Vec<ClaimNamingPatch>> {
     #[cfg(test)]
     let _whole_read_scope =
         crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
     let container_path = layout.container_slot_path(ObjectType::RecognitionClaim, ContainerSlot::A);
     let relative = layout.repository_relative(&container_path)?;
-    let mut matches: Vec<(ObjectId, RecognitionClaimPayload)> = Vec::new();
+    let trust_policy = load_maintainer_trust_policy_or_empty(layout)?;
+    let mut matches: Vec<ClaimNamingPatch> = Vec::new();
     let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
     if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
         let replay = decode_container_records(ObjectType::RecognitionClaim, &bytes)?;
@@ -353,12 +374,22 @@ pub(crate) fn claims_naming_patch(
             }
             let payload =
                 RecognitionClaimPayload::decode_canonical(&record.envelope.canonical_payload)?;
-            if payload.patch_ids.contains(&patch_id) {
-                matches.push((claim_id, payload));
+            if !payload.patch_ids.contains(&patch_id) {
+                continue;
             }
+            let invalid_signature_reason =
+                match verify_claim_signature(&record.envelope, &trust_policy) {
+                    Ok(_) => None,
+                    Err(err) => Some(err.to_string()),
+                };
+            matches.push(ClaimNamingPatch {
+                claim_id,
+                payload,
+                invalid_signature_reason,
+            });
         }
     }
-    matches.sort_by_key(|(claim_id, _)| *claim_id);
+    matches.sort_by_key(|claim| claim.claim_id);
     Ok(matches)
 }
 

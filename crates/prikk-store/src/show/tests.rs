@@ -172,11 +172,32 @@ fn write_pending_patch(layout: &RepositoryLayout, operations: Vec<Operation>) ->
     object_store.write_object(&envelope).unwrap()
 }
 
-/// Write a `RecognitionClaim` object directly, for 0.56.0 step 1b's own pending-path-resolution
-/// fixtures. Unsigned: `claims_naming_patch`'s own container scan only decodes the payload, never
-/// checks a signature (that check is `sync pending`'s own, separate, job), so a signature would
-/// add fixture weight for nothing this file's own tests need.
+/// Write a `RecognitionClaim` object directly, signed by the already-trusted `maintainer_signer`
+/// (0.56.0 step 1b2, R4: `claims_naming_patch` now checks each claim's own signature outcome and
+/// skips a claim it cannot verify at all, so every fixture exercising path-resolution logic
+/// *other than* the signature check itself needs a real, sound signature -- an unsigned claim
+/// would now be skipped before that logic is ever reached. See [`write_claim_with_no_signature`]
+/// for the one fixture that deliberately wants the unsigned/invalid case.)
 fn write_claim(
+    layout: &RepositoryLayout,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> ObjectId {
+    write_signed_claim(
+        layout,
+        &maintainer_signer(),
+        block_id,
+        patch_ids,
+        parent_block_ids,
+    )
+}
+
+/// Write a `RecognitionClaim` object directly, with no signature at all -- the one fixture shape
+/// this file's own R4 test (`show_resolves_through_a_sound_claim_skipping_an_invalid_signature_beside_it`)
+/// needs: `verify_claim_signature`'s "carries no MAINTAINER signature" refusal, the same `Invalid`
+/// case `sync-pending-v1` reports as an alarm.
+fn write_claim_with_no_signature(
     layout: &RepositoryLayout,
     block_id: ObjectId,
     patch_ids: Vec<ObjectId>,
@@ -2175,6 +2196,78 @@ fn signed_create_file_patch_for_test(
     envelope
 }
 
+/// 0.56.0 step 1b2, R2 (the review's own measured case): one patch, one state. Before `received
+/// remove`, `show <patch>` and `show <block>` agree (`sealed`). After it, the block is still
+/// readable by its own bare id (RFC 142 §1's bare-id read has no reachability check at all), but
+/// no longer reachable from any tip -- the bug was that the block branch hardcoded `Sealed`
+/// unconditionally while the bare-Patch branch correctly asked the pending set, so the two forms
+/// of the identical patch disagreed. Both must now read `Pending`.
+#[test]
+fn show_state_agrees_between_a_patch_and_its_block_after_received_remove() {
+    let root = unique_temp_dir("show-state-one-patch-one-state");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+    let blob_id = write_blob(&layout, BlobKind::Text, b"one state\n".to_vec());
+    let patch_id = object_store
+        .write_object(&signed_create_file_patch_for_test(
+            "a.txt",
+            NodeId::from_bytes([0xA3; 32]),
+            blob_id,
+        ))
+        .unwrap();
+    let root_block_id = object_store
+        .write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))
+        .unwrap();
+    let block_id = object_store
+        .write_object(&signed_block(
+            BlockKind::Normal,
+            vec![root_block_id],
+            vec![patch_id],
+            None,
+        ))
+        .unwrap();
+    drop(object_store);
+    land_as_received_pointer_for_test(&layout, block_id);
+
+    // Before removal: both ids agree, sealed (received counts as sealed -- the task 1 fixture
+    // above establishes this).
+    let from_patch_before = show(&layout, patch_id).unwrap();
+    let [patch_before] = from_patch_before.as_slice() else {
+        panic!("expected exactly one patch, got {from_patch_before:?}");
+    };
+    assert_eq!(patch_before.state, PatchState::Sealed);
+    let from_block_before = show(&layout, block_id).unwrap();
+    let [block_patch_before] = from_block_before.as_slice() else {
+        panic!("expected exactly one patch, got {from_block_before:?}");
+    };
+    assert_eq!(block_patch_before.state, PatchState::Sealed);
+
+    crate::remove_received_pointer(&layout, "remotes/origin/heads/main").unwrap();
+
+    // After removal: the measured bug (review v1, R2) had `show <block>` still say `sealed` while
+    // `show <patch>` correctly flipped to `pending`. Both must now agree.
+    let from_patch_after = show(&layout, patch_id).unwrap();
+    let [patch_after] = from_patch_after.as_slice() else {
+        panic!("expected exactly one patch, got {from_patch_after:?}");
+    };
+    assert_eq!(
+        patch_after.state,
+        PatchState::Pending,
+        "show <patch> after received remove must read pending"
+    );
+    let from_block_after = show(&layout, block_id).unwrap();
+    let [block_patch_after] = from_block_after.as_slice() else {
+        panic!("expected exactly one patch, got {from_block_after:?}");
+    };
+    assert_eq!(
+        block_patch_after.state,
+        PatchState::Pending,
+        "show <block>, the identical patch, must agree with show <patch> -- not stay sealed"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Task 2: a pending patch whose own claim names a single, real, sealed parent block resolves a
 /// real path -- not `unresolved_node_id`.
 #[test]
@@ -2398,6 +2491,233 @@ fn show_leaves_a_pending_patch_unresolved_when_its_claim_names_more_than_one_par
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// The content-addressed id a `RecognitionClaim` payload would get, without writing anything --
+/// used only to decide, up front, which of two candidate claims will sort first by claim id (see
+/// `show_resolves_through_a_sound_claim_skipping_an_invalid_signature_beside_it`'s own fixture
+/// setup). Signatures never affect `object_id()`, so this is the same id the envelope would get
+/// whether or how it is later signed.
+fn unsigned_claim_id_for_test(
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> ObjectId {
+    let payload = RecognitionClaimPayload {
+        block_id,
+        patch_ids,
+        parent_block_ids,
+    };
+    let bytes = payload.to_canonical_bytes().unwrap();
+    ObjectEnvelope::unsigned(ObjectType::RecognitionClaim, 1, bytes).object_id()
+}
+
+/// Write a MAINTAINER-signed `RecognitionClaim` envelope directly -- unlike [`write_claim`]
+/// (deliberately unsigned, since `claims_naming_patch`'s own *payload* scan never checked a
+/// signature before 0.56.0 step 1b2), this one carries a real, verifiable signature, for R4's own
+/// fixtures that need a claim whose signature outcome is genuinely `Sound`.
+fn write_signed_claim(
+    layout: &RepositoryLayout,
+    signer: &Ed25519MaintainerSigner,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> ObjectId {
+    let payload = RecognitionClaimPayload {
+        block_id,
+        patch_ids,
+        parent_block_ids,
+    };
+    let bytes = payload.to_canonical_bytes().unwrap();
+    let mut envelope = ObjectEnvelope::unsigned(ObjectType::RecognitionClaim, 1, bytes);
+    let id = envelope.object_id();
+    envelope
+        .add_signature(
+            crate::maintainer_signing::maintainer_signature(
+                signer,
+                ObjectType::RecognitionClaim,
+                id,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut object_store = ObjectWriteSession::open(layout).unwrap();
+    object_store.write_object(&envelope).unwrap()
+}
+
+/// 0.56.0 step 1b2, R4: a claim whose own MAINTAINER signature is invalid must be skipped before
+/// any fold is attempted, and must never be allowed to choose the path `show` resolves. Here it
+/// sits beside a second, sound claim naming the same patch and the same real, sealed parent: the
+/// path must resolve from the sound claim, and `resolved_through_claim_id` must name it, never
+/// the invalid one.
+#[test]
+fn show_resolves_through_a_sound_claim_skipping_an_invalid_signature_beside_it() {
+    let root = unique_temp_dir("show-pending-invalid-signature-skipped");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xA4; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    let anchor_block_id = current_block_id(&layout);
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+
+    // `claims_naming_patch` tries claims in claim-id order (content-addressed, so neither
+    // candidate block id below controls it directly) -- for this control to be a *real* one (a
+    // control must be able to fail, not pass by claim-id luck regardless of which claim the
+    // signature skip actually removes), the invalid claim's own id must sort *before* the sound
+    // one's, so that without R4's signature skip, `show` would try -- and resolve through -- the
+    // invalid claim first. Computed by comparing both candidates' own unsigned envelope ids
+    // (signatures never affect `object_id()`) and assigning the lower-sorting one to the invalid
+    // claim, whichever of the two candidate block ids that turns out to be.
+    let candidate_a = ObjectId::from_bytes([0xA5; 32]);
+    let candidate_b = ObjectId::from_bytes([0xA6; 32]);
+    let candidate_a_claim_id =
+        unsigned_claim_id_for_test(candidate_a, vec![pending_id], vec![anchor_block_id]);
+    let candidate_b_claim_id =
+        unsigned_claim_id_for_test(candidate_b, vec![pending_id], vec![anchor_block_id]);
+    let (invalid_prospective_block_id, sound_prospective_block_id) =
+        if candidate_a_claim_id < candidate_b_claim_id {
+            (candidate_a, candidate_b)
+        } else {
+            (candidate_b, candidate_a)
+        };
+
+    // The invalid claim: no MAINTAINER signature at all, and (by construction above) the lower
+    // claim id of the two, so it is the one `show` would try first.
+    let invalid_claim_id = write_claim_with_no_signature(
+        &layout,
+        invalid_prospective_block_id,
+        vec![pending_id],
+        vec![anchor_block_id],
+    );
+
+    // The sound claim: a real MAINTAINER signature under the trusted (adopted) key, naming the
+    // same real, sealed parent.
+    let sound_claim_id = write_signed_claim(
+        &layout,
+        &maintainer_signer(),
+        sound_prospective_block_id,
+        vec![pending_id],
+        vec![anchor_block_id],
+    );
+    assert_ne!(
+        invalid_claim_id, sound_claim_id,
+        "fixture sanity: distinct claims"
+    );
+    assert!(
+        invalid_claim_id < sound_claim_id,
+        "fixture sanity: the invalid claim must sort first, or this control cannot fail"
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    assert_eq!(
+        patch.resolved_through_claim_id,
+        Some(sound_claim_id),
+        "the path must resolve from the sound claim, never the invalid one"
+    );
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    assert_eq!(
+        operation.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "the sound claim's real, sealed parent must resolve this pending patch's own path: {:?}",
+        operation.paths
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.56.0 step 1b2, R4: a claim whose own declared parent is sealed, but whose own patch does not
+/// actually fold against that parent's state (an `EditText`-shaped failure, built here with
+/// `ChangePerm` on a node id that was never created at all -- the identical "could not be
+/// applied" failure class), must not make `show` itself refuse. `show` still exits `Ok`, and the
+/// reason names the fold failure specifically, not a generic placeholder.
+#[test]
+fn show_does_not_refuse_when_a_claims_own_patch_fails_to_fold() {
+    let root = unique_temp_dir("show-pending-claim-fold-failure");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    // A real, sealed anchor block -- but its own live nodes never include the node id the
+    // pending patch below names, so folding that patch onto this anchor's state fails outright,
+    // not merely "unresolved."
+    create_raw_file(
+        &layout,
+        NodeId::from_bytes([0xB3; 32]),
+        "unrelated.txt",
+        BlobKind::Text,
+        b"unrelated\n",
+    );
+    let anchor_block_id = current_block_id(&layout);
+
+    let absent_node_id = NodeId::from_bytes([0xB4; 32]);
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id: absent_node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let prospective_block_id = ObjectId::from_bytes([0xB5; 32]);
+    write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![anchor_block_id],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    assert_eq!(
+        patch.resolved_through_claim_id, None,
+        "a fold failure must not be mistaken for a resolution"
+    );
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("does not fold against its own declared parent"),
+                "reason must name the fold failure specifically, not a generic placeholder: \
+                 {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// Task 1: a bare sealed patch id shown directly still reports its node-addressed operations
 /// unresolved (unchanged behaviour, RFC 142 §1), but now names why.
 #[test]
@@ -2446,8 +2766,9 @@ fn show_names_a_reason_for_a_bare_sealed_patchs_unresolved_path() {
             ..
         } => {
             assert!(
-                reason.contains("RFC 142"),
-                "reason must name the deliberate scope, not a guess: {reason}"
+                reason.contains("does not search for the block that sealed"),
+                "reason must name the deliberate scope, not a guess, and in plain user terms \
+                 (no RFC number or internal rule name): {reason}"
             );
         }
         other => panic!("expected Unresolved with a reason, got {other:?}"),

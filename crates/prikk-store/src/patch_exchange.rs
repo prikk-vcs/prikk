@@ -45,17 +45,37 @@ pub use artifact::{
 pub use crate::patch_set_digest::accepted_but_unsealed_patch_ids;
 
 /// One recognition claim naming a pending patch (planeter letter 2026-10-21 §2; 0.56.0 step 1
-/// part 1a): the claim's own id (content-addressed, not a payload field), the single block it
-/// names (`RecognitionClaimPayload::block_id` -- **not** `parent_block_ids`, which mirrors that
-/// named block's own parents and is used only for [`crate::order_claims_for_sealing`]'s batch
-/// ordering; it is plural where the request's own "the parent block id the claim names" is
-/// singular), and that claim's own MAINTAINER signature outcome.
+/// part 1a; field names corrected in step 1b2's R1): the claim's own id (content-addressed, not a
+/// payload field), the block it recognizes, the block(s) it declares as that block's own parents,
+/// and that claim's own MAINTAINER signature outcome.
+///
+/// **`target_block_id` and `parent_block_ids` name the same two blocks `extract-report-v1`
+/// (shipped 0.54.0) already names, under the same two names.** `target_block_id` is the claim's
+/// own `RecognitionClaimPayload::block_id` -- the block it *recognizes*, the same meaning and the
+/// same field name `extract-report-v1`'s own `target_block_id` carries. `parent_block_ids` is the
+/// claim's own `RecognitionClaimPayload::parent_block_ids` -- the block(s) its patches are sealed
+/// *onto*, the same meaning `extract-report-v1`'s own `claim_parent_block_id` carries, but as a
+/// **list**, not a single id: `extract --claim` refuses a claim naming more than one parent
+/// (there is no `mainline_parent_id` field to pick a mainline from), but a listing has no such
+/// need to pick one -- it reports a merge-shaped claim rather than refusing one, so `[]` for a
+/// root claim, one entry for an ordinary claim, two for a claim about a merge. (Step 1a named this
+/// second field `parent_block_id`, singular, for the *first* block above -- the wrong block,
+/// confusingly reusing a name `extract-report-v1` already used for the other one. Corrected here,
+/// before any release; `order_claims_for_sealing`'s own batch ordering is unaffected, since it
+/// reads `RecognitionClaimPayload::parent_block_ids` directly, never this summarized type.)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingPatchClaim {
     /// The claim's own content-addressed id.
     pub claim_id: ObjectId,
-    /// The block this claim says these patches are sealed into (`RecognitionClaimPayload::block_id`).
-    pub parent_block_id: ObjectId,
+    /// The block this claim recognizes (`RecognitionClaimPayload::block_id`) -- the same field
+    /// and meaning as `extract-report-v1`'s own `target_block_id`.
+    pub target_block_id: ObjectId,
+    /// The block(s) this claim declares as `target_block_id`'s own parents
+    /// (`RecognitionClaimPayload::parent_block_ids`) -- the same meaning as `extract-report-v1`'s
+    /// own `claim_parent_block_id`, but as a list: `[]` for a root claim, one entry ordinarily,
+    /// two for a claim about a merge. A listing reports a merge-shaped claim; it does not refuse
+    /// one the way `extract --claim` does.
+    pub parent_block_ids: Vec<ObjectId>,
     /// This claim's own MAINTAINER signature outcome -- reported, never gating. See
     /// [`PendingClaimSignatureOutcome`]'s own doc for why this is not plain
     /// [`ClaimSignatureVerification`].
@@ -209,7 +229,8 @@ pub fn pending_patches_with_claims(layout: &RepositoryLayout) -> Result<Vec<Pend
                     .or_default()
                     .push(PendingPatchClaim {
                         claim_id,
-                        parent_block_id: payload.block_id,
+                        target_block_id: payload.block_id,
+                        parent_block_ids: payload.parent_block_ids.clone(),
                         signature: signature.clone(),
                     });
             }

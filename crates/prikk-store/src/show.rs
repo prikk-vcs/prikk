@@ -22,6 +22,8 @@
 //! sealed patch id**, with no block or queue to resolve against, reports every node-addressed
 //! operation unresolved.
 
+use std::collections::BTreeSet;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
@@ -241,6 +243,13 @@ pub struct ShowPatch {
     pub queued: bool,
     /// This patch's own classification (0.56.0 step 1b) -- see [`PatchState`]'s own doc.
     pub state: PatchState,
+    /// The recognition claim that resolved this pending patch's own node-addressed path, when one
+    /// did (0.56.0 step 1b2, R4). `Some(claim_id)` only for a pending patch whose path was
+    /// actually resolved through that claim; `None` for every other case -- queued, sealed (via a
+    /// block or via a bare id), and every *unresolved* pending-patch case, including one skipped
+    /// for an invalid signature or a fold failure. A tool can look up that claim id's own
+    /// signature outcome in `sync pending`'s own `sync-pending-v1` listing.
+    pub resolved_through_claim_id: Option<ObjectId>,
 }
 
 /// `prikk show <block-id|patch-id>` (RFC 142): read the target, decode its patch(es), resolve
@@ -262,6 +271,14 @@ pub struct ShowPatch {
 /// sealed -- this is deliberate, not a gap the queued case's fix also closes.
 pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     let object_store = ObjectReadSnapshot::open(layout)?;
+    // 0.56.0 step 1b2, R2: computed once per command, shared by every branch below, rather than
+    // once per patch or only in the bare-Patch branch -- `state` is a property of the patch in
+    // this repository, the same whichever id names it. A `BTreeSet` (the same idiom
+    // `patch_exchange.rs`'s own `pending_patches_with_claims` already uses) so repeated membership
+    // checks in the block loop below are not `O(n)` each.
+    let pending_set: BTreeSet<ObjectId> = patch_ids_pending_excluding_received(layout)?
+        .into_iter()
+        .collect();
     let Some(envelope) = object_store.read_object(id)? else {
         return show_queued_patch(layout, &object_store, id);
     };
@@ -287,23 +304,44 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     &mut text_cache,
                     sealed_lineage,
                 )?;
+                // 0.56.0 step 1b2, R2: this patch may be reachable from no tip this repository
+                // holds (its own or received) even though it is sealed into *this* block -- a
+                // `received remove` on the only pointer that ever reached this block leaves the
+                // block itself still readable by its own id (RFC 142 §1's bare-id read has no
+                // reachability check at all), but no longer reachable from any tip. The same
+                // membership the bare-Patch branch already used decides this, not a hardcoded
+                // `Sealed`.
+                // 0.56.0 step 1b2, R2: this patch may be reachable from no tip this repository
+                // holds (its own or received) even though it is sealed into *this* block -- a
+                // `received remove` on the only pointer that ever reached this block leaves the
+                // block itself still readable by its own id (RFC 142 §1's bare-id read has no
+                // reachability check at all), but no longer reachable from any tip. The same
+                // membership the bare-Patch branch already used decides this, not a hardcoded
+                // `Sealed`.
+                let patch_state = if pending_set.contains(patch_id) {
+                    PatchState::Pending
+                } else {
+                    PatchState::Sealed
+                };
                 patches.push(show_patch(
                     &object_store,
                     *patch_id,
                     Some(&state),
                     None,
-                    PatchState::Sealed,
+                    patch_state,
+                    None,
                 )?);
             }
             Ok(patches)
         }
         ObjectType::Patch => {
-            let pending_ids = patch_ids_pending_excluding_received(layout)?;
-            if pending_ids.contains(&id) {
-                let (lifecycle, reason) =
+            if pending_set.contains(&id) {
+                let (lifecycle, reason, resolved_through_claim_id) =
                     match resolve_pending_patch_lifecycle(layout, &object_store, id)? {
-                        PendingPathResolution::Resolved(state) => (Some(state), None),
-                        PendingPathResolution::Unresolved(reason) => (None, Some(reason)),
+                        PendingPathResolution::Resolved(claim_id, state) => {
+                            (Some(state), None, Some(claim_id))
+                        }
+                        PendingPathResolution::Unresolved(reason) => (None, Some(reason), None),
                     };
                 Ok(vec![show_patch(
                     &object_store,
@@ -311,6 +349,7 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     lifecycle.as_ref(),
                     reason.as_deref(),
                     PatchState::Pending,
+                    resolved_through_claim_id,
                 )?])
             } else {
                 Ok(vec![show_patch(
@@ -318,12 +357,11 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     id,
                     None,
                     Some(
-                        "a sealed patch shown directly by its own id is not resolved against \
-                         its containing block (RFC 142 §1 scopes `show` to a patch's own state, \
-                         never a search for what else happens to be sealed) -- use `prikk log` \
-                         or `prikk tree` to find that block",
+                        "`show` does not search for the block that sealed a patch shown by its \
+                         own id; `prikk log` or `prikk tree` finds it",
                     ),
                     PatchState::Sealed,
+                    None,
                 )?])
             }
         }
@@ -367,12 +405,27 @@ fn block_starting_state(
     }
 }
 
+/// One patch's own render context, besides its envelope/content -- bundled into one small `Copy`
+/// value (0.56.0 step 1b2) so [`patch_from_envelope`] stays under clippy's `too_many_arguments`
+/// threshold once `resolved_through_claim_id` joined `lifecycle`/`unresolved_reason`/`queued`/
+/// `state`, the same reason `lifecycle_cache/replay.rs`'s own `MaterializeFallbackContext` bundles
+/// `layout`/`sealed_lineage` there.
+#[derive(Clone, Copy)]
+struct PatchRenderContext<'a> {
+    lifecycle: Option<&'a NodeLifecycleState>,
+    unresolved_reason: Option<&'a str>,
+    queued: bool,
+    state: PatchState,
+    resolved_through_claim_id: Option<ObjectId>,
+}
+
 fn show_patch(
     object_store: &impl ObjectReader,
     patch_id: ObjectId,
     lifecycle: Option<&NodeLifecycleState>,
     unresolved_reason: Option<&str>,
     state: PatchState,
+    resolved_through_claim_id: Option<ObjectId>,
 ) -> Result<ShowPatch> {
     let envelope = object_store
         .read_typed(patch_id, ObjectType::Patch)?
@@ -381,10 +434,13 @@ fn show_patch(
         object_store,
         &envelope,
         patch_id,
-        lifecycle,
-        unresolved_reason,
-        false,
-        state,
+        PatchRenderContext {
+            lifecycle,
+            unresolved_reason,
+            queued: false,
+            state,
+            resolved_through_claim_id,
+        },
     )
 }
 
@@ -424,10 +480,13 @@ fn show_queued_patch(
         object_store,
         &record.envelope,
         id,
-        Some(&lifecycle),
-        None,
-        true,
-        PatchState::Queued,
+        PatchRenderContext {
+            lifecycle: Some(&lifecycle),
+            unresolved_reason: None,
+            queued: true,
+            state: PatchState::Queued,
+            resolved_through_claim_id: None,
+        },
     )?])
 }
 
@@ -472,10 +531,7 @@ fn patch_from_envelope(
     object_store: &impl ObjectReader,
     envelope: &ObjectEnvelope,
     patch_id: ObjectId,
-    lifecycle: Option<&NodeLifecycleState>,
-    unresolved_reason: Option<&str>,
-    queued: bool,
-    state: PatchState,
+    context: PatchRenderContext<'_>,
 ) -> Result<ShowPatch> {
     let operations = decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?;
     let operations = operations
@@ -485,16 +541,17 @@ fn patch_from_envelope(
                 object_store,
                 envelope,
                 operation,
-                lifecycle,
-                unresolved_reason,
+                context.lifecycle,
+                context.unresolved_reason,
             )
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(ShowPatch {
         patch_id,
         operations,
-        queued,
-        state,
+        queued: context.queued,
+        state: context.state,
+        resolved_through_claim_id: context.resolved_through_claim_id,
     })
 }
 
@@ -669,37 +726,84 @@ fn show_blob_content(
     }
 }
 
-/// A pending patch's own path resolution, through the claim(s) naming it (0.56.0 step 1b).
+/// A pending patch's own path resolution, through the claim(s) naming it (0.56.0 step 1b; step
+/// 1b2, R4: the resolving claim's own id is now carried too).
 enum PendingPathResolution {
-    /// A usable claim resolved: the folded state to resolve this patch's own node-addressed
-    /// operations against.
-    Resolved(NodeLifecycleState),
-    /// No claim resolved -- the reason named, for the most informative claim tried (or the one
-    /// and only reason, when every claim failed the same way).
+    /// A usable claim resolved: its own id, and the folded state to resolve this patch's own
+    /// node-addressed operations against.
+    Resolved(ObjectId, NodeLifecycleState),
+    /// No claim resolved -- the most specific reason among every claim tried (0.56.0 step 1b2,
+    /// R4's own priority order: see [`UnresolvedReasonPriority`]), or the one and only reason,
+    /// when every claim failed the same way.
     Unresolved(String),
 }
 
+/// How specific an unresolved reason is, among every claim [`resolve_pending_patch_lifecycle`]
+/// tried for one pending patch (0.56.0 step 1b2, R4, ruled explicitly): when several claims fail
+/// for different reasons, the *most specific* one is reported, not simply whichever was tried
+/// last. Declaration order is priority order -- `derive(Ord)` ranks an earlier variant lower, and
+/// [`record_if_more_specific`] keeps the lowest-ranked (most specific) reason seen, so this order
+/// *is* the ranking: an invalid signature (the claim itself cannot be trusted at all) outranks a
+/// fold failure (the claim is trusted enough to try, but its own patches do not fit its own
+/// declared parent), which outranks a chain (the claim is internally sound, only its parent is not
+/// yet realized), which outranks a merge (the claim is internally sound, there is simply no
+/// mainline to pick). Ties (two claims failing for the identical reason) are broken by claim-id
+/// order, since claims are already tried in that order and a reason already recorded at a given
+/// rank is never displaced by another at the same rank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum UnresolvedReasonPriority {
+    /// The claim's own MAINTAINER signature is invalid -- skipped before any fold is attempted.
+    InvalidSignature,
+    /// The claim's own patches do not fold against its own declared parent.
+    FoldFailure,
+    /// The claim's one declared parent is itself only pending -- an unrealized chain.
+    Chain,
+    /// The claim declares more than one parent, with no mainline to choose.
+    Merge,
+}
+
+/// Record `reason` at `priority` in `best`, keeping whichever of the two is more specific (the
+/// lower-ranked [`UnresolvedReasonPriority`]) -- see that type's own doc for why declaration order
+/// is priority order, and why this never displaces a reason already recorded at the same rank
+/// (claim-id order is preserved that way, since claims are visited in that order).
+fn record_if_more_specific(
+    best: &mut Option<(UnresolvedReasonPriority, String)>,
+    priority: UnresolvedReasonPriority,
+    reason: String,
+) {
+    let replace = match best {
+        None => true,
+        Some((existing_priority, _)) => priority < *existing_priority,
+    };
+    if replace {
+        *best = Some((priority, reason));
+    }
+}
+
 /// Resolve a **pending** patch's own node-addressed operations against the claim that names it
-/// (0.56.0 step 1 part 1b; planeter letter 2026-10-21 §2's own "parent block id the claim names").
+/// (0.56.0 step 1 part 1b; planeter letter 2026-10-21 §2's own "parent block id the claim names";
+/// step 1b2, R4: a reader must not refuse because of a claim, and must say which claim resolved
+/// the path).
 ///
 /// **"The claim's parent block" is `RecognitionClaimPayload::parent_block_ids`, not `block_id`.**
-/// `block_id` is the block the claim says these patches *would* be sealed into -- `sync-pending-v1`
-/// already calls that field `parent_block_id` for an unrelated, legitimate reason (labeling the
-/// prospective block). It cannot be what this task means: for a `Consistent` claim (the honest,
-/// unmodified kind), `block_id`'s own `patch_ids` equal the claim's own `patch_ids` verbatim
+/// `block_id` is the block the claim says these patches *would* be sealed into -- the block it
+/// recognizes (`target_block_id`, in `extract-report-v1`'s and `sync-pending-v1`'s own naming). It
+/// cannot be what this task means: for a `Consistent` claim (the honest, unmodified kind),
+/// `block_id`'s own `patch_ids` equal the claim's own `patch_ids` verbatim
 /// (`check_recognition_claim_consistency`), so the moment `block_id` is itself reachable from any
 /// tip, those same patch ids are already inside the sealed closure
 /// `patch_ids_pending_excluding_received` excludes -- the patch would already read `sealed`, never
 /// `pending`. "The claim's parent block, sealed or received" has to mean the *pre-existing*
 /// historical anchor the prospective block would attach onto: `parent_block_ids`, the named
-/// block's own parents. **Flagged here for the architect's own explicit confirmation**, the same
-/// way `sync-pending-v1`'s own `parent_block_id = block_id` reading was flagged in step 1a --
-/// grounded, not in doubt, but worth surfacing since it reads differently from a casual reading of
-/// this task's own wording.
+/// block's own parents.
 ///
-/// Tries every held claim naming this patch (0.56.0 step 1a already proved more than one can),
-/// in claim id order (`claims_naming_patch`'s own order -- the same convention `claims[]` uses
+/// Tries every held claim naming this patch (0.56.0 step 1a already proved more than one can), in
+/// claim id order (`claims_naming_patch`'s own order -- the same convention `claims[]` uses
 /// elsewhere), and uses the first that resolves:
+/// - **An invalid signature skips the claim before any fold is attempted** (R4): a claim whose own
+///   MAINTAINER signature `claims_naming_patch` reports invalid (the same case `sync-pending-v1`
+///   reports as `"invalid"`, "the one value a tool must treat as an alarm") must not be allowed to
+///   choose the path `show` prints.
 /// - `parent_block_ids` empty (a root claim): folds from an empty [`NodeLifecycleState`], the same
 ///   starting point [`block_starting_state`]'s own `Root` arm already uses.
 /// - `parent_block_ids` exactly one, and that one block id is itself sealed or received (checked
@@ -712,12 +816,19 @@ enum PendingPathResolution {
 ///   unrealized chain -- skipped, named as the reason if no other claim does better.
 /// - `parent_block_ids` with more than one entry (a merge-shaped claim): no `mainline_parent_id`
 ///   exists on `RecognitionClaimPayload` to pick one from (unlike `BlockPayload`) -- skipped, named
-///   as its own distinct reason. Out of this sitting's scope, same as the chain case (both are
-///   step 2B's `extract` chain work).
+///   as its own distinct reason.
+/// - **A fold failure becomes that claim's own reason, not a propagated `Err`** (R4): the fold
+///   itself is the same [`apply_one_patch_with_materialize_fallback`] driver `show()`'s own block
+///   loop already uses, over the claim's own `patch_ids` (its stated order, not a real block's)
+///   instead of `block.patch_ids`, stopping once the target patch has been applied -- but an
+///   untrusted claim's own declared parent not actually fitting its patches (an `EditText` naming
+///   a node absent there, for example) must not make the whole `show <patch>` call refuse; the
+///   next claim (if any) is tried instead, the same "readers report, gates refuse" rule 1a's R1
+///   already established for `sync pending`'s own signature handling.
 ///
-/// Either way, the fold itself is the same [`apply_one_patch_with_materialize_fallback`] driver
-/// `show()`'s own block loop already uses, over the claim's own `patch_ids` (its stated order, not
-/// a real block's) instead of `block.patch_ids`, stopping once the target patch has been applied.
+/// **When several claims fail, the most specific reason is reported** (R4, ruled explicitly), not
+/// simply whichever was tried last -- see [`UnresolvedReasonPriority`]'s own doc for the order and
+/// [`record_if_more_specific`] for how it is kept.
 fn resolve_pending_patch_lifecycle(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
@@ -730,26 +841,45 @@ fn resolve_pending_patch_lifecycle(
         ));
     }
 
-    let mut last_reason = String::new();
-    for (_, claim) in &claims {
-        let anchor = match claim.parent_block_ids.as_slice() {
+    let mut best_reason: Option<(UnresolvedReasonPriority, String)> = None;
+    for claim in &claims {
+        if let Some(reason) = &claim.invalid_signature_reason {
+            record_if_more_specific(
+                &mut best_reason,
+                UnresolvedReasonPriority::InvalidSignature,
+                format!(
+                    "the claim naming this patch has an invalid MAINTAINER signature, so it is \
+                     skipped rather than used to resolve a path: {reason}"
+                ),
+            );
+            continue;
+        }
+        let anchor = match claim.payload.parent_block_ids.as_slice() {
             [] => None,
             [parent] => {
                 if block_is_sealed_or_received(layout, object_store, *parent)? {
                     Some(*parent)
                 } else {
-                    last_reason = format!(
-                        "the claim naming this patch names parent block {parent}, which is not \
-                         itself sealed or received yet -- it is still part of an unrealized \
-                         chain of claims"
+                    record_if_more_specific(
+                        &mut best_reason,
+                        UnresolvedReasonPriority::Chain,
+                        format!(
+                            "the claim naming this patch names parent block {parent}, which is \
+                             not itself sealed or received yet -- it is still part of an \
+                             unrealized chain of claims"
+                        ),
                     );
                     continue;
                 }
             }
             _ => {
-                last_reason = "the claim naming this patch names more than one parent block, \
-                                with no mainline to choose"
-                    .to_string();
+                record_if_more_specific(
+                    &mut best_reason,
+                    UnresolvedReasonPriority::Merge,
+                    "the claim naming this patch names more than one parent block, with no \
+                     mainline to choose"
+                        .to_string(),
+                );
                 continue;
             }
         };
@@ -762,21 +892,45 @@ fn resolve_pending_patch_lifecycle(
             None => None,
         };
         let mut text_cache = TextCache::new();
-        for claim_patch_id in &claim.patch_ids {
-            apply_one_patch_with_materialize_fallback(
+        let mut fold_failed = false;
+        for claim_patch_id in &claim.payload.patch_ids {
+            if let Err(err) = apply_one_patch_with_materialize_fallback(
                 Some(layout),
                 object_store,
                 *claim_patch_id,
                 &mut state,
                 &mut text_cache,
                 sealed_lineage,
-            )?;
+            ) {
+                record_if_more_specific(
+                    &mut best_reason,
+                    UnresolvedReasonPriority::FoldFailure,
+                    format!(
+                        "the claim naming this patch does not fold against its own declared \
+                         parent: {err}"
+                    ),
+                );
+                fold_failed = true;
+                break;
+            }
             if *claim_patch_id == patch_id {
-                return Ok(PendingPathResolution::Resolved(state));
+                return Ok(PendingPathResolution::Resolved(claim.claim_id, state));
             }
         }
+        debug_assert!(
+            fold_failed,
+            "claims_naming_patch only returns a claim whose own patch_ids contains patch_id; \
+             the loop above must either resolve or record a fold failure before falling through"
+        );
     }
-    Ok(PendingPathResolution::Unresolved(last_reason))
+    let (_, reason) = best_reason.ok_or_else(|| {
+        PrikkError::Integrity(
+            "resolve_pending_patch_lifecycle tried every claim naming this patch without \
+             reaching a resolution or recording a reason -- internal inconsistency"
+                .to_string(),
+        )
+    })?;
+    Ok(PendingPathResolution::Unresolved(reason))
 }
 
 /// Resolve one ref/received pointer's own `RefState` to its tip block id -- the identical

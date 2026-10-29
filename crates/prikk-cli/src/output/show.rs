@@ -151,6 +151,12 @@ pub(crate) fn print_show(patches: &[ShowPatch]) {
         if patch.queued {
             println!("queued: yes");
         }
+        // 0.56.0 step 1b2, R4: printed only when relevant -- a pending patch whose path actually
+        // resolved through a claim -- the same conditional convention `queued: yes` above already
+        // uses, never printed otherwise.
+        if let Some(claim_id) = patch.resolved_through_claim_id {
+            println!("resolved through claim: {claim_id}");
+        }
         for (index, operation) in patch.operations.iter().enumerate() {
             print_operation(index, operation);
         }
@@ -297,6 +303,14 @@ pub(crate) fn print_show_json(patches: &[ShowPatch]) {
         // 0.56.0 step 1b: additive within `show-report-v1`.
         json.push_str(", \"state\": ");
         json.push_str(&escape_json_string(state_label(patch.state)));
+        // 0.56.0 step 1b2, R4: additive within `show-report-v1`. `null` unless a pending patch's
+        // own path actually resolved through a claim -- see `push_path`'s own `Some`/`None` idiom
+        // for `"reason"`, reused here the same way.
+        json.push_str(", \"resolved_through_claim_id\": ");
+        match patch.resolved_through_claim_id {
+            Some(claim_id) => json.push_str(&escape_json_string(&claim_id.to_string())),
+            None => json.push_str("null"),
+        }
         json.push_str(", \"operations\": [");
         for (op_index, operation) in patch.operations.iter().enumerate() {
             if op_index > 0 {
