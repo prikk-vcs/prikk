@@ -49,10 +49,9 @@ use prikk_store::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
     DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
     ReceivedTagResolution, SealFromAcceptedOutcome, SyncArtifactOutcome, TagSignatureVerification,
-    accept_exchange_artifact, accepted_but_unsealed_patch_ids, adopt_tag, build_have_list,
-    build_sync_artifact, build_sync_summary, compare_sync_summary, decode_sync_summary,
-    list_received_tags, order_claims_for_sealing, pending_patches_with_claims,
-    seal_from_accepted_claim,
+    accept_exchange_artifact, adopt_tag, build_have_list, build_sync_artifact, build_sync_summary,
+    compare_sync_summary, decode_sync_summary, list_received_tags, order_claims_for_sealing,
+    patch_ids_pending_excluding_received, pending_patches_with_claims, seal_from_accepted_claim,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -299,11 +298,10 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     Ok(())
 }
 
-/// `prikk sync pending` -- pending here means accepted into this repository's own queue
-/// (`sync accept`) and not yet sealed; it is not a general "every patch this repository has not
-/// sealed" listing, so a patch this repository only holds through `archive import`'s received
-/// history can still appear here, for a reason named at the `--format json` doc in `commands.md`
-/// (owner ruling F's own text does not hold for that case -- see this round's report).
+/// `prikk sync pending` -- pending here means accepted into this repository (`sync accept`) and
+/// not sealed by any history this repository holds, its own or received (0.56.0 step 1a2, owner
+/// ruling 2026-10-29, "Exclude received history" -- see `patch_ids_pending_excluding_received`'s
+/// own doc for why this is not the same query `seal_from_accepted_claim` uses).
 fn run_pending(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let format_json = parse_pending_args(args)?;
     let layout = crate::open_repository(root)?;
@@ -312,7 +310,7 @@ fn run_pending(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
         crate::output::print_sync_pending_json(&entries);
         return Ok(());
     }
-    let patch_ids = accepted_but_unsealed_patch_ids(&layout).map_err(|err| err.to_string())?;
+    let patch_ids = patch_ids_pending_excluding_received(&layout).map_err(|err| err.to_string())?;
     println!("pending (accepted, unsealed) patches: {}", patch_ids.len());
     for patch_id in &patch_ids {
         println!("  {patch_id}");

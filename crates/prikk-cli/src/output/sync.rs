@@ -1,7 +1,7 @@
 //! `prikk sync pending --format json` (0.56.0 step 1 part 1a; planeter letter 2026-10-21 §2):
 //! `sync-pending-v1`, the one JSON document this module prints.
 
-use prikk_store::{ClaimSignatureVerification, PendingPatchEntry};
+use prikk_store::{PendingClaimSignatureOutcome, PendingPatchEntry};
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::println;
@@ -48,14 +48,29 @@ pub(crate) fn print_sync_pending_json(entries: &[PendingPatchEntry]) {
     println!("{json}");
 }
 
-fn push_signature(json: &mut String, signature: &ClaimSignatureVerification) {
-    let (outcome, key_id) = match signature {
-        ClaimSignatureVerification::Sound { key_id } => ("sound", key_id),
-        ClaimSignatureVerification::Unverifiable { key_id } => ("unverifiable", key_id),
-    };
+fn push_signature(json: &mut String, signature: &PendingClaimSignatureOutcome) {
     json.push_str("{\"outcome\": ");
-    json.push_str(&escape_json_string(outcome));
-    json.push_str(", \"key_id\": ");
-    json.push_str(&escape_json_string(key_id));
+    match signature {
+        PendingClaimSignatureOutcome::Sound { key_id } => {
+            json.push_str(&escape_json_string("sound"));
+            json.push_str(", \"key_id\": ");
+            json.push_str(&escape_json_string(key_id));
+        }
+        PendingClaimSignatureOutcome::Unverifiable { key_id } => {
+            json.push_str(&escape_json_string("unverifiable"));
+            json.push_str(", \"key_id\": ");
+            json.push_str(&escape_json_string(key_id));
+        }
+        PendingClaimSignatureOutcome::Invalid { key_id, reason } => {
+            json.push_str(&escape_json_string("invalid"));
+            json.push_str(", \"key_id\": ");
+            match key_id {
+                Some(key_id) => json.push_str(&escape_json_string(key_id)),
+                None => json.push_str("null"),
+            }
+            json.push_str(", \"reason\": ");
+            json.push_str(&escape_json_string(reason));
+        }
+    }
     json.push('}');
 }

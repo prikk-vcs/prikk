@@ -18,13 +18,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload};
+use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload, SignerRole};
 
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_set_digest::patch_ids_reachable_from_block;
+use crate::received::list_received_pointers;
 use crate::recognition_claim::verify_claim_signature;
 use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::trust::load_maintainer_trust_policy_or_empty;
@@ -73,24 +74,81 @@ pub fn accepted_but_unsealed_patch_ids(layout: &RepositoryLayout) -> Result<Vec<
     let ref_store = RefStore::new(layout.clone());
     let mut reachable: BTreeSet<ObjectId> = BTreeSet::new();
     for pointer in ref_store.list_ref_pointers()? {
-        let ref_state_envelope = object_store
-            .read_typed(pointer.ref_state_id, ObjectType::RefState)?
-            .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "ref {} names missing RefState {}",
-                    pointer.ref_name, pointer.ref_state_id
-                ))
-            })?;
-        let ref_state_payload = prikk_object::RefStatePayload::decode_canonical(
-            &ref_state_envelope.canonical_payload,
-            ref_state_envelope.schema_version,
-        )?;
-        let (tip_block_id, _tag_envelope) =
-            resolve_ref_tip_block(&object_store, &ref_state_payload)?;
-        reachable.extend(patch_ids_reachable_from_block(&object_store, tip_block_id)?);
+        reachable.extend(reachable_patch_ids_from_ref_state(
+            &object_store,
+            &pointer.ref_name,
+            pointer.ref_state_id,
+        )?);
     }
 
     Ok(all_patch_ids.difference(&reachable).copied().collect())
+}
+
+/// Resolve one ref pointer's tip block to its own reachable patch ids: `RefState` read -> decode
+/// -> [`resolve_ref_tip_block`] -> [`patch_ids_reachable_from_block`]. Shared by
+/// [`accepted_but_unsealed_patch_ids`]'s own loop over local ref pointers and
+/// [`patch_ids_pending_excluding_received`]'s loop over received pointers -- identical resolution,
+/// differing only in which pointer kind calls it (`pointer_name` is only ever used for the error
+/// message, so a `remotes/...` name reads naturally too).
+fn reachable_patch_ids_from_ref_state(
+    object_store: &ObjectReadSnapshot,
+    pointer_name: &str,
+    ref_state_id: ObjectId,
+) -> Result<Vec<ObjectId>> {
+    let ref_state_envelope = object_store
+        .read_typed(ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "ref {pointer_name} names missing RefState {ref_state_id}"
+            ))
+        })?;
+    let ref_state_payload = prikk_object::RefStatePayload::decode_canonical(
+        &ref_state_envelope.canonical_payload,
+        ref_state_envelope.schema_version,
+    )?;
+    let (tip_block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state_payload)?;
+    patch_ids_reachable_from_block(object_store, tip_block_id)
+}
+
+/// `sync pending`'s own view (0.56.0 step 1a2; owner ruling 2026-10-29, "Exclude received
+/// history"): every patch [`accepted_but_unsealed_patch_ids`] reports, minus every one also
+/// reachable from a **received** pointer's own tip block (`archive import` without a successful
+/// `--adopt`, landing via `land_as_received_pointer` into the received-index -- confirmed in step
+/// 1a's own report, §4). A patch the sender's own history already sealed, even one this repository
+/// has not adopted, is not something an operator still needs to act on.
+///
+/// **Built as its own subtraction, not a change to [`accepted_but_unsealed_patch_ids`] itself.**
+/// That function has a third caller, `seal_from_accepted_claim` (a gate, not a listing), which
+/// keeps its own exact prior behavior -- see this round's own report for why sealing does not get
+/// this exclusion too.
+///
+/// Set algebra: `(A \ X) \ Y = A \ (X ∪ Y)`. `accepted_but_unsealed_patch_ids` already computed
+/// `A \ X`; this adds exactly one further pass, over received pointers (typically few), never a
+/// second scan of the `Patch` container. Filtering an already-sorted `Vec` by exclusion preserves
+/// its order, so the result stays in the same patch-id order the raw query already returns.
+pub fn patch_ids_pending_excluding_received(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
+    let pending = accepted_but_unsealed_patch_ids(layout)?;
+    if pending.is_empty() {
+        return Ok(pending);
+    }
+
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let mut received_reachable: BTreeSet<ObjectId> = BTreeSet::new();
+    for pointer in list_received_pointers(layout)? {
+        received_reachable.extend(reachable_patch_ids_from_ref_state(
+            &object_store,
+            &pointer.ref_name,
+            pointer.ref_state_id,
+        )?);
+    }
+    if received_reachable.is_empty() {
+        return Ok(pending);
+    }
+
+    Ok(pending
+        .into_iter()
+        .filter(|patch_id| !received_reachable.contains(patch_id))
+        .collect())
 }
 
 /// One recognition claim naming a pending patch (planeter letter 2026-10-21 §2; 0.56.0 step 1
@@ -105,9 +163,68 @@ pub struct PendingPatchClaim {
     pub claim_id: ObjectId,
     /// The block this claim says these patches are sealed into (`RecognitionClaimPayload::block_id`).
     pub parent_block_id: ObjectId,
-    /// This claim's own MAINTAINER signature outcome -- reported, never gating (the same treatment
-    /// `AcceptReport::claim_signature_outcomes` already gives it).
-    pub signature: ClaimSignatureVerification,
+    /// This claim's own MAINTAINER signature outcome -- reported, never gating. See
+    /// [`PendingClaimSignatureOutcome`]'s own doc for why this is not plain
+    /// [`ClaimSignatureVerification`].
+    pub signature: PendingClaimSignatureOutcome,
+}
+
+/// `sync pending`'s own reporting of a claim's MAINTAINER signature outcome (0.56.0 step 1a2,
+/// owner ruling "a reader reports a failed signature; it does not refuse the listing"). Carries
+/// [`ClaimSignatureVerification`]'s own two outcomes unchanged, plus a third this reader alone
+/// adds for the one case that type deliberately does not carry -- a signature that fails to
+/// verify against a key this repository has *adopted*, i.e. a detected forgery.
+/// [`ClaimSignatureVerification`] itself keeps exactly its own two variants: every gate
+/// (`accept_exchange_artifact`, `seal_from_accepted_claim`) still refuses on that case via
+/// `verify_claim_signature`'s `Err`, unchanged. This mapping exists only here, in the reader,
+/// because a listing must show the operator *which* claim failed, not hide the whole listing
+/// behind one forged claim's refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingClaimSignatureOutcome {
+    /// Mirrors [`ClaimSignatureVerification::Sound`].
+    Sound {
+        /// The MAINTAINER key id the signature named and verified against.
+        key_id: String,
+    },
+    /// Mirrors [`ClaimSignatureVerification::Unverifiable`].
+    Unverifiable {
+        /// The MAINTAINER key id named, which this repository has not adopted.
+        key_id: String,
+    },
+    /// `verify_claim_signature` returned `Err`: a signature naming an *adopted* key that failed
+    /// to verify (a detected forgery), a MAINTAINER signature whose algorithm is not Ed25519, or
+    /// no MAINTAINER-role signature present at all. `key_id` is the first MAINTAINER-role
+    /// signature's own key id, when the claim's envelope carries one at all -- `None` only for
+    /// the last case, where there is no signature to name a key from. `reason` is the refusal's
+    /// own display text. **The one value a tool consuming this listing must treat as an alarm.**
+    Invalid {
+        /// The first MAINTAINER-role signature's key id, or `None` if the claim carries no
+        /// MAINTAINER-role signature at all.
+        key_id: Option<String>,
+        /// `verify_claim_signature`'s own refusal text.
+        reason: String,
+    },
+}
+
+impl From<ClaimSignatureVerification> for PendingClaimSignatureOutcome {
+    fn from(value: ClaimSignatureVerification) -> Self {
+        match value {
+            ClaimSignatureVerification::Sound { key_id } => Self::Sound { key_id },
+            ClaimSignatureVerification::Unverifiable { key_id } => Self::Unverifiable { key_id },
+        }
+    }
+}
+
+/// The first MAINTAINER-role signature's own key id in `envelope`, if any -- used only to name a
+/// `key_id` for [`PendingClaimSignatureOutcome::Invalid`] when `verify_claim_signature` itself
+/// returns `Err` without a structured key id to reuse. Mirrors the same filter
+/// `verify_claim_signature`'s own first pass over `envelope.signatures` applies.
+fn first_maintainer_key_id(envelope: &prikk_object::ObjectEnvelope) -> Option<String> {
+    envelope
+        .signatures
+        .iter()
+        .find(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| signature.key_id.clone())
 }
 
 /// One pending patch, with every recognition claim (held locally) that names it.
@@ -121,14 +238,16 @@ pub struct PendingPatchEntry {
 }
 
 /// `sync pending`'s own join (0.56.0 step 1 part 1a; planeter letter 2026-10-21 §2): every
-/// accepted-but-unsealed patch, each with the recognition claim(s) naming it.
+/// patch [`patch_ids_pending_excluding_received`] reports, each with the recognition claim(s)
+/// naming it.
 ///
 /// **One pass over each container, never a pass over claims per pending patch.** Reuses
-/// [`accepted_but_unsealed_patch_ids`]'s own single scan of the `Patch` container (plus its
-/// existing ancestry walk) for the pending set, then makes exactly one further scan of the
-/// `RecognitionClaim` container -- the same container-walk shape [`crate::order_claims_for_sealing`]'s
-/// own sibling listing (`seal_from_accepted.rs`'s private `enumerate_stored_claims`) uses, inlined
-/// here rather than reused because this caller also needs each claim's own `ObjectEnvelope` (for
+/// [`patch_ids_pending_excluding_received`]'s own scan (which itself reuses
+/// [`accepted_but_unsealed_patch_ids`]'s single scan of the `Patch` container plus its ancestry
+/// walks) for the pending set, then makes exactly one further scan of the `RecognitionClaim`
+/// container -- the same container-walk shape [`crate::order_claims_for_sealing`]'s own sibling
+/// listing (`seal_from_accepted.rs`'s private `enumerate_stored_claims`) uses, inlined here rather
+/// than reused because this caller also needs each claim's own `ObjectEnvelope` (for
 /// `verify_claim_signature`), which that function drops once it has computed a claim's id. Builds
 /// the patch -> claims map in that single pass (for each claim, for each of its own `patch_ids`
 /// that is in the pending set, append to that patch's own list) -- never re-scanned per patch.
@@ -140,24 +259,18 @@ pub struct PendingPatchEntry {
 /// a claim -- or one named only by a claim this repository has not yet received -- is ordinary,
 /// not an error.
 ///
-/// **A claim's signature outcome is reported, never gated on.** `verify_claim_signature` can
-/// still return `Err` -- not just the two reportable variants -- but only for a genuine forged
-/// signature under a key this repository has *adopted*: a claim already held here passed this
-/// same check once, under whatever trust policy held at accept time (`accept_exchange_artifact`
-/// propagates that `Err` with `?`); what changes between then and a later `sync pending` call is
-/// the trust policy itself, so a signature that was `Unverifiable` at accept time (its key not yet
-/// adopted) can turn out, once that key *is* later adopted, to never have verified at all. That is
-/// exactly the forged-claim-under-a-now-trusted-identity case `verify_claim_signature`'s own doc
-/// calls "an integrity failure, not a trust question" -- every other caller of this function
-/// propagates that `Err` as a refusal, and this one does too, rather than inventing a third,
-/// undesigned JSON outcome for a case the type's own two variants deliberately do not carry.
+/// **A claim's signature outcome is reported, never gated on -- see [`PendingClaimSignatureOutcome`]'s
+/// own doc.** `verify_claim_signature`'s `Err` (a genuine forged signature under an adopted key, a
+/// non-Ed25519 MAINTAINER signature, or none at all) is mapped to
+/// [`PendingClaimSignatureOutcome::Invalid`] for that one claim, not propagated -- an unrelated
+/// forged claim must not blind the whole listing to every other pending patch.
 pub fn pending_patches_with_claims(layout: &RepositoryLayout) -> Result<Vec<PendingPatchEntry>> {
     debug_assert!(
         persisted_object_types().contains(&ObjectType::RecognitionClaim),
         "RecognitionClaim must remain a persisted, containerized object type"
     );
 
-    let pending_ids = accepted_but_unsealed_patch_ids(layout)?;
+    let pending_ids = patch_ids_pending_excluding_received(layout)?;
     let pending_set: BTreeSet<ObjectId> = pending_ids.iter().copied().collect();
 
     #[cfg(test)]
@@ -187,9 +300,16 @@ pub fn pending_patches_with_claims(layout: &RepositoryLayout) -> Result<Vec<Pend
                 continue;
             }
             // Only a claim naming at least one pending patch needs its signature checked here --
-            // a claim naming no pending patch is irrelevant to this listing and must not be able
-            // to refuse it on an unrelated signature problem.
-            let signature = verify_claim_signature(&record.envelope, &trust_policy)?;
+            // a claim naming no pending patch is irrelevant to this listing. A signature failure
+            // is reported for this one claim (`Invalid`), never propagated: a forged claim must
+            // not blind the listing to every other pending patch (0.56.0 step 1a2, R1).
+            let signature = match verify_claim_signature(&record.envelope, &trust_policy) {
+                Ok(outcome) => PendingClaimSignatureOutcome::from(outcome),
+                Err(err) => PendingClaimSignatureOutcome::Invalid {
+                    key_id: first_maintainer_key_id(&record.envelope),
+                    reason: err.to_string(),
+                },
+            };
             for patch_id in names_pending {
                 claims_by_patch
                     .entry(patch_id)

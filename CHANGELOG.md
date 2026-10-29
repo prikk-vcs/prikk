@@ -22,10 +22,12 @@
 
 ### Added
 
-- **`sync pending --format json`** (`sync-pending-v1`): each accepted-but-unsealed patch, with the
-  recognition claim(s) naming it, each claim's own parent block id, and that claim's own MAINTAINER
-  signature outcome (sound, or unverifiable and why). A patch no held claim names reports
-  `"claims": []`. The existing text form (a count and one id per line) is unchanged.
+- **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
+  this repository and not sealed by any history it holds, its own or received. Each entry carries
+  the recognition claim(s) naming the patch, each claim's own parent block id, and that claim's
+  own MAINTAINER signature outcome: sound, unverifiable and why, or invalid (a detected forgery,
+  reported for that one claim rather than refusing the whole listing). A patch no held claim names
+  reports `"claims": []`. The text form's own shape (a count and one id per line) is unchanged.
 
 ## 0.55.0 — 2026-10-29
 

@@ -165,29 +165,36 @@ block can have more than one parent, so there is no single next entry to walk th
 not a block's own ancestry. This closes a prior gap where `log --ref <block id>` exited `0` with an
 empty history instead of refusing.
 
-**`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches this
-repository has accepted (`sync accept`) and not yet sealed (RFC 115 Stage 3's own derived query:
-patch objects present, minus those reachable from a local ref's own tip block). **This is not "every
-patch this repository has not sealed":** a patch held only through `archive import`'s received
-history can still appear here. By default, `archive import` lands every ref — even one naming the
-exporter's own local branch — under `remotes/…` through the received-index, which this query never
-walks; only a ref landed with `--adopt` becomes a real local ref, reachable, and therefore excluded.
+**`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches
+accepted into this repository (`sync accept`) and not sealed by any history it holds, its own or
+received: RFC 115 Stage 3's own derived query (patch objects present, minus those reachable from a
+local ref's own tip block), further reduced by every patch also reachable from a **received**
+pointer's own tip block — a patch the sender's own history already sealed, even one this
+repository has never adopted into a local ref, is not something an operator still needs to act on.
+This is a listing-only reduction: `sync seal` (`seal_from_accepted_claim`) still uses the
+unreduced query, since sealing is about this repository's own ref history, not what some other
+repository's received history claims.
 `--format json`'s one document, `sync-pending-v1`, adds the recognition claim(s) naming each pending
 patch: `patches[]`, each `{"patch_id", "claims"}`; `claims[]`, each `{"claim_id", "parent_block_id",
-"signature"}`, where `signature` is `{"outcome": "sound"|"unverifiable", "key_id"}` from the claim's
-own MAINTAINER signature. The outcome is reported, never gated on — except a signature that fails to
-verify against a key this repository has since adopted, a detected forgery, which refuses the same
-way every other caller of this check already refuses one. `parent_block_id` is the claim's own
-`block_id` (the block it says these patches are sealed into), not its `parent_block_ids` (plural —
-that field mirrors `block_id`'s own parents, used only to order a batch of claims for sealing).
+"signature"}`, where `signature` is `{"outcome": "sound"|"unverifiable"|"invalid", "key_id"}` from
+the claim's own MAINTAINER signature. **`"invalid"` is the one value a tool consuming this listing
+must treat as an alarm:** a detected forgery under a key this repository has adopted, a
+MAINTAINER signature whose algorithm is not Ed25519, or no MAINTAINER signature at all — carried
+alongside `"reason"` (the refusal's own text) and, for the first two cases, `"key_id"`; the last
+case's `"key_id"` is `null`, since there is no signature to name one from. This is reported for
+that one claim only, beside every other pending patch — it never refuses the whole listing, unlike
+`sync accept`/`sync seal`, which still refuse outright on the identical signature check.
+`parent_block_id` is the claim's own `block_id` (the block it says these patches are sealed into),
+not its `parent_block_ids` (plural — that field mirrors `block_id`'s own parents, used only to
+order a batch of claims for sealing).
 **A patch no held claim names appears with `"claims": []`:** ordinary, since one exchange artifact's
 patch and claim sections are independent — a patch can arrive without, or before, any claim naming
 it. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's own
 `claims[]` is ordered by claim id. The text form itself (the count line and one id per line) is
-unchanged.
+unchanged in shape, though its own count and list now reflect the same received-history reduction.
 
 ```json
-{"schema_version": "sync-pending-v1", "patches": [{"patch_id": "<id>", "claims": [{"claim_id": "<id>", "parent_block_id": "<id>", "signature": {"outcome": "sound", "key_id": "<key-id>"}}]}]}
+{"schema_version": "sync-pending-v1", "patches": [{"patch_id": "<id>", "claims": [{"claim_id": "<id>", "parent_block_id": "<id>", "signature": {"outcome": "sound", "key_id": "<key-id>"}}, {"claim_id": "<id>", "parent_block_id": "<id>", "signature": {"outcome": "invalid", "key_id": "<key-id>", "reason": "<the refusal's own text>"}}]}]}
 ```
 
 **Reading a point: `tree`.** `tree` lists the files present at a point — a ref, or a bare block id — with

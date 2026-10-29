@@ -7,8 +7,8 @@ use prikk_error::Result;
 use prikk_object::{BlockKind, ObjectId, SignerRole};
 
 use super::{
-    ClaimSignatureVerification, PendingPatchEntry, accepted_but_unsealed_patch_ids,
-    pending_patches_with_claims,
+    PendingClaimSignatureOutcome, PendingPatchEntry, accepted_but_unsealed_patch_ids,
+    patch_ids_pending_excluding_received, pending_patches_with_claims,
 };
 use crate::add_trusted_maintainer;
 use crate::test_gates::test_support::{
@@ -17,6 +17,7 @@ use crate::test_gates::test_support::{
 };
 use crate::{
     FileObjectStore, MaintainerSigner, ObjectWriter, RefPublication, RefStore, RepositoryLayout,
+    write_received_pointer_for_test,
 };
 
 #[test]
@@ -216,7 +217,7 @@ fn pending_claims_one_claim_naming_two_pending_patches_appears_on_both() -> Resu
         assert_eq!(claim_entry.parent_block_id, block_id);
         assert_eq!(
             claim_entry.signature,
-            ClaimSignatureVerification::Sound {
+            PendingClaimSignatureOutcome::Sound {
                 key_id: signer.key_id().to_string()
             }
         );
@@ -306,7 +307,7 @@ fn pending_claims_an_unverifiable_signer_is_reported_without_refusing() -> Resul
     assert_eq!(entries[0].claims.len(), 1);
     assert_eq!(
         entries[0].claims[0].signature,
-        ClaimSignatureVerification::Unverifiable {
+        PendingClaimSignatureOutcome::Unverifiable {
             key_id: signer.key_id().to_string()
         }
     );
@@ -315,14 +316,17 @@ fn pending_claims_an_unverifiable_signer_is_reported_without_refusing() -> Resul
 }
 
 /// The forged-claim-under-a-now-trusted-identity case `verify_claim_signature`'s own doc calls "an
-/// integrity failure, not a trust question" -- every other caller of that check refuses on it, and
-/// so does this one (see `pending_patches_with_claims`'s own doc for why). Built by relabelling a
-/// genuine signature's own `key_id` to an *adopted* one it was never produced for, rather than
-/// generating a signature with mismatched bytes directly -- `maintainer_signature` has no seam for
-/// the latter, and this produces the identical, real failure: a public key that does not verify
-/// the bytes presented under its name.
+/// integrity failure, not a trust question" -- every *gate* (`accept_exchange_artifact`,
+/// `seal_from_accepted_claim`) still refuses on it via that function's own `Err`. This reader
+/// does not: 0.56.0 step 1a2's own ruling is that a listing must show the operator which claim
+/// failed, not hide the whole listing behind one forged claim's refusal, so
+/// `pending_patches_with_claims` maps this `Err` to `PendingClaimSignatureOutcome::Invalid` for
+/// that one claim instead. Built by relabelling a genuine signature's own `key_id` to an
+/// *adopted* one it was never produced for, rather than generating a signature with mismatched
+/// bytes directly -- `maintainer_signature` has no seam for the latter, and this produces the
+/// identical, real failure: a public key that does not verify the bytes presented under its name.
 #[test]
-fn pending_claims_a_forged_signature_under_an_adopted_key_refuses() -> Result<()> {
+fn pending_claims_a_forged_signature_under_an_adopted_key_is_reported_invalid() -> Result<()> {
     let root = unique_temp_dir("pexch-pending-claims-forged");
     let layout = RepositoryLayout::init(root.clone())?;
     let mut objects = FileObjectStore::new(layout.clone());
@@ -357,10 +361,111 @@ fn pending_claims_a_forged_signature_under_an_adopted_key_refuses() -> Result<()
     }
     objects.write_object(&claim)?;
 
-    let result = pending_patches_with_claims(&layout);
-    assert!(
-        result.is_err(),
-        "a forged signature under an adopted key must refuse, not report an outcome: {result:?}"
+    let entries = pending_patches_with_claims(&layout)?;
+    assert_eq!(entries.len(), 1, "the listing must not refuse: {entries:?}");
+    assert_eq!(entries[0].claims.len(), 1);
+    match &entries[0].claims[0].signature {
+        PendingClaimSignatureOutcome::Invalid { key_id, reason } => {
+            assert_eq!(key_id.as_deref(), Some(other_signer.key_id()));
+            assert!(
+                reason.contains("does not verify against adopted key"),
+                "reason must name the real refusal text: {reason:?}"
+            );
+        }
+        other => panic!("a forged signature under an adopted key must report Invalid: {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// 0.56.0 step 1a2, R2 (owner ruling 2026-10-29, "Exclude received history"): a patch reachable
+/// only from a **received** pointer (never adopted into a local ref) is not pending, even though
+/// `accepted_but_unsealed_patch_ids` -- the raw query `seal_from_accepted_claim` still uses
+/// unchanged -- still reports it. Both queries are asserted here to show they now genuinely
+/// diverge, not just that the new one happens to return the right thing.
+#[test]
+fn a_patch_reachable_only_from_a_received_pointer_is_not_pending() -> Result<()> {
+    let root = unique_temp_dir("pexch-pending-received-excluded");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    objects.write_object(&signed_patch_blob_envelope())?;
+    let patch = signed_patch_envelope();
+    let patch_id = objects.write_object(&patch)?;
+
+    // The sender's own history already sealed this patch -- held here only as received, never
+    // adopted into a local ref, exactly `archive import`'s default (non-`--adopt`) landing.
+    let root_block = signed_block(BlockKind::Root, Vec::new(), Vec::new(), None);
+    let root_block_id = objects.write_object(&root_block)?;
+    let child_block = signed_block(BlockKind::Normal, vec![root_block_id], vec![patch_id], None);
+    let child_block_id = objects.write_object(&child_block)?;
+    let received_ref_state =
+        signed_ref_state_envelope("remotes/origin/heads/main", None, child_block_id, 1);
+    let received_ref_state_id = objects.write_object(&received_ref_state)?;
+    write_received_pointer_for_test(&layout, "remotes/origin/heads/main", received_ref_state_id)?;
+
+    assert_eq!(
+        accepted_but_unsealed_patch_ids(&layout)?,
+        vec![patch_id],
+        "the raw query, which `seal_from_accepted_claim` still uses, must stay unchanged by R2"
+    );
+    assert_eq!(
+        patch_ids_pending_excluding_received(&layout)?,
+        Vec::new(),
+        "the listing's own view must exclude a patch the received history already sealed"
+    );
+    assert_eq!(
+        pending_patches_with_claims(&layout)?,
+        Vec::new(),
+        "the claim join must see the same exclusion"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// 0.56.0 step 1a2, R2's own regression guard: R2 must not over-exclude. A patch with no received
+/// block sealing it at all stays pending, exactly as before.
+#[test]
+fn a_patch_with_no_received_seal_is_still_pending() -> Result<()> {
+    let root = unique_temp_dir("pexch-pending-received-not-excluded");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    objects.write_object(&signed_patch_blob_envelope())?;
+    let patch = signed_patch_envelope();
+    let patch_id = objects.write_object(&patch)?;
+
+    // No block, no ref, no received pointer at all -- nothing excludes this patch.
+    assert_eq!(
+        patch_ids_pending_excluding_received(&layout)?,
+        vec![patch_id]
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// A received pointer naming a block that does **not** seal the patch in question must not
+/// exclude it -- R2's own subtraction is per reachable patch id, not "any received pointer
+/// exists at all".
+#[test]
+fn a_received_pointer_not_sealing_the_patch_does_not_exclude_it() -> Result<()> {
+    let root = unique_temp_dir("pexch-pending-received-unrelated");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    objects.write_object(&signed_patch_blob_envelope())?;
+    let patch = signed_patch_envelope();
+    let patch_id = objects.write_object(&patch)?;
+
+    // A received history that seals nothing at all (an empty root block only).
+    let root_block = signed_block(BlockKind::Root, Vec::new(), Vec::new(), None);
+    let root_block_id = objects.write_object(&root_block)?;
+    let received_ref_state =
+        signed_ref_state_envelope("remotes/origin/heads/main", None, root_block_id, 1);
+    let received_ref_state_id = objects.write_object(&received_ref_state)?;
+    write_received_pointer_for_test(&layout, "remotes/origin/heads/main", received_ref_state_id)?;
+
+    assert_eq!(
+        patch_ids_pending_excluding_received(&layout)?,
+        vec![patch_id],
+        "a received pointer that does not seal this patch must not exclude it"
     );
     let _ = std::fs::remove_dir_all(root);
     Ok(())
