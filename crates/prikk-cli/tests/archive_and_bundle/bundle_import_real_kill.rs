@@ -157,12 +157,25 @@ fn a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until
          not the whole thing: got {dest_object_count_after_kill}"
     );
 
-    // `doctor`: clean exit too. `bundle import` has no journal, so there is no
-    // `PRIKK-DOCTOR-INTERRUPTED-IMPORT`-shaped state for `doctor` to name -- only the stale locks,
-    // which `doctor` is not expected to name (the architect's own review: "`doctor` names none of
-    // them, and the error does not mention `unlock`").
+    // `doctor`: still exits 0 (a held lock is informational, not an error) -- but 0.56.0 step 0
+    // made it name every stale lock this real kill left behind, regardless of `bundle import`
+    // having no journal (unlike `archive import`'s `PRIKK-DOCTOR-INTERRUPTED-IMPORT`).
     let doctor_after_kill = support::prikk(&dest_repo).arg("doctor").output().unwrap();
     support::ok(&doctor_after_kill, "doctor after kill");
+    let doctor_text = String::from_utf8_lossy(&doctor_after_kill.stdout);
+    let held_lock_issue_count = doctor_text
+        .lines()
+        .filter(|line| line.contains("PRIKK-DOCTOR-HELD-LOCK"))
+        .count();
+    assert_eq!(
+        held_lock_issue_count, 3,
+        "the real kill leaves exactly three stale locks (active, received-index, objects) and \
+         doctor must name each one, not stay silent: {doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("errors=0"),
+        "a held lock must never be reported as an error-severity issue: {doctor_text}"
+    );
 
     // A same-process retry, before unlocking, is refused by the stale lock -- not silently
     // succeeding, and not corrupting anything.
@@ -179,6 +192,11 @@ fn a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until
         premature_retry_text.contains("lock") && premature_retry_text.contains("conflict")
             || premature_retry_text.contains("already"),
         "the refusal must read as a lock conflict, not some other error: {premature_retry_text}"
+    );
+    // 0.56.0 step 0: the refusal itself must name the way out, not just `doctor`.
+    assert!(
+        premature_retry_text.contains("prikk unlock"),
+        "a lock conflict must name `prikk unlock` directly: {premature_retry_text}"
     );
 
     // `prikk unlock` lists the lock(s) this real kill left behind; clear each one.
@@ -244,6 +262,97 @@ fn a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until
 
     let _ = std::fs::remove_dir_all(&source_repo);
     let _ = std::fs::remove_dir_all(&reference_repo);
+    let _ = std::fs::remove_dir_all(&dest_repo);
+    let _ = std::fs::remove_file(&bundle_path);
+    let _ = std::fs::remove_file(&marker_path);
+}
+
+/// Positive control for `push_held_lock_issues`: a lock held by a genuinely live process (the
+/// blocked child here, not yet killed) must be reported by `doctor` as informational only, with
+/// `doctor`'s own exit code unchanged at 0 -- a live write in progress is ordinary, not a defect,
+/// and must not be confused with the real-kill case above.
+#[test]
+fn doctor_names_a_lock_held_by_a_live_process_as_informational_only() {
+    let source_repo = support::unique_repo("bundle-live-lock-source");
+    support::init(&source_repo);
+    support::generation(&source_repo, "heads/main", "a.txt", b"first\n", "first");
+    support::generation(&source_repo, "heads/main", "b.txt", b"second\n", "second");
+    support::generation(&source_repo, "heads/main", "c.txt", b"third\n", "third");
+
+    let mut bundle_path = std::env::temp_dir();
+    bundle_path.push(format!(
+        "prikk-cli-bundle-live-lock-{}.bin",
+        support::unique_suffix()
+    ));
+    support::ok(
+        &support::prikk(&source_repo)
+            .args([
+                "bundle",
+                "export",
+                "--ref",
+                "heads/main",
+                "--output",
+                bundle_path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "bundle export",
+    );
+
+    let dest_repo = support::unique_repo("bundle-live-lock-dest");
+    support::init(&dest_repo);
+
+    let mut marker_path = std::env::temp_dir();
+    marker_path.push(format!(
+        "prikk-cli-bundle-live-lock-marker-{}",
+        support::unique_suffix()
+    ));
+    let _ = std::fs::remove_file(&marker_path);
+    let mut child = support::prikk(&dest_repo)
+        .env("PRIKK_BUNDLE_IMPORT_BLOCK_AFTER_N_FOR_TEST", "2")
+        .env("PRIKK_BUNDLE_IMPORT_BLOCKED_MARKER_FOR_TEST", &marker_path)
+        .args(["bundle", "import", "--input", bundle_path.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `prikk bundle import`");
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !marker_path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the child process never reached the blocking seam within 30s"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // The child is still alive and still holding its locks -- run `doctor` against the same
+    // repository root while it blocks.
+    let doctor_while_live = support::prikk(&dest_repo).arg("doctor").output().unwrap();
+    support::ok(&doctor_while_live, "doctor while import is live");
+    let doctor_text = String::from_utf8_lossy(&doctor_while_live.stdout);
+    let held_lock_issue_count = doctor_text
+        .lines()
+        .filter(|line| line.contains("PRIKK-DOCTOR-HELD-LOCK"))
+        .count();
+    assert!(
+        held_lock_issue_count >= 1,
+        "the live import must hold at least one lock doctor can see: {doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("appears running"),
+        "a lock held by the still-live child must report liveness as appears running: \
+         {doctor_text}"
+    );
+    assert!(
+        doctor_text.contains("errors=0") && doctor_text.contains("warnings=0"),
+        "a live-process lock is informational only, never a warning or error: {doctor_text}"
+    );
+
+    child.kill().expect("send SIGKILL");
+    let _ = child.wait();
+
+    let _ = std::fs::remove_dir_all(&source_repo);
     let _ = std::fs::remove_dir_all(&dest_repo);
     let _ = std::fs::remove_file(&bundle_path);
     let _ = std::fs::remove_file(&marker_path);

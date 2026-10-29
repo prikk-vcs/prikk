@@ -228,6 +228,13 @@ to clear them, and this is deliberate, not merely unimplemented: automatically c
 process turns out to still be running would let two writers hold the same container simultaneously,
 the exact race locking exists to prevent.
 
+`prikk doctor` names every held lock too (`PRIKK-DOCTOR-HELD-LOCK`, informational severity — a held
+lock does not change `doctor`'s exit code), with the same path, kind, recorded pid and advisory
+liveness `prikk unlock`'s own listing reports, and its `lock conflict` error names `prikk unlock`
+directly. This closes the gap where a crash with no interrupted-import journal (`bundle import`, not
+`archive import`) left `doctor` silent about the very locks it left behind; it does not change the
+cleanup path itself, which remains `prikk unlock` alone.
+
 `prikk unlock` is the supported recovery path. A bare invocation lists every currently held lock, its
 recorded process id, and a best-effort advisory on whether that process still appears to be running
 (checked with `kill(pid, 0)` on Linux and macOS; unknown on other platforms). This check is

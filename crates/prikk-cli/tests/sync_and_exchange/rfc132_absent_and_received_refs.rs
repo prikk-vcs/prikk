@@ -605,3 +605,62 @@ fn addendum3_implicit_plan_only_keeps_its_answer_in_a_fresh_repository() {
         );
     }
 }
+
+/// 0.56.0 step 0: `log --ref <block id>` used to exit 0 with an empty history (`"blocks": []`)
+/// instead of a refusal — `require_existing_ref`'s own `LeftToCaller` case (a name that is
+/// neither a known ref kind nor refused) returned `Ok(())`, not a refusal, and the hex string was
+/// then read as a literal, never-found ref name downstream. Now routed through `resolve_point`,
+/// which recognizes the shape and refuses it by name instead: `log` does not yet walk a block's
+/// own (possibly multi-parent) ancestry as history, so a block id that genuinely resolves is
+/// refused explicitly, never silently answered as if it were an empty ref.
+#[test]
+fn step0_log_ref_block_id_refuses_instead_of_an_empty_success() {
+    let f = fixture("refusals-step0-block-id");
+    let block_id = f.base.as_str();
+
+    let output = run(&f.src, &["log", "--ref", block_id, "--format", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a resolvable block id must refuse, not succeed empty: {}",
+        text(&output)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\"blocks\": []"),
+        "must never silently answer an empty success: {stdout}"
+    );
+    assert!(
+        text(&output).contains("is a block id") && text(&output).contains("more than one parent"),
+        "{}",
+        text(&output)
+    );
+
+    // Text form refuses the same way.
+    let text_output = run(&f.src, &["log", "--ref", block_id]);
+    assert_eq!(text_output.status.code(), Some(1));
+    assert!(text(&text_output).contains("is a block id"));
+}
+
+/// 0.56.0 step 0: an unknown 64-hex id (syntactically a block id, but naming nothing this
+/// repository holds) refuses by the point resolver's own "not in this repository" wording, not
+/// an empty success either.
+#[test]
+fn step0_log_ref_unknown_block_id_refuses_by_name() {
+    let f = fixture("refusals-step0-unknown-block-id");
+    let unknown = "0".repeat(63) + "1";
+    assert_refusal(
+        &f.src,
+        &["log", "--ref", &unknown, "--format", "json"],
+        &format!("precondition not met: block {unknown} is not in this repository"),
+    );
+}
+
+/// 0.56.0 step 0: an existing ref is completely unaffected by routing resolution through
+/// `resolve_point` instead of `require_existing_ref` — same output, same exit code.
+#[test]
+fn step0_log_ref_existing_ref_still_works() {
+    let f = fixture("refusals-step0-existing-ref-unaffected");
+    let out = ok(&f.src, &["log", "--ref", "heads/main", "--format", "json"]);
+    assert!(out.contains(f.base.as_str()), "{out}");
+}

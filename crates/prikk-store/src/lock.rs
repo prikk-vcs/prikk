@@ -307,9 +307,14 @@ fn acquire_lock_file(
     let body = lock_body(kind);
     match create_new_file_required(mutation_root, relative, body.as_bytes()) {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Err(
-            PrikkError::LockConflict(format!("{kind} lock already exists: {}", path.display())),
-        ),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(PrikkError::LockConflict(format!(
+                "{kind} lock already exists: {} -- run `prikk unlock` to list held locks, or \
+                 `prikk unlock --lock <path>` to clear one once the process that held it is \
+                 confirmed gone",
+                path.display()
+            )))
+        }
         Err(err) => Err(err.into()),
     }
 }

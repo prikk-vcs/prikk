@@ -156,6 +156,15 @@ bare block id, 64 lowercase hex characters, resolved by one resolver.
   `ref-state: <none>` for a block id. `patch-plan-content-v1`'s `ref` holds the value as given, now
   possibly a block id; its schema version is unchanged.
 
+**`log --ref` and a bare block id.** `log --ref` is resolved by the same one resolver described
+above, so a value that is neither a ref name nor 64 lowercase hex refuses, and a block id naming
+nothing in this repository refuses as a precondition — but `log` itself still refuses a block id
+that does resolve: `<id> is a block id; log does not show history ending at a block` (exit `1`). A
+block can have more than one parent, so there is no single next entry to walk the way
+`RefState.previous_ref_state_id` gives one; `log`'s own history is the publication chain of a ref,
+not a block's own ancestry. This closes a prior gap where `log --ref <block id>` exited `0` with an
+empty history instead of refusing.
+
 **Reading a point: `tree`.** `tree` lists the files present at a point — a ref, or a bare block id — with
 each one's mode, exact size and whether it is text or binary, by the same classification `checkout
 --patch-plan --format json` reports. It reads received refs. Without `--ref` it lists the current branch,

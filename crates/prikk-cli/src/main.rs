@@ -888,10 +888,29 @@ fn run_log(args: Vec<String>) -> std::result::Result<(), CliError> {
     let layout = open_repository(args.root)?;
     // RFC 132 refusal sweep, rule 4, as amended by RFC 147 §2i: an explicit absent ref refuses; the
     // current branch of a fresh repository keeps its empty history, named explicitly or left implicit.
+    //
+    // 0.56.0 step 0: resolved through `resolve_point`, not the narrower `require_existing_ref` --
+    // the narrow function's own `LeftToCaller` case (a name that is neither a known ref kind nor
+    // refused) returns `Ok(())`, not a refusal, and a bare block id is exactly that shape. Before
+    // this, `--ref <block id>` fell through this check doing nothing, then `read_current_ref_state_id`
+    // read it as a literal (never-found) ref name and returned `Ok(None)`, so the whole walk below
+    // silently produced `RefHistory { entries: vec![] }` -- exit 0, "blocks": [] -- never a refusal.
+    // `resolve_point` closes both gaps at once: a name that is neither ref-shaped nor block-shaped
+    // now refuses by name (`InvalidName`), and a block id that resolves is caught explicitly below,
+    // since this reader does not yet walk a block's own (possibly multi-parent) ancestry as history.
     if let Some(explicit) = &args.ref_name {
         if !current_branch::is_unpublished_current_branch(&layout, explicit)? {
-            prikk_store::require_existing_ref(&layout, explicit, prikk_store::ReceivedRefs::Read)
-                .map_err(|err| err.to_string())?;
+            let point =
+                prikk_store::resolve_point(&layout, explicit, prikk_store::ReceivedRefs::Read)
+                    .map_err(|err| err.to_string())?;
+            if point.kind == prikk_store::PointKind::Block {
+                return Err(format!(
+                    "{explicit} is a block id; `log` does not show history ending at a block -- a \
+                     block can have more than one parent, so there is no single next entry to walk; \
+                     expected a ref name (heads/…, tags/… or remotes/…)"
+                )
+                .into());
+            }
         }
     }
     let ref_name = current_branch::resolve_ref(&layout, args.ref_name)?;

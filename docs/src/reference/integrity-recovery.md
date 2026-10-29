@@ -208,6 +208,7 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-CURRENT-BRANCH` | `warning` | `.prikk/current-branch` is malformed or names a branch that does not exist or is closed; every `--ref` default refuses until it is fixed, while an explicit `--ref` still works. |
 | `PRIKK-DOCTOR-PROVISIONAL-WORKTREE` | `warning` | The worktree was materialized from a snapshot and is not replay-verified. `prikk verify` clears it. |
 | `PRIKK-DOCTOR-INTERRUPTED-MATERIALIZATION` | `warning` | A checkout or branch switch stopped part-way, so `commit` refuses until it is re-run or the named file is moved aside. |
+| `PRIKK-DOCTOR-HELD-LOCK` | `info` | 0.56.0 step 0: a lock file (`active.lock`, a ref lock, or a container lock) is currently held. One issue per held lock, naming its path, kind, recorded pid, and the same advisory liveness `prikk unlock` prints. Never blocks health on its own — a held lock is ordinary during a live write; the recommendation names `prikk unlock` for the full listing and the "clear only after independently confirming the process is gone" guidance. |
 | `PRIKK-DOCTOR-VERIFY-ERROR` | `error` | Repository verification failed before doctor could produce a healthy report. |
 
 Publication-trust issues can also appear in doctor output as error-severity diagnostics using the

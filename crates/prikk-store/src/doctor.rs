@@ -883,6 +883,45 @@ fn import_interrupted_way_out(layout: &RepositoryLayout, id: &str) -> String {
     )
 }
 
+/// 0.56.0 step 0: a crashed writer's stale lock file used to be named only when an
+/// archive-import journal happened to be present (`import_interrupted_way_out`, reachable solely
+/// from `push_interrupted_import_issue`) -- `bundle import`'s own writers leave no such journal,
+/// so a `bundle import` kill left `doctor` silent about `active.lock`/`received-index.lock`/
+/// `objects.lock` files it never looked at. This calls the same `unlock::list_held_locks` every
+/// held lock is already enumerated by (`prikk unlock`'s own listing) unconditionally, so every
+/// writer's stale lock is named regardless of which command created it.
+///
+/// Informational, not a warning: a held lock is ordinary during a live write, and
+/// `HeldLock::liveness` is advisory only (see its own doc) -- `doctor` must not imply a lock is
+/// safe to clear just because it is listed here.
+fn push_held_lock_issues(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue>) {
+    let Ok(locks) = crate::unlock::list_held_locks(layout) else {
+        return;
+    };
+    for lock in locks {
+        let liveness = match lock.liveness {
+            crate::unlock::PidLiveness::AppearsRunning => "appears running -- do not clear",
+            crate::unlock::PidLiveness::DoesNotAppearRunning => {
+                "does not appear to be running (not proof it is safe to clear)"
+            }
+            crate::unlock::PidLiveness::Unknown => "unknown (not proof it is safe to clear)",
+        };
+        let pid = lock
+            .recorded_pid
+            .map_or_else(|| "(unparseable)".to_string(), |pid| pid.to_string());
+        issues.push(DoctorIssue::info(
+            "PRIKK-DOCTOR-HELD-LOCK",
+            format!(
+                "a {} lock is held: {} (recorded pid: {pid}, liveness: {liveness})",
+                lock.kind,
+                lock.path.display()
+            ),
+            "run `prikk unlock` for the full listing and liveness guidance; clear a lock only \
+             after independently confirming the process that created it is gone",
+        ));
+    }
+}
+
 /// Run doctor diagnostics for a repository layout.
 #[must_use]
 pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
@@ -895,6 +934,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
     push_provisional_worktree_issue(layout, &mut issues);
     push_interrupted_materialization_issue(layout, &mut issues);
     push_interrupted_import_issue(layout, &mut issues);
+    push_held_lock_issues(layout, &mut issues);
     match verify_repository(layout) {
         Ok(verification) => {
             // DC-95 Stage 2 Level 1: a stage that failed or could not evaluate is blocking by

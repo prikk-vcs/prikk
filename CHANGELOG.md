@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Output changes
+
+- **`log --ref <block id>` now refuses instead of silently answering an empty history.** A block
+  id that names nothing in this repository refuses as a precondition (`block <id> is not in this
+  repository`); a block id that does resolve refuses too, naming the reason: `log` does not walk a
+  block's own ancestry as history (a block can have more than one parent, so there is no single
+  next entry), only a ref's own publication chain. Before this, either case exited `0` with
+  `"blocks": []` — a silent wrong answer, never a refusal. A value that is neither a ref name nor a
+  block id now also refuses by name, the same wording `cat`/`tree`/`extract`/`checkout`/`diff`
+  already give for the identical shape.
+- **`prikk doctor` now names every stale lock a crashed writer left behind.** Each held lock
+  (`active.lock`, a ref lock, or a container lock) is reported as an informational
+  `PRIKK-DOCTOR-HELD-LOCK` diagnostic, with its path, kind, recorded process id, and the same
+  advisory liveness check `prikk unlock` already prints — `doctor`'s exit code is unchanged, since
+  a held lock is ordinary during a live write. Before this, a crash during `bundle import`, which
+  writes no interrupted-import journal, left `doctor` completely silent about the locks it left
+  behind. The `lock conflict` refusal message itself now also names `prikk unlock` directly.
+
 ## 0.55.0 — 2026-10-29
 
 ### Upgrading
