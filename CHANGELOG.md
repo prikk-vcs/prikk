@@ -28,6 +28,12 @@
   own MAINTAINER signature outcome: sound, unverifiable and why, or invalid (a detected forgery,
   reported for that one claim rather than refusing the whole listing). A patch no held claim names
   reports `"claims": []`. The text form's own shape (a count and one id per line) is unchanged.
+- **`show --format json` now reports each patch's own `"state"`**: `"queued"`, `"pending"`, or
+  `"sealed"`. A pending text edit's path now resolves, when the recognition claim naming it names
+  a single parent block this repository already holds; where it cannot (no claim names the patch,
+  the claim's own parent is itself only pending, or the claim names more than one parent), the
+  existing `"unresolved_node_id"` now carries a `"reason"` alongside it, naming which applies,
+  rather than leaving the reader to guess.
 
 ## 0.55.0 — 2026-10-29
 

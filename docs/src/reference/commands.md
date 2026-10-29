@@ -165,14 +165,37 @@ block can have more than one parent, so there is no single next entry to walk th
 not a block's own ancestry. This closes a prior gap where `log --ref <block id>` exited `0` with an
 empty history instead of refusing.
 
+**`show`'s own `state` field, and resolving a pending text edit's path.** Every patch
+`show --format json` reports (`show-report-v1`, additive) now also carries `"state"`:
+`"queued"` (found only in this repository's own active WAL), `"pending"` (accepted and not sealed
+by any history this repository holds, its own or received — the same membership `sync pending`
+itself reports), or `"sealed"` (reached from a block, through this repository's own local ref
+history or a received pointer's). `"pending"` and `"sealed"` cannot both hold for the same patch;
+`"queued"` and `"pending"` cannot either, under ordinary operation, since a queued patch has no
+written object yet at all. `"queued"` and `"sealed"` can genuinely, briefly overlap across a real
+crash window between sealing a block and clearing the queue afterward — `show` already resolves
+this the same way it always has, by looking for a real object before ever falling back to the
+queue, so `"sealed"` wins. A pending patch's own node-addressed operations (`edit-text`,
+`replace-binary`, `change-perm`) now also resolve a real path when the recognition claim naming it
+names a single parent block this repository already holds, sealed or received — folding that
+claim's own patches onto that parent's state, the same way a sealed block's own patches fold onto
+its parent's. **Where that parent is itself only pending, part of a claim naming another
+not-yet-realized block, the path stays unresolved** (a real feature, not yet built: resolving a
+*chain* of pending claims), **and so does a patch no held claim names, or one whose claim names
+more than one parent with no mainline to pick** — `"unresolved_node_id"` now carries a `"reason"`
+alongside it, naming which of these applies, rather than guessing a path. A bare sealed patch id
+shown directly stays unresolved too, unchanged from before, now also naming why: `show` never
+searches for which block contains an already-sealed patch (the answer would depend on what else
+happens to be sealed) — `prikk log`/`prikk tree` find that block instead.
+
 **`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches
 accepted into this repository (`sync accept`) and not sealed by any history it holds, its own or
-received: RFC 115 Stage 3's own derived query (patch objects present, minus those reachable from a
-local ref's own tip block), further reduced by every patch also reachable from a **received**
-pointer's own tip block — a patch the sender's own history already sealed, even one this
-repository has never adopted into a local ref, is not something an operator still needs to act on.
-This is a listing-only reduction: `sync seal` (`seal_from_accepted_claim`) still uses the
-unreduced query, since sealing is about this repository's own ref history, not what some other
+received: patch objects present, minus those reachable from a local ref's own tip block, further
+reduced by every patch also reachable from a **received** pointer's own tip block — a patch the
+sender's own history already sealed, even one this repository has never adopted into a local ref,
+is not something an operator still needs to act on. This is a listing-only reduction: `sync seal`
+still seals a claim's patches into this repository's own history, even when a received history
+already sealed them, since sealing is about this repository's own ref history, not what some other
 repository's received history claims.
 `--format json`'s one document, `sync-pending-v1`, adds the recognition claim(s) naming each pending
 patch: `patches[]`, each `{"patch_id", "claims"}`; `claims[]`, each `{"claim_id", "parent_block_id",
@@ -184,9 +207,7 @@ alongside `"reason"` (the refusal's own text) and, for the first two cases, `"ke
 case's `"key_id"` is `null`, since there is no signature to name one from. This is reported for
 that one claim only, beside every other pending patch — it never refuses the whole listing, unlike
 `sync accept`/`sync seal`, which still refuse outright on the identical signature check.
-`parent_block_id` is the claim's own `block_id` (the block it says these patches are sealed into),
-not its `parent_block_ids` (plural — that field mirrors `block_id`'s own parents, used only to
-order a batch of claims for sealing).
+`parent_block_id` is the block the claim says its patches are sealed into.
 **A patch no held claim names appears with `"claims": []`:** ordinary, since one exchange artifact's
 patch and claim sections are independent — a patch can arrive without, or before, any claim naming
 it. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's own

@@ -16,18 +16,22 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use prikk_object::{
-    BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, CreateSymlink, DeleteNode,
-    DeleteNodePreimage, NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType, Operation,
-    OperationKind, PatchPayload, PatchPurpose, RenamePath, ReplaceBinary,
+    BlobKind, BlobPayload, BlockKind, CanonicalEncode, ChangePerm, CreateFile, CreateSymlink,
+    DeleteNode, DeleteNodePreimage, NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType,
+    Operation, OperationKind, PatchPayload, PatchPurpose, RecognitionClaimPayload, RenamePath,
+    ReplaceBinary,
 };
 
-use super::{ShowBlobContent, ShowDeletePreimage, ShowOperationContent, ShowPathResolution, show};
+use super::{
+    PatchState, ShowBlobContent, ShowDeletePreimage, ShowOperationContent, ShowPathResolution, show,
+};
 use crate::author::author_signing::author_signature;
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::object_store::{ObjectWriteSession, ObjectWriter};
+use crate::received::write_received_pointer_for_test;
 use crate::refs::RefStore;
-use crate::test_gates::test_support::unique_temp_dir;
+use crate::test_gates::test_support::{signed_block, signed_ref_state_envelope, unique_temp_dir};
 use crate::wal::Wal;
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
@@ -144,6 +148,60 @@ fn write_blob(layout: &RepositoryLayout, kind: BlobKind, content: Vec<u8>) -> Ob
     let envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, bytes);
     let mut object_store = ObjectWriteSession::open(layout).unwrap();
     object_store.write_object(&envelope).unwrap()
+}
+
+/// Write a Patch object directly to the object store, bypassing the active WAL entirely (0.56.0
+/// step 1b) -- the "accepted, unsealed" shape `patch_exchange.rs`'s own module doc describes: "a
+/// written object that was never in the WAL." Unlike [`append_raw_patch`], never touches
+/// `Wal::append_patch`, so this patch id reads `pending`, never `queued`.
+fn write_pending_patch(layout: &RepositoryLayout, operations: Vec<Operation>) -> ObjectId {
+    let payload = PatchPayload {
+        operations,
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let bytes = payload.to_canonical_bytes().unwrap();
+    let mut envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, bytes);
+    let id = envelope.object_id();
+    envelope
+        .add_signature(author_signature(&author_signer(), id).unwrap())
+        .unwrap();
+    let mut object_store = ObjectWriteSession::open(layout).unwrap();
+    object_store.write_object(&envelope).unwrap()
+}
+
+/// Write a `RecognitionClaim` object directly, for 0.56.0 step 1b's own pending-path-resolution
+/// fixtures. Unsigned: `claims_naming_patch`'s own container scan only decodes the payload, never
+/// checks a signature (that check is `sync pending`'s own, separate, job), so a signature would
+/// add fixture weight for nothing this file's own tests need.
+fn write_claim(
+    layout: &RepositoryLayout,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> ObjectId {
+    let payload = RecognitionClaimPayload {
+        block_id,
+        patch_ids,
+        parent_block_ids,
+    };
+    let bytes = payload.to_canonical_bytes().unwrap();
+    let envelope = ObjectEnvelope::unsigned(ObjectType::RecognitionClaim, 1, bytes);
+    let mut object_store = ObjectWriteSession::open(layout).unwrap();
+    object_store.write_object(&envelope).unwrap()
+}
+
+/// Land `block_id` as a received pointer under `remotes/origin/heads/main`, never touching the
+/// local ref -- `archive import`'s default (non-`--adopt`) landing shape, the same construction
+/// `patch_exchange::tests`'s own received-exclusion fixtures use.
+fn land_as_received_pointer_for_test(layout: &RepositoryLayout, block_id: ObjectId) -> ObjectId {
+    let ref_state = signed_ref_state_envelope("remotes/origin/heads/main", None, block_id, 1);
+    let mut object_store = ObjectWriteSession::open(layout).unwrap();
+    let ref_state_id = object_store.write_object(&ref_state).unwrap();
+    write_received_pointer_for_test(layout, "remotes/origin/heads/main", ref_state_id).unwrap();
+    ref_state_id
 }
 
 /// Raw `CreateFile`, sealed in its own block, giving a real live node at a chosen id -- the
@@ -464,7 +522,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
         },
         patch_id: None,
     };
-    let shown = super::show_operation(&store, &dummy_envelope(), &create_file, None).unwrap();
+    let shown = super::show_operation(&store, &dummy_envelope(), &create_file, None, None).unwrap();
     match shown.content {
         ShowOperationContent::CreateFile {
             content: ShowBlobContent::Unavailable { blob_id },
@@ -486,7 +544,7 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
         },
         patch_id: None,
     };
-    let shown = super::show_operation(&store, &dummy_envelope(), &delete_node, None).unwrap();
+    let shown = super::show_operation(&store, &dummy_envelope(), &delete_node, None, None).unwrap();
     match shown.content {
         ShowOperationContent::DeleteNode {
             preimage: ShowDeletePreimage::File(ShowBlobContent::Unavailable { blob_id }),
@@ -503,7 +561,8 @@ fn show_degrades_all_four_blob_dereference_sites_on_absence() {
         },
         patch_id: None,
     };
-    let shown = super::show_operation(&store, &dummy_envelope(), &replace_binary, None).unwrap();
+    let shown =
+        super::show_operation(&store, &dummy_envelope(), &replace_binary, None, None).unwrap();
     match shown.content {
         ShowOperationContent::ReplaceBinary {
             old: ShowBlobContent::Unavailable { blob_id: old_id },
@@ -542,7 +601,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         patch_id: None,
     };
     assert!(
-        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None, None).is_err(),
         "a type-mismatched object must propagate an error, not degrade"
     );
 
@@ -561,7 +620,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         patch_id: None,
     };
     assert!(
-        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None, None).is_err(),
         "a malformed Blob payload must propagate an error, not degrade"
     );
 
@@ -590,7 +649,7 @@ fn show_propagates_an_error_for_a_damaged_object_distinct_from_absence() {
         patch_id: None,
     };
     assert!(
-        super::show_operation(&store, &dummy_envelope(), &create_file, None).is_err(),
+        super::show_operation(&store, &dummy_envelope(), &create_file, None, None).is_err(),
         "a SNAPSHOT-kind blob named by CreateFile must propagate an error, not degrade"
     );
 }
@@ -1941,6 +2000,458 @@ fn show_resolves_a_text_edit_across_a_replay_verified_checkpoint_and_a_rename() 
         !verification.has_stage_failure() && !verification.has_item_failure(),
         "verify must pass: the stored history in this fixture was never damaged: {verification:?}"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// --- 0.56.0 step 1b: `state` and pending-patch path resolution -----------------------------
+
+/// Task 1: a patch found only in the active WAL reads `queued`.
+#[test]
+fn show_state_is_queued_for_a_wal_patch() {
+    let root = unique_temp_dir("show-state-queued");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    generation(&layout, "a.txt", b"before\n", "genesis");
+
+    std::fs::write(root.join("a.txt"), b"after\n").unwrap();
+    commit(&layout, "edit, not sealed");
+
+    let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+        .replay()
+        .unwrap();
+    let [record] = active_replay.records.as_slice() else {
+        panic!("expected exactly one queued record, got {active_replay:?}");
+    };
+    let queued_id = record.envelope.object_id();
+
+    let patches = show(&layout, queued_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Queued);
+    assert!(patch.queued);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 1: every patch in a sealed block's own `patch_ids` reads `sealed`, whether shown through
+/// the block or by its own bare patch id.
+#[test]
+fn show_state_is_sealed_for_a_block_patch_and_its_own_bare_id() {
+    let root = unique_temp_dir("show-state-sealed");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    generation(&layout, "a.txt", b"before\n", "genesis");
+
+    std::fs::write(root.join("a.txt"), b"after\n").unwrap();
+    commit(&layout, "edit a.txt");
+    seal(&layout);
+
+    let block_id = current_block_id(&layout);
+    let from_block = show(&layout, block_id).unwrap();
+    let [block_patch] = from_block.as_slice() else {
+        panic!("expected exactly one patch, got {from_block:?}");
+    };
+    assert_eq!(block_patch.state, PatchState::Sealed);
+
+    let from_bare_id = show(&layout, block_patch.patch_id).unwrap();
+    let [bare_patch] = from_bare_id.as_slice() else {
+        panic!("expected exactly one patch, got {from_bare_id:?}");
+    };
+    assert_eq!(bare_patch.state, PatchState::Sealed);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 1: a patch written directly (never queued, never sealed) reads `pending`.
+#[test]
+fn show_state_is_pending_for_an_accepted_unsealed_patch() {
+    let root = unique_temp_dir("show-state-pending");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xA1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    assert!(!patch.queued);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 1, the exact case 0.56.0 step 1a2 built `patch_ids_pending_excluding_received` for:
+/// a patch reachable only from a received pointer (never adopted into a local ref) reads
+/// `sealed`, not `pending` -- `show` must agree with `sync pending`'s own exclusion.
+#[test]
+fn show_state_is_sealed_for_a_patch_reachable_only_from_a_received_pointer() {
+    let root = unique_temp_dir("show-state-received-sealed");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+    let blob_id = write_blob(&layout, BlobKind::Text, b"received\n".to_vec());
+    let patch_id = object_store
+        .write_object(&signed_create_file_patch_for_test(
+            "a.txt",
+            NodeId::from_bytes([0xA2; 32]),
+            blob_id,
+        ))
+        .unwrap();
+    let root_block_id = object_store
+        .write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))
+        .unwrap();
+    let child_block_id = object_store
+        .write_object(&signed_block(
+            BlockKind::Normal,
+            vec![root_block_id],
+            vec![patch_id],
+            None,
+        ))
+        .unwrap();
+    drop(object_store);
+    land_as_received_pointer_for_test(&layout, child_block_id);
+
+    let patches = show(&layout, patch_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(
+        patch.state,
+        PatchState::Sealed,
+        "a received-only-reachable patch must read sealed, matching sync pending's own R2 \
+         exclusion -- never pending"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// An AUTHOR-signed `CreateFile` patch envelope, for the received-pointer fixture above (no real
+/// worktree/commit round trip -- the block it lands in is never sealed through the ordinary path
+/// either).
+fn signed_create_file_patch_for_test(
+    path: &str,
+    node_id: NodeId,
+    blob_id: ObjectId,
+) -> ObjectEnvelope {
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: path.to_string(),
+                node_id,
+                blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let bytes = payload.to_canonical_bytes().unwrap();
+    let mut envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, bytes);
+    let id = envelope.object_id();
+    envelope
+        .add_signature(author_signature(&author_signer(), id).unwrap())
+        .unwrap();
+    envelope
+}
+
+/// Task 2: a pending patch whose own claim names a single, real, sealed parent block resolves a
+/// real path -- not `unresolved_node_id`.
+#[test]
+fn show_resolves_a_pending_patchs_path_through_its_claims_sealed_parent() {
+    let root = unique_temp_dir("show-pending-resolves");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xB1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    let anchor_block_id = current_block_id(&layout);
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let prospective_block_id = ObjectId::from_bytes([0xB2; 32]);
+    write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![anchor_block_id],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    assert_eq!(
+        operation.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "the claim's real, sealed parent must resolve this pending patch's own path: {:?}",
+        operation.paths
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 2: a pending patch whose claim names a parent block that is itself only pending (part of
+/// an unrealized chain of claims) stays unresolved, naming the chain as the reason.
+#[test]
+fn show_leaves_a_pending_patch_unresolved_when_its_claims_parent_is_itself_only_pending() {
+    let root = unique_temp_dir("show-pending-chain");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xC1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    // Never written to the object store at all -- not sealed, not received, and (deliberately)
+    // not even named by another claim's own `block_id`: the chain's own further link does not
+    // need to exist for this claim's own parent to be unresolved.
+    let unrealized_parent_id = ObjectId::from_bytes([0xC2; 32]);
+    let prospective_block_id = ObjectId::from_bytes([0xC3; 32]);
+    write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![unrealized_parent_id],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("not itself sealed or received"),
+                "reason must name the chain: {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 2: a pending patch no held claim names at all stays unresolved, naming that.
+#[test]
+fn show_leaves_a_pending_patch_unresolved_when_no_claim_names_it() {
+    let root = unique_temp_dir("show-pending-no-claim");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xD1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("no held recognition claim"),
+                "reason must name the absence of any claim: {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 2: a pending patch whose claim names more than one parent block stays unresolved, naming
+/// that there is no mainline to choose -- `RecognitionClaimPayload` carries no `mainline_parent_id`
+/// the way `BlockPayload` does.
+#[test]
+fn show_leaves_a_pending_patch_unresolved_when_its_claim_names_more_than_one_parent() {
+    let root = unique_temp_dir("show-pending-merge-claim");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xE1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    let anchor_block_id = current_block_id(&layout);
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let other_parent_id = ObjectId::from_bytes([0xE2; 32]);
+    let prospective_block_id = ObjectId::from_bytes([0xE3; 32]);
+    write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![anchor_block_id, other_parent_id],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("more than one parent"),
+                "reason must name the merge-shaped claim: {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Task 1: a bare sealed patch id shown directly still reports its node-addressed operations
+/// unresolved (unchanged behaviour, RFC 142 §1), but now names why.
+#[test]
+fn show_names_a_reason_for_a_bare_sealed_patchs_unresolved_path() {
+    let root = unique_temp_dir("show-bare-sealed-reason");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xF1; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    append_raw_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    seal(&layout);
+    let block_id = current_block_id(&layout);
+    let from_block = show(&layout, block_id).unwrap();
+    let [block_patch] = from_block.as_slice() else {
+        panic!("expected exactly one patch, got {from_block:?}");
+    };
+    let bare_patch_id = block_patch.patch_id;
+
+    let patches = show(&layout, bare_patch_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Sealed);
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("RFC 142"),
+                "reason must name the deliberate scope, not a guess: {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }

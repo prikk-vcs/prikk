@@ -25,19 +25,56 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
+    RefStatePayload,
 };
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lifecycle_cache::replay::{TextCache, apply_one_patch_with_materialize_fallback};
-use crate::merge::evidence::{lifecycle_state_at, lineage_horizon, mainline_or_sole_parent};
+use crate::merge::evidence::{
+    ancestors_inclusive, lifecycle_state_at, lineage_horizon, mainline_or_sole_parent,
+};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
+use crate::patch_set_digest::patch_ids_pending_excluding_received;
+use crate::received::list_received_pointers;
+use crate::recognition_claim::claims_naming_patch;
+use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::wal::Wal;
+
+/// `show`'s own classification of one patch (0.56.0 step 1b): `queued` (this repository's own
+/// active WAL), `pending` (accepted via `sync accept`, not reachable from any tip this repository
+/// holds -- the identical membership `patch_ids_pending_excluding_received` already computes for
+/// `sync pending`), or `sealed` (reached from a block, via this repository's own local ref history
+/// or a received pointer's).
+///
+/// **Precedence, when more than one could apply:** `pending` and `sealed` cannot both hold --
+/// `patch_ids_pending_excluding_received` is defined as "accepted, minus reachable from any tip,"
+/// so membership in it already proves non-membership in the sealed closure. `queued` and `pending`
+/// cannot both hold under ordinary operation either -- a queued patch has no object-store `Patch`
+/// object yet at all (`accept_exchange_artifact` writes one directly, `seal` is what first turns a
+/// WAL record into one), so the two sets are populated from disjoint sources. `queued` and
+/// `sealed` *can* genuinely, transiently overlap, across the real crash window between a block's
+/// own write/publish and the active WAL's later truncation (`finish_active_publication_cleanup`
+/// truncates only after the block and ref are written). `show()`'s own existing structure already
+/// decides this case, for free: it reads the real object first (`object_store.read_object`,
+/// covering both `pending` and `sealed`) and only falls back to the WAL scan when that read finds
+/// nothing -- so `sealed`/`pending` already win over `queued` by construction, with no additional
+/// priority check needed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PatchState {
+    /// Found only in this repository's own active WAL -- committed but not yet sealed.
+    Queued,
+    /// Accepted (`sync accept`) and not reachable from any tip this repository holds, its own or
+    /// received -- the same membership `sync pending` itself reports.
+    Pending,
+    /// Reached from a block, via this repository's own local ref history or a received pointer's.
+    Sealed,
+}
 
 /// What `show` resolved a node-addressed operation's path to. RFC 140's "never fatal" rule
 /// applies unchanged (RFC 142 §3, control 3): an unresolved node id is reported, not an error.
@@ -55,6 +92,14 @@ pub enum ShowPathResolution {
     Unresolved {
         /// Hex-encoded node id that failed to resolve.
         node_id: String,
+        /// Why no path was resolved -- `None` for the fold-completed-but-not-live case above
+        /// (unchanged from before 0.56.0 step 1b: the node id and the operation sequence already
+        /// say everything there is to say). `Some` for every case where no fold was even
+        /// attempted: a bare sealed patch id shown directly (`show`'s own scope, RFC 142 §1 --
+        /// never searches for a patch's containing block), or a pending patch whose own path
+        /// resolution (0.56.0 step 1b) could not find a usable claim. **Never a guess**: when
+        /// `Some`, no path was computed at all, not an uncertain one.
+        reason: Option<String>,
     },
 }
 
@@ -191,8 +236,11 @@ pub struct ShowPatch {
     /// This patch's operations.
     pub operations: Vec<ShowOperation>,
     /// `true` when the patch was found in the active WAL -- committed but not yet sealed -- rather
-    /// than in the object store (RFC 142 §7a).
+    /// than in the object store (RFC 142 §7a). Kept unchanged alongside [`PatchState`] (0.56.0
+    /// step 1b is additive): `state == PatchState::Queued` always agrees with `queued == true`.
     pub queued: bool,
+    /// This patch's own classification (0.56.0 step 1b) -- see [`PatchState`]'s own doc.
+    pub state: PatchState,
 }
 
 /// `prikk show <block-id|patch-id>` (RFC 142): read the target, decode its patch(es), resolve
@@ -239,11 +287,46 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     &mut text_cache,
                     sealed_lineage,
                 )?;
-                patches.push(show_patch(&object_store, *patch_id, Some(&state))?);
+                patches.push(show_patch(
+                    &object_store,
+                    *patch_id,
+                    Some(&state),
+                    None,
+                    PatchState::Sealed,
+                )?);
             }
             Ok(patches)
         }
-        ObjectType::Patch => Ok(vec![show_patch(&object_store, id, None)?]),
+        ObjectType::Patch => {
+            let pending_ids = patch_ids_pending_excluding_received(layout)?;
+            if pending_ids.contains(&id) {
+                let (lifecycle, reason) =
+                    match resolve_pending_patch_lifecycle(layout, &object_store, id)? {
+                        PendingPathResolution::Resolved(state) => (Some(state), None),
+                        PendingPathResolution::Unresolved(reason) => (None, Some(reason)),
+                    };
+                Ok(vec![show_patch(
+                    &object_store,
+                    id,
+                    lifecycle.as_ref(),
+                    reason.as_deref(),
+                    PatchState::Pending,
+                )?])
+            } else {
+                Ok(vec![show_patch(
+                    &object_store,
+                    id,
+                    None,
+                    Some(
+                        "a sealed patch shown directly by its own id is not resolved against \
+                         its containing block (RFC 142 §1 scopes `show` to a patch's own state, \
+                         never a search for what else happens to be sealed) -- use `prikk log` \
+                         or `prikk tree` to find that block",
+                    ),
+                    PatchState::Sealed,
+                )?])
+            }
+        }
         other => Err(PrikkError::UnsupportedObjectType(format!(
             "show requires a Block or Patch id; {id} is {other}"
         ))),
@@ -288,11 +371,21 @@ fn show_patch(
     object_store: &impl ObjectReader,
     patch_id: ObjectId,
     lifecycle: Option<&NodeLifecycleState>,
+    unresolved_reason: Option<&str>,
+    state: PatchState,
 ) -> Result<ShowPatch> {
     let envelope = object_store
         .read_typed(patch_id, ObjectType::Patch)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Patch {patch_id}")))?;
-    patch_from_envelope(object_store, &envelope, patch_id, lifecycle, false)
+    patch_from_envelope(
+        object_store,
+        &envelope,
+        patch_id,
+        lifecycle,
+        unresolved_reason,
+        false,
+        state,
+    )
 }
 
 /// RFC 142 §7a, on stikk's letter 011: an id the object store does not hold may be a patch that is
@@ -332,7 +425,9 @@ fn show_queued_patch(
         &record.envelope,
         id,
         Some(&lifecycle),
+        None,
         true,
+        PatchState::Queued,
     )?])
 }
 
@@ -378,17 +473,28 @@ fn patch_from_envelope(
     envelope: &ObjectEnvelope,
     patch_id: ObjectId,
     lifecycle: Option<&NodeLifecycleState>,
+    unresolved_reason: Option<&str>,
     queued: bool,
+    state: PatchState,
 ) -> Result<ShowPatch> {
     let operations = decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?;
     let operations = operations
         .iter()
-        .map(|operation| show_operation(object_store, envelope, operation, lifecycle))
+        .map(|operation| {
+            show_operation(
+                object_store,
+                envelope,
+                operation,
+                lifecycle,
+                unresolved_reason,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(ShowPatch {
         patch_id,
         operations,
         queued,
+        state,
     })
 }
 
@@ -401,6 +507,7 @@ fn show_operation(
     envelope: &ObjectEnvelope,
     operation: &DecodedPatchOperation,
     lifecycle: Option<&NodeLifecycleState>,
+    unresolved_reason: Option<&str>,
 ) -> Result<ShowOperation> {
     Ok(match &operation.kind {
         DecodedOperationKind::CreateFile {
@@ -441,7 +548,7 @@ fn show_operation(
             ..
         } => ShowOperation {
             kind: "edit-text",
-            paths: vec![resolve_node_path(*node_id, lifecycle)],
+            paths: vec![resolve_node_path(*node_id, lifecycle, unresolved_reason)],
             content: ShowOperationContent::EditText {
                 old_span_text: old_span_text.clone(),
                 replacement_text: replacement_text.clone(),
@@ -453,7 +560,7 @@ fn show_operation(
             new_blob_id,
         } => ShowOperation {
             kind: "replace-binary",
-            paths: vec![resolve_node_path(*node_id, lifecycle)],
+            paths: vec![resolve_node_path(*node_id, lifecycle, unresolved_reason)],
             content: ShowOperationContent::ReplaceBinary {
                 old: show_blob_content(object_store, *old_blob_id)?,
                 new: show_blob_content(object_store, *new_blob_id)?,
@@ -478,7 +585,7 @@ fn show_operation(
             new_mode,
         } => ShowOperation {
             kind: "change-perm",
-            paths: vec![resolve_node_path(*node_id, lifecycle)],
+            paths: vec![resolve_node_path(*node_id, lifecycle, unresolved_reason)],
             content: ShowOperationContent::ChangePerm {
                 old_mode: *old_mode,
                 new_mode: *new_mode,
@@ -494,16 +601,29 @@ fn show_operation(
     })
 }
 
+/// `unresolved_reason` is consulted only when `lifecycle` itself is `None` -- no fold was even
+/// attempted, so a bare node id alone would say nothing about why. When `lifecycle` is `Some` but
+/// the node is not live in it, the reason stays `None` (unchanged from before 0.56.0 step 1b): a
+/// fold that completed fine but found the node not live already says everything relevant through
+/// the node id and the operation sequence around it.
 fn resolve_node_path(
     node_id: NodeId,
     lifecycle: Option<&NodeLifecycleState>,
+    unresolved_reason: Option<&str>,
 ) -> ShowPathResolution {
-    lifecycle
-        .and_then(|state| state.live_node(&node_id))
-        .map(|node| ShowPathResolution::Path(node.path.as_str().to_string()))
-        .unwrap_or_else(|| ShowPathResolution::Unresolved {
+    if let Some(state) = lifecycle {
+        if let Some(node) = state.live_node(&node_id) {
+            return ShowPathResolution::Path(node.path.as_str().to_string());
+        }
+        return ShowPathResolution::Unresolved {
             node_id: prikk_hash::to_hex(node_id.as_bytes()),
-        })
+            reason: None,
+        };
+    }
+    ShowPathResolution::Unresolved {
+        node_id: prikk_hash::to_hex(node_id.as_bytes()),
+        reason: unresolved_reason.map(str::to_string),
+    }
 }
 
 /// RFC 142 §6b: keeps the `Option` the object store hands out instead of collapsing it into a bare
@@ -547,6 +667,168 @@ fn show_blob_content(
             ))),
         },
     }
+}
+
+/// A pending patch's own path resolution, through the claim(s) naming it (0.56.0 step 1b).
+enum PendingPathResolution {
+    /// A usable claim resolved: the folded state to resolve this patch's own node-addressed
+    /// operations against.
+    Resolved(NodeLifecycleState),
+    /// No claim resolved -- the reason named, for the most informative claim tried (or the one
+    /// and only reason, when every claim failed the same way).
+    Unresolved(String),
+}
+
+/// Resolve a **pending** patch's own node-addressed operations against the claim that names it
+/// (0.56.0 step 1 part 1b; planeter letter 2026-10-21 §2's own "parent block id the claim names").
+///
+/// **"The claim's parent block" is `RecognitionClaimPayload::parent_block_ids`, not `block_id`.**
+/// `block_id` is the block the claim says these patches *would* be sealed into -- `sync-pending-v1`
+/// already calls that field `parent_block_id` for an unrelated, legitimate reason (labeling the
+/// prospective block). It cannot be what this task means: for a `Consistent` claim (the honest,
+/// unmodified kind), `block_id`'s own `patch_ids` equal the claim's own `patch_ids` verbatim
+/// (`check_recognition_claim_consistency`), so the moment `block_id` is itself reachable from any
+/// tip, those same patch ids are already inside the sealed closure
+/// `patch_ids_pending_excluding_received` excludes -- the patch would already read `sealed`, never
+/// `pending`. "The claim's parent block, sealed or received" has to mean the *pre-existing*
+/// historical anchor the prospective block would attach onto: `parent_block_ids`, the named
+/// block's own parents. **Flagged here for the architect's own explicit confirmation**, the same
+/// way `sync-pending-v1`'s own `parent_block_id = block_id` reading was flagged in step 1a --
+/// grounded, not in doubt, but worth surfacing since it reads differently from a casual reading of
+/// this task's own wording.
+///
+/// Tries every held claim naming this patch (0.56.0 step 1a already proved more than one can),
+/// in claim id order (`claims_naming_patch`'s own order -- the same convention `claims[]` uses
+/// elsewhere), and uses the first that resolves:
+/// - `parent_block_ids` empty (a root claim): folds from an empty [`NodeLifecycleState`], the same
+///   starting point [`block_starting_state`]'s own `Root` arm already uses.
+/// - `parent_block_ids` exactly one, and that one block id is itself sealed or received (checked
+///   against the same local-ref-tip/received-pointer-tip union [`patch_ids_pending_excluding_received`]
+///   already walks, narrowed here to block-id membership via [`ancestors_inclusive`] instead of
+///   patch-id accumulation): folds from that block's own end state
+///   ([`lifecycle_state_at`], the same call [`block_starting_state`] makes for a real block's own
+///   parent).
+/// - `parent_block_ids` exactly one, but not itself sealed or received: this claim is part of an
+///   unrealized chain -- skipped, named as the reason if no other claim does better.
+/// - `parent_block_ids` with more than one entry (a merge-shaped claim): no `mainline_parent_id`
+///   exists on `RecognitionClaimPayload` to pick one from (unlike `BlockPayload`) -- skipped, named
+///   as its own distinct reason. Out of this sitting's scope, same as the chain case (both are
+///   step 2B's `extract` chain work).
+///
+/// Either way, the fold itself is the same [`apply_one_patch_with_materialize_fallback`] driver
+/// `show()`'s own block loop already uses, over the claim's own `patch_ids` (its stated order, not
+/// a real block's) instead of `block.patch_ids`, stopping once the target patch has been applied.
+fn resolve_pending_patch_lifecycle(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    patch_id: ObjectId,
+) -> Result<PendingPathResolution> {
+    let claims = claims_naming_patch(layout, patch_id)?;
+    if claims.is_empty() {
+        return Ok(PendingPathResolution::Unresolved(
+            "no held recognition claim names this pending patch yet".to_string(),
+        ));
+    }
+
+    let mut last_reason = String::new();
+    for (_, claim) in &claims {
+        let anchor = match claim.parent_block_ids.as_slice() {
+            [] => None,
+            [parent] => {
+                if block_is_sealed_or_received(layout, object_store, *parent)? {
+                    Some(*parent)
+                } else {
+                    last_reason = format!(
+                        "the claim naming this patch names parent block {parent}, which is not \
+                         itself sealed or received yet -- it is still part of an unrealized \
+                         chain of claims"
+                    );
+                    continue;
+                }
+            }
+            _ => {
+                last_reason = "the claim naming this patch names more than one parent block, \
+                                with no mainline to choose"
+                    .to_string();
+                continue;
+            }
+        };
+        let mut state = match anchor {
+            Some(anchor_id) => lifecycle_state_at(object_store, anchor_id)?.state().clone(),
+            None => NodeLifecycleState::new(),
+        };
+        let sealed_lineage = match anchor {
+            Some(anchor_id) => Some((anchor_id, lineage_horizon(object_store, anchor_id)?)),
+            None => None,
+        };
+        let mut text_cache = TextCache::new();
+        for claim_patch_id in &claim.patch_ids {
+            apply_one_patch_with_materialize_fallback(
+                Some(layout),
+                object_store,
+                *claim_patch_id,
+                &mut state,
+                &mut text_cache,
+                sealed_lineage,
+            )?;
+            if *claim_patch_id == patch_id {
+                return Ok(PendingPathResolution::Resolved(state));
+            }
+        }
+    }
+    Ok(PendingPathResolution::Unresolved(last_reason))
+}
+
+/// Resolve one ref/received pointer's own `RefState` to its tip block id -- the identical
+/// resolution [`crate::patch_exchange::accepted_but_unsealed_patch_ids`]'s own per-pointer loop
+/// already performs. Duplicated here at a few lines, rather than reaching into that module's
+/// private helper and bumping its visibility, to keep this file's own tip walk self-contained for
+/// a block-id membership question [`crate::patch_exchange`] has no existing caller for.
+fn resolve_tip_block_id(
+    object_store: &impl ObjectReader,
+    pointer_name: &str,
+    ref_state_id: ObjectId,
+) -> Result<ObjectId> {
+    let ref_state_envelope = object_store
+        .read_typed(ref_state_id, ObjectType::RefState)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "ref {pointer_name} names missing RefState {ref_state_id}"
+            ))
+        })?;
+    let ref_state_payload = RefStatePayload::decode_canonical(
+        &ref_state_envelope.canonical_payload,
+        ref_state_envelope.schema_version,
+    )?;
+    let (tip_block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state_payload)?;
+    Ok(tip_block_id)
+}
+
+/// Is `block_id` itself sealed (reachable from a local ref tip) or received (reachable from a
+/// received pointer's tip)? No existing predicate answers this -- `patch_ids_reachable_from_block`
+/// and its callers only ever accumulate *patch* ids from an ancestry walk, discarding the ancestor
+/// *block* ids [`ancestors_inclusive`] already computes along the way. This reuses that same walk,
+/// over the same tip union [`patch_ids_pending_excluding_received`] already walks for patch ids,
+/// and checks `block_id`'s own membership in the accumulated block-id keys instead.
+fn block_is_sealed_or_received(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+) -> Result<bool> {
+    let ref_store = RefStore::new(layout.clone());
+    for pointer in ref_store.list_ref_pointers()? {
+        let tip = resolve_tip_block_id(object_store, &pointer.ref_name, pointer.ref_state_id)?;
+        if ancestors_inclusive(object_store, tip)?.contains_key(&block_id) {
+            return Ok(true);
+        }
+    }
+    for pointer in list_received_pointers(layout)? {
+        let tip = resolve_tip_block_id(object_store, &pointer.ref_name, pointer.ref_state_id)?;
+        if ancestors_inclusive(object_store, tip)?.contains_key(&block_id) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

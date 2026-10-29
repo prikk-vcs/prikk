@@ -3,8 +3,8 @@
 //! RFC 142 §6: renders `EditText`'s own before/after span, never a synthesized line-oriented
 //! diff -- no hunk header, no line-number gutter, in either the prose or the JSON form.
 
+use prikk_store::{PatchState, ShowOperation, ShowPatch};
 use prikk_store::{ShowBlobContent, ShowDeletePreimage, ShowOperationContent, ShowPathResolution};
-use prikk_store::{ShowOperation, ShowPatch};
 
 use crate::stdout::println;
 
@@ -13,9 +13,26 @@ use super::verification::escape_json_string;
 fn print_path(label: &str, path: &ShowPathResolution) {
     match path {
         ShowPathResolution::Path(path) => println!("    {label}: {path}"),
-        ShowPathResolution::Unresolved { node_id } => {
+        ShowPathResolution::Unresolved {
+            node_id,
+            reason: None,
+        } => {
             println!("    {label}: <unresolved node {node_id}>");
         }
+        ShowPathResolution::Unresolved {
+            node_id,
+            reason: Some(reason),
+        } => {
+            println!("    {label}: <unresolved node {node_id}: {reason}>");
+        }
+    }
+}
+
+fn state_label(state: PatchState) -> &'static str {
+    match state {
+        PatchState::Queued => "queued",
+        PatchState::Pending => "pending",
+        PatchState::Sealed => "sealed",
     }
 }
 
@@ -147,9 +164,14 @@ fn push_path(json: &mut String, path: &ShowPathResolution) {
             json.push_str(&escape_json_string(path));
             json.push('}');
         }
-        ShowPathResolution::Unresolved { node_id } => {
+        ShowPathResolution::Unresolved { node_id, reason } => {
             json.push_str("{\"unresolved_node_id\": ");
             json.push_str(&escape_json_string(node_id));
+            json.push_str(", \"reason\": ");
+            match reason {
+                Some(reason) => json.push_str(&escape_json_string(reason)),
+                None => json.push_str("null"),
+            }
             json.push('}');
         }
     }
@@ -272,6 +294,9 @@ pub(crate) fn print_show_json(patches: &[ShowPatch]) {
         json.push_str(&escape_json_string(&patch.patch_id.to_string()));
         // RFC 142 §7a: additive within `show-report-v1` -- `true` for a committed, unsealed patch.
         json.push_str(&format!(", \"queued\": {}", patch.queued));
+        // 0.56.0 step 1b: additive within `show-report-v1`.
+        json.push_str(", \"state\": ");
+        json.push_str(&escape_json_string(state_label(patch.state)));
         json.push_str(", \"operations\": [");
         for (op_index, operation) in patch.operations.iter().enumerate() {
             if op_index > 0 {

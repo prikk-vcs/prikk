@@ -107,10 +107,18 @@ fn show_addresses_a_queued_patch_as_it_will_render_once_sealed() {
     support::ok(&sealed_json, "show <sealed id> --format json");
     let sealed_json = stdout(&sealed_json);
     assert!(sealed_json.contains("\"queued\": false"), "{sealed_json}");
+    assert!(
+        sealed_json.contains("\"state\": \"sealed\""),
+        "{sealed_json}"
+    );
+    // 0.56.0 step 1b: `state` legitimately differs too (`queued` -> `sealed`), the same way
+    // `queued` itself does -- both fields track the same transition, by design.
     assert_eq!(
-        queued_json.replace("\"queued\": true", "\"queued\": false"),
+        queued_json
+            .replace("\"queued\": true", "\"queued\": false")
+            .replace("\"state\": \"queued\"", "\"state\": \"sealed\""),
         sealed_json,
-        "the queued rendering must equal the sealed one apart from `queued`"
+        "the queued rendering must equal the sealed one apart from `queued` and `state`"
     );
 
     let sealed_prose = stdout(&show(&repo, &id, false));

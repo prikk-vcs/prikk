@@ -17,17 +17,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use prikk_error::{PrikkError, Result};
+use prikk_error::Result;
 use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload, SignerRole};
 
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
-use crate::object_store::{ObjectReadSnapshot, ObjectReader};
-use crate::patch_set_digest::patch_ids_reachable_from_block;
-use crate::received::list_received_pointers;
+use crate::patch_set_digest::patch_ids_pending_excluding_received;
 use crate::recognition_claim::verify_claim_signature;
-use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::trust::load_maintainer_trust_policy_or_empty;
 
 mod accept;
@@ -40,116 +37,12 @@ pub use artifact::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, export_exchange_artifact,
 };
-
-/// D2's derived query (design-v1.md §3, RFC 115 Stage 3 §5): **no new container, no stored pending
-/// state.** "Accepted but unsealed" is computed, every time it's asked:
-///
-/// > patch objects present in this repository, minus the patch ids reachable from any block.
-///
-/// Enumerates stored patches the way `verify/objects.rs:163` enumerates objects
-/// (`persisted_object_types()` → per-type container → `decode_container_records`, narrowed here to
-/// `ObjectType::Patch` alone) and reuses Stage 1's `patch_ids_reachable_from_block` for the
-/// subtrahend, over every local ref's tip -- the same ancestry walk `export_bundle` and Stage 1's
-/// digest already share, not a second one.
-pub fn accepted_but_unsealed_patch_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
-    debug_assert!(
-        persisted_object_types().contains(&ObjectType::Patch),
-        "Patch must remain a persisted, containerized object type"
-    );
-
-    #[cfg(test)]
-    let _whole_read_scope =
-        crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
-    let container_path = layout.container_slot_path(ObjectType::Patch, ContainerSlot::A);
-    let relative = layout.repository_relative(&container_path)?;
-    let mut all_patch_ids: BTreeSet<ObjectId> = BTreeSet::new();
-    if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
-        let replay = decode_container_records(ObjectType::Patch, &bytes)?;
-        for record in replay.records {
-            all_patch_ids.insert(record.envelope.object_id());
-        }
-    }
-
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
-    let mut reachable: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in ref_store.list_ref_pointers()? {
-        reachable.extend(reachable_patch_ids_from_ref_state(
-            &object_store,
-            &pointer.ref_name,
-            pointer.ref_state_id,
-        )?);
-    }
-
-    Ok(all_patch_ids.difference(&reachable).copied().collect())
-}
-
-/// Resolve one ref pointer's tip block to its own reachable patch ids: `RefState` read -> decode
-/// -> [`resolve_ref_tip_block`] -> [`patch_ids_reachable_from_block`]. Shared by
-/// [`accepted_but_unsealed_patch_ids`]'s own loop over local ref pointers and
-/// [`patch_ids_pending_excluding_received`]'s loop over received pointers -- identical resolution,
-/// differing only in which pointer kind calls it (`pointer_name` is only ever used for the error
-/// message, so a `remotes/...` name reads naturally too).
-fn reachable_patch_ids_from_ref_state(
-    object_store: &ObjectReadSnapshot,
-    pointer_name: &str,
-    ref_state_id: ObjectId,
-) -> Result<Vec<ObjectId>> {
-    let ref_state_envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {pointer_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
-    let ref_state_payload = prikk_object::RefStatePayload::decode_canonical(
-        &ref_state_envelope.canonical_payload,
-        ref_state_envelope.schema_version,
-    )?;
-    let (tip_block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state_payload)?;
-    patch_ids_reachable_from_block(object_store, tip_block_id)
-}
-
-/// `sync pending`'s own view (0.56.0 step 1a2; owner ruling 2026-10-29, "Exclude received
-/// history"): every patch [`accepted_but_unsealed_patch_ids`] reports, minus every one also
-/// reachable from a **received** pointer's own tip block (`archive import` without a successful
-/// `--adopt`, landing via `land_as_received_pointer` into the received-index -- confirmed in step
-/// 1a's own report, §4). A patch the sender's own history already sealed, even one this repository
-/// has not adopted, is not something an operator still needs to act on.
-///
-/// **Built as its own subtraction, not a change to [`accepted_but_unsealed_patch_ids`] itself.**
-/// That function has a third caller, `seal_from_accepted_claim` (a gate, not a listing), which
-/// keeps its own exact prior behavior -- see this round's own report for why sealing does not get
-/// this exclusion too.
-///
-/// Set algebra: `(A \ X) \ Y = A \ (X ∪ Y)`. `accepted_but_unsealed_patch_ids` already computed
-/// `A \ X`; this adds exactly one further pass, over received pointers (typically few), never a
-/// second scan of the `Patch` container. Filtering an already-sorted `Vec` by exclusion preserves
-/// its order, so the result stays in the same patch-id order the raw query already returns.
-pub fn patch_ids_pending_excluding_received(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
-    let pending = accepted_but_unsealed_patch_ids(layout)?;
-    if pending.is_empty() {
-        return Ok(pending);
-    }
-
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let mut received_reachable: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in list_received_pointers(layout)? {
-        received_reachable.extend(reachable_patch_ids_from_ref_state(
-            &object_store,
-            &pointer.ref_name,
-            pointer.ref_state_id,
-        )?);
-    }
-    if received_reachable.is_empty() {
-        return Ok(pending);
-    }
-
-    Ok(pending
-        .into_iter()
-        .filter(|patch_id| !received_reachable.contains(patch_id))
-        .collect())
-}
+// 0.56.0 step 1b (boundary-check, `exchange-subsystem`): `accepted_but_unsealed_patch_ids` and
+// `patch_ids_pending_excluding_received` moved to `patch_set_digest` (not part of the exchange
+// subsystem, so `show` may call them directly), re-exported here unchanged so every pre-existing
+// caller inside this subsystem keeps resolving the same two names. Their own doc comments stayed
+// at the new location, not duplicated here.
+pub use crate::patch_set_digest::accepted_but_unsealed_patch_ids;
 
 /// One recognition claim naming a pending patch (planeter letter 2026-10-21 §2; 0.56.0 step 1
 /// part 1a): the claim's own id (content-addressed, not a payload field), the single block it

@@ -758,6 +758,19 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   `verify`'s own report rather than keeping a second derivation of it -- one more \
                   real consumer sharing this module's own rules, not reach that crept outward",
     },
+    DeclaredHub {
+        module: "patch_set_digest",
+        reason: "0.56.0 step 1b: `accepted_but_unsealed_patch_ids` and \
+                  `patch_ids_pending_excluding_received` moved here from `patch_exchange` (re-exported \
+                  there unchanged for every pre-existing caller) because `show` now needs them too, \
+                  and the exchange-subsystem rule above forbids `show` from reaching into \
+                  `patch_exchange` directly -- `patch_set_digest` already carries no such \
+                  restriction and already hosts `patch_ids_reachable_from_block`, the exact sibling \
+                  query both moved functions are built on. The two new fan-out edges (`foundation`, \
+                  for the same container-scan primitives `patch_exchange` already used; `received`, \
+                  for the received-pointer walk 0.56.0 step 1a2 added) and the one new fan-in edge \
+                  (`show`) are this one relocation, not reach that crept outward on its own",
+    },
 ];
 
 /// One module in the emitted graph.

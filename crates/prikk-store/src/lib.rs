@@ -255,9 +255,8 @@ pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, PendingClaimSignatureOutcome,
-    PendingPatchClaim, PendingPatchEntry, accept_exchange_artifact,
-    accepted_but_unsealed_patch_ids, export_exchange_artifact,
-    patch_ids_pending_excluding_received, pending_patches_with_claims,
+    PendingPatchClaim, PendingPatchEntry, accept_exchange_artifact, export_exchange_artifact,
+    pending_patches_with_claims,
 };
 pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,
@@ -278,10 +277,10 @@ pub use patch_replay::{
     replay_time_split_for_test_support, replayed_block_count_at_point_for_test_support,
 };
 pub use patch_set_digest::{
-    PatchSetDigest, PatchSetResolution, compute_patch_set_digest,
+    PatchSetDigest, PatchSetResolution, accepted_but_unsealed_patch_ids, compute_patch_set_digest,
     compute_patch_set_digest_and_count_from_block, compute_patch_set_digest_for_ref,
-    compute_patch_set_digest_from_block, patch_ids_reachable_from_block, patch_set_digest_preimage,
-    resolve_patch_set_digest,
+    compute_patch_set_digest_from_block, patch_ids_pending_excluding_received,
+    patch_ids_reachable_from_block, patch_set_digest_preimage, resolve_patch_set_digest,
 };
 pub use path::{RepoPath, validate_no_path_collisions, validate_repo_path};
 pub use point::{
@@ -345,8 +344,8 @@ pub use rollback::preview::{
 pub use rollback::verify::{RollbackDraftVerification, verify_active_rollback_draft};
 pub use seal_from_accepted::{SealFromAcceptedOutcome, seal_from_accepted_claim};
 pub use show::{
-    ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent, ShowPatch,
-    ShowPathResolution, show,
+    PatchState, ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent,
+    ShowPatch, ShowPathResolution, show,
 };
 pub use signature_admission::{
     DroppedSignature, DroppedSignatureReason, MAX_COUNTED_SIGNATURES_PER_OBJECT,

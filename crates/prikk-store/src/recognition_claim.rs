@@ -34,7 +34,7 @@
 //! order, derived from **signed** data rather than an artifact's own unsigned sequence or an
 //! incidental id order. This is the first code that sorts by it.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -42,6 +42,9 @@ use prikk_object::{
     SignatureAlgorithm, SignerRole,
 };
 
+use crate::foundation::container::decode_container_records;
+use crate::foundation::fsutil::read_file_if_exists;
+use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::object_store::ObjectReader;
 use crate::trust::MaintainerTrustPolicy;
 
@@ -315,6 +318,48 @@ pub fn order_claims_for_sealing(
         )));
     }
     Ok(order)
+}
+
+/// Every held recognition claim naming `patch_id`, sorted by claim id (0.56.0 step 1b: `show`'s
+/// own need, resolving a pending patch's path through the claim that names it). Distinct from
+/// `patch_exchange::PendingPatchClaim`, which keeps only `block_id` and a signature outcome for
+/// `sync-pending-v1` -- this caller needs the claim's full payload, specifically
+/// `parent_block_ids`, which that summarized type does not carry. Same container-walk shape,
+/// one further scan of `RecognitionClaim`, not reused from `patch_exchange::pending_patches_with_claims`
+/// since that function already discards the full payload once it has extracted what `sync
+/// pending` itself needs.
+///
+/// **Lives here, not in `patch_exchange`**, for the identical reason `patch_set_digest` now hosts
+/// `accepted_but_unsealed_patch_ids` (0.56.0 step 1b): `show` needs this, and the boundary-check
+/// gate's own `exchange-subsystem` rule does not let it reach into `patch_exchange`.
+/// `recognition_claim` carries no such restriction.
+pub(crate) fn claims_naming_patch(
+    layout: &RepositoryLayout,
+    patch_id: ObjectId,
+) -> Result<Vec<(ObjectId, RecognitionClaimPayload)>> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
+    let container_path = layout.container_slot_path(ObjectType::RecognitionClaim, ContainerSlot::A);
+    let relative = layout.repository_relative(&container_path)?;
+    let mut matches: Vec<(ObjectId, RecognitionClaimPayload)> = Vec::new();
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
+        let replay = decode_container_records(ObjectType::RecognitionClaim, &bytes)?;
+        for record in replay.records {
+            let claim_id = record.envelope.object_id();
+            if !seen.insert(claim_id) {
+                continue;
+            }
+            let payload =
+                RecognitionClaimPayload::decode_canonical(&record.envelope.canonical_payload)?;
+            if payload.patch_ids.contains(&patch_id) {
+                matches.push((claim_id, payload));
+            }
+        }
+    }
+    matches.sort_by_key(|(claim_id, _)| *claim_id);
+    Ok(matches)
 }
 
 #[cfg(test)]
