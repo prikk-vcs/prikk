@@ -202,6 +202,31 @@ Before this, such a change could land through `archive import` with no warning, 
 `archive verify` as internally consistent, while `bundle import` already refused the identical
 change; this closes that gap, through one shared check both importers now run.
 
+**A refused `archive import` landing now leaves the repository exactly as it was found — nothing
+written at all, not even a half-finished import record.** Every planned landing is now classified
+against the local repository before anything is written, not only after every carried object has
+already landed; a rollback, a diverged landing, or one that does not connect still refuses the
+same way, but a refused run no longer leaves behind objects nobody can reach, or an unfinished
+import that `prikk doctor` would otherwise report as an error. Resuming an interrupted import
+(after a real crash, say) is unaffected, and still catches the rarer case of the pointer moving
+again in the gap before the resume.
+
+**`archive import --format json` now reports the same classification `bundle import --format
+json` does.** Each entry in its own `"landings"` array gains `"class"` and `"ref_state_chain"`
+(the same names and values described above, for every landing, not only a refused one), and a
+refusal now prints the same `refusal-v1` document described above, with `"command":
+"archive-import"`.
+
+**`bundle preview --ref remotes/<name>` now resolves what was actually received at that name,
+instead of always reporting "no local history" for it.** A `remotes/…` name answers against the
+received pointer held under that exact name; if none is held there, the command refuses by name
+rather than reporting a misleading answer. A `heads/…` or `tags/…` name is unaffected.
+`bundle preview` also now always reports, in two new fields (`"import_class"` and
+`"import_ref_state_chain"`), the classification `bundle import` of the identical delivery would
+actually make — against the received pointer this repository would actually write to, which is
+not always the same name a `--ref` comparison asked to inspect. These are additive and distinct
+from `"class"`/`"ref_state_chain"` above, which still answer only the `--ref` comparison.
+
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
 bare block id, 64 lowercase hex characters, resolved by one resolver.

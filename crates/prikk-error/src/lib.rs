@@ -95,15 +95,29 @@ pub enum PrikkError {
         /// The bound that was exceeded.
         bound_count: u64,
     },
-    /// 0.56.0 step 3b (A4): `bundle import`'s own refusal of a rollback, a diverged rewrite, or a
-    /// history that does not connect to the received pointer it would replace (0.56.0 step 3a,
-    /// A3). Exists apart from [`Self::Precondition`] for the same reason
-    /// [`Self::IncompletePublication`] does: `prikk-cli`'s own `refusal-v1` document must classify
-    /// this refusal structurally, never by matching this error's own message text (an edit to the
-    /// text could silently drop the classification). Its own `Display` text is unchanged from what
-    /// `Precondition` would have rendered for the identical message; only a caller that needs the
-    /// class itself matches the variant.
+    /// 0.56.0 step 3b (A4), generalized in step 3c2 (R2): `bundle import`'s and `archive import`'s
+    /// own refusal of a rollback, a diverged rewrite, or a history that does not connect to the
+    /// pointer it would replace (0.56.0 step 3a, A3). Exists apart from [`Self::Precondition`] for
+    /// the same reason [`Self::IncompletePublication`] does: `prikk-cli`'s own `refusal-v1`
+    /// document must classify this refusal structurally, never by matching this error's own
+    /// message text (an edit to the text could silently drop the classification). Its own
+    /// `Display` text is unchanged from what `Precondition` would have rendered for the identical
+    /// message; only a caller that needs the class (or which command raised it) matches the
+    /// variant.
+    ///
+    /// **One variant for both importers, not two** (R2's own choice, stated here so a future
+    /// reader does not wonder why `archive import` does not get its own sibling): the two call
+    /// sites differ only in which command raised the refusal and in how the "prior pointer" side
+    /// is resolved (`bundle import`'s own pass-1 metadata vs. `archive import`'s local store /
+    /// archive-side graph) -- a difference already fully absorbed before either ever constructs
+    /// this value. The `class`/`message` fields, and every caller that matches on them, are
+    /// otherwise identical between the two, so a second, structurally-duplicate variant would
+    /// carry no information a `command` field does not already carry more cheaply.
     BundleNonFastForward {
+        /// Which command raised this refusal: `"bundle-import"` or `"archive-import"` -- matches
+        /// `refusal-v1`'s own `"command"` field for each (`bundle-import-report-v1`'s is
+        /// `"bundle-import"`; `prepo-import-report-v1`'s new one is `"archive-import"`).
+        command: &'static str,
         /// The connectivity class that was refused: one of `"rollback"`, `"diverged"`, or
         /// `"does-not-connect"` (`prikk_store::BundleConnectivityClass::as_str`'s own values for
         /// those three variants). Kept as a plain `&'static str` here, not `prikk-store`'s own

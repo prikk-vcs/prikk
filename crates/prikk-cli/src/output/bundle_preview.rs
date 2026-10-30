@@ -35,6 +35,17 @@ pub(crate) fn print_bundle_preview_json(report: &BundlePreviewReport) {
         Some(chain) => json.push_str(&escape_json_string(chain.as_str())),
         None => json.push_str("null"),
     }
+    // 0.56.0 step 3c2 (R3): additive, and named so it cannot be confused with "class"/
+    // "ref_state_chain" above -- those answer the `--ref` comparison asked for inspection;
+    // these answer what `bundle import` of this exact delivery would actually do, against the
+    // received pointer at `remotes/<bundle_ref>`, which may be a different name entirely.
+    json.push_str(",\n  \"import_class\": ");
+    json.push_str(&escape_json_string(report.import_class.as_str()));
+    json.push_str(",\n  \"import_ref_state_chain\": ");
+    match report.import_ref_state_chain {
+        Some(chain) => json.push_str(&escape_json_string(chain.as_str())),
+        None => json.push_str("null"),
+    }
 
     json.push_str(",\n  \"conflict\": ");
     match &report.conflict {
@@ -118,6 +129,16 @@ pub(crate) fn print_bundle_preview_plain(report: &BundlePreviewReport) {
     println!("class: {}", report.class.as_str());
     if let Some(chain) = report.ref_state_chain {
         println!("ref state chain: {}", chain.as_str());
+    }
+    // 0.56.0 step 3c2 (R3): what `bundle import` of this exact delivery would actually do --
+    // against the received pointer at `remotes/<bundle_ref>`, independent of what "class" above
+    // just answered against the `--ref` comparison.
+    println!(
+        "bundle import of this delivery would classify as: {}",
+        report.import_class.as_str()
+    );
+    if let Some(chain) = report.import_ref_state_chain {
+        println!("  ref state chain: {}", chain.as_str());
     }
     match &report.conflict {
         Some(BundlePreviewConflict::AppliesCleanly) => println!("conflict: none, applies cleanly"),

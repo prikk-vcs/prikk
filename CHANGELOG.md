@@ -41,6 +41,22 @@
   not decode, before anything is written.** Before this, `archive import` could land such a change
   with no warning at all, and `archive verify` reported the archive as internally consistent —
   while `bundle import` already refused the identical change. All three now apply the same check.
+- **A refused `archive import` landing now leaves the repository exactly as it was found.** Before
+  this, a refused landing (a rollback, a divergent landing, or one that does not connect) still left
+  every object the archive carried written, and an unfinished import record behind — so `prikk
+  doctor` then reported an error about an import that did not finish, even though the refusal was
+  working as designed. Every planned landing is now checked against the local repository before
+  anything is written at all, not only after every object has already landed, so a refused run now
+  writes nothing: no object, no unfinished record. Resuming a genuinely interrupted import (after a
+  crash, say) still works the same way as before, and still catches the rarer case of the pointer
+  moving again in the gap before the resume.
+- **`bundle preview --ref remotes/<name>` now resolves what this repository actually received at
+  that name, instead of always reporting "no local history" for it.** Before this, previewing a
+  bundle against a received (not yet locally published) ref always answered as if nothing had ever
+  been received there, even when something had — while `bundle import` of the identical bundle
+  correctly read it and refused as a rollback or similar. A `remotes/…` name now resolves against
+  what was actually received; if nothing was received under that exact name, the command refuses
+  by name rather than giving a misleading answer. A `heads/…` or `tags/…` name is unaffected.
 
 ### Added
 
@@ -59,6 +75,19 @@
   refusals above (a rollback, a divergent rewrite, or a history that does not connect), it also
   prints a `refusal-v1` document naming the refused class, the same reusable shape `extract` already
   uses for its own refusals.
+
+- **`archive import --format json` now reports the same classification `bundle import --format
+  json` does.** Each entry in its own list of landings carries `"class"` and `"ref_state_chain"`
+  (the same fields and values `bundle preview --format json`/`bundle import --format json` already
+  report), for every landing, not only a refused one. A refusal now also prints the same reusable
+  refusal document `bundle import` already uses, naming the refused class.
+- **`bundle preview` now always reports two additional fields, `"import_class"` and
+  `"import_ref_state_chain"`.** These answer a different question from the existing `"class"`/
+  `"ref_state_chain"` above: what `bundle import` of this exact delivery would actually do, against
+  whatever this repository would actually write to, which is not always the same thing a preview's
+  own comparison target was asked to inspect. The two can genuinely disagree — previewing a
+  bundle's effect against one ref for inspection does not change which pointer `bundle import` of
+  the identical bytes would actually touch.
 
 - **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
   this repository and not sealed by any history it holds, its own or received. Each entry carries

@@ -437,8 +437,22 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     let mut options = ArchiveImportOptions::default();
     options.adopt = parsed.adopt;
     options.allow_non_fast_forward = parsed.allow_non_fast_forward;
-    let report = prikk_store::import_archive(&layout, &mut reader, &options)
-        .map_err(|err| err.to_string())?;
+    let format_json = parsed.format_json;
+    let report = prikk_store::import_archive(&layout, &mut reader, &options).map_err(|err| {
+        // 0.56.0 step 3c2 (R2): a `refusal-v1` document on exactly the three connectivity-based
+        // refusals this round and 3c classify structurally, via the `BundleNonFastForward`
+        // variant 3b/3c2 share with `bundle import` -- never by matching `err`'s own message
+        // text. Printed before `err.to_string()` below; stderr's own text and the exit code are
+        // unaffected either way (`bundle import`'s own idiom, 3b).
+        if format_json {
+            if let prikk_error::PrikkError::BundleNonFastForward { class, command, .. } = &err {
+                if *command == "archive-import" {
+                    print_archive_import_refusal_json(class, &err.to_string());
+                }
+            }
+        }
+        err.to_string()
+    })?;
 
     if parsed.format_json {
         print_import_report_json(&report);
@@ -446,6 +460,21 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         print_import_report(&report);
     }
     Ok(())
+}
+
+/// 0.56.0 step 3c2 (R2): `archive import --format json`'s own `refusal-v1`, mirroring `bundle
+/// import`'s own `print_bundle_import_refusal_json` (3b) exactly, with `"command":
+/// "archive-import"` in place of `"bundle-import"`.
+fn print_archive_import_refusal_json(id: &str, message: &str) {
+    let mut json = String::new();
+    json.push_str(
+        "{\"schema_version\": \"refusal-v1\", \"command\": \"archive-import\", \"refusal\": ",
+    );
+    json.push_str(&escape_json_string(id));
+    json.push_str(", \"reason\": null, \"message\": ");
+    json.push_str(&escape_json_string(message));
+    json.push('}');
+    println!("{json}");
 }
 
 fn print_import_report(report: &prikk_store::ArchiveImportReport) {
@@ -495,6 +524,13 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
             );
         } else {
             println!("{}: landed as {}", landing.ref_name, landing.landed_as);
+        }
+        // 0.56.0 step 3c2 (R2): the same `class`/`ref state chain` lines `bundle import`'s own
+        // plain-text form already prints (3a), per landing here rather than once for the whole
+        // report.
+        println!("  class: {}", landing.class.as_str());
+        if let Some(chain) = landing.ref_state_chain {
+            println!("  ref state chain: {}", chain.as_str());
         }
     }
     if let Some(note) = publication_trust_note(&report.landing_outcomes) {
@@ -633,7 +669,8 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
         .map(|landing| {
             format!(
                 "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {}, \
-                 \"landed\": {}, \"collision_target\": {}, \"publication_trusted\": {} }}",
+                 \"landed\": {}, \"collision_target\": {}, \"publication_trusted\": {}, \
+                 \"class\": {}, \"ref_state_chain\": {} }}",
                 escape_json_string(&landing.ref_name),
                 escape_json_string(&landing.landed_as),
                 landing.adopted,
@@ -646,7 +683,14 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
                     Some(id) => escape_json_string(&id.to_string()),
                     None => "null".to_string(),
                 },
-                landing.publication_trusted
+                landing.publication_trusted,
+                // 0.56.0 step 3c2 (R2): additive, the same `class`/`ref_state_chain` field names
+                // and values `bundle-import-report-v1`/`bundle-preview-v1` already carry.
+                escape_json_string(landing.class.as_str()),
+                match landing.ref_state_chain {
+                    Some(chain) => escape_json_string(chain.as_str()),
+                    None => "null".to_string(),
+                }
             )
         })
         .collect();

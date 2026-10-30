@@ -542,6 +542,17 @@ pub struct BundlePreviewReport {
     /// ref's current `RefState`. `None` only when `class` is `NoLocalHistory` -- there is no local
     /// `RefState` to compare against.
     pub ref_state_chain: Option<RefStateChainRelation>,
+    /// 0.56.0 step 3c2 (R3): the classification `bundle import` of this exact delivery would
+    /// actually make, against the received pointer at `remotes/<bundle_ref_name>` -- **not**
+    /// against `local_ref_name`/`class` above, which answer a different question (what `--ref`
+    /// asked to compare against, for inspection). These two can genuinely differ: a preview run
+    /// against a local ref for inspection purposes does not change which received pointer
+    /// `bundle import` of the identical bytes would actually touch. Named distinctly from
+    /// `class` so the two are never confused.
+    pub import_class: BundleConnectivityClass,
+    /// 0.56.0 step 3c2 (R3): the `RefState`-chain relation `import_class` was computed against.
+    /// `None` exactly when `import_class` is `NoLocalHistory`.
+    pub import_ref_state_chain: Option<RefStateChainRelation>,
 }
 
 /// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
@@ -627,7 +638,29 @@ pub fn preview_bundle_reporting_anchor(
         .map(|signature| signature.key_id)
         .collect();
 
-    let local_ref_state_id = RefStore::new(layout.clone()).read_current_ref_state_id(ref_name)?;
+    // 0.56.0 step 3c2 (R3): a `remotes/…` argument resolves the received pointer of that exact
+    // name, not `RefStore`'s own `heads/`/`tags/`-only lookup -- `RefStore::read_current_ref_
+    // state_id` only ever reads local refs, so a `remotes/…` argument used to always read `None`
+    // here regardless of whether a received pointer of that exact name existed, reporting a
+    // misleading `no-local-history` for a name that, in fact, resolves (planeter's own original
+    // complaint, and the same class of defect step 0's `log --ref` fix already addressed: a name
+    // that should resolve must not silently answer an empty/wrong success). A `heads/`/`tags/`
+    // argument keeps its own existing behavior unchanged: a genuinely unpublished local ref still
+    // legitimately answers `NoLocalHistory` below.
+    let local_ref_state_id = if let Some(received_name) = ref_name.strip_prefix("remotes/") {
+        match crate::received::read_received_pointer(layout, ref_name)? {
+            Some(pointer) => Some(pointer.ref_state_id),
+            None => {
+                return Err(PrikkError::Precondition(format!(
+                    "bundle preview: no received pointer is held at remotes/{received_name} -- \
+                     refusing rather than reporting a misleading no-local-history answer for a \
+                     name that does not resolve"
+                )));
+            }
+        }
+    } else {
+        RefStore::new(layout.clone()).read_current_ref_state_id(ref_name)?
+    };
 
     // §4n.1: a local ref with no published RefState at all -- not merely an empty one -- has no
     // target to compare against, so this is answered without ever attempting
@@ -683,6 +716,33 @@ pub fn preview_bundle_reporting_anchor(
                 local_ref_state_id,
             )?;
             (preview, Some(chain))
+        }
+    };
+
+    // 0.56.0 step 3c2 (R3): always compute the classification `bundle import` of this exact
+    // delivery would actually make -- against the received pointer at `remotes/<the bundle's
+    // own exported ref name>`, independent of whatever `ref_name` was asked for display purposes
+    // above (the two can genuinely differ: previewing a `heads/feature`-named bundle's impact
+    // against a local `heads/main`, say, while `bundle import` would still only ever write to
+    // `remotes/feature`). Reuses `import_bundle`'s own pre-write classification
+    // (`classify_import_connectivity`), over the identical pass-1 `closure_by_id` metadata and
+    // `read_snapshot` this function already built above -- no new reader, no second decode of
+    // anything the bundle carries.
+    let import_received_ref_name = format!("remotes/{}", metadata.origin_ref_name);
+    let import_received_pointer =
+        crate::received::read_received_pointer(layout, &import_received_ref_name)?;
+    let (import_class, import_ref_state_chain) = match &import_received_pointer {
+        None => (BundleConnectivityClass::NoLocalHistory, None),
+        Some(pointer) => {
+            let (class, chain) = classify_import_connectivity(
+                &read_snapshot,
+                &metadata.closure_by_id,
+                pointer,
+                bundle_target,
+                ref_state_id,
+                &import_received_ref_name,
+            )?;
+            (class, Some(chain))
         }
     };
 
@@ -742,6 +802,8 @@ pub fn preview_bundle_reporting_anchor(
             }),
             class,
             ref_state_chain,
+            import_class,
+            import_ref_state_chain,
         },
         anchor_fallbacks,
     ))
@@ -2252,6 +2314,7 @@ pub fn import_bundle(
         // matching this message's own words. `Display` renders identically to what `Precondition`
         // would have for this same message -- stderr's own text is unchanged by this round.
         return Err(PrikkError::BundleNonFastForward {
+            command: "bundle-import",
             class: connectivity_class.as_str(),
             message: format!(
                 "bundle import: this delivery is a {} against {received_ref_name}'s current \
@@ -3341,7 +3404,13 @@ fn read_ref_state_payload_for_chain(
 /// Does `start`'s own `previous_ref_state_id` chain contain `target` (at zero or more hops,
 /// `start == target` included)? Cycle-guarded the same way `history.rs`'s `load_ref_history` is --
 /// a cycle here is a genuine integrity defect, not a reportable classification.
-fn ref_state_chain_contains(
+///
+/// `pub(crate)` (0.56.0 step 3c2, R1): `archive import`'s own early, pre-stage-1 classification
+/// needs to walk the *local* side of a chain whose other side is not locally admitted yet (the
+/// archive's own delivered `RefState` has not been written at that point) -- this function alone,
+/// not `bundle_ref_state_chain_contains`'s archive-side-incompatible `closure_by_id` walk, answers
+/// that, since `target` here is only ever compared by id, never dereferenced.
+pub(crate) fn ref_state_chain_contains(
     reader: &impl ObjectReader,
     start: ObjectId,
     target: ObjectId,
@@ -3551,6 +3620,45 @@ pub(crate) fn classify_landing_connectivity(
     let chain =
         classify_ref_state_chain(reader, delivered_ref_state_id, reader, prior_ref_state_id)?;
     Ok((class, chain))
+}
+
+/// 0.56.0 step 3c2 (R1): the one classification `archive import`'s own new, pre-stage-1 check
+/// calls -- given both sides' own inclusive block-ancestor id sets and targets, plus whether each
+/// side's own `RefState` chain contains the other's id (computed by the caller, which alone knows
+/// how to walk its own two, differently-sourced chains: one side is the local store, the other is
+/// the archive itself, not yet admitted), returns the same public six-class/three-relation pair
+/// [`classify_import_connectivity`] and [`classify_landing_connectivity`] already return. Pure
+/// set/id logic, like [`preview::classify_connectivity`] itself -- no reader, no object decode.
+pub(crate) fn classify_connectivity_from_sets(
+    local_ancestors: &BTreeSet<ObjectId>,
+    delivered_ancestors: &BTreeSet<ObjectId>,
+    local_target: ObjectId,
+    delivered_target: ObjectId,
+    delivered_chain_contains_local: bool,
+    local_chain_contains_delivered: bool,
+) -> (BundleConnectivityClass, RefStateChainRelation) {
+    let preview_class = preview::classify_connectivity(
+        local_ancestors,
+        delivered_ancestors,
+        local_target,
+        delivered_target,
+    );
+    let class = match preview_class {
+        preview::ConnectivityClass::NoLocalHistory => BundleConnectivityClass::NoLocalHistory,
+        preview::ConnectivityClass::AlreadyAtTip => BundleConnectivityClass::AlreadyAtTip,
+        preview::ConnectivityClass::Rollback => BundleConnectivityClass::Rollback,
+        preview::ConnectivityClass::FastForward => BundleConnectivityClass::FastForward,
+        preview::ConnectivityClass::Diverged => BundleConnectivityClass::Diverged,
+        preview::ConnectivityClass::DoesNotConnect => BundleConnectivityClass::DoesNotConnect,
+    };
+    let chain = if delivered_chain_contains_local {
+        RefStateChainRelation::Extends
+    } else if local_chain_contains_delivered {
+        RefStateChainRelation::Older
+    } else {
+        RefStateChainRelation::Unrelated
+    };
+    (class, chain)
 }
 
 pub(crate) fn encode_bundle(

@@ -37,5 +37,7 @@ mod rfc155_part_if_trust_note;
 mod step0_c1_closure_shapes;
 #[path = "archive_and_bundle/step3b_bundle_import_json.rs"]
 mod step3b_bundle_import_json;
+#[path = "archive_and_bundle/step3c2_archive_import_json.rs"]
+mod step3c2_archive_import_json;
 #[path = "support/mod.rs"]
 mod support;

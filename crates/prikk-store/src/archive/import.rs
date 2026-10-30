@@ -88,18 +88,23 @@
 //! [`crate::lock::acquire_container_locks`] itself now refuses while a journal is present (see its
 //! own doc comment) -- so every one of those lock-only writers, present and future, is covered too.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek};
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, RefUpdatePayload, SignerRole};
+use prikk_object::{
+    BlockPayload, ObjectEnvelope, ObjectId, ObjectType, RefKind, RefStatePayload, RefUpdatePayload,
+    SignerRole, TagPayload,
+};
 
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
 };
 use crate::bundle::{
     BundleConnectivityClass, CarriedSignatureAdmitter, RefStateChainRelation,
-    classify_landing_connectivity, object_type_dependency_rank,
+    classify_connectivity_from_sets, classify_landing_connectivity, object_type_dependency_rank,
+    ref_state_chain_contains,
 };
 use crate::foundation::fsutil::{
     create_new_file_required, ensure_directory_required, read_file_if_exists,
@@ -339,6 +344,17 @@ pub struct LandingOutcome {
     /// the tip's own object could not be read (should not happen in practice; stage 1 already
     /// wrote it before stage 3 ever runs) or when nothing was checked.
     pub signing_key_ids: Vec<String>,
+    /// 0.56.0 step 3c2 (R2): this landing's own connectivity class against the pointer it would
+    /// replace (or did replace, for a collided entry) -- `NoLocalHistory` when no such pointer
+    /// existed. The same six values `bundle import`'s own `BundleImportReport::class` and
+    /// `bundle preview`'s own `"class"` field already carry, additive here too so
+    /// `prepo-import-report-v1` can report every landing's own classification, not only a
+    /// refused one.
+    pub class: BundleConnectivityClass,
+    /// 0.56.0 step 3c2 (R2): the `RefState`-chain relation to the pointer `class` was computed
+    /// against -- `None` exactly when `class` is `NoLocalHistory` (there was no prior `RefState`
+    /// to chain against).
+    pub ref_state_chain: Option<RefStateChainRelation>,
 }
 
 /// Every distinct MAINTAINER signer key id on `envelope`, sorted and deduplicated (I-F item 1) --
@@ -445,17 +461,66 @@ pub fn import_archive<R: Read + Seek>(
     }
 
     let existing_journal = read_journal(layout)?;
-    let (journal, resumed) = match existing_journal {
-        Some(journal) if journal.archive_identity == archive_identity => (journal, true),
-        Some(other) => {
+    if let Some(other) = &existing_journal {
+        if other.archive_identity != archive_identity {
             let id = journal_short_id(&other.archive_identity);
             return Err(PrikkError::LockConflict(format!(
                 "a different archive import is already in progress (id {id}); run the same \
                  import again, or `prikk doctor --cancel-import {id}`"
             )));
         }
+    }
+
+    // All four container locks, held from here to the commit point, literally as §9.5 requires
+    // (RFC 155 Part I-B2, review `rfc155-impl-IB-review-v1` finding IB1(a), closing the named
+    // deviation Part I-B's own report flagged: the three ref-side locks used to be acquired later,
+    // per call, by `publish`/`write_received_pointer` themselves).
+    //
+    // 0.56.0 step 3c2 (R1): acquired *before* a fresh start's own journal is ever created, not
+    // after (3c's own, now-corrected shape) -- the fresh branch below classifies every planned
+    // landing against the local store before writing anything at all, and that read needs the
+    // identical race-free guarantee against a concurrent writer that every later read/write in
+    // this function already has under this same guard. Unconditionally the "allowing" variant: a
+    // fresh start has no journal yet (trivially passes either way); a resume's own journal is
+    // already present, from this same import, and must not refuse itself.
+    let _container_locks = acquire_container_locks_allowing_import_journal(
+        layout,
+        &[
+            LockableContainer::ObjectStore,
+            LockableContainer::RefPointerIndex,
+            LockableContainer::RefLog,
+            LockableContainer::ReceivedIndex,
+        ],
+    )?;
+    let active_lock = ActiveLock::acquire_for_write_allowing_import_journal(
+        layout,
+        crate::foundation::layout::DEFAULT_ACTIVE_NAME,
+    )?;
+    // Moved up from immediately before stage 1 (0.56.0 step 3c2): the fresh branch below also
+    // uses this as the local-side reader for its own early classification, under the same locks
+    // just acquired -- one open, reused for both purposes, not two.
+    let mut object_store = ObjectWriteSession::open(layout)?;
+
+    let (journal, resumed) = match existing_journal {
+        Some(journal) => (journal, true),
         None => {
             let landing = compute_landing_plan(source, &manifest)?;
+            // 0.56.0 step 3c2 (R1): classify every planned landing against the local store
+            // *before* the journal is ever created and before stage 1 writes a single object --
+            // a refusal here leaves the repository exactly as it was found: no object, no
+            // journal. See `classify_every_planned_landing_or_refuse`'s own doc comment for why
+            // the delivered side must be read from the archive itself (stage 1 has not admitted
+            // any of its objects yet) rather than through `classify_landing_connectivity`'s own
+            // reader, which the unchanged, later stage-3 check below still uses (for the narrower
+            // case of a pointer that moves between an interrupted run and its resume).
+            classify_every_planned_landing_or_refuse(
+                layout,
+                source,
+                &manifest,
+                &landing,
+                options,
+                &object_store,
+            )?;
             let containers = compute_container_starting_lengths(layout)?;
             let journal = ImportJournal {
                 archive_identity,
@@ -464,8 +529,8 @@ pub fn import_archive<R: Read + Seek>(
             };
             write_journal(layout, &journal)?;
             // Test seam, unreachable from production: a kill right after the journal's own first
-            // write, before any container lock or any stage-1/2 byte -- the case table's own
-            // "kill right after the journal" row.
+            // write, before any stage-1/2 byte -- the case table's own "kill right after the
+            // journal" row.
             #[cfg(test)]
             if STOP_AFTER_JOURNAL_FOR_TEST.with(std::cell::Cell::take) {
                 return Err(PrikkError::Integrity(
@@ -476,35 +541,6 @@ pub fn import_archive<R: Read + Seek>(
         }
     };
 
-    // All four container locks, held from here to the commit point, literally as §9.5 requires
-    // (RFC 155 Part I-B2, review `rfc155-impl-IB-review-v1` finding IB1(a), closing the named
-    // deviation Part I-B's own report flagged: the three ref-side locks used to be acquired later,
-    // per call, by `publish`/`write_received_pointer` themselves). Acquired *after* the journal
-    // exists for a fresh start (the journal write above needed none of them), and unconditionally
-    // for a resume, since the prior run already held and released them when it was killed. Stage 1
-    // appends through `ObjectWriteSession::write_object_under_held_lock`; stage 3 lands through
-    // `RefStore::publish_with_object_store_under_held_lock` and
-    // `write_received_pointer_under_held_lock` -- each takes this same guard instead of acquiring
-    // its own container lock per call, which is exactly why a plain per-call acquisition could not
-    // be reused by a caller already holding these locks continuously (the identical class of
-    // conflict `write_object_under_held_lock` already exists to avoid for `ObjectStore`).
-    let _container_locks = acquire_container_locks_allowing_import_journal(
-        layout,
-        &[
-            LockableContainer::ObjectStore,
-            LockableContainer::RefPointerIndex,
-            LockableContainer::RefLog,
-            LockableContainer::ReceivedIndex,
-        ],
-    )?;
-    // Unconditionally the "allowing" variant: a fresh start has no journal yet (trivially passes
-    // either way); a resume's own journal is already present, from this same import, and must not
-    // refuse itself.
-    let active_lock = ActiveLock::acquire_for_write_allowing_import_journal(
-        layout,
-        crate::foundation::layout::DEFAULT_ACTIVE_NAME,
-    )?;
-
     // Stage 1: one object type at a time, in container (= dependency) order, one decoded object
     // at a time within a type -- never the whole archive's, or even a whole type's, objects in
     // memory together (RFC 155 Part P2b; see this module's own doc comment for why container
@@ -512,7 +548,6 @@ pub fn import_archive<R: Read + Seek>(
     // lifted): an id already present locally may now gain a carried signature through RFC 156 §4's
     // merge, the same way `import_bundle` and `patch_exchange::accept` already admit one -- via
     // `CarriedSignatureAdmitter::admit_one`, not a second copy of that rule.
-    let mut object_store = ObjectWriteSession::open(layout)?;
     let mut object_types: Vec<ObjectType> = persisted_object_types().to_vec();
     object_types.sort_by_key(|object_type| object_type_dependency_rank(*object_type));
     let mut written_object_counts = Vec::with_capacity(object_types.len());
@@ -796,6 +831,22 @@ pub fn import_archive<R: Read + Seek>(
                 .as_ref()
                 .map(maintainer_signer_key_ids)
                 .unwrap_or_default();
+            // 0.56.0 step 3c2 (R2): a collided entry's own class/chain against the *local*
+            // destination (the exporter's own ref, which won the name) -- the same comparison
+            // the exporter's own `Local` landing, processed just above in this same loop, would
+            // itself classify against had it been a `Received` entry instead.
+            let (class, ref_state_chain) =
+                match crate::received::read_received_pointer(layout, &landing.ref_name)? {
+                    None => (BundleConnectivityClass::NoLocalHistory, None),
+                    Some(pointer) => {
+                        let (class, chain) = classify_landing_connectivity(
+                            &object_store,
+                            landing.ref_state_id,
+                            pointer.ref_state_id,
+                        )?;
+                        (class, Some(chain))
+                    }
+                };
             if let Some(slot) = landing_outcomes.get_mut(index) {
                 *slot = Some(LandingOutcome {
                     ref_name: landing.ref_name.clone(),
@@ -811,6 +862,8 @@ pub fn import_archive<R: Read + Seek>(
                     origin: landing.origin,
                     publication_trusted,
                     signing_key_ids,
+                    class,
+                    ref_state_chain,
                 });
             }
             continue;
@@ -899,7 +952,7 @@ fn land_one_ref(
         // already-`remotes/`-shaped name -- never re-wrapped a second time (review
         // `rfc155-impl-IA-review-v1`, finding A3).
         LandingOrigin::Received => {
-            let changed = land_as_received_pointer(
+            let (changed, class, ref_state_chain) = land_as_received_pointer(
                 layout,
                 &landing.ref_name,
                 landing.ref_state_id,
@@ -918,6 +971,8 @@ fn land_one_ref(
                     origin: landing.origin,
                     publication_trusted,
                     signing_key_ids: signing_key_ids.clone(),
+                    class,
+                    ref_state_chain,
                 },
                 changed,
             ))
@@ -933,7 +988,11 @@ fn land_one_ref(
                 ref_log_records,
                 container_locks,
             )? {
-                AdoptOutcome::Adopted { remote_reason } => Ok((
+                AdoptOutcome::Adopted {
+                    remote_reason,
+                    class,
+                    chain,
+                } => Ok((
                     LandingOutcome {
                         ref_name: landing.ref_name.clone(),
                         landed_as: landing.ref_name.clone(),
@@ -944,11 +1003,13 @@ fn land_one_ref(
                         origin: landing.origin,
                         publication_trusted,
                         signing_key_ids: signing_key_ids.clone(),
+                        class,
+                        ref_state_chain: chain,
                     },
                     true,
                 )),
                 AdoptOutcome::FellThrough { reason } => {
-                    let changed = land_as_received_pointer(
+                    let (changed, class, ref_state_chain) = land_as_received_pointer(
                         layout,
                         &landing.destination,
                         landing.ref_state_id,
@@ -967,6 +1028,8 @@ fn land_one_ref(
                             origin: landing.origin,
                             publication_trusted,
                             signing_key_ids: signing_key_ids.clone(),
+                            class,
+                            ref_state_chain,
                         },
                         changed,
                     ))
@@ -974,7 +1037,7 @@ fn land_one_ref(
             }
         }
         LandingOrigin::Local => {
-            let changed = land_as_received_pointer(
+            let (changed, class, ref_state_chain) = land_as_received_pointer(
                 layout,
                 &landing.destination,
                 landing.ref_state_id,
@@ -992,6 +1055,8 @@ fn land_one_ref(
                     collision_target: None,
                     origin: landing.origin,
                     publication_trusted,
+                    class,
+                    ref_state_chain,
                     signing_key_ids,
                 },
                 changed,
@@ -1022,6 +1087,9 @@ fn land_one_ref(
 ///
 /// `container_locks` must already hold `ReceivedIndex` -- checked, not assumed, by
 /// [`crate::received::write_received_pointer_under_held_lock`].
+/// Returns `(changed, class, chain)` -- 0.56.0 step 3c2 (R2): `class`/`chain` are returned, not
+/// just acted on, so `land_one_ref` can carry them into [`LandingOutcome`] additively, the same
+/// way `BundleImportReport` already carries `import_bundle`'s own classification.
 fn land_as_received_pointer(
     layout: &RepositoryLayout,
     ref_name: &str,
@@ -1029,7 +1097,7 @@ fn land_as_received_pointer(
     object_store: &ObjectWriteSession,
     options: &ArchiveImportOptions,
     container_locks: &ContainerLockGuard,
-) -> Result<bool> {
+) -> Result<(bool, BundleConnectivityClass, Option<RefStateChainRelation>)> {
     let before = crate::received::read_received_pointer(layout, ref_name)?;
     let (class, chain) = match &before {
         None => (BundleConnectivityClass::NoLocalHistory, None),
@@ -1048,13 +1116,17 @@ fn land_as_received_pointer(
         )
         && !options.allow_non_fast_forward
     {
-        return Err(PrikkError::Precondition(format!(
-            "archive import: landing {ref_name} is a {} against its current received pointer -- \
-             refusing rather than silently rewriting received history; pass \
-             --allow-non-fast-forward to accept a landing that does not simply extend the \
-             pointer it would replace",
-            class.as_str()
-        )));
+        return Err(PrikkError::BundleNonFastForward {
+            command: "archive-import",
+            class: class.as_str(),
+            message: format!(
+                "archive import: landing {ref_name} is a {} against its current received \
+                 pointer -- refusing rather than silently rewriting received history; pass \
+                 --allow-non-fast-forward to accept a landing that does not simply extend the \
+                 pointer it would replace",
+                class.as_str()
+            ),
+        });
     }
     let pointer_updated = !matches!(
         (class, chain),
@@ -1071,7 +1143,8 @@ fn land_as_received_pointer(
             container_locks,
         )?;
     }
-    Ok(before.map(|pointer| pointer.ref_state_id) != Some(ref_state_id))
+    let changed = before.map(|pointer| pointer.ref_state_id) != Some(ref_state_id);
+    Ok((changed, class, chain))
 }
 
 enum AdoptOutcome {
@@ -1080,8 +1153,15 @@ enum AdoptOutcome {
     /// against the delivered tip, and `--allow-non-fast-forward` let adoption proceed despite it
     /// -- see [`LandingOutcome::remote_reason`]'s own doc comment for why the ordinary,
     /// fast-forward/already-at-tip case still carries `None` here.
+    ///
+    /// 0.56.0 step 3c2 (R2): `class`/`chain` are the classification against the received pointer
+    /// already held at this entry's own destination, if one exists (`NoLocalHistory`/`None`
+    /// otherwise) -- carried into [`LandingOutcome`] the same way `land_as_received_pointer`'s own
+    /// return value is.
     Adopted {
         remote_reason: Option<String>,
+        class: BundleConnectivityClass,
+        chain: Option<RefStateChainRelation>,
     },
     FellThrough {
         reason: String,
@@ -1141,12 +1221,16 @@ fn try_adopt_local_ref(
     let received_at_destination =
         crate::received::read_received_pointer(layout, &landing.destination)?;
     let mut adopt_remote_reason: Option<String> = None;
+    let mut adopt_class = BundleConnectivityClass::NoLocalHistory;
+    let mut adopt_chain: Option<RefStateChainRelation> = None;
     if let Some(pointer) = &received_at_destination {
-        let (class, _chain) = classify_landing_connectivity(
+        let (class, destination_chain) = classify_landing_connectivity(
             &*object_store,
             landing.ref_state_id,
             pointer.ref_state_id,
         )?;
+        adopt_class = class;
+        adopt_chain = Some(destination_chain);
         if matches!(
             class,
             BundleConnectivityClass::Rollback
@@ -1154,14 +1238,18 @@ fn try_adopt_local_ref(
                 | BundleConnectivityClass::DoesNotConnect
         ) {
             if !options.allow_non_fast_forward {
-                return Err(PrikkError::Precondition(format!(
-                    "archive import --adopt: adopting {} would be a {} against the received \
-                     pointer already held at {} -- refusing rather than silently rewriting \
-                     received history; pass --allow-non-fast-forward to adopt it anyway",
-                    landing.ref_name,
-                    class.as_str(),
-                    landing.destination
-                )));
+                return Err(PrikkError::BundleNonFastForward {
+                    command: "archive-import",
+                    class: class.as_str(),
+                    message: format!(
+                        "archive import --adopt: adopting {} would be a {} against the received \
+                         pointer already held at {} -- refusing rather than silently rewriting \
+                         received history; pass --allow-non-fast-forward to adopt it anyway",
+                        landing.ref_name,
+                        class.as_str(),
+                        landing.destination
+                    ),
+                });
             }
             // A genuine fact worth naming even though adoption proceeds (A3: "the class in
             // remote_reason") -- never set for the ordinary fast-forward/already-at-tip case,
@@ -1235,7 +1323,262 @@ fn try_adopt_local_ref(
     }
     Ok(AdoptOutcome::Adopted {
         remote_reason: adopt_remote_reason,
+        class: adopt_class,
+        chain: adopt_chain,
     })
+}
+
+/// 0.56.0 step 3c2 (R1): the archive's own carried `Block`/`RefState`/`Tag` ancestry and chain
+/// data, scanned once directly from the archive -- stage 1 has not admitted any of the archive's
+/// own objects into the local store yet at the point this is built, so this is the archive-side
+/// counterpart of `bundle::import_bundle`'s own pass-1 `closure_by_id` metadata map, built the
+/// same way (one streamed decode of each record, only the few fields each type needs for
+/// connectivity, nothing held past that).
+struct ArchiveRefGraph {
+    parent_block_ids: BTreeMap<ObjectId, Vec<ObjectId>>,
+    ref_state_previous: BTreeMap<ObjectId, Option<ObjectId>>,
+    ref_state_target: BTreeMap<ObjectId, (RefKind, ObjectId)>,
+    tag_target_block: BTreeMap<ObjectId, ObjectId>,
+}
+
+fn build_archive_ref_graph<R: Read + Seek>(
+    source: &mut R,
+    manifest: &super::verify::ManifestView,
+) -> Result<ArchiveRefGraph> {
+    let mut graph = ArchiveRefGraph {
+        parent_block_ids: BTreeMap::new(),
+        ref_state_previous: BTreeMap::new(),
+        ref_state_target: BTreeMap::new(),
+        tag_target_block: BTreeMap::new(),
+    };
+    let block_entry = find_entry(
+        manifest,
+        ArchiveSectionKind::ObjectContainer(ObjectType::Block),
+    )?;
+    for_each_object_record(source, block_entry, ObjectType::Block, |envelope| {
+        let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+        graph
+            .parent_block_ids
+            .insert(envelope.object_id(), payload.parent_block_ids);
+        Ok(())
+    })?;
+    let ref_state_entry = find_entry(
+        manifest,
+        ArchiveSectionKind::ObjectContainer(ObjectType::RefState),
+    )?;
+    for_each_object_record(source, ref_state_entry, ObjectType::RefState, |envelope| {
+        let payload = RefStatePayload::decode_canonical(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )?;
+        let id = envelope.object_id();
+        graph
+            .ref_state_previous
+            .insert(id, payload.previous_ref_state_id);
+        graph
+            .ref_state_target
+            .insert(id, (payload.kind, payload.target_object_id));
+        Ok(())
+    })?;
+    let tag_entry = find_entry(
+        manifest,
+        ArchiveSectionKind::ObjectContainer(ObjectType::Tag),
+    )?;
+    for_each_object_record(source, tag_entry, ObjectType::Tag, |envelope| {
+        let payload = TagPayload::decode_canonical(&envelope.canonical_payload)?;
+        graph
+            .tag_target_block
+            .insert(envelope.object_id(), payload.target_block_id);
+        Ok(())
+    })?;
+    Ok(graph)
+}
+
+/// Resolve `ref_state_id`'s own target block, through the archive's own carried `Tag` if its kind
+/// is `RefKind::Tag` -- the archive-side counterpart of `crate::refs::resolve_ref_tip_block`, read
+/// from `graph` instead of an `ObjectReader` (nothing here is locally admitted yet).
+fn archive_resolve_tip_block(graph: &ArchiveRefGraph, ref_state_id: ObjectId) -> Result<ObjectId> {
+    let (kind, target) = graph
+        .ref_state_target
+        .get(&ref_state_id)
+        .copied()
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: RefState {ref_state_id} is not among this archive's own carried \
+             objects"
+            ))
+        })?;
+    match kind {
+        RefKind::Branch => Ok(target),
+        RefKind::Tag => graph.tag_target_block.get(&target).copied().ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: Tag {target} is not among this archive's own carried objects"
+            ))
+        }),
+    }
+}
+
+/// Every ancestor block id reachable from `target` (`target` included), walked purely through
+/// `graph` -- the archive-side counterpart of `crate::merge::evidence::ancestors_inclusive`, over
+/// the archive's own carried `Block` records rather than ones already in the local store. Sound
+/// only because stage 0's own `verify_archive` has already confirmed this archive's reference
+/// closure is sound before this is ever called.
+fn archive_block_ancestor_ids(
+    graph: &ArchiveRefGraph,
+    target: ObjectId,
+) -> Result<BTreeSet<ObjectId>> {
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    let mut stack = vec![target];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let parents = graph.parent_block_ids.get(&id).ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: block {id} is not among this archive's own carried objects"
+            ))
+        })?;
+        stack.extend(parents.iter().copied());
+    }
+    Ok(seen)
+}
+
+/// Does `start`'s own `previous_ref_state_id` chain, walked purely through `graph`, contain
+/// `target`? `target` is only ever compared by id, never dereferenced, so it need not itself be
+/// one of the archive's own carried `RefState`s (it is ordinarily the *local* prior pointer's own
+/// id) -- the archive-side counterpart of `bundle::ref_state_chain_contains`.
+fn archive_ref_state_chain_contains(
+    graph: &ArchiveRefGraph,
+    start: ObjectId,
+    target: ObjectId,
+) -> Result<bool> {
+    let mut current = Some(start);
+    let mut seen: BTreeSet<ObjectId> = BTreeSet::new();
+    while let Some(id) = current {
+        if id == target {
+            return Ok(true);
+        }
+        if !seen.insert(id) {
+            return Err(PrikkError::Integrity(format!(
+                "archive import: RefState chain contains a cycle at {id}"
+            )));
+        }
+        current = *graph.ref_state_previous.get(&id).ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: RefState {id} is not among this archive's own carried objects"
+            ))
+        })?;
+    }
+    Ok(false)
+}
+
+/// Classify one planned landing's delivered tip (read from `graph`, the archive itself) against
+/// a local `RefState` id (read from `local_reader`, the local store) -- the one classification
+/// `classify_every_planned_landing_or_refuse` calls, before stage 1 ever runs.
+fn classify_archive_landing_against_local(
+    graph: &ArchiveRefGraph,
+    local_reader: &impl ObjectReader,
+    delivered_ref_state_id: ObjectId,
+    prior_ref_state_id: ObjectId,
+) -> Result<(BundleConnectivityClass, RefStateChainRelation)> {
+    let delivered_target = archive_resolve_tip_block(graph, delivered_ref_state_id)?;
+    let delivered_ancestors = archive_block_ancestor_ids(graph, delivered_target)?;
+
+    let prior_envelope = local_reader
+        .read_object(prior_ref_state_id)?
+        .ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "received pointer names missing RefState {prior_ref_state_id}"
+            ))
+        })?;
+    let prior_payload = RefStatePayload::decode_canonical(
+        &prior_envelope.canonical_payload,
+        prior_envelope.schema_version,
+    )?;
+    let (prior_target, _tag_envelope) =
+        crate::refs::resolve_ref_tip_block(local_reader, &prior_payload)?;
+    let local_ancestors: BTreeSet<ObjectId> =
+        crate::merge::evidence::ancestors_inclusive(local_reader, prior_target)?
+            .keys()
+            .copied()
+            .collect();
+
+    let delivered_chain_contains_local =
+        archive_ref_state_chain_contains(graph, delivered_ref_state_id, prior_ref_state_id)?;
+    let local_chain_contains_delivered =
+        ref_state_chain_contains(local_reader, prior_ref_state_id, delivered_ref_state_id)?;
+
+    Ok(classify_connectivity_from_sets(
+        &local_ancestors,
+        &delivered_ancestors,
+        prior_target,
+        delivered_target,
+        delivered_chain_contains_local,
+        local_chain_contains_delivered,
+    ))
+}
+
+/// 0.56.0 step 3c2 (R1): classify every planned landing against the local store, before stage 1
+/// ever writes an object and before the journal that would let a resume start partway through
+/// this import is ever created -- a refusal here writes nothing at all: no object, no journal,
+/// no half-landed pointer. For each landing, the *prior* pointer this landing would replace is
+/// read under the exact same name `land_as_received_pointer`/`try_adopt_local_ref` compare against
+/// at stage 3 (a `LandingOrigin::Received` entry's own `ref_name`, already `remotes/`-shaped; a
+/// `LandingOrigin::Local` entry's own `destination`, `remotes/<ref_name>` -- the same name whether
+/// or not `--adopt` ultimately applies, since `try_adopt_local_ref`'s own fall-through lands at
+/// that identical destination too). The stage-3 check inside `land_as_received_pointer` and
+/// `try_adopt_local_ref` is kept, unchanged, for the one case this early check cannot cover: a
+/// resumed import, whose journal (and therefore whose landing plan) was fixed by an earlier,
+/// interrupted run, where the local pointer may have moved again in the gap before the resume.
+fn classify_every_planned_landing_or_refuse<R: Read + Seek>(
+    layout: &RepositoryLayout,
+    source: &mut R,
+    manifest: &super::verify::ManifestView,
+    landings: &[PlannedRefLanding],
+    options: &ArchiveImportOptions,
+    local_reader: &impl ObjectReader,
+) -> Result<()> {
+    if landings.is_empty() {
+        return Ok(());
+    }
+    let graph = build_archive_ref_graph(source, manifest)?;
+    for landing in landings {
+        let prior_name: &str = match landing.origin {
+            LandingOrigin::Received => &landing.ref_name,
+            LandingOrigin::Local => &landing.destination,
+        };
+        let Some(prior_pointer) = crate::received::read_received_pointer(layout, prior_name)?
+        else {
+            continue;
+        };
+        let (class, _chain) = classify_archive_landing_against_local(
+            &graph,
+            local_reader,
+            landing.ref_state_id,
+            prior_pointer.ref_state_id,
+        )?;
+        if matches!(
+            class,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        ) && !options.allow_non_fast_forward
+        {
+            return Err(PrikkError::BundleNonFastForward {
+                command: "archive-import",
+                class: class.as_str(),
+                message: format!(
+                    "archive import: landing {} is a {} against its current received pointer \
+                     -- refusing before writing anything for this import at all; pass \
+                     --allow-non-fast-forward to accept a landing that does not simply extend \
+                     the pointer it would replace",
+                    landing.ref_name,
+                    class.as_str()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn compute_landing_plan(

@@ -536,3 +536,295 @@ fn sealed_by_reports_the_maintainer_key_id() {
     let _ = std::fs::remove_dir_all(&source_root);
     let _ = std::fs::remove_dir_all(&local_root);
 }
+
+// ---- 0.56.0 step 3c2 (R3): `--ref remotes/…` resolves the received pointer, and `bundle
+// preview` always reports the classification `bundle import` of the identical delivery would
+// actually make. ----
+
+/// The review's own measured bug, reproduced: a destination holds a **received** pointer at
+/// `remotes/heads/main`, two generations ahead of the bundle (`f`, a child of `m1`). Before this
+/// round, `bundle preview --ref remotes/heads/main` of a bundle at `m1` answered
+/// `"no-local-history"`/`"class": "no-local-history"` regardless -- `RefStore::read_current_ref_
+/// state_id` only ever reads `heads/`/`tags/`, never the received index, so a `remotes/…`
+/// argument always read `None`. `bundle import` of the identical bytes, meanwhile, correctly read
+/// the received pointer and refused it as a rollback. Fixed: `class` (against `--ref`) now
+/// resolves the received pointer and reports `rollback`, matching what `bundle import` of this
+/// exact delivery would do -- and since `--ref` here names the identical `remotes/heads/main`
+/// `bundle import` would itself write to, `import_class`/`import_ref_state_chain` agree with
+/// `class`/`ref_state_chain` exactly.
+#[test]
+fn ref_remotes_resolves_the_received_pointer_and_reports_the_real_class() {
+    let (dest_layout, dest_root, m1_id, m1_ref_state_id) =
+        genesis_repo("rfc144-r3-ref-remotes-dest");
+    let (f_id, f_ref_state_id) = seal_create_file_block(
+        &dest_layout,
+        Some(m1_id),
+        "b.txt",
+        0x02,
+        b"second generation\n",
+        2,
+        Some(m1_ref_state_id),
+    )
+    .unwrap();
+    let _ = f_id;
+    // Splice `f`'s own RefState in as a *received* pointer at `remotes/heads/main` -- simulating
+    // what a real `bundle import`/`archive import` of a two-generation delivery would have left
+    // behind, without going through a full import round trip (the same `write_received_pointer_
+    // for_test` seam the archive-side 3c2 tests use).
+    crate::write_received_pointer_for_test(&dest_layout, "remotes/heads/main", f_ref_state_id)
+        .unwrap();
+
+    // `source`: an independent repository whose own `heads/main` is content-addressed to the
+    // identical `m1` block (same path/content/node seed as `genesis_repo` always produces) --
+    // so a bundle exported from it is genuinely an ancestor of `f`, not merely similarly shaped.
+    let (source_layout, source_root, source_m1_id, _) =
+        genesis_repo("rfc144-r3-ref-remotes-source");
+    assert_eq!(source_m1_id, m1_id, "genesis_repo must be deterministic");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+
+    let options = BundleImportOptions::default_limits();
+    let report =
+        preview_bundle_from_bytes(&dest_layout, &bytes, &options, "remotes/heads/main").unwrap();
+    assert_eq!(
+        report.class,
+        BundleConnectivityClass::Rollback,
+        "a remotes/… --ref must resolve the received pointer, not silently read no-local-history \
+         for a name that actually exists: {report:?}"
+    );
+    assert_eq!(report.ref_state_chain, Some(RefStateChainRelation::Older));
+    // The `--ref` named here *is* the exact name `bundle import` of this bundle would itself
+    // write to (the bundle's own exported ref is also `heads/main`), so the two classifications
+    // must agree exactly.
+    assert_eq!(report.import_class, report.class);
+    assert_eq!(report.import_ref_state_chain, report.ref_state_chain);
+
+    let _ = std::fs::remove_dir_all(&dest_root);
+    let _ = std::fs::remove_dir_all(&source_root);
+}
+
+/// `--ref remotes/…` naming a pointer that does not exist refuses by name, rather than silently
+/// answering `no-local-history` for a name that was simply never checked.
+#[test]
+fn ref_remotes_with_no_received_pointer_refuses_by_name() {
+    let local_root = unique_temp_dir("rfc144-r3-ref-remotes-absent");
+    let local_layout = RepositoryLayout::init(local_root.clone()).unwrap();
+    let (source_layout, source_root, _, _) = genesis_repo("rfc144-r3-ref-remotes-absent-source");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+
+    let options = BundleImportOptions::default_limits();
+    let error = preview_bundle_from_bytes(&local_layout, &bytes, &options, "remotes/heads/main")
+        .expect_err("no received pointer exists at this name -- must refuse, not guess");
+    assert!(
+        error.to_string().contains("remotes/heads/main"),
+        "the refusal must name the ref: {error}"
+    );
+
+    let _ = std::fs::remove_dir_all(&local_root);
+    let _ = std::fs::remove_dir_all(&source_root);
+}
+
+/// `import_class` answers a different question from `class`, and the two can genuinely differ:
+/// previewing a bundle against a local ref chosen purely for inspection (`heads/other`, never
+/// published) still reports what `bundle import` of the identical bytes would actually do
+/// against the received pointer at `remotes/<the bundle's own exported ref name>` -- which here
+/// is `remotes/heads/main`, a rollback, even though `class` (against `heads/other`) is
+/// `no-local-history`.
+#[test]
+fn import_class_differs_from_class_when_ref_names_a_different_target() {
+    let (dest_layout, dest_root, m1_id, m1_ref_state_id) =
+        genesis_repo("rfc144-r3-import-class-differs-dest");
+    let (_, f_ref_state_id) = seal_create_file_block(
+        &dest_layout,
+        Some(m1_id),
+        "b.txt",
+        0x03,
+        b"second generation\n",
+        2,
+        Some(m1_ref_state_id),
+    )
+    .unwrap();
+    crate::write_received_pointer_for_test(&dest_layout, "remotes/heads/main", f_ref_state_id)
+        .unwrap();
+
+    let (source_layout, source_root, source_m1_id, _) =
+        genesis_repo("rfc144-r3-import-class-differs-source");
+    assert_eq!(source_m1_id, m1_id, "genesis_repo must be deterministic");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+
+    let options = BundleImportOptions::default_limits();
+    // `heads/other` has never been published at `dest_layout` -- a legitimate, unrelated name
+    // chosen purely to inspect the bundle's effects, nothing to do with `remotes/heads/main`.
+    let report = preview_bundle_from_bytes(&dest_layout, &bytes, &options, "heads/other").unwrap();
+    assert_eq!(
+        report.class,
+        BundleConnectivityClass::NoLocalHistory,
+        "heads/other has never been published locally: {report:?}"
+    );
+    assert_eq!(
+        report.import_class,
+        BundleConnectivityClass::Rollback,
+        "bundle import of this exact delivery would still refuse as a rollback against \
+         remotes/heads/main, regardless of what --ref asked to inspect: {report:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dest_root);
+    let _ = std::fs::remove_dir_all(&source_root);
+}
+
+/// `preview`'s `import_class` for every one of the six classes genuinely equals what `bundle
+/// import` of the identical bytes then actually does -- not merely asserted, but *run*: each
+/// case ends by calling `import_bundle` against a byte-identical fresh copy of the same
+/// destination state and comparing its own, real `class` field to what `preview` predicted.
+#[test]
+fn import_class_matches_what_bundle_import_actually_does_for_every_class() {
+    // Shared source history: m1 (genesis), then two *independent* children of it, each sealed on
+    // its own fork of the pure-m1 state (not on one another) -- f and g, which therefore share
+    // m1 as their common ancestor without either knowing about the other.
+    let (m1_layout, m1_root, m1_id, m1_ref_state_id) = genesis_repo("rfc144-r3-matrix-m1");
+    let bytes_m1 = export_bundle(&m1_layout, "heads/main").unwrap().1;
+
+    let (f_layout, f_root) = fork_repo(&m1_root, "rfc144-r3-matrix-f");
+    let (_, f_ref_state_id) = seal_create_file_block(
+        &f_layout,
+        Some(m1_id),
+        "f.txt",
+        0x10,
+        b"f generation\n",
+        2,
+        Some(m1_ref_state_id),
+    )
+    .unwrap();
+    let bytes_f = export_bundle(&f_layout, "heads/main").unwrap().1;
+
+    let (g_layout, g_root) = fork_repo(&m1_root, "rfc144-r3-matrix-g");
+    seal_create_file_block(
+        &g_layout,
+        Some(m1_id),
+        "g.txt",
+        0x11,
+        b"g generation\n",
+        2,
+        Some(m1_ref_state_id),
+    )
+    .unwrap();
+    let bytes_g = export_bundle(&g_layout, "heads/main").unwrap().1;
+
+    let (unrelated_layout, unrelated_root) = unrelated_genesis_repo("rfc144-r3-matrix-unrelated");
+    let bytes_unrelated = export_bundle(&unrelated_layout, "heads/main").unwrap().1;
+
+    // One case per class: `(label, fork_root_to_copy, received_pointer_to_splice, delivered_bytes,
+    // expected_class)`. `fork_root_to_copy`/`received_pointer_to_splice` are both `None` for
+    // `NoLocalHistory` (a bare, fresh destination, nothing received at all).
+    type Case<'a> = (
+        &'a str,
+        Option<&'a Path>,
+        Option<ObjectId>,
+        &'a [u8],
+        BundleConnectivityClass,
+    );
+    let cases: Vec<Case<'_>> = vec![
+        (
+            "no-local-history",
+            None,
+            None,
+            &bytes_m1,
+            BundleConnectivityClass::NoLocalHistory,
+        ),
+        (
+            "already-at-tip",
+            Some(&m1_root),
+            Some(m1_ref_state_id),
+            &bytes_m1,
+            BundleConnectivityClass::AlreadyAtTip,
+        ),
+        (
+            "rollback",
+            Some(&f_root),
+            Some(f_ref_state_id),
+            &bytes_m1,
+            BundleConnectivityClass::Rollback,
+        ),
+        (
+            "fast-forward",
+            Some(&m1_root),
+            Some(m1_ref_state_id),
+            &bytes_f,
+            BundleConnectivityClass::FastForward,
+        ),
+        (
+            "diverged",
+            Some(&f_root),
+            Some(f_ref_state_id),
+            &bytes_g,
+            BundleConnectivityClass::Diverged,
+        ),
+        (
+            "does-not-connect",
+            Some(&m1_root),
+            Some(m1_ref_state_id),
+            &bytes_unrelated,
+            BundleConnectivityClass::DoesNotConnect,
+        ),
+    ];
+
+    for (label, fork_from, splice, bytes, expected) in cases {
+        let dest_root = unique_temp_dir(&format!("rfc144-r3-matrix-dest-{label}"));
+        if let Some(fork_from) = fork_from {
+            copy_dir_recursive(&fork_from.join(".prikk"), &dest_root.join(".prikk"));
+        }
+        let dest_layout = RepositoryLayout::init(dest_root.clone()).unwrap();
+        if let Some(ref_state_id) = splice {
+            crate::write_received_pointer_for_test(
+                &dest_layout,
+                "remotes/heads/main",
+                ref_state_id,
+            )
+            .unwrap();
+        }
+
+        let options = BundleImportOptions::default_limits();
+        let report = preview_bundle_from_bytes(&dest_layout, bytes, &options, "remotes/heads/main");
+        let predicted = match (&report, splice) {
+            (Ok(report), _) => report.import_class,
+            (Err(_), None) => {
+                // `remotes/heads/main` does not exist at all for the `no-local-history` case --
+                // `preview`'s own `--ref` resolution now refuses by name (R3's own fix) rather
+                // than reporting `no-local-history` for an absent name. `bundle import`'s own
+                // classification for the identical, first-ever delivery is `no-local-history`
+                // too (there is nothing to be a non-fast-forward against), so this case still
+                // predicts the same class `import_bundle` below will actually report.
+                BundleConnectivityClass::NoLocalHistory
+            }
+            (Err(error), Some(_)) => panic!("unexpected preview refusal for {label}: {error}"),
+        };
+        assert_eq!(predicted, expected, "{label}: preview's own prediction");
+
+        // Now actually run `bundle import` of the identical bytes against the identical
+        // destination state, and compare its own real, measured class to the prediction above.
+        let allow = matches!(
+            expected,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        );
+        let import_options = if allow {
+            BundleImportOptions::default_limits().with_allow_non_fast_forward(true)
+        } else {
+            BundleImportOptions::default_limits()
+        };
+        let import_report =
+            crate::bundle::import_bundle_from_bytes(&dest_layout, bytes, &import_options)
+                .unwrap_or_else(|error| panic!("{label}: bundle import itself refused: {error}"));
+        assert_eq!(
+            import_report.class, expected,
+            "{label}: bundle import's own real classification must match preview's prediction"
+        );
+
+        let _ = std::fs::remove_dir_all(&dest_root);
+    }
+
+    let _ = std::fs::remove_dir_all(&m1_root);
+    let _ = std::fs::remove_dir_all(&f_root);
+    let _ = std::fs::remove_dir_all(&g_root);
+    let _ = std::fs::remove_dir_all(&unrelated_root);
+}

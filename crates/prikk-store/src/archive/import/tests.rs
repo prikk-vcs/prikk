@@ -166,6 +166,142 @@ fn build_signed_source_repository(dir: &std::path::Path) -> (RepositoryLayout, O
     (layout, block_id, author_key_id)
 }
 
+/// A second, genuinely unrelated root repository -- distinct content, distinct path, distinct
+/// node id from [`build_signed_source_repository`], so its own root `Block` has a different
+/// object id and shares no ancestry with anything built from that fixture. Published under
+/// `ref_name` (a caller-chosen name, so it can be imported alongside a `build_signed_source_
+/// repository`-derived archive without their two `remotes/<ref_name>` landings colliding).
+/// Returns the layout and the published ref's own tip `RefState` id.
+fn build_unrelated_root_repository(
+    dir: &std::path::Path,
+    ref_name: &str,
+) -> (RepositoryLayout, ObjectId) {
+    let layout = RepositoryLayout::init(dir).expect("init");
+
+    let author_signer = Ed25519AuthorSigner::from_seed("unrelated-test-author", &[0x33; 32])
+        .expect("author signer");
+    let author_key_id = author_signer.key_id().to_string();
+    {
+        let active_lock = ActiveLock::acquire_for_write(&layout, DEFAULT_ACTIVE_NAME)
+            .expect("active lock for author key recording");
+        crate::author::author_key_index::record_author_key_material(
+            &layout,
+            &author_key_id,
+            author_signer.public_key_bytes(),
+            &active_lock,
+        )
+        .expect("record the author key locally, so the exported archive carries it");
+    }
+
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("unrelated-test-maintainer", &[0x44; 32])
+            .expect("maintainer signer");
+    let maintainer_public_key_hex: String = maintainer_signer
+        .public_key_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    crate::add_trusted_maintainer(
+        &layout,
+        maintainer_signer.key_id(),
+        &maintainer_public_key_hex,
+    )
+    .expect("adopt the maintainer key locally");
+
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_payload = BlobPayload::new(BlobKind::Text, b"wholly unrelated content\n".to_vec());
+    let blob_bytes = blob_payload
+        .to_canonical_bytes()
+        .expect("encode blob payload");
+    let blob_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob_bytes);
+    let blob_id = blob_envelope.object_id();
+    store.write_object(&blob_envelope).expect("write blob");
+
+    let patch_payload = prikk_object::PatchPayload {
+        operations: vec![prikk_object::Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: prikk_object::OperationKind::CreateFile(prikk_object::CreateFile {
+                path: "unrelated.txt".to_string(),
+                node_id: prikk_object::NodeId::from_bytes([0x99; 32]),
+                blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: prikk_object::PatchPurpose::Normal,
+        message: None,
+    };
+    let patch_bytes = patch_payload
+        .to_canonical_bytes()
+        .expect("encode patch payload");
+    let mut patch_envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, patch_bytes);
+    let patch_id = patch_envelope.object_id();
+    patch_envelope
+        .add_signature(author_signature(&author_signer, patch_id).expect("sign the patch"))
+        .expect("attach the real author signature");
+    store.write_object(&patch_envelope).expect("write patch");
+
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: vec![patch_id],
+        state_merkle_root: MerkleRoot([0u8; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                .expect("sign the block"),
+        )
+        .expect("attach the real maintainer signature");
+    store.write_object(&block_envelope).expect("write block");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: ref_name.to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, ref_state_id)
+                .expect("sign the ref state"),
+        )
+        .expect("attach the real maintainer signature");
+
+    let ref_update_envelope = signed_ref_update_envelope(ref_name, None, ref_state_id, block_id, 1);
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: ref_name.to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: ref_state_envelope,
+            ref_update: ref_update_envelope,
+        })
+        .expect("publish ref_name");
+
+    (layout, ref_state_id)
+}
+
 fn export_bytes(layout: &RepositoryLayout) -> Vec<u8> {
     let mut bytes = Vec::new();
     export_archive(layout, &mut bytes).expect("export");
@@ -2634,6 +2770,16 @@ fn received_landing_rollback_refuses_and_leaves_the_pointer_unchanged() {
         error.to_string().contains("rollback"),
         "the refusal must name the class: {error}"
     );
+    // 0.56.0 step 3c2 (R2): the refusal is the structured `BundleNonFastForward` variant, shared
+    // with `bundle import`, never a plain `Precondition` a caller could only match by text.
+    assert!(
+        matches!(
+            &error,
+            prikk_error::PrikkError::BundleNonFastForward { command, class, .. }
+                if *command == "archive-import" && *class == "rollback"
+        ),
+        "the refusal must carry the structured command/class fields: {error:?}"
+    );
     let after = crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
         .expect("read received pointer")
         .expect("the pointer must still be present");
@@ -2642,9 +2788,9 @@ fn received_landing_rollback_refuses_and_leaves_the_pointer_unchanged() {
         "a refused landing must leave the received pointer exactly as it was"
     );
 
-    // The same delivery, with the flag, succeeds -- the import journal left by the refused
-    // attempt above (same archive bytes, same identity) lets this resume rather than redo stage
-    // 1's own object writes.
+    // 0.56.0 step 3c2 (R1): unlike before this round, the refusal above happened *before* the
+    // journal was ever created, so this retry is a genuinely fresh import, not a resume of a
+    // journal the refused attempt left behind.
     let report = import_archive(
         &dest_layout,
         &mut Cursor::new(archive_at_block1),
@@ -2654,6 +2800,10 @@ fn received_landing_rollback_refuses_and_leaves_the_pointer_unchanged() {
         },
     )
     .expect("the same rollback, with the flag, must succeed");
+    assert!(
+        !report.resumed,
+        "the refused attempt above wrote no journal, so this is a fresh import, not a resume"
+    );
     assert!(report.landing_outcomes.iter().all(|landing| landing.landed));
 }
 
@@ -2865,5 +3015,400 @@ fn adopt_refuses_an_unrelated_received_pointer_at_the_destination_by_default() {
             .expect("read current ref state")
             .is_some(),
         "the second attempt, with the flag, must have adopted a real local heads/main"
+    );
+}
+
+// 0.56.0 step 3c2 (R1): a refused archive landing must leave the repository exactly as it was
+// found -- no object, no journal -- not the "every object already written, journal left behind"
+// shape 3c's own report measured and the review's own fixture reproduced (`doctor` then reporting
+// `PRIKK-DOCTOR-INTERRUPTED-IMPORT` as an error for an import that, from the user's own point of
+// view, was correctly refused and should have changed nothing).
+
+/// The review's own measured fixture, reproduced exactly: repository `a` has `heads/main` and
+/// `heads/feature`. `archive_x`: main at `m1`, feature at `f` (a child of `m1`). `archive_y`:
+/// main at `m2` (a different child of `m1`), feature reset back to `m1` -- a rollback relative to
+/// `archive_x`'s own feature tip. Both refs land under `remotes/` by default (no `--adopt`), so
+/// the early classification this round adds runs against a `LandingOrigin::Local` entry's own
+/// `remotes/<ref_name>` destination, the same path a received landing takes.
+fn build_two_ref_rollback_fixture(dir: &std::path::Path) -> (Vec<u8>, Vec<u8>) {
+    let (layout, m1_id, author_key_id) = build_signed_source_repository(dir);
+
+    let author_signer =
+        Ed25519AuthorSigner::from_seed("import-test-author", &[0x11; 32]).expect("author signer");
+    assert_eq!(author_signer.key_id(), author_key_id);
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("import-test-maintainer", &[0x22; 32])
+            .expect("maintainer signer");
+
+    let mut store = FileObjectStore::new(layout.clone());
+
+    // heads/feature, generation 1: published at m1, the same target heads/main already names.
+    let feature_gen1_payload = RefStatePayload {
+        ref_name: "heads/feature".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: m1_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let feature_gen1_bytes = feature_gen1_payload
+        .to_canonical_bytes()
+        .expect("encode feature gen1 ref-state payload");
+    let mut feature_gen1_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, feature_gen1_bytes);
+    let feature_gen1_id = feature_gen1_envelope.object_id();
+    feature_gen1_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, feature_gen1_id)
+                .expect("sign feature gen1"),
+        )
+        .expect("attach the real maintainer signature");
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/feature".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: feature_gen1_envelope,
+            ref_update: signed_ref_update_envelope(
+                "heads/feature",
+                None,
+                feature_gen1_id,
+                m1_id,
+                1,
+            ),
+        })
+        .expect("publish heads/feature gen1");
+
+    // A fresh child block of m1 -- call it f.
+    let mut new_child_block = |parent: ObjectId, discriminant: u8| -> ObjectId {
+        let blob_payload = BlobPayload::new(
+            BlobKind::Text,
+            vec![discriminant; 1 + usize::from(discriminant)],
+        );
+        let blob_bytes = blob_payload.to_canonical_bytes().expect("encode blob");
+        let blob_envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, blob_bytes);
+        let blob_id = blob_envelope.object_id();
+        store.write_object(&blob_envelope).expect("write blob");
+
+        let patch_payload = prikk_object::PatchPayload {
+            operations: vec![prikk_object::Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: prikk_object::OperationKind::CreateFile(prikk_object::CreateFile {
+                    path: format!("child-{discriminant}.txt"),
+                    node_id: prikk_object::NodeId::from_bytes([discriminant; 32]),
+                    blob_id,
+                    mode: 0o100_644,
+                }),
+            }],
+            intent: None,
+            preconditions: Vec::new(),
+            purpose: prikk_object::PatchPurpose::Normal,
+            message: None,
+        };
+        let patch_bytes = patch_payload.to_canonical_bytes().expect("encode patch");
+        let mut patch_envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, patch_bytes);
+        let patch_id = patch_envelope.object_id();
+        patch_envelope
+            .add_signature(author_signature(&author_signer, patch_id).expect("sign patch"))
+            .expect("attach the real author signature");
+        store.write_object(&patch_envelope).expect("write patch");
+
+        let block_payload = BlockPayload {
+            parent_block_ids: vec![parent],
+            kind: BlockKind::Normal,
+            patch_ids: vec![patch_id],
+            state_merkle_root: MerkleRoot([0u8; 32]),
+            snapshot_blob_ref: None,
+            mainline_parent_id: None,
+            merge_baseline_block_id: None,
+        };
+        let block_bytes = block_payload.to_canonical_bytes().expect("encode block");
+        let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+        let block_id = block_envelope.object_id();
+        block_envelope
+            .add_signature(
+                maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                    .expect("sign block"),
+            )
+            .expect("attach the real maintainer signature");
+        store.write_object(&block_envelope).expect("write block");
+        block_id
+    };
+
+    let f_id = new_child_block(m1_id, 0xF0);
+
+    // heads/feature, generation 2: advances to f.
+    let feature_gen2_payload = RefStatePayload {
+        ref_name: "heads/feature".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: f_id,
+        update_seq: 2,
+        previous_ref_state_id: Some(feature_gen1_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let feature_gen2_bytes = feature_gen2_payload
+        .to_canonical_bytes()
+        .expect("encode feature gen2 ref-state payload");
+    let mut feature_gen2_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, feature_gen2_bytes);
+    let feature_gen2_id = feature_gen2_envelope.object_id();
+    feature_gen2_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, feature_gen2_id)
+                .expect("sign feature gen2"),
+        )
+        .expect("attach the real maintainer signature");
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/feature".to_string(),
+            expected_previous_ref_state_id: Some(feature_gen1_id),
+            ref_state: feature_gen2_envelope,
+            ref_update: signed_ref_update_envelope(
+                "heads/feature",
+                Some(feature_gen1_id),
+                feature_gen2_id,
+                f_id,
+                2,
+            ),
+        })
+        .expect("publish heads/feature gen2");
+
+    // archive_x: heads/main at m1 (unchanged), heads/feature at f.
+    let archive_x = export_bytes(&layout);
+
+    // A second, distinct child of m1 -- m2.
+    let m2_id = new_child_block(m1_id, 0x02);
+
+    // heads/main, generation 2: advances to m2.
+    let main_gen1_id = RefStore::new(layout.clone())
+        .read_current_ref_state_id("heads/main")
+        .expect("read current ref state")
+        .expect("heads/main must already be published");
+    let main_gen2_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: m2_id,
+        update_seq: 2,
+        previous_ref_state_id: Some(main_gen1_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let main_gen2_bytes = main_gen2_payload
+        .to_canonical_bytes()
+        .expect("encode main gen2 ref-state payload");
+    let mut main_gen2_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, main_gen2_bytes);
+    let main_gen2_id = main_gen2_envelope.object_id();
+    main_gen2_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, main_gen2_id)
+                .expect("sign main gen2"),
+        )
+        .expect("attach the real maintainer signature");
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: Some(main_gen1_id),
+            ref_state: main_gen2_envelope,
+            ref_update: signed_ref_update_envelope(
+                "heads/main",
+                Some(main_gen1_id),
+                main_gen2_id,
+                m2_id,
+                2,
+            ),
+        })
+        .expect("publish heads/main gen2");
+
+    // heads/feature, generation 3: reset back to m1 -- a rollback relative to f.
+    let feature_gen3_payload = RefStatePayload {
+        ref_name: "heads/feature".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: m1_id,
+        update_seq: 3,
+        previous_ref_state_id: Some(feature_gen2_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let feature_gen3_bytes = feature_gen3_payload
+        .to_canonical_bytes()
+        .expect("encode feature gen3 ref-state payload");
+    let mut feature_gen3_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, feature_gen3_bytes);
+    let feature_gen3_id = feature_gen3_envelope.object_id();
+    feature_gen3_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, feature_gen3_id)
+                .expect("sign feature gen3"),
+        )
+        .expect("attach the real maintainer signature");
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/feature".to_string(),
+            expected_previous_ref_state_id: Some(feature_gen2_id),
+            ref_state: feature_gen3_envelope,
+            ref_update: signed_ref_update_envelope(
+                "heads/feature",
+                Some(feature_gen2_id),
+                feature_gen3_id,
+                m1_id,
+                3,
+            ),
+        })
+        .expect("publish heads/feature gen3 (rollback)");
+
+    // archive_y: heads/main at m2, heads/feature reset to m1.
+    let archive_y = export_bytes(&layout);
+
+    (archive_x, archive_y)
+}
+
+/// The review's own R1 finding, reproduced and then fixed: importing `archive_x` then
+/// `archive_y` refuses `archive_y`'s own `heads/feature` landing (a rollback against the `f` this
+/// destination already holds at `remotes/heads/feature`) -- and now, unlike before this round,
+/// leaves the whole `.prikk` directory byte-for-byte identical to how the refused call found it
+/// (not merely "no new objects": the import journal itself must never have existed either), and
+/// `doctor` reports no error at all (not the `PRIKK-DOCTOR-INTERRUPTED-IMPORT` the review
+/// measured against the unfixed build).
+#[test]
+fn a_refused_archive_landing_writes_nothing_at_all_and_doctor_stays_clean() {
+    let source_dir = unique_temp_dir("archive-3c2-r1-source");
+    let (archive_x, archive_y) = build_two_ref_rollback_fixture(&source_dir);
+
+    let dest_dir = unique_temp_dir("archive-3c2-r1-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_x),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("importing archive_x first must never refuse");
+
+    let before = directory_fingerprint(&dest_dir);
+    assert_eq!(
+        interrupted_import_short_id(&dest_layout).expect("read journal presence"),
+        None,
+        "no journal must be present before the refused import even starts"
+    );
+
+    let error = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_y),
+        &ArchiveImportOptions::default(),
+    )
+    .expect_err("archive_y's own feature landing is a rollback against f -- must refuse");
+    assert!(
+        error.to_string().contains("rollback"),
+        "the refusal must name the class: {error}"
+    );
+
+    let after = directory_fingerprint(&dest_dir);
+    assert_eq!(
+        before, after,
+        "a refused landing (0.56.0 step 3c2, R1) must leave the whole repository directory \
+         byte-for-byte identical -- no object, no journal"
+    );
+    assert_eq!(
+        interrupted_import_short_id(&dest_layout).expect("read journal presence"),
+        None,
+        "the journal must never have been created for a landing refused before stage 1"
+    );
+
+    let report = crate::doctor_repository(&dest_layout);
+    assert!(
+        report
+            .issues
+            .iter()
+            .all(|issue| issue.code != "PRIKK-DOCTOR-INTERRUPTED-IMPORT"),
+        "a refusal that wrote nothing at all must leave doctor with nothing to report about an \
+         interrupted import: {:?}",
+        report.issues
+    );
+}
+
+/// 0.56.0 step 3c2 (R1): the early, pre-stage-1 check cannot see a pointer move that happens
+/// *after* this run's own journal was already written (by construction -- the classification that
+/// decided nothing refuses already ran before the journal existed). The handoff's own instruction
+/// is to keep the later, stage-3 check for exactly this narrower, later-arising case: between an
+/// interrupted run (which already passed the early check, here using `stop_after_stage_1_for_test`
+/// to interrupt right after stage 1, with the journal already present) and its resume, some other
+/// process moves the local pointer -- simulated here with `write_received_pointer_for_test`,
+/// bypassing `archive import`'s own refusal logic on purpose, the way a real concurrent writer
+/// would. The resume must still refuse, but now at stage 3, not at the (already-passed) early
+/// check.
+#[test]
+fn a_resumed_import_still_refuses_at_stage_3_when_the_pointer_moved_in_the_gap() {
+    let source_dir = unique_temp_dir("archive-3c2-r1-resume-source");
+    let (archive_at_block1, archive_at_block1b) = build_two_generation_source_archives(&source_dir);
+
+    let dest_dir = unique_temp_dir("archive-3c2-r1-resume-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+
+    // Establish remotes/heads/main at block1 first, so the second import below has a "before" to
+    // classify against at all.
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("the first landing must never refuse");
+
+    // An entirely unrelated third repository (a genuinely different root block -- not a
+    // descendant of block1 the way block1b is), published under a *different* ref name
+    // (`heads/other`) so its own archive lands at `remotes/heads/other`, not colliding with
+    // `remotes/heads/main` -- imported under that distinct name, its objects are now genuinely
+    // local at this destination, so `write_received_pointer_for_test` below can splice its own
+    // RefState in as `remotes/heads/main`'s own pointer without naming anything that is not
+    // actually present.
+    let unrelated_dir = unique_temp_dir("archive-3c2-r1-resume-unrelated");
+    let (unrelated_layout, unrelated_ref_state_id) =
+        build_unrelated_root_repository(&unrelated_dir, "heads/other");
+    let unrelated_archive = export_bytes(&unrelated_layout);
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(unrelated_archive),
+        &ArchiveImportOptions::default(),
+    )
+    .expect("importing the unrelated history under its own, distinct name must never refuse");
+
+    // Interrupt the fast-forward import of block1b right after stage 1 -- the early check already
+    // passed (block1b is a genuine fast-forward of block1), so the journal is present and every
+    // object block1b carries is already written locally; stage 3 has not landed anything yet.
+    crate::archive::import::stop_after_stage_1_for_test();
+    import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1b.clone()),
+        &ArchiveImportOptions::default(),
+    )
+    .expect_err("the test seam stops the import right after stage 1");
+    assert_ne!(
+        interrupted_import_short_id(&dest_layout).expect("read journal presence"),
+        None,
+        "the journal must be present: the early check already passed before this interruption"
+    );
+
+    // Simulate a concurrent writer moving the pointer in the gap before the resume -- to a
+    // genuinely unrelated history, so the resumed stage-3 check sees a does-not-connect.
+    crate::write_received_pointer_for_test(
+        &dest_layout,
+        "remotes/heads/main",
+        unrelated_ref_state_id,
+    )
+    .expect("simulate a concurrent writer moving the pointer");
+
+    let error = import_archive(
+        &dest_layout,
+        &mut Cursor::new(archive_at_block1b),
+        &ArchiveImportOptions::default(),
+    )
+    .expect_err(
+        "the resumed import's own stage-3 check must catch the pointer that moved in the gap",
+    );
+    assert!(
+        error.to_string().contains("does-not-connect"),
+        "the refusal must name the class: {error}"
     );
 }
