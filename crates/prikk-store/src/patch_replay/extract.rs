@@ -699,7 +699,10 @@ pub(crate) enum ExtractChainFoldError {
     Lineage(PrikkError),
     /// Link `link_index` (into the caller's own chain, root to foot) does not fold -- a genuine
     /// mismatch between the claim's own patches and the state they are folded onto ([`is_fold_mismatch`]).
-    Fold { link_index: usize, err: LifecycleReplayError },
+    Fold {
+        link_index: usize,
+        err: LifecycleReplayError,
+    },
     /// Any other failure applying a link's own patches (for example, a patch id that does not exist
     /// or does not decode) -- propagated unclassified, exactly as every such failure already was
     /// before this round.
@@ -793,10 +796,7 @@ pub(crate) fn replay_for_extract_chain(
         }
         crate::block_state::CandidateStateDerivationError::Patch(err) => {
             if is_fold_mismatch(&err) {
-                ExtractChainFoldError::Fold {
-                    link_index: 0,
-                    err,
-                }
+                ExtractChainFoldError::Fold { link_index: 0, err }
             } else {
                 ExtractChainFoldError::Other(err.into())
             }
@@ -843,12 +843,12 @@ pub(crate) fn replay_for_extract_chain(
     let mut files = Vec::with_capacity(entries.len());
     for entry in entries {
         let StateRootContent::Blob(blob_id) = entry.content else {
-            return Err(ExtractChainFoldError::Other(PrikkError::UnsupportedObjectType(
-                format!(
+            return Err(ExtractChainFoldError::Other(
+                PrikkError::UnsupportedObjectType(format!(
                     "claimed state holds symlink {}; extract supports the file-level subset only",
                     entry.path.as_str()
-                ),
-            )));
+                )),
+            ));
         };
         let content = match text_cache.get(&entry.node_id) {
             Some(bytes) => ExtractContent::Resident(bytes.clone()),

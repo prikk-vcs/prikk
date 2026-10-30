@@ -11,8 +11,8 @@ use prikk_object::{
 use super::*;
 use crate::point::{Point, PointKind};
 use crate::test_gates::test_support::{
-    AnchoredHistory, Signing, dummy_signature, maintainer_signature, signed_block,
-    unique_temp_dir, write_blob,
+    AnchoredHistory, Signing, dummy_signature, maintainer_signature, signed_block, unique_temp_dir,
+    write_blob,
 };
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner,
@@ -629,9 +629,12 @@ fn write_claim_signed_by(
         payload.to_canonical_bytes().unwrap(),
     );
     let claim_id = envelope.object_id();
-    let signature =
-        crate::maintainer_signing::maintainer_signature(signer, ObjectType::RecognitionClaim, claim_id)
-            .unwrap();
+    let signature = crate::maintainer_signing::maintainer_signature(
+        signer,
+        ObjectType::RecognitionClaim,
+        claim_id,
+    )
+    .unwrap();
     envelope.add_signature(signature).unwrap();
     store.write_object(&envelope).unwrap()
 }
@@ -805,7 +808,7 @@ fn prepare_extract_plan_for_claim_refuses_an_unsigned_claim_as_claim_signature_i
 /// reachability, not existence).
 #[test]
 fn prepare_extract_plan_for_claim_refuses_an_unreachable_but_existing_parent_as_claim_parent_not_sealed()
-{
+ {
     let root = unique_temp_dir("extract-claim-unreachable-parent");
     let layout = RepositoryLayout::init(root).unwrap();
     let mut store = FileObjectStore::new(layout.clone());
@@ -875,7 +878,8 @@ fn prepare_extract_plan_for_claim_follows_a_two_link_chain_to_a_sealed_root() {
         admitted_repo_for_claim_fixtures("extract-claim-two-link-chain");
     let mut store = FileObjectStore::new(layout.clone());
 
-    let root_patch_id = write_simple_create_file_patch(&mut store, "root-link.txt", 0x71, b"root link\n");
+    let root_patch_id =
+        write_simple_create_file_patch(&mut store, "root-link.txt", 0x71, b"root link\n");
     let intermediate_block = ObjectId::from_bytes([0x72; 32]);
     let root_claim_id = write_claim_signed_by(
         &mut store,
@@ -887,7 +891,8 @@ fn prepare_extract_plan_for_claim_follows_a_two_link_chain_to_a_sealed_root() {
         &maintainer,
     );
 
-    let foot_patch_id = write_simple_create_file_patch(&mut store, "foot-link.txt", 0x73, b"foot link\n");
+    let foot_patch_id =
+        write_simple_create_file_patch(&mut store, "foot-link.txt", 0x73, b"foot link\n");
     let foot_target_block = ObjectId::from_bytes([0x74; 32]);
     let foot_claim_id = write_claim(
         &mut store,
@@ -905,7 +910,10 @@ fn prepare_extract_plan_for_claim_follows_a_two_link_chain_to_a_sealed_root() {
     assert_eq!(plan.target_block_id, foot_target_block);
     assert_eq!(plan.claim_parent_block_id, Some(intermediate_block));
     assert_eq!(
-        plan.chain.iter().map(|link| link.claim_id).collect::<Vec<_>>(),
+        plan.chain
+            .iter()
+            .map(|link| link.claim_id)
+            .collect::<Vec<_>>(),
         vec![root_claim_id, foot_claim_id],
         "root to foot order"
     );
@@ -914,8 +922,11 @@ fn prepare_extract_plan_for_claim_follows_a_two_link_chain_to_a_sealed_root() {
         Some(crate::ChainSignatureOutcomeKind::Unverifiable),
         "the foot claim's own fake signature is unadopted -- the weakest outcome in the chain"
     );
-    let paths: std::collections::BTreeSet<&str> =
-        plan.entries.iter().map(|entry| entry.path.as_str()).collect();
+    let paths: std::collections::BTreeSet<&str> = plan
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
     assert!(paths.contains("README.md"));
     assert!(paths.contains("root-link.txt"));
     assert!(paths.contains("foot-link.txt"));
@@ -1019,14 +1030,24 @@ fn prepare_extract_plan_for_claim_uses_the_one_sound_candidate_of_a_shared_block
     let reader = ObjectReadSnapshot::open(&layout).unwrap();
     let plan = prepare_extract_plan_for_claim(&layout, &reader, foot_claim_id, false).unwrap();
     assert_eq!(
-        plan.chain.iter().map(|link| link.claim_id).collect::<Vec<_>>(),
+        plan.chain
+            .iter()
+            .map(|link| link.claim_id)
+            .collect::<Vec<_>>(),
         vec![sound_candidate, foot_claim_id]
     );
     let chosen = &plan.chain[0];
     assert_eq!(chosen.claim_id, sound_candidate);
-    assert_eq!(chosen.signature_outcome, crate::ChainSignatureOutcomeKind::Sound);
     assert_eq!(
-        chosen.other_candidates.iter().map(|c| c.claim_id).collect::<Vec<_>>(),
+        chosen.signature_outcome,
+        crate::ChainSignatureOutcomeKind::Sound
+    );
+    assert_eq!(
+        chosen
+            .other_candidates
+            .iter()
+            .map(|c| c.claim_id)
+            .collect::<Vec<_>>(),
         vec![unverifiable_candidate],
         "the losing candidate is still named, not silently dropped"
     );
@@ -1172,7 +1193,10 @@ fn prepare_extract_plan_for_claim_refuses_a_merge_claim_mid_chain() {
         Some(crate::ExtractRefusalKind::ClaimHasSeveralParents { count: 2 }),
         "{err}"
     );
-    assert!(err.to_string().contains(&merge_claim_id.to_string()), "{err}");
+    assert!(
+        err.to_string().contains(&merge_claim_id.to_string()),
+        "{err}"
+    );
 }
 
 /// **D2's "any link" framing**: an invalid MAINTAINER signature mid-chain, not on the claim named on
@@ -1267,7 +1291,8 @@ fn prepare_extract_plan_for_claim_refuses_past_the_bound_combining_anchor_distan
         AnchoredHistory::standard_signed("extract-claim-chain-bound", 63, Signing::Unadopted);
     let tip = *history.blocks.last().unwrap();
 
-    let patch_g2 = write_simple_create_file_patch(&mut history.store, "chain-g2.txt", 0xE2, b"g2\n");
+    let patch_g2 =
+        write_simple_create_file_patch(&mut history.store, "chain-g2.txt", 0xE2, b"g2\n");
     let block_g2 = ObjectId::from_bytes([0xF1; 32]);
     let claim_g2 = write_claim(
         &mut history.store,
@@ -1277,7 +1302,8 @@ fn prepare_extract_plan_for_claim_refuses_past_the_bound_combining_anchor_distan
             parent_block_ids: vec![tip],
         },
     );
-    let patch_g1 = write_simple_create_file_patch(&mut history.store, "chain-g1.txt", 0xE1, b"g1\n");
+    let patch_g1 =
+        write_simple_create_file_patch(&mut history.store, "chain-g1.txt", 0xE1, b"g1\n");
     let block_g1 = ObjectId::from_bytes([0xF2; 32]);
     let claim_g1 = write_claim(
         &mut history.store,

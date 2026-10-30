@@ -191,14 +191,14 @@ pub fn prepare_extract_plan(
 /// claim's own patches would produce if sealed, walking back through every unsealed ancestor claim
 /// the ruling's own D1-D4 govern, never sealing anything itself.
 ///
-/// **The walk** ([`crate::claim_chain::walk_claim_chain`]) answers every structural question: which
+/// **The walk** (`crate::claim_chain::walk_claim_chain`) answers every structural question: which
 /// claim, if any, recognizes a given unsealed parent block (D4); what to do when more than one held
 /// claim recognizes the same block (D1); a cycle (D3); a merge-shaped claim at any link, not only
 /// the one named here (D4, extending the single-hop refusal this function always had). This
 /// function's own job is the two things that remain caller policy for `extract` specifically (D2,
 /// D3's bound, D4's refuse-before-writing): refuse on any `Invalid` signature anywhere in the chain
 /// (unlike `show`, from 0.56.0 step 3f), check the length bound, fold every link in order
-/// ([`replay_for_extract_chain`]), and report the whole chain additively.
+/// (`replay_for_extract_chain`), and report the whole chain additively.
 ///
 /// # Errors
 ///
@@ -328,8 +328,7 @@ pub fn prepare_extract_plan_for_claim(
         .links
         .iter()
         .map(|link| {
-            let (signature_outcome, signature_key_id) =
-                chain_signature_report(&link.signature);
+            let (signature_outcome, signature_key_id) = chain_signature_report(&link.signature);
             let other_candidates = link
                 .other_candidates
                 .iter()
@@ -374,9 +373,10 @@ fn chain_signature_report(
         ClaimChainSignatureOutcome::Sound { key_id } => {
             (ChainSignatureOutcomeKind::Sound, Some(key_id.clone()))
         }
-        ClaimChainSignatureOutcome::Unverifiable { key_id } => {
-            (ChainSignatureOutcomeKind::Unverifiable, Some(key_id.clone()))
-        }
+        ClaimChainSignatureOutcome::Unverifiable { key_id } => (
+            ChainSignatureOutcomeKind::Unverifiable,
+            Some(key_id.clone()),
+        ),
         ClaimChainSignatureOutcome::Invalid { key_id, .. } => {
             (ChainSignatureOutcomeKind::Invalid, key_id.clone())
         }
@@ -477,7 +477,10 @@ fn classify_claim_chain_walk_error(error: ClaimChainWalkError) -> ExtractError {
 
 /// [`ExtractChainFoldError`] -> [`ExtractError`] (D3's bound, D4's fold failure): `chain` is this
 /// function's own just-walked chain, so `Fold`'s own `link_index` can be named by claim id.
-fn classify_extract_chain_fold_error(error: ExtractChainFoldError, chain: &ClaimChain) -> ExtractError {
+fn classify_extract_chain_fold_error(
+    error: ExtractChainFoldError,
+    chain: &ClaimChain,
+) -> ExtractError {
     match error {
         ExtractChainFoldError::Bound(err) | ExtractChainFoldError::Collision(err) => err,
         ExtractChainFoldError::Lineage(err) | ExtractChainFoldError::Other(err) => err.into(),

@@ -161,9 +161,7 @@ fn classify_extract_plan_error(
         Some(ExtractRefusalKind::ClaimSignatureInvalid(_)) => {
             (ExtractRefusalId::ClaimSignatureInvalid, None)
         }
-        Some(ExtractRefusalKind::ClaimDoesNotFold(_)) => {
-            (ExtractRefusalId::ClaimDoesNotFold, None)
-        }
+        Some(ExtractRefusalKind::ClaimDoesNotFold(_)) => (ExtractRefusalId::ClaimDoesNotFold, None),
         Some(ExtractRefusalKind::ClaimChainSharedBlock(_)) => {
             (ExtractRefusalId::ClaimChainSharedBlock, None)
         }
@@ -1018,10 +1016,7 @@ fn print_chain_lines(plan: &ExtractPlan) {
                     )
                 })
                 .collect();
-            println!(
-                "    also recognized by, not used: {}",
-                others.join(", ")
-            );
+            println!("    also recognized by, not used: {}", others.join(", "));
         }
     }
     if plan.chain_signature == Some(ChainSignatureOutcomeKind::Unverifiable) {

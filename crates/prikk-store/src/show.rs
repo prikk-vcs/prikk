@@ -25,7 +25,9 @@
 use std::collections::BTreeSet;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType};
+use prikk_object::{
+    BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
+};
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};

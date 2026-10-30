@@ -85,7 +85,10 @@ pub(crate) enum ClaimChainWalkError {
     SeveralParents { claim_id: ObjectId, count: usize },
     /// `claim_id`'s own declared parent `parent` is neither a reachable block nor recognized by any
     /// held claim -- the walk could not take its next step.
-    ParentNotSealed { claim_id: ObjectId, parent: ObjectId },
+    ParentNotSealed {
+        claim_id: ObjectId,
+        parent: ObjectId,
+    },
     /// D1: two or more held claims recognize `block_id`, and either none or more than one of them is
     /// `Sound` -- refused rather than guessed. Every candidate is named, with its own outcome.
     SharedBlock {
@@ -180,11 +183,14 @@ fn candidates_by_recognized_block(
             let payload =
                 RecognitionClaimPayload::decode_canonical(&record.envelope.canonical_payload)?;
             let signature = classify_claim_signature(&record.envelope, &trust_policy);
-            by_block.entry(payload.block_id).or_default().push(ClaimChainCandidate {
-                claim_id,
-                payload,
-                signature,
-            });
+            by_block
+                .entry(payload.block_id)
+                .or_default()
+                .push(ClaimChainCandidate {
+                    claim_id,
+                    payload,
+                    signature,
+                });
         }
     }
     for candidates in by_block.values_mut() {
@@ -197,7 +203,12 @@ fn candidates_by_recognized_block(
 fn sound_count(candidates: &[ClaimChainCandidate]) -> usize {
     candidates
         .iter()
-        .filter(|candidate| matches!(candidate.signature, ClaimChainSignatureOutcome::Sound { .. }))
+        .filter(|candidate| {
+            matches!(
+                candidate.signature,
+                ClaimChainSignatureOutcome::Sound { .. }
+            )
+        })
         .count()
 }
 
@@ -291,7 +302,10 @@ pub(crate) fn walk_claim_chain(
                     .last()
                     .map(|link| link.claim_id)
                     .unwrap_or(start_claim_id);
-                return Ok(Err(ClaimChainWalkError::ParentNotSealed { claim_id, parent }));
+                return Ok(Err(ClaimChainWalkError::ParentNotSealed {
+                    claim_id,
+                    parent,
+                }));
             }
             1 => {
                 let chosen = candidates
@@ -305,7 +319,10 @@ pub(crate) fn walk_claim_chain(
                     let chosen_id = candidates
                         .iter()
                         .find(|candidate| {
-                            matches!(candidate.signature, ClaimChainSignatureOutcome::Sound { .. })
+                            matches!(
+                                candidate.signature,
+                                ClaimChainSignatureOutcome::Sound { .. }
+                            )
                         })
                         .map(|candidate| candidate.claim_id)
                         .unwrap_or_else(|| unreachable!("sound_count == 1 just checked"));
