@@ -672,13 +672,22 @@ fn apply_rename_batch_for_extract(
 /// (`crate::extract::tests`) pins that a claim naming a Patch object that was simply never written
 /// stays `kind: None` (the ordinary `damaged-repository` fallback), not reclassified here just
 /// because it happens to arrive through the same `LifecycleReplayError` type.
+///
+/// **`OutsideVersionRuleInLineage` is deliberately excluded** (0.56.0 step 3f, R1): a path outside
+/// this version's own rule is not a claim about the replayed state being wrong, it is a path a
+/// newer prikk may have written (A6 / 3d2). Counting it here would classify a chain-folded claim as
+/// `claim-does-not-fold` for exactly the object `extract --ref` already classifies, for the
+/// identical underlying path, as the reading sentence ("outside what this version of prikk
+/// accepts..."). Leaving the match's default `Other(err.into())` arm handle it instead routes it
+/// through the same unchanged `From<LifecycleReplayError> for PrikkError` conversion
+/// (`lifecycle_cache/replay.rs`) that `extract --ref` already uses, so both paths give the same
+/// classification and the same sentence for the same object.
 fn is_fold_mismatch(err: &LifecycleReplayError) -> bool {
     matches!(
         err,
         LifecycleReplayError::InconsistentLifecycleEffect { .. }
             | LifecycleReplayError::MissingBlobForLifecycleEffect { .. }
             | LifecycleReplayError::TextSpanResolutionFailed { .. }
-            | LifecycleReplayError::OutsideVersionRuleInLineage { .. }
     )
 }
 

@@ -80,8 +80,10 @@
   later `received remove` — used to be treated as a usable anchor anyway; it now refuses exactly
   the way a parent that was never received at all already did. A claim whose own patch does not
   actually apply onto the state before it now reads as that specifically, rather than as generic
-  repository damage. None of this affects a claim whose own signature is simply unadopted (not
-  forged) rather than invalid — that continues to extract, as it always has.
+  repository damage — except a patch whose own path is simply outside this version's own rule (one
+  a newer `prikk` may have written), which reads exactly as `extract --ref` already reads the
+  identical path, never as an unsound claim. None of this affects a claim whose own signature is
+  simply unadopted (not forged) rather than invalid — that continues to extract, as it always has.
 
 ### Added
 

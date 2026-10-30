@@ -705,6 +705,104 @@ fn write_non_folding_change_perm_patch(store: &mut FileObjectStore) -> ObjectId 
     store.write_object(&patch).unwrap()
 }
 
+/// A single `CreateFile` patch naming a non-ASCII path -- the exact shape a newer `prikk` (once it
+/// supports Unicode paths) could write, and that this version's own `CreateFile::validate`/
+/// `validate_repo_path` refuses to *author* -- built by driving `prikk_object::CanonicalWriter`
+/// directly, bypassing `CreateFile`'s own validating `encode_canonical` (0.56.0 step 3f, R1: the
+/// same bypass `lifecycle_cache::replay::tests::apply_queued_patch_envelopes_classifies_a_non_ascii_path_as_outside_version_rule_not_malformed`
+/// uses one layer down). Reaching this through `extract --claim`'s chain fold must classify it the
+/// same way `extract --ref` already does for the identical path -- the reading sentence, never
+/// `claim-does-not-fold`.
+fn write_non_ascii_path_patch(store: &mut FileObjectStore) -> ObjectId {
+    use prikk_object::{CanonicalWriter, WireType};
+
+    // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, "pages/日本語.md").unwrap();
+    create_file
+        .field_bytes(2, NodeId::from_bytes([0xD1; 32]).as_bytes())
+        .unwrap();
+    create_file
+        .field_object_id(3, &ObjectId::from_bytes([0xD2; 32]))
+        .unwrap();
+    create_file.field_u32(4, 0o100_644).unwrap();
+    let create_file_bytes = create_file.finish();
+
+    // Operation tags (payload/patch.rs): 1=op_seq, 10=CreateFile (nested Record).
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1).unwrap();
+    operation
+        .field_raw(10, WireType::Record, &create_file_bytes)
+        .unwrap();
+    let operation_bytes = operation.finish();
+
+    // PatchPayload tag 1: one operation, framed as a `RecordListItem` (`repeated_record_list`'s own
+    // wire shape).
+    let mut payload = CanonicalWriter::new();
+    payload
+        .field_raw(1, WireType::RecordListItem, &operation_bytes)
+        .unwrap();
+    let canonical_payload = payload.finish();
+
+    let mut patch = ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
+    patch.add_signature(dummy_signature()).unwrap();
+    store.write_object(&patch).unwrap()
+}
+
+/// **R1** (0.56.0 step 3f): a non-foot link's own `Patch` names a path outside this version's own
+/// rule -- not damage, and not a claim about the folded state being wrong. Before this fix,
+/// `is_fold_mismatch` counted `LifecycleReplayError::OutsideVersionRuleInLineage` as a fold
+/// mismatch, so this read `claim-does-not-fold`. It must now read exactly what `extract --ref`
+/// already reads for the identical path: `kind: None` (the ordinary fallback), and the reading
+/// sentence ("outside what this version of prikk accepts... newer version of prikk may have
+/// written it"), never "claim-does-not-fold" and never "malformed"/"damaged".
+#[test]
+fn prepare_extract_plan_for_claim_reads_the_outside_version_sentence_not_claim_does_not_fold_mid_chain()
+ {
+    let (layout, _maintainer, _author, genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-outside-version-mid-chain");
+    let mut store = FileObjectStore::new(layout.clone());
+    let intermediate_block = ObjectId::from_bytes([0xF1; 32]);
+
+    let non_ascii_patch = write_non_ascii_path_patch(&mut store);
+    let root_claim_id = write_claim(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: intermediate_block,
+            patch_ids: vec![non_ascii_patch],
+            parent_block_ids: vec![genesis_block],
+        },
+    );
+    let patch_foot = write_simple_create_file_patch(&mut store, "foot.txt", 0xF2, b"foot\n");
+    let foot_claim_id = write_claim(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: ObjectId::from_bytes([0xF3; 32]),
+            patch_ids: vec![patch_foot],
+            parent_block_ids: vec![intermediate_block],
+        },
+    );
+    let _ = root_claim_id;
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, foot_claim_id, false).unwrap_err();
+    assert_eq!(
+        err.kind, None,
+        "an out-of-version-rule path must stay the ordinary fallback, not reclassified as \
+         claim-does-not-fold: {err:?}"
+    );
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("outside what this version of prikk accepts")
+            && rendered.contains("newer version of prikk may have written it"),
+        "expected the reading sentence extract --ref already gives for this path, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("does not apply cleanly") && !rendered.contains("does not fold"),
+        "must never read as claim-does-not-fold: {rendered}"
+    );
+}
+
 /// Adopt a maintainer key under the literal id `"maintainer-key"` -- the key id
 /// `crate::test_gates::test_support::maintainer_signature()`'s own fixed, fake signature always
 /// names -- with a bogus (but shape-valid) public key, so that fixed fake signature now names an

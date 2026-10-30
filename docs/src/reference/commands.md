@@ -452,7 +452,12 @@ receive it first, then extract the claim again; this repository is not damaged.
 this repository has adopted, or the link carries no MAINTAINER signature at all — the claim named
 directly on the command line is checked exactly the same way as every other link in the chain the
 walk builds from it. `claim-does-not-fold` means some link's own patches do not actually apply onto
-the state the chain has built up to that point — that claim is unsound, not this repository.
+the state the chain has built up to that point — that claim is unsound, not this repository. A
+link whose own patch names a path outside this version's own rule (today: non-ASCII) is not this
+case: it reads `damaged-repository`, with the same "outside what this version of `prikk` accepts"
+sentence `extract --ref` already gives for the identical path (see "A path this version of `prikk`
+does not accept is not damage", above) — a claim can be perfectly sound and still carry a patch a
+newer `prikk` wrote.
 `claim-chain-shared-block` means two or more held claims recognize the same block the walk needed to
 resolve, with none, or more than one, signed by a key this repository has adopted — picking one
 without that would be a guess. `claim-chain-cycle` means the walk would have revisited a block it
