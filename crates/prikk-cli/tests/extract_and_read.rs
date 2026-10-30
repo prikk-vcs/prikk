@@ -35,5 +35,7 @@ mod rfc157_cat;
 mod rfc157_tree;
 #[path = "extract_and_read/show_fix_block_reading_command_sweep.rs"]
 mod show_fix_block_reading_command_sweep;
+#[path = "extract_and_read/step3f_claim_chain_report.rs"]
+mod step3f_claim_chain_report;
 #[path = "support/mod.rs"]
 mod support;

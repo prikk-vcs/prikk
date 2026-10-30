@@ -627,7 +627,9 @@ fn extract_refuses_both_ref_and_claim() {
 /// `refusal-v1` (0.54.0 step 3 Part 5d): this project's first machine-readable refusal document.
 /// Asserts its exact shape -- `schema_version`, `command`, `refusal`, `reason`, `message` -- and
 /// that stderr and the exit code are unchanged from before this round.
-fn assert_refusal_json(
+/// `pub(crate)`: reused by `step3f_claim_chain_report.rs` (0.56.0 step 3f, R2) for the chain-walk's
+/// own new refusal ids, rather than duplicating this exact shape a second time.
+pub(crate) fn assert_refusal_json(
     output: &Output,
     expected_refusal: &str,
     expected_reason: Option<&str>,
