@@ -63,13 +63,19 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 29] = [
+const UPPER_LAYER: [&str; 30] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
     "archive",
     "branch_switch",
     "bundle",
+    // 0.56.0 step 3e: the claim chain walk (D1-D4) -- walks held `RecognitionClaim`s back to a
+    // reachable Block, used by `extract` (this round) and, from 0.56.0 step 3f, `show`. Depends on
+    // `recognition_claim` (upper, for the signature classification its own doc explains it cannot
+    // import from `patch_exchange` to avoid), `refs`, `received`, `merge::evidence` and
+    // `object_store` (all lower); reached only by `extract` and `show`, both upper.
+    "claim_chain",
     "compact",
     // RFC 153: `diff`, comparing two resolved points through the anchored replay. Built on `patch_replay`,
     // `point_reading` and `line_diff`; reached only by the CLI.

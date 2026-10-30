@@ -37,6 +37,7 @@ mod block_state;
 mod branch_switch;
 mod bundle;
 mod checkout;
+mod claim_chain;
 // RFC 131 §6d.2's first grouping under the lifted §6a prohibition: `active` and `worktree_patch`,
 // two co-designed layers each checking the half of a commit boundary the other owns.
 mod commit_boundary;
@@ -205,11 +206,13 @@ pub use doctor::{
     repair_tails, restore_queue_target,
 };
 pub use extract::{
-    ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
+    ExtractChainLink, ExtractPlan, ExtractPlanContent, ExtractPlanEntry, prepare_extract_plan,
     prepare_extract_plan_for_claim, read_extract_blob_content, rename_new_directory_no_replace,
 };
 pub use extract_refusal::{
-    ClaimParentNotSealedInfo, ExtractError, ExtractRefusalKind, NoCheckpointReason,
+    ChainCandidateSignature, ChainSignatureOutcomeKind, ClaimChainCycleInfo,
+    ClaimChainSharedBlockInfo, ClaimDoesNotFoldInfo, ClaimParentNotSealedInfo,
+    ClaimSignatureInvalidInfo, ExtractError, ExtractRefusalKind, NoCheckpointReason,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
 pub use foundation::index::IndexRepairReport;

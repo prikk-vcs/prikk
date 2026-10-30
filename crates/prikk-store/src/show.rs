@@ -25,27 +25,21 @@
 use std::collections::BTreeSet;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{
-    BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
-    RefStatePayload,
-};
+use prikk_object::{BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType};
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
+use crate::claim_chain::block_is_sealed_or_received;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lifecycle_cache::replay::{TextCache, apply_one_patch_with_materialize_fallback};
-use crate::merge::evidence::{
-    ancestors_inclusive, lifecycle_state_at, lineage_horizon, mainline_or_sole_parent,
-};
+use crate::merge::evidence::{lifecycle_state_at, lineage_horizon, mainline_or_sole_parent};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
 use crate::patch_set_digest::patch_ids_pending_excluding_received;
-use crate::received::list_received_pointers;
 use crate::recognition_claim::claims_naming_patch;
-use crate::refs::{RefStore, resolve_ref_tip_block};
 use crate::wal::Wal;
 
 /// `show`'s own classification of one patch (0.56.0 step 1b): `queued` (this repository's own
@@ -801,7 +795,7 @@ fn record_if_more_specific(
 ///   starting point [`block_starting_state`]'s own `Root` arm already uses.
 /// - `parent_block_ids` exactly one, and that one block id is itself sealed or received (checked
 ///   against the same local-ref-tip/received-pointer-tip union [`patch_ids_pending_excluding_received`]
-///   already walks, narrowed here to block-id membership via [`ancestors_inclusive`] instead of
+///   already walks, narrowed here to block-id membership via `ancestors_inclusive` instead of
 ///   patch-id accumulation): folds from that block's own end state
 ///   ([`lifecycle_state_at`], the same call [`block_starting_state`] makes for a real block's own
 ///   parent).
@@ -924,58 +918,6 @@ fn resolve_pending_patch_lifecycle(
         )
     })?;
     Ok(PendingPathResolution::Unresolved(reason))
-}
-
-/// Resolve one ref/received pointer's own `RefState` to its tip block id -- the identical
-/// resolution [`crate::patch_exchange::accepted_but_unsealed_patch_ids`]'s own per-pointer loop
-/// already performs. Duplicated here at a few lines, rather than reaching into that module's
-/// private helper and bumping its visibility, to keep this file's own tip walk self-contained for
-/// a block-id membership question [`crate::patch_exchange`] has no existing caller for.
-fn resolve_tip_block_id(
-    object_store: &impl ObjectReader,
-    pointer_name: &str,
-    ref_state_id: ObjectId,
-) -> Result<ObjectId> {
-    let ref_state_envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {pointer_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
-    let ref_state_payload = RefStatePayload::decode_canonical(
-        &ref_state_envelope.canonical_payload,
-        ref_state_envelope.schema_version,
-    )?;
-    let (tip_block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state_payload)?;
-    Ok(tip_block_id)
-}
-
-/// Is `block_id` itself sealed (reachable from a local ref tip) or received (reachable from a
-/// received pointer's tip)? No existing predicate answers this -- `patch_ids_reachable_from_block`
-/// and its callers only ever accumulate *patch* ids from an ancestry walk, discarding the ancestor
-/// *block* ids [`ancestors_inclusive`] already computes along the way. This reuses that same walk,
-/// over the same tip union [`patch_ids_pending_excluding_received`] already walks for patch ids,
-/// and checks `block_id`'s own membership in the accumulated block-id keys instead.
-fn block_is_sealed_or_received(
-    layout: &RepositoryLayout,
-    object_store: &impl ObjectReader,
-    block_id: ObjectId,
-) -> Result<bool> {
-    let ref_store = RefStore::new(layout.clone());
-    for pointer in ref_store.list_ref_pointers()? {
-        let tip = resolve_tip_block_id(object_store, &pointer.ref_name, pointer.ref_state_id)?;
-        if ancestors_inclusive(object_store, tip)?.contains_key(&block_id) {
-            return Ok(true);
-        }
-    }
-    for pointer in list_received_pointers(layout)? {
-        let tip = resolve_tip_block_id(object_store, &pointer.ref_name, pointer.ref_state_id)?;
-        if ancestors_inclusive(object_store, tip)?.contains_key(&block_id) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]

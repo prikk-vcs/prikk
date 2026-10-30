@@ -164,7 +164,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // by `extract` (upper) and `patch_replay::extract` (lower): 167 -> 168.
     // 0.56.0 step 3d (A6) added `lifecycle_cache::replay::classify`, split out of `replay` itself
     // (over the size-check limit): 168 -> 169.
-    assert_eq!(modules.len(), 169, "modules: {modules:?}");
+    // 0.56.0 step 3e added `claim_chain`, the claim chain walk (D1-D4) shared by `extract` and
+    // (0.56.0 step 3f) `show`: 169 -> 170.
+    assert_eq!(modules.len(), 170, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

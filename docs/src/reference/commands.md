@@ -373,18 +373,36 @@ before a single Patch or Blob is read, never relaxed by these flags. **`--format
 largest entry's own byte length, always present, the same number the text form's `largest file: N bytes`
 line gives), `provisional`, `written` (whether this call actually wrote the target), `point` (the ref name or
 the block/claim id given, the one fixed key `tree`'s own `tree-listing-v1`/`cat`'s own `path-content-v1`
-both use), `point_kind` (`"ref"`, `"block"`, or `"claim"`), `target_block_id`, and `claim_parent_block_id`
-(always present; `null` unless `point_kind` is `"claim"`, in which case it is the claim's own declared
-parent — the block its own patches would be sealed *onto*, not `target_block_id`, which is the block the
-claim *recognizes*; no command printed a claim's parent before this round) — the same hand-rolled,
-`schema_version`-named convention those commands already use. **`--claim <claim-id>`** (mutually exclusive
-with `--ref`) previews a pending `RecognitionClaim` — the same id `sync seal --claim` takes — as if its
-own patches were sealed onto its own declared parent, without sealing anything: useful to inspect what a
-claim would produce (its size, or its content) before deciding to accept it. A claim naming more than one
-parent (one built from an ancestor `Merge` block) is refused by name — there is no field in the claim
-saying which parent is mainline, so this is refused rather than guessed. `--claim` takes the identical
-pre-walk bound as `--ref`/a bare block id: past the trusted distance from the claimed parent's own nearest
-admitted checkpoint, it refuses by name unless `--allow-full-replay` is given. `extract`'s own peak memory,
+both use), `point_kind` (`"ref"`, `"block"`, or `"claim"`), `target_block_id`, `claim_parent_block_id`
+(always present; `null` unless `point_kind` is `"claim"`, in which case it is the *named* claim's own
+declared parent — the block its own patches would be sealed *onto*, not `target_block_id`, which is the
+block the claim *recognizes*), `chain`, and `chain_signature` (both described below) — the same
+hand-rolled, `schema_version`-named convention those commands already use. **`--claim <claim-id>`**
+(mutually exclusive with `--ref`) previews a pending `RecognitionClaim` — the same id `sync seal --claim`
+takes — as if its own patches were sealed onto its own declared parent, without sealing anything: useful
+to inspect what a claim would produce (its size, or its content) before deciding to accept it.
+
+When the named claim's own declared parent is not itself a real, reachable block, `extract --claim` walks
+back through whichever other held claim, if any, recognizes that parent block, and so on, until it reaches
+a block that genuinely is reachable from some branch or received history this repository holds — or until
+the walk cannot continue at all, which refuses `claim-parent-not-sealed` exactly as a parent this
+repository has simply never received does. Every link the walk visits is checked the same way: a claim
+naming more than one parent (one built from an ancestor `Merge` block) is refused by name, at any position
+in the chain, not only the one given on the command line — there is no field in any claim saying which
+parent is mainline, so this is refused rather than guessed. When two or more held claims recognize the
+same block the walk needs to resolve, the one signed by a key this repository has adopted is used, and
+every other candidate is named in the report rather than silently dropped; with none, or with more than
+one, signed that way, the command refuses rather than guessing which is true. A chain that would revisit a
+block it has already visited refuses as a cycle. Every link's own MAINTAINER signature is checked: one
+that fails to verify against an adopted key, or that carries no MAINTAINER signature at all, refuses the
+whole command — the claim named directly on the command line is checked exactly the same way as every
+other link; a signature that simply names a key this repository has not adopted is not treated as a
+failure and does not by itself refuse. A link whose own patches do not actually apply onto the state
+before it refuses by name, distinctly from a damaged repository. `--claim` takes the identical pre-walk
+bound as `--ref`/a bare block id, extended to the whole chain: the trusted distance from the real block the
+walk finally reaches, plus every additional unsealed claim the walk had to pass through to reach it
+together, must not exceed the usual bound, or the command refuses by name — naming both numbers — unless
+`--allow-full-replay` is given. `extract`'s own peak memory,
 whole command, tracks the largest single file it actually reads (roughly twice that file's own size, not
 once — see [Current State](current-state.md)), not the point's own total content size; this holds the
 same way whether the point is named by `--ref`, a bare block id, or `--claim` — `--claim`'s own own
@@ -393,6 +411,23 @@ equivalent planning step (about 1.1–1.3x, measured), but that planning cost is
 shared, dominant cost every path pays: streaming the point's own largest file once. See
 [Current State](current-state.md) for the measured figures, both the planning-only comparison and the
 whole command. See [Reading a point](../guide/tree-and-cat.md).
+
+**`chain` and `chain_signature`: the whole walked chain, for a claim.** `chain` is `[]` for a ref or
+bare block id, which name no claim at all; for a claim, it carries every link the walk actually
+used, oldest first, the *named* claim always last. Each entry is `{"claim_id", "target_block_id",
+"parent_block_ids", "signature", "other_candidates"}` — the identical field names `sync pending`'s
+own `claims[]` entries already use for the first four, with `signature` the identical
+`{"outcome": "sound"|"unverifiable", "key_id"}` shape too (an `"invalid"` link anywhere in the
+chain always refuses the whole command first, so one never appears here). `other_candidates` is
+non-empty only on the one link chosen because it was the single adopted-key candidate among two or
+more held claims recognizing that same block; each entry there is `{"claim_id", "signature"}` for a
+candidate that was named but not used. `chain_signature` is the single weakest `"outcome"` across
+every link in `chain` (`"sound"` only if every link is, otherwise `"unverifiable"`; `null` when
+`chain` is empty) — a consuming tool does not need to scan the array itself to tell whether the
+whole chain traces back to an adopted key. The text form prints the identical information: one
+`link N: claim <id> (<outcome>)` line per entry, root to foot, an indented line naming any
+`other_candidates`, and an explicit `unverified` line whenever `chain_signature` is
+`"unverifiable"`.
 
 **`refusal-v1`: a machine-readable refusal document.** Under `--format json`, *every* refusal `extract`
 exits `1` for — never a usage error, exit `2`, which prints no document — writes exactly one JSON document
@@ -405,26 +440,36 @@ classified by a fallback, rather than exiting `1` under `--format json` with not
 {"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
 ```
 
-`refusal` is one of fifteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`refusal` is one of nineteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
 `destination-exists`, `destination-inside-repository`, `temporary-sibling-exists`, `point-not-found`,
-`claim-not-found`, `not-a-claim`, `claim-has-several-parents`, `claim-parent-not-sealed`, `case-collision`,
-`no-checkpoint-in-reach`, `not-a-repository`, `damaged-repository`, `io-failure`. `claim-parent-not-sealed`
-means the claim's own declared parent has not been sealed or received into this repository yet — seal or
-receive it first, then extract the claim again; this repository is not damaged. `reason` is set only for
-`no-checkpoint-in-reach`, naming which of
-three conditions the admitted-anchor search found in reach — **one cause at a time**: the first blocker
-the search meets, not necessarily the only one. Fix it and run again; the next refusal names the next
-cause, if any. In priority order: `signer-not-adopted` (a recorded checkpoint whose signer this repository
-has not adopted — adopt the key), `not-recorded` (a checkpoint in reach, never recorded by `verify`/`seal`
-— run `verify`), or `no-checkpoint` (none at all — `--allow-full-replay`). Every other id carries
-`reason: null`. `message` is stderr's own text, without its leading `error: ` prefix — the generic framing
-applied to every command's own error, never part of the refusal's own text itself; the JSON document never
-paraphrases it.
+`claim-not-found`, `not-a-claim`, `claim-has-several-parents`, `claim-parent-not-sealed`,
+`claim-signature-invalid`, `claim-does-not-fold`, `claim-chain-shared-block`, `claim-chain-cycle`,
+`case-collision`, `no-checkpoint-in-reach`, `not-a-repository`, `damaged-repository`, `io-failure`.
+`claim-parent-not-sealed` means some link's own declared parent is neither itself reachable from any
+branch or received history this repository holds, nor recognized by any other held claim — seal or
+receive it first, then extract the claim again; this repository is not damaged.
+`claim-signature-invalid` means some link's own MAINTAINER signature failed to verify against a key
+this repository has adopted, or the link carries no MAINTAINER signature at all — the claim named
+directly on the command line is checked exactly the same way as every other link in the chain the
+walk builds from it. `claim-does-not-fold` means some link's own patches do not actually apply onto
+the state the chain has built up to that point — that claim is unsound, not this repository.
+`claim-chain-shared-block` means two or more held claims recognize the same block the walk needed to
+resolve, with none, or more than one, signed by a key this repository has adopted — picking one
+without that would be a guess. `claim-chain-cycle` means the walk would have revisited a block it
+had already visited earlier in the same chain. `reason` is set only for `no-checkpoint-in-reach`,
+naming which of three conditions the admitted-anchor search found in reach — **one cause at a
+time**: the first blocker the search meets, not necessarily the only one. Fix it and run again; the
+next refusal names the next cause, if any. In priority order: `signer-not-adopted` (a recorded
+checkpoint whose signer this repository has not adopted — adopt the key), `not-recorded` (a
+checkpoint in reach, never recorded by `verify`/`seal` — run `verify`), or `no-checkpoint` (none at
+all — `--allow-full-replay`). Every other id carries `reason: null`. `message` is stderr's own text,
+without its leading `error: ` prefix — the generic framing applied to every command's own error,
+never part of the refusal's own text itself; the JSON document never paraphrases it.
 
 **This is this project's own, reusable form for a JSON refusal** — `refusal-v1`'s shape
 (`schema_version`, `command`, `refusal`, `reason`, `message`) was designed as a precedent other
 commands adopt when next touched, not a one-off specific to `extract`. `bundle import` is its
-second adopter (see above), for exactly three of its own refusals; `extract`'s own fifteen ids
+second adopter (see above), for exactly three of its own refusals; `extract`'s own nineteen ids
 above are unaffected.
 
 **Removing a received pointer: `received remove`.** `received remove <remotes/…> [--plan-only]`

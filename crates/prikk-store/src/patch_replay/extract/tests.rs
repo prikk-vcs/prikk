@@ -307,15 +307,27 @@ fn claim_pre_walk_refuses_past_the_bound_without_an_admitted_anchor() {
 
     let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
 
-    let refused =
-        replay_for_extract_claim(&history.layout, &reader, Some(parent), &[patch_id], false);
+    let refused = replay_for_extract_chain(
+        &history.layout,
+        &reader,
+        Some(parent),
+        0,
+        &[vec![patch_id]],
+        false,
+    );
     let message = refused.unwrap_err().to_string();
     assert!(message.contains("no admitted snapshot within"), "{message}");
     assert!(message.contains("--allow-full-replay"), "{message}");
 
-    let allowed =
-        replay_for_extract_claim(&history.layout, &reader, Some(parent), &[patch_id], true)
-            .unwrap();
+    let allowed = replay_for_extract_chain(
+        &history.layout,
+        &reader,
+        Some(parent),
+        0,
+        &[vec![patch_id]],
+        true,
+    )
+    .unwrap();
     assert!(allowed.provisional);
     assert!(!allowed.files.is_empty());
 }

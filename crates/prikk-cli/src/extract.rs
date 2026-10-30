@@ -30,8 +30,8 @@ use std::path::{Path, PathBuf};
 
 use prikk_object::ObjectId;
 use prikk_store::{
-    ExtractPlan, ExtractPlanContent, ExtractRefusalKind, NoCheckpointReason, ObjectReadSnapshot,
-    Point, RepoPath,
+    ChainSignatureOutcomeKind, ExtractChainLink, ExtractPlan, ExtractPlanContent,
+    ExtractRefusalKind, NoCheckpointReason, ObjectReadSnapshot, Point, RepoPath,
 };
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
@@ -42,12 +42,14 @@ use crate::output::verification::escape_json_string;
 use crate::stdout::println;
 use crate::{current_branch, open_repository};
 
-/// `refusal-v1`'s own fifteen ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e,
-/// `destination-inside-repository` and `claim-parent-not-sealed` added in 0.55.0 step 1) -- this
-/// project's first machine-readable refusal document, designed as a precedent other commands adopt
-/// when next touched. **Exhaustive by construction**: no `match` over this enum anywhere in this
-/// module has a wildcard arm, so a sixteenth refusal `extract` grows later, without updating this
-/// enum, is a compile error here, not a silently missing id in the document.
+/// `refusal-v1`'s own ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e,
+/// `destination-inside-repository` and `claim-parent-not-sealed` added in 0.55.0 step 1,
+/// `claim-signature-invalid`/`claim-does-not-fold`/`claim-chain-shared-block`/`claim-chain-cycle`
+/// added in 0.56.0 step 3e) -- this project's first machine-readable refusal document, designed as
+/// a precedent other commands adopt when next touched. **Exhaustive by construction**: no `match`
+/// over this enum anywhere in this module has a wildcard arm, so a next refusal `extract` grows
+/// later, without updating this enum, is a compile error here, not a silently missing id in the
+/// document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtractRefusalId {
     OverMaxBytes,
@@ -60,6 +62,10 @@ enum ExtractRefusalId {
     NotAClaim,
     ClaimHasSeveralParents,
     ClaimParentNotSealed,
+    ClaimSignatureInvalid,
+    ClaimDoesNotFold,
+    ClaimChainSharedBlock,
+    ClaimChainCycle,
     CaseCollision,
     NoCheckpointInReach,
     DamagedRepository,
@@ -80,6 +86,10 @@ impl ExtractRefusalId {
             Self::NotAClaim => "not-a-claim",
             Self::ClaimHasSeveralParents => "claim-has-several-parents",
             Self::ClaimParentNotSealed => "claim-parent-not-sealed",
+            Self::ClaimSignatureInvalid => "claim-signature-invalid",
+            Self::ClaimDoesNotFold => "claim-does-not-fold",
+            Self::ClaimChainSharedBlock => "claim-chain-shared-block",
+            Self::ClaimChainCycle => "claim-chain-cycle",
             Self::CaseCollision => "case-collision",
             Self::NoCheckpointInReach => "no-checkpoint-in-reach",
             Self::DamagedRepository => "damaged-repository",
@@ -148,6 +158,16 @@ fn classify_extract_plan_error(
         Some(ExtractRefusalKind::ClaimParentNotSealed(_)) => {
             (ExtractRefusalId::ClaimParentNotSealed, None)
         }
+        Some(ExtractRefusalKind::ClaimSignatureInvalid(_)) => {
+            (ExtractRefusalId::ClaimSignatureInvalid, None)
+        }
+        Some(ExtractRefusalKind::ClaimDoesNotFold(_)) => {
+            (ExtractRefusalId::ClaimDoesNotFold, None)
+        }
+        Some(ExtractRefusalKind::ClaimChainSharedBlock(_)) => {
+            (ExtractRefusalId::ClaimChainSharedBlock, None)
+        }
+        Some(ExtractRefusalKind::ClaimChainCycle(_)) => (ExtractRefusalId::ClaimChainCycle, None),
         Some(ExtractRefusalKind::CaseCollision) => (ExtractRefusalId::CaseCollision, None),
         Some(ExtractRefusalKind::NoCheckpointInReach(reason)) => (
             ExtractRefusalId::NoCheckpointInReach,
@@ -962,6 +982,56 @@ fn print_claim_parent_block_line(plan: &ExtractPlan) {
     }
 }
 
+/// One word for a chain link's own signature outcome, in the CLI's own text form.
+fn chain_signature_word(outcome: ChainSignatureOutcomeKind) -> &'static str {
+    match outcome {
+        ChainSignatureOutcomeKind::Sound => "sound",
+        ChainSignatureOutcomeKind::Unverifiable => "unverifiable",
+        ChainSignatureOutcomeKind::Invalid => "invalid",
+    }
+}
+
+/// (0.56.0 step 3e, D1-D4) The walked chain's own text form: one line per link, root to foot, and
+/// an explicit `unverified` line whenever the weakest outcome in the chain is `unverifiable` --
+/// nothing printed at all for a ref/block-id point, which names no claim and so has no chain.
+fn print_chain_lines(plan: &ExtractPlan) {
+    if plan.chain.is_empty() {
+        return;
+    }
+    println!("chain: {} link(s), root to foot", plan.chain.len());
+    for (index, link) in plan.chain.iter().enumerate() {
+        println!(
+            "  link {}: claim {} ({})",
+            index + 1,
+            link.claim_id,
+            chain_signature_word(link.signature_outcome)
+        );
+        if !link.other_candidates.is_empty() {
+            let others: Vec<String> = link
+                .other_candidates
+                .iter()
+                .map(|candidate| {
+                    format!(
+                        "{} ({})",
+                        candidate.claim_id,
+                        chain_signature_word(candidate.outcome)
+                    )
+                })
+                .collect();
+            println!(
+                "    also recognized by, not used: {}",
+                others.join(", ")
+            );
+        }
+    }
+    if plan.chain_signature == Some(ChainSignatureOutcomeKind::Unverifiable) {
+        println!(
+            "unverified: at least one link's MAINTAINER signature names a key this repository \
+             has not adopted"
+        );
+    }
+}
+
 fn print_report(
     layout: &prikk_store::RepositoryLayout,
     source: &ExtractSource,
@@ -974,6 +1044,7 @@ fn print_report(
     println!("{}: {}", source_label(source), plan.point);
     println!("target block: {}", plan.target_block_id);
     print_claim_parent_block_line(plan);
+    print_chain_lines(plan);
     println!("output directory: {}", target.display());
     print_provisional_line(plan.provisional);
     println!("files written: {}", plan.entries.len());
@@ -996,11 +1067,55 @@ fn print_plan_only_report(
     println!("{}: {}", source_label(source), plan.point);
     println!("target block: {}", plan.target_block_id);
     print_claim_parent_block_line(plan);
+    print_chain_lines(plan);
     println!("plan only: nothing was written");
     print_provisional_line(plan.provisional);
     println!("files: {file_count}");
     println!("total content bytes: {total_bytes}");
     println!("largest file: {largest_file_bytes} bytes");
+}
+
+/// One `chain[]` entry: the identical field names `sync-pending-v1`'s own `claims[]` entries
+/// already use (`{"claim_id", "target_block_id", "parent_block_ids", "signature"}`), plus
+/// `other_candidates` (0.56.0 step 3e, D1's own exception, surfaced).
+fn push_chain_link_json(json: &mut String, link: &ExtractChainLink) {
+    json.push_str("{\"claim_id\": ");
+    json.push_str(&escape_json_string(&link.claim_id.to_string()));
+    json.push_str(", \"target_block_id\": ");
+    json.push_str(&escape_json_string(&link.target_block_id.to_string()));
+    json.push_str(", \"parent_block_ids\": [");
+    for (index, parent) in link.parent_block_ids.iter().enumerate() {
+        if index > 0 {
+            json.push_str(", ");
+        }
+        json.push_str(&escape_json_string(&parent.to_string()));
+    }
+    json.push_str("], \"signature\": {\"outcome\": ");
+    json.push_str(&escape_json_string(chain_signature_word(
+        link.signature_outcome,
+    )));
+    json.push_str(", \"key_id\": ");
+    match &link.signature_key_id {
+        Some(key_id) => json.push_str(&escape_json_string(key_id)),
+        None => json.push_str("null"),
+    }
+    json.push_str("}, \"other_candidates\": [");
+    for (index, candidate) in link.other_candidates.iter().enumerate() {
+        if index > 0 {
+            json.push_str(", ");
+        }
+        json.push_str("{\"claim_id\": ");
+        json.push_str(&escape_json_string(&candidate.claim_id.to_string()));
+        json.push_str(", \"signature\": {\"outcome\": ");
+        json.push_str(&escape_json_string(chain_signature_word(candidate.outcome)));
+        json.push_str(", \"key_id\": ");
+        match &candidate.key_id {
+            Some(key_id) => json.push_str(&escape_json_string(key_id)),
+            None => json.push_str("null"),
+        }
+        json.push_str("}}");
+    }
+    json.push_str("]}");
 }
 
 /// `--format json` (0.54.0 step 3 Part 3, item 3): follows `tree`'s own hand-rolled-JSON,
@@ -1032,6 +1147,23 @@ fn print_json_report(
     json.push_str(",\n  \"claim_parent_block_id\": ");
     match plan.claim_parent_block_id {
         Some(parent) => json.push_str(&escape_json_string(&parent.to_string())),
+        None => json.push_str("null"),
+    }
+    json.push_str(",\n  \"chain\": [");
+    for (index, link) in plan.chain.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    ");
+        push_chain_link_json(&mut json, link);
+    }
+    if !plan.chain.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push(']');
+    json.push_str(",\n  \"chain_signature\": ");
+    match plan.chain_signature {
+        Some(outcome) => json.push_str(&escape_json_string(chain_signature_word(outcome))),
         None => json.push_str("null"),
     }
     json.push_str(",\n  \"provisional\": ");

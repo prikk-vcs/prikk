@@ -51,6 +51,7 @@ use crate::anchor_trust::{
     Admission, AnchorSite, AnchorTrust, MAX_ANCHOR_DISTANCE, NotUsableReason,
 };
 use crate::extract_refusal::{ExtractError, ExtractRefusalKind, NoCheckpointReason};
+use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::object_store::ObjectReader;
 use crate::snapshot::SnapshotManifest;
 use crate::state_root::StateRootContent;
@@ -259,21 +260,41 @@ fn classify_no_checkpoint_reason(
 /// share it exactly): past `MAX_ANCHOR_DISTANCE` blocks of history with no admitted anchor found
 /// anywhere in it, refuse by name unless `allow_full_replay` is set -- the same refusal
 /// `replay_for_extract`'s own inline check already gave, now shared verbatim with
-/// `replay_for_extract_claim`'s own pre-walk over the claimed parent's chain.
+/// `replay_for_extract_chain`'s own pre-walk over the chain's own anchor.
 fn refuse_past_the_bound_unless_allowed(
     chain_len: usize,
     allow_full_replay: bool,
     reason: NoCheckpointReason,
 ) -> std::result::Result<(), ExtractError> {
-    if !allow_full_replay && chain_len > MAX_ANCHOR_DISTANCE + 1 {
+    refuse_past_the_bound_unless_allowed_for_chain(chain_len, 0, allow_full_replay, reason)
+}
+
+/// The same pre-walk bound, extended for a claim chain (0.56.0 step 3e, D3): `hop_count` is how many
+/// unsealed claim links stand between the named claim and `anchor_chain_len`'s own real block
+/// anchor (0 for the ordinary ref/block-id path and for a single claim whose own declared parent is
+/// itself sealed or received -- both already covered by [`refuse_past_the_bound_unless_allowed`]'s
+/// own call into this). **The rule (D3, ruled): the anchor's own distance, plus the chain's own hop
+/// count, together must not exceed [`MAX_ANCHOR_DISTANCE`]** -- naming both numbers in the refusal,
+/// so an operator can tell which part is large. `claim-chain-too-deep` was proposed and not adopted
+/// (D3): this is the *same* bound and the *same* id (`no-checkpoint-in-reach`) the ref/block-id path
+/// already has, not a second one.
+fn refuse_past_the_bound_unless_allowed_for_chain(
+    anchor_chain_len: usize,
+    hop_count: usize,
+    allow_full_replay: bool,
+    reason: NoCheckpointReason,
+) -> std::result::Result<(), ExtractError> {
+    let combined = anchor_chain_len + hop_count;
+    if !allow_full_replay && combined > MAX_ANCHOR_DISTANCE + 1 {
         return Err(ExtractError::classified(
             ExtractRefusalKind::NoCheckpointInReach(reason),
             PrikkError::Precondition(format!(
                 "no admitted snapshot within {MAX_ANCHOR_DISTANCE} blocks of this point; its own \
-                 history reaches back {chain_len} blocks without one -- older or crafted history, \
-                 per this repository's own checkpoint cadence; refusing before reading a single \
-                 patch, to avoid an unbounded replay from genesis -- pass --allow-full-replay to \
-                 read it anyway"
+                 history reaches back {anchor_chain_len} blocks without one, and this chain adds \
+                 {hop_count} further unsealed claim hop(s) beyond that -- older or crafted \
+                 history, or a long chain of unsealed claims, per this repository's own checkpoint \
+                 cadence; refusing before reading a single patch, to avoid an unbounded replay from \
+                 genesis -- pass --allow-full-replay to read it anyway"
             )),
         ));
     }
@@ -644,94 +665,192 @@ fn apply_rename_batch_for_extract(
     Ok(())
 }
 
-/// `prikk extract --claim` (0.54.0 step 3 Part 3): the files a `RecognitionClaim` would produce if
-/// its own `patch_ids` were sealed onto its own declared `parent` -- read-only, never sealing
-/// anything. `parent`/`patch_ids` are already resolved by the caller (`prikk_store::extract`'s own
-/// claim-decoding; this module stays a lower layer and never reads a `RecognitionClaimPayload`
-/// itself, the same separation `replay_for_extract` already keeps from `Point` resolution).
+/// Whether `err` represents a genuine fold mismatch -- the patch's own claim about the state it is
+/// applied to is wrong (0.56.0 step 3e, D4) -- as opposed to a different missing or malformed object
+/// the replay needed along the way. **Narrow on purpose**:
+/// `prepare_extract_plan_for_claim_still_falls_back_when_a_different_object_is_missing`
+/// (`crate::extract::tests`) pins that a claim naming a Patch object that was simply never written
+/// stays `kind: None` (the ordinary `damaged-repository` fallback), not reclassified here just
+/// because it happens to arrive through the same `LifecycleReplayError` type.
+fn is_fold_mismatch(err: &LifecycleReplayError) -> bool {
+    matches!(
+        err,
+        LifecycleReplayError::InconsistentLifecycleEffect { .. }
+            | LifecycleReplayError::MissingBlobForLifecycleEffect { .. }
+            | LifecycleReplayError::TextSpanResolutionFailed { .. }
+            | LifecycleReplayError::OutsideVersionRuleInLineage { .. }
+    )
+}
+
+/// [`replay_for_extract_chain`]'s own error: like [`ExtractError`], but `Fold` carries which link
+/// (an index into the caller's own chain, root to foot) failed to fold, rather than the already
+/// -resolved claim id -- the crate-root caller (`crate::extract::prepare_extract_plan_for_claim`)
+/// is the one that knows the chain, and maps the index back to a claim id there.
+#[derive(Debug)]
+pub(crate) enum ExtractChainFoldError {
+    /// D3's own bound, already fully classified (`no-checkpoint-in-reach`).
+    Bound(ExtractError),
+    /// A case-insensitive path collision in the folded result, already fully classified
+    /// (`case-collision`) -- caught as a `Lineage`-shaped error from `entries_from_state` rather
+    /// than a `Patch`-shaped one, the same classification the single-link path always gave this.
+    Collision(ExtractError),
+    /// The anchor's own sealed lineage did not resolve -- this repository's own sealed history is
+    /// broken, propagated unclassified exactly as before this round.
+    Lineage(PrikkError),
+    /// Link `link_index` (into the caller's own chain, root to foot) does not fold -- a genuine
+    /// mismatch between the claim's own patches and the state they are folded onto ([`is_fold_mismatch`]).
+    Fold { link_index: usize, err: LifecycleReplayError },
+    /// Any other failure applying a link's own patches (for example, a patch id that does not exist
+    /// or does not decode) -- propagated unclassified, exactly as every such failure already was
+    /// before this round.
+    Other(PrikkError),
+}
+
+impl std::fmt::Display for ExtractChainFoldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bound(err) | Self::Collision(err) => write!(f, "{err}"),
+            Self::Lineage(err) | Self::Other(err) => write!(f, "{err}"),
+            Self::Fold { err, .. } => write!(
+                f,
+                "extract --claim refused: the claim's own patches do not apply cleanly to its \
+                 declared parent's state ({err})"
+            ),
+        }
+    }
+}
+
+/// **The chain-aware fold** (0.56.0 step 3e, D4): `anchor` is where the chain walk
+/// (`crate::claim_chain::walk_claim_chain`) stopped (a real, reachable block, or `None` for
+/// genesis); `link_patch_ids` is every link's own `patch_ids`, root to foot (`link_patch_ids[0]`
+/// folds directly onto `anchor`'s own resolved state; each further entry folds onto the previous
+/// one's result); `hop_count` is the chain's own length past the anchor, fed straight into D3's own
+/// bound (`refuse_past_the_bound_unless_allowed_for_chain`) alongside the anchor's own real-block
+/// distance.
 ///
-/// **The adapter, stated precisely**: [`crate::block_state::derive_candidate`] (Stack A's own
-/// function, reused rather than re-implemented -- `AnchorSite::ExtractClaim` is its own site, but
-/// the derivation itself is the identical one `seal`/`merge`/`seal-from-accepted` already share)
-/// returns a path-keyed [`crate::state_root::StateRootEntry`] list and a node-id-keyed [`TextCache`]
-/// of every text node the derivation actually materialized (an edit, or a fresh text `CreateFile`).
-/// Every entry's own [`crate::state_root::StateRootContent::Blob`] id is exactly
-/// [`ExtractContent::Blob`]'s own shape already -- ruling 1 extended to a candidate state rather
-/// than a sealed one -- so a node the cache does *not* hold streams from its blob id unread, the
-/// identical streaming property the block-chain path already gives every untouched or
-/// binary-touched file. A node the cache *does* hold is [`ExtractContent::Resident`], already
-/// materialized by the derivation itself -- no second read.
-///
-/// `provisional` mirrors [`crate::block_state::CandidateDerivation::anchored`] exactly: an admitted
-/// anchor was found and used (`anchored == true`, `provisional == false`), or the full walk ran from
-/// genesis (`anchored == false`, `provisional == true`) -- the identical meaning the ref/block-id
-/// path's own `provisional` already carries, just derived from the candidate path's own flag rather
-/// than re-discovered here.
+/// **The first link reuses [`crate::block_state::derive_candidate`] exactly as the single-claim path
+/// always did** (the identical anchor-aware resolution, so a chain of length 1 behaves exactly as
+/// before this round); **every further link folds with
+/// [`crate::lifecycle_cache::replay::apply_candidate_patches`]** onto the state the previous link
+/// already produced -- `derive_candidate`'s own API always resolves a *real* Block's state, which no
+/// link past the first one has (every link past the first stands for a block that was never sealed).
 ///
 /// # Errors
 ///
-/// The parent's own lineage does not resolve (this repository's own sealed history is broken), the
-/// claim's own patches do not apply cleanly to that parent's state, or an entry names a symlink
-/// (`extract` supports the file-level subset only, the same refusal `seed_from_manifest` already
-/// gives the block-chain path).
-pub(crate) fn replay_for_extract_claim(
+/// See [`ExtractChainFoldError`]'s own variants.
+pub(crate) fn replay_for_extract_chain(
     layout: &crate::RepositoryLayout,
     reader: &impl ObjectReader,
-    parent: Option<ObjectId>,
-    patch_ids: &[ObjectId],
+    anchor: Option<ObjectId>,
+    hop_count: usize,
+    link_patch_ids: &[Vec<ObjectId>],
     allow_full_replay: bool,
-) -> std::result::Result<ExtractReplayOutcome, ExtractError> {
-    // 0.54.0 step 3 Part 3b (R1): ruling 2's own depth bound applies to the whole command, not only
-    // the ref/block-id path -- a claim's declared parent with no admitted checkpoint within reach
-    // must refuse the same way, before a single Patch or Blob is read. A root claim (`parent` is
-    // `None`) has no chain to walk and nothing to bound.
-    if let Some(parent_id) = parent {
-        let chain = super::read::single_parent_chain(reader, parent_id)?;
+) -> std::result::Result<ExtractReplayOutcome, ExtractChainFoldError> {
+    // D3: the identical pre-walk bound the ref/block-id path and the old single-claim path both
+    // already had, now also counting the chain's own hops. A root (genesis) anchor has no real
+    // block-chain distance to bound, same as before this round.
+    if let Some(anchor_id) = anchor {
+        let chain = super::read::single_parent_chain(reader, anchor_id)
+            .map_err(ExtractChainFoldError::Lineage)?;
         let trust = crate::anchor_trust::AnchorTrust::load(layout);
         if let AnchorSearch::GaveUp { reason } =
-            search_admitted_anchor(reader, &chain, &trust, AnchorSite::ExtractClaim)?
+            search_admitted_anchor(reader, &chain, &trust, AnchorSite::ExtractClaim)
+                .map_err(ExtractChainFoldError::Lineage)?
         {
-            refuse_past_the_bound_unless_allowed(chain.len(), allow_full_replay, reason)?;
+            refuse_past_the_bound_unless_allowed_for_chain(
+                chain.len(),
+                hop_count,
+                allow_full_replay,
+                reason,
+            )
+            .map_err(ExtractChainFoldError::Bound)?;
         }
     }
+
+    let Some((first_patch_ids, remaining)) = link_patch_ids.split_first() else {
+        return Err(ExtractChainFoldError::Lineage(PrikkError::Integrity(
+            "extract --claim chain walk produced an empty chain -- internal inconsistency"
+                .to_string(),
+        )));
+    };
 
     let derived = crate::block_state::derive_candidate(
         layout,
         reader,
-        parent,
-        patch_ids,
+        anchor,
+        first_patch_ids,
         crate::block_state::StateAnchoring::Anchored(AnchorSite::ExtractClaim),
     )
     .map_err(|err| match err {
-        // 0.54.0 step 3 Part 5d: `derive_candidate`'s own `entries_from_state` already runs the
-        // identical `validate_no_path_collisions` check this function's own caller
-        // (`prepare_extract_plan_for_claim`) would otherwise run a second time on the same entries
-        // -- for a claim, this is where the collision is actually caught first, under the
-        // `Lineage` arm (never `Patch`: `entries_from_state`'s own call happens after patches are
-        // already applied, over the resulting state, not the patches themselves). Classified here,
-        // at this exact call site, rather than guessed from `PrikkError::InvalidName`'s own message
-        // text elsewhere: within this one arm, an `InvalidName` can only be this check (a malformed
-        // path would already have failed earlier, decoding the patch itself).
         crate::block_state::CandidateStateDerivationError::Lineage(
             err @ PrikkError::InvalidName(_),
-        ) => ExtractError::classified(ExtractRefusalKind::CaseCollision, err),
-        crate::block_state::CandidateStateDerivationError::Lineage(err) => err.into(),
-        crate::block_state::CandidateStateDerivationError::Patch(err) => PrikkError::Integrity(
-            format!("extract --claim refused: the claim's own patches do not apply cleanly to its declared parent's state ({err})"),
-        )
-        .into(),
+        ) => ExtractChainFoldError::Collision(ExtractError::classified(
+            ExtractRefusalKind::CaseCollision,
+            err,
+        )),
+        crate::block_state::CandidateStateDerivationError::Lineage(err) => {
+            ExtractChainFoldError::Lineage(err)
+        }
+        crate::block_state::CandidateStateDerivationError::Patch(err) => {
+            if is_fold_mismatch(&err) {
+                ExtractChainFoldError::Fold {
+                    link_index: 0,
+                    err,
+                }
+            } else {
+                ExtractChainFoldError::Other(err.into())
+            }
+        }
     })?;
 
-    let mut files = Vec::with_capacity(derived.entries.len());
-    for entry in derived.entries {
+    let mut state = derived.state;
+    let mut text_cache = derived.text_cache;
+    let anchored_used = derived.anchored;
+
+    for (offset, patch_ids) in remaining.iter().enumerate() {
+        let link_index = offset + 1;
+        crate::lifecycle_cache::replay::apply_candidate_patches(
+            reader,
+            &mut state,
+            &mut text_cache,
+            patch_ids,
+        )
+        .map_err(|err| {
+            if is_fold_mismatch(&err) {
+                ExtractChainFoldError::Fold { link_index, err }
+            } else {
+                ExtractChainFoldError::Other(err.into())
+            }
+        })?;
+    }
+
+    // A chain of length 1 (the ordinary single-claim case, unchanged from before this round):
+    // `derive_candidate` already computed these entries from the identical, never-further-folded
+    // `state`, so reuse them rather than paying `entries_from_state`'s own walk a second time over
+    // nothing new. A longer chain folded further patches since, so its own final state needs a
+    // fresh derivation.
+    let entries = if remaining.is_empty() {
+        derived.entries
+    } else {
+        crate::state_root::entries_from_state(&state).map_err(|err| match err {
+            err @ PrikkError::InvalidName(_) => ExtractChainFoldError::Collision(
+                ExtractError::classified(ExtractRefusalKind::CaseCollision, err),
+            ),
+            err => ExtractChainFoldError::Lineage(err),
+        })?
+    };
+
+    let mut files = Vec::with_capacity(entries.len());
+    for entry in entries {
         let StateRootContent::Blob(blob_id) = entry.content else {
-            return Err(PrikkError::UnsupportedObjectType(format!(
-                "claimed state holds symlink {}; extract supports the file-level subset only",
-                entry.path.as_str()
-            ))
-            .into());
+            return Err(ExtractChainFoldError::Other(PrikkError::UnsupportedObjectType(
+                format!(
+                    "claimed state holds symlink {}; extract supports the file-level subset only",
+                    entry.path.as_str()
+                ),
+            )));
         };
-        let content = match derived.text_cache.get(&entry.node_id) {
+        let content = match text_cache.get(&entry.node_id) {
             Some(bytes) => ExtractContent::Resident(bytes.clone()),
             None => ExtractContent::Blob(blob_id),
         };
@@ -743,7 +862,7 @@ pub(crate) fn replay_for_extract_claim(
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(ExtractReplayOutcome {
-        provisional: !derived.anchored,
+        provisional: !anchored_used,
         files,
     })
 }

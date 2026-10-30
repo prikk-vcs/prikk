@@ -81,6 +81,21 @@ pub enum ExtractRefusalKind {
     CaseCollision,
     /// `no-checkpoint-in-reach`: the pre-walk bound, carrying its own `reason` sub-classification.
     NoCheckpointInReach(NoCheckpointReason),
+    /// `claim-signature-invalid` (0.56.0 step 3e, D2): an `invalid` MAINTAINER signature at some
+    /// link in the chain -- the claim named directly on the command line included. No signature at
+    /// all is `invalid` too (`verify_claim_signature`'s own classification).
+    ClaimSignatureInvalid(Box<ClaimSignatureInvalidInfo>),
+    /// `claim-does-not-fold` (0.56.0 step 3e, D4): some link's own `patch_ids` do not apply onto the
+    /// previous link's end state (or, for the root link, onto the chain's own anchor). Replaces
+    /// what used to fall through, unclassified, to `damaged-repository` -- an untrusted chain's own
+    /// claim not fitting where it says it goes is not this repository being damaged.
+    ClaimDoesNotFold(Box<ClaimDoesNotFoldInfo>),
+    /// `claim-chain-shared-block` (0.56.0 step 3e, D1): two or more held claims recognize the same
+    /// block the walk visits, and either none or more than one of them has a `Sound` signature.
+    ClaimChainSharedBlock(Box<ClaimChainSharedBlockInfo>),
+    /// `claim-chain-cycle` (0.56.0 step 3e, D3): the walk would revisit a block it has already
+    /// visited earlier in the same chain.
+    ClaimChainCycle(Box<ClaimChainCycleInfo>),
 }
 
 /// [`ExtractRefusalKind::ClaimParentNotSealed`]'s own payload, boxed there for the reason that
@@ -97,6 +112,69 @@ pub struct ClaimParentNotSealedInfo {
     pub claim: prikk_object::ObjectId,
     /// The claim's own declared parent, confirmed absent from this repository's object store.
     pub parent: prikk_object::ObjectId,
+}
+
+/// [`ExtractRefusalKind::ClaimSignatureInvalid`]'s own payload, boxed for the same reason
+/// [`ClaimParentNotSealedInfo`] is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClaimSignatureInvalidInfo {
+    /// The link whose own MAINTAINER signature is invalid (or absent).
+    pub claim_id: prikk_object::ObjectId,
+}
+
+/// [`ExtractRefusalKind::ClaimDoesNotFold`]'s own payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClaimDoesNotFoldInfo {
+    /// The link whose own `patch_ids` did not apply.
+    pub claim_id: prikk_object::ObjectId,
+}
+
+/// One candidate's own signature outcome, as reported in [`ClaimChainSharedBlockInfo::candidates`]
+/// -- a simplified, wire-friendly three-way tag (`extract-report-v1`/`refusal-v1` carry the same
+/// three strings `sync-pending-v1` already does: `"sound"`, `"unverifiable"`, `"invalid"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainSignatureOutcomeKind {
+    /// The signature verifies against a key this repository has adopted.
+    Sound,
+    /// The signature names a key this repository has not adopted -- not checked, not a failure.
+    Unverifiable,
+    /// The signature failed to verify against an adopted key, is not Ed25519, or is absent.
+    Invalid,
+}
+
+/// One candidate claim named in a [`ExtractRefusalKind::ClaimChainSharedBlock`] refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChainCandidateSignature {
+    /// The candidate's own id.
+    pub claim_id: prikk_object::ObjectId,
+    /// Its own signature outcome.
+    pub outcome: ChainSignatureOutcomeKind,
+    /// The MAINTAINER key id named, when there is one to name.
+    pub key_id: Option<String>,
+}
+
+/// [`ExtractRefusalKind::ClaimChainSharedBlock`]'s own payload (D1): every candidate claim that
+/// recognizes `block_id`, with its own signature outcome, so an operator can see exactly why the
+/// walk refused rather than picked one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClaimChainSharedBlockInfo {
+    /// The block two or more held claims recognize.
+    pub block_id: prikk_object::ObjectId,
+    /// Every candidate claim recognizing it, sorted by claim id.
+    pub candidates: Vec<ChainCandidateSignature>,
+}
+
+/// [`ExtractRefusalKind::ClaimChainCycle`]'s own payload (D3): every claim id the walk found in the
+/// loop, oldest-in-the-chain first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClaimChainCycleInfo {
+    /// Every claim id the walk found forming the loop.
+    pub claim_ids: Vec<prikk_object::ObjectId>,
 }
 
 /// [`prepare_extract_plan`](crate::extract::prepare_extract_plan)/

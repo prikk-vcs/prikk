@@ -71,6 +71,17 @@
   something different and actionable instead: that this version of `prikk` does not accept
   non-ASCII repository paths, naming the file. Every one of these commands still refuses; only
   how the refusal is classified and worded has changed.
+- **`extract --claim` now checks every claim's own signature, and walks back through unsealed
+  ancestor claims to find the sealed or received history they build on.** Before this, `extract
+  --claim` checked no signature at all, so a forged or unsigned claim extracted its files with
+  exit `0`; a forged (a MAINTAINER signature naming an adopted key that does not actually verify)
+  or unsigned claim now refuses instead. A claim whose declared parent block is held in this
+  repository but reachable from no branch or received history — for example, one orphaned by a
+  later `received remove` — used to be treated as a usable anchor anyway; it now refuses exactly
+  the way a parent that was never received at all already did. A claim whose own patch does not
+  actually apply onto the state before it now reads as that specifically, rather than as generic
+  repository damage. None of this affects a claim whose own signature is simply unadopted (not
+  forged) rather than invalid — that continues to extract, as it always has.
 
 ### Added
 
@@ -118,6 +129,27 @@
   patch, every claim's own parent is itself only pending, or every claim names more than one parent
   with no mainline to pick), the existing `"unresolved_node_id"` carries a `"reason"` alongside it,
   naming the most specific of these that applies, rather than leaving the reader to guess.
+- **`extract --claim` now follows a chain of unsealed recognition claims back to real history,
+  instead of stopping at the first one whose own declared parent is not itself a real block.** A
+  claim naming a parent that no real block names, but that another held claim recognizes, is now
+  walked through: if that other claim's own parent is in turn genuinely reachable (or itself
+  recognized by yet another held claim, and so on), the whole chain extracts as one plan. When two
+  or more held claims recognize the same block, the one signed by an adopted key is used and the
+  others are named in the report; with none or more than one signed that way, the command refuses
+  rather than guessing. A chain that loops back on itself, or that holds a claim declaring more
+  than one parent anywhere in it, refuses by name. The chain's own total length (however far its
+  real anchor already sits from the last trusted checkpoint, plus every additional unsealed claim
+  beyond it) is bounded the same way a very old or crafted point already is, and `--allow-full-
+  replay` overrides it the same way too.
+- **`extract --format json`'s own `extract-report-v1` carries the whole walked chain**: a `"chain"`
+  array, oldest claim first, each entry naming the claim, the block it recognizes, its own declared
+  parent(s), and its MAINTAINER signature outcome (plus any other claim that recognized the same
+  block and was not used); and a `"chain_signature"` field giving the single weakest outcome across
+  the whole chain, so a consuming tool does not have to scan the array itself to tell whether every
+  link traces back to an adopted key. The text form prints one line per link and an explicit
+  `unverified` line whenever any link's signature is from a key this repository has not adopted.
+  `"claim_parent_block_id"` keeps its existing meaning (the named claim's own immediate declared
+  parent) unchanged; the chain is additive.
 
 ## 0.55.0 — 2026-10-29
 

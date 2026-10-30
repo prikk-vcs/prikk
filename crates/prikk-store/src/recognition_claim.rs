@@ -320,6 +320,70 @@ pub fn order_claims_for_sealing(
     Ok(order)
 }
 
+/// One held claim's own MAINTAINER signature outcome, as the 0.56.0 step 3e chain walk
+/// (`crate::claim_chain`) needs it: the identical three-way shape
+/// [`crate::patch_exchange::PendingClaimSignatureOutcome`] already carries for `sync-pending-v1`,
+/// duplicated here rather than imported -- `patch_exchange` is the exchange subsystem, walled off
+/// from every outside caller by this project's own `exchange-subsystem` boundary convention (this
+/// module's own doc, above, already states the identical reason for not reusing that crate's
+/// `pending_patches_with_claims`), and the chain walk is reachable from `extract` and (0.56.0 step
+/// 3f) `show`, neither of which may reach into that subsystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClaimChainSignatureOutcome {
+    /// Mirrors [`ClaimSignatureVerification::Sound`].
+    Sound {
+        /// The MAINTAINER key id the signature named and verified against.
+        key_id: String,
+    },
+    /// Mirrors [`ClaimSignatureVerification::Unverifiable`].
+    Unverifiable {
+        /// The MAINTAINER key id named, which this repository has not adopted.
+        key_id: String,
+    },
+    /// `verify_claim_signature` returned `Err`: a forged signature under an adopted key, a
+    /// MAINTAINER signature whose algorithm is not Ed25519, or none at all.
+    Invalid {
+        /// The first MAINTAINER-role signature's key id, or `None` if the claim carries no
+        /// MAINTAINER-role signature at all.
+        key_id: Option<String>,
+        /// `verify_claim_signature`'s own refusal text.
+        reason: String,
+    },
+}
+
+/// The first MAINTAINER-role signature's own key id in `envelope`, if any -- mirrors
+/// `patch_exchange::first_maintainer_key_id` exactly, for the identical reason
+/// [`ClaimChainSignatureOutcome`]'s own doc gives for not importing that module's type.
+fn first_maintainer_key_id(envelope: &ObjectEnvelope) -> Option<String> {
+    envelope
+        .signatures
+        .iter()
+        .find(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| signature.key_id.clone())
+}
+
+/// Classify one claim's own MAINTAINER signature into [`ClaimChainSignatureOutcome`]'s three-way
+/// shape -- the chain walk's own need (D2): never gating by itself, just the outcome, so the walk
+/// (and D1's own shared-block tie-break) can read it structurally while each caller decides what to
+/// do with an `Invalid`/`Unverifiable` link.
+pub(crate) fn classify_claim_signature(
+    envelope: &ObjectEnvelope,
+    trust_policy: &MaintainerTrustPolicy,
+) -> ClaimChainSignatureOutcome {
+    match verify_claim_signature(envelope, trust_policy) {
+        Ok(ClaimSignatureVerification::Sound { key_id }) => {
+            ClaimChainSignatureOutcome::Sound { key_id }
+        }
+        Ok(ClaimSignatureVerification::Unverifiable { key_id }) => {
+            ClaimChainSignatureOutcome::Unverifiable { key_id }
+        }
+        Err(err) => ClaimChainSignatureOutcome::Invalid {
+            key_id: first_maintainer_key_id(envelope),
+            reason: err.to_string(),
+        },
+    }
+}
+
 /// One recognition claim naming a pending patch, as [`claims_naming_patch`] hands it back to
 /// `show` (0.56.0 step 1b2, R4): the claim's own id, its full payload (`show` needs
 /// `parent_block_ids` and `patch_ids`, which `patch_exchange::PendingPatchClaim` -- built for

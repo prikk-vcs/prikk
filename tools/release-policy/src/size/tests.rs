@@ -348,7 +348,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.56.0 step 3d (A6) split `lifecycle_cache/replay/classify.rs` out of `replay.rs` (over the
     // size-check limit after the outside-version-rule classifier); its own `replay/tests.rs` was
     // already `cfg(test)`-invisible: 169 -> 170.
-    assert_eq!(store.production_files, 170);
+    // 0.56.0 step 3e added `claim_chain.rs`; its own `claim_chain/tests.rs` is `cfg(test)`-invisible:
+    // 170 -> 171.
+    assert_eq!(store.production_files, 171);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.
