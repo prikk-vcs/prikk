@@ -29,27 +29,26 @@
   publication history is older than what is already there now writes every object it carries while
   leaving the pointer itself untouched, and exits `0` rather than silently moving the pointer's own
   record backward.
-- **`archive import` now applies the identical rule.** Landing a ref as a received pointer (the
-  default, and `--adopt`'s own fallback) refuses a rollback, a divergent rewrite, or an unrelated
-  history against the pointer it would replace, unless `--allow-non-fast-forward` is given — the
-  same flag, the same three names, `bundle import` already has. `--adopt` itself now also checks
-  the received pointer already held at the name it would otherwise land under before adopting a
-  real local branch: adopting onto an unrelated or rolled-back received history refuses the same
-  way, under the same flag, and the note explaining why a ref landed under `remotes/` instead of as
-  a real local branch now also names this case when the flag let it through anyway.
+- **`archive import` applies the identical rule, fully, before anything is written.** Landing a
+  ref as a received pointer (the default, and `--adopt`'s own fallback) refuses a rollback, a
+  divergent rewrite, or an unrelated history against the pointer it would replace, unless
+  `--allow-non-fast-forward` is given — the same flag, the same three names, `bundle import`
+  already has. `--adopt` itself also checks the received pointer already held at the name it would
+  otherwise land under before adopting a real local branch: adopting onto an unrelated or
+  rolled-back received history refuses the same way, under the same flag, and the note explaining
+  why a ref landed under `remotes/` instead of as a real local branch also names this case when the
+  flag let it through anyway. Every planned landing is checked against the local repository before
+  anything at all is written, not only after every object has already landed, so a refusal leaves
+  the repository exactly as it was found: no object written, no unfinished import record behind.
+  Resuming a genuinely interrupted import still works the same way, and still catches the rarer
+  case of the pointer moving again in the gap before the resume. `--format json` reports the same
+  classification `bundle import --format json` does: each landing carries `"class"` and
+  `"ref_state_chain"`, for every landing, not only a refused one, and a refusal prints the same
+  reusable refusal document `bundle import` already uses, naming the refused class.
 - **`archive import` and `archive verify` now refuse a carried change whose own recorded edits do
   not decode, before anything is written.** Before this, `archive import` could land such a change
   with no warning at all, and `archive verify` reported the archive as internally consistent —
   while `bundle import` already refused the identical change. All three now apply the same check.
-- **A refused `archive import` landing now leaves the repository exactly as it was found.** Before
-  this, a refused landing (a rollback, a divergent landing, or one that does not connect) still left
-  every object the archive carried written, and an unfinished import record behind — so `prikk
-  doctor` then reported an error about an import that did not finish, even though the refusal was
-  working as designed. Every planned landing is now checked against the local repository before
-  anything is written at all, not only after every object has already landed, so a refused run now
-  writes nothing: no object, no unfinished record. Resuming a genuinely interrupted import (after a
-  crash, say) still works the same way as before, and still catches the rarer case of the pointer
-  moving again in the gap before the resume.
 - **`bundle preview --ref remotes/<name>` now resolves what this repository actually received at
   that name, instead of always reporting "no local history" for it.** Before this, previewing a
   bundle against a received (not yet locally published) ref always answered as if nothing had ever
@@ -76,11 +75,6 @@
   prints a `refusal-v1` document naming the refused class, the same reusable shape `extract` already
   uses for its own refusals.
 
-- **`archive import --format json` now reports the same classification `bundle import --format
-  json` does.** Each entry in its own list of landings carries `"class"` and `"ref_state_chain"`
-  (the same fields and values `bundle preview --format json`/`bundle import --format json` already
-  report), for every landing, not only a refused one. A refusal now also prints the same reusable
-  refusal document `bundle import` already uses, naming the refused class.
 - **`bundle preview` now always reports two additional fields, `"import_class"` and
   `"import_ref_state_chain"`.** These answer a different question from the existing `"class"`/
   `"ref_state_chain"` above: what `bundle import` of this exact delivery would actually do, against

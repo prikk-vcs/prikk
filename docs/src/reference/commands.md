@@ -187,45 +187,36 @@ itself is unchanged by this.
   `fast-forward`, is never refused on this ground, and an `already-at-tip` landing whose own
   publication history reads `"older"` leaves the received pointer itself unchanged, the same as
   `bundle import`.
-- **`--adopt` now also checks the received pointer already held at the name a ref would otherwise
-  land under** (`remotes/<ref>`), before adopting it as a real local branch — previously, adopting a
-  ref read nothing at all from the received index, so an archive naming an unrelated or rolled-back
-  history at a name this repository had already received landed as a trusted local branch with no
-  warning. The same three classes refuse the same way, under the same flag. When the flag lets the
-  adoption through anyway, the landing's own `"remote_reason"` names the class, even though
-  adoption itself succeeded — the one case this field now carries something other than why a ref
-  fell through to `remotes/` instead of being adopted.
+  Every planned landing is classified against the local repository before anything is written at
+  all, not only after every carried object has already landed, so a refusal leaves the repository
+  exactly as it was found: no object written, no unfinished import record behind. Resuming an
+  interrupted import (after a real crash, say) still works the same way, and still catches the
+  rarer case of the pointer moving again in the gap before the resume.
+- **`--adopt` also checks the received pointer already held at the name a ref would otherwise land
+  under** (`remotes/<ref>`), before adopting it as a real local branch. The same three classes
+  refuse the same way, under the same flag. When the flag lets the adoption through anyway, the
+  landing's own `"remote_reason"` names the class, even though adoption itself succeeded — the one
+  case this field carries something other than why a ref fell through to `remotes/` instead of
+  being adopted.
+- **`--format json` reports the same classification `bundle import --format json` does.** Each
+  entry in its own `"landings"` array carries `"class"` and `"ref_state_chain"` (the same names and
+  values described above, for every landing, not only a refused one), and a refusal prints the
+  same `refusal-v1` document described above, with `"command": "archive-import"`.
 
-**`archive import` and `archive verify` now refuse a `Patch` whose own operations do not decode,
-before anything is written** — the identical check `bundle import`'s own admission already runs.
-Before this, such a change could land through `archive import` with no warning, or pass
-`archive verify` as internally consistent, while `bundle import` already refused the identical
-change; this closes that gap, through one shared check both importers now run.
+**`archive import` and `archive verify` refuse a `Patch` whose own operations do not decode,
+before anything is written** — the identical check `bundle import`'s own admission runs. All three
+commands apply the same check, so a change `bundle import` would refuse is refused by
+`archive import`/`archive verify` too, never landed or reported as internally consistent.
 
-**A refused `archive import` landing now leaves the repository exactly as it was found — nothing
-written at all, not even a half-finished import record.** Every planned landing is now classified
-against the local repository before anything is written, not only after every carried object has
-already landed; a rollback, a diverged landing, or one that does not connect still refuses the
-same way, but a refused run no longer leaves behind objects nobody can reach, or an unfinished
-import that `prikk doctor` would otherwise report as an error. Resuming an interrupted import
-(after a real crash, say) is unaffected, and still catches the rarer case of the pointer moving
-again in the gap before the resume.
-
-**`archive import --format json` now reports the same classification `bundle import --format
-json` does.** Each entry in its own `"landings"` array gains `"class"` and `"ref_state_chain"`
-(the same names and values described above, for every landing, not only a refused one), and a
-refusal now prints the same `refusal-v1` document described above, with `"command":
-"archive-import"`.
-
-**`bundle preview --ref remotes/<name>` now resolves what was actually received at that name,
-instead of always reporting "no local history" for it.** A `remotes/…` name answers against the
-received pointer held under that exact name; if none is held there, the command refuses by name
-rather than reporting a misleading answer. A `heads/…` or `tags/…` name is unaffected.
-`bundle preview` also now always reports, in two new fields (`"import_class"` and
-`"import_ref_state_chain"`), the classification `bundle import` of the identical delivery would
-actually make — against the received pointer this repository would actually write to, which is
-not always the same name a `--ref` comparison asked to inspect. These are additive and distinct
-from `"class"`/`"ref_state_chain"` above, which still answer only the `--ref` comparison.
+**`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
+`remotes/…` name answers against the received pointer held under that exact name; if none is held
+there, the command refuses by name rather than reporting a misleading "no local history" answer. A
+`heads/…` or `tags/…` name is unaffected. `bundle preview` also always reports, in two additional
+fields (`"import_class"` and `"import_ref_state_chain"`), the classification `bundle import` of the
+identical delivery would actually make — against the received pointer this repository would
+actually write to, which is not always the same name a `--ref` comparison asked to inspect. These
+are additive and distinct from `"class"`/`"ref_state_chain"` above, which answer only the `--ref`
+comparison.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
