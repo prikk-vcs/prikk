@@ -84,6 +84,18 @@
   a newer `prikk` may have written), which reads exactly as `extract --ref` already reads the
   identical path, never as an unsound claim. None of this affects a claim whose own signature is
   simply unadopted (not forged) rather than invalid — that continues to extract, as it always has.
+- **`show` of a pending patch now resolves through a chain of unsealed recognition claims, not only
+  one hop.** Before this, a claim whose own declared parent was itself only another pending claim's
+  prospective block — never sealed or received — read as an unrealized chain and stayed unresolved,
+  even when that other claim's own parent really was sealed or received. `show` now walks back
+  through as many such claims as it takes to reach real history, the same walk `extract --claim`
+  already uses. Two new reasons can now appear where a pending patch stays unresolved: a chain that
+  needs to resolve a block two or more held claims recognize, with none or more than one of them
+  signed by an adopted key (a shared-block collision), and a chain that loops back on itself (a
+  cycle) — both report the condition by name rather than refusing. An invalid MAINTAINER signature
+  anywhere in the chain is still skipped, not only at the claim named directly;
+  `"resolved_through_claim_id"` is still the claim naming the patch, never an earlier link in its
+  own chain.
 
 ### Added
 

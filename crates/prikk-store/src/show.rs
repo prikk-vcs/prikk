@@ -31,7 +31,7 @@ use prikk_object::{
 
 use crate::RepositoryLayout;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
-use crate::claim_chain::block_is_sealed_or_received;
+use crate::claim_chain::{ClaimChainAnchor, ClaimChainWalkError, walk_claim_chain};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lifecycle_cache::replay::{TextCache, apply_one_patch_with_materialize_fallback};
 use crate::merge::evidence::{lifecycle_state_at, lineage_horizon, mainline_or_sole_parent};
@@ -41,7 +41,7 @@ use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
 use crate::patch_set_digest::patch_ids_pending_excluding_received;
-use crate::recognition_claim::claims_naming_patch;
+use crate::recognition_claim::{ClaimChainSignatureOutcome, claims_naming_patch};
 use crate::wal::Wal;
 
 /// `show`'s own classification of one patch (0.56.0 step 1b): `queued` (this repository's own
@@ -728,26 +728,37 @@ enum PendingPathResolution {
 }
 
 /// How specific an unresolved reason is, among every claim [`resolve_pending_patch_lifecycle`]
-/// tried for one pending patch (0.56.0 step 1b2, R4, ruled explicitly): when several claims fail
-/// for different reasons, the *most specific* one is reported, not simply whichever was tried
-/// last. Declaration order is priority order -- `derive(Ord)` ranks an earlier variant lower, and
+/// tried for one pending patch (0.56.0 step 1b2, R4, ruled explicitly; 0.56.0 step 3f extends this
+/// to the chain walk's own two further structural failures): when several claims fail for
+/// different reasons, the *most specific* one is reported, not simply whichever was tried last.
+/// Declaration order is priority order -- `derive(Ord)` ranks an earlier variant lower, and
 /// [`record_if_more_specific`] keeps the lowest-ranked (most specific) reason seen, so this order
-/// *is* the ranking: an invalid signature (the claim itself cannot be trusted at all) outranks a
-/// fold failure (the claim is trusted enough to try, but its own patches do not fit its own
-/// declared parent), which outranks a chain (the claim is internally sound, only its parent is not
-/// yet realized), which outranks a merge (the claim is internally sound, there is simply no
-/// mainline to pick). Ties (two claims failing for the identical reason) are broken by claim-id
+/// *is* the ranking, reasoned the same way the pre-3f four-way order already was: `InvalidSignature`
+/// and `FoldFailure` are claims about *this claim's own soundness* -- the most actionable, since
+/// fixing or replacing the claim itself resolves them. `SharedBlock` and `Cycle` are not about this
+/// claim's own soundness at all; they are identified, nameable facts about the store's state
+/// relative to this chain (which claims collide, which ids loop) -- less actionable than fixing a
+/// claim (nothing about *this* claim is wrong), but still a specific condition an operator can act
+/// on, so they outrank the two least specific reasons. `Chain` and `Merge` are "nothing more to go
+/// on yet" -- a dead end or an unpickable mainline, naming only where the walk stopped, not what is
+/// wrong with anything. Ties (two claims failing for the identical reason) are broken by claim-id
 /// order, since claims are already tried in that order and a reason already recorded at a given
 /// rank is never displaced by another at the same rank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum UnresolvedReasonPriority {
     /// The claim's own MAINTAINER signature is invalid -- skipped before any fold is attempted.
     InvalidSignature,
-    /// The claim's own patches do not fold against its own declared parent.
+    /// Some link's own patches do not fold against its own declared parent.
     FoldFailure,
-    /// The claim's one declared parent is itself only pending -- an unrealized chain.
+    /// The walk needed to resolve a block recognized by more than one held claim, with none or
+    /// more than one of them signed by an adopted key (0.56.0 step 3f, D1).
+    SharedBlock,
+    /// The walk revisited a block it had already visited earlier in the same chain (0.56.0 step
+    /// 3f, D3).
+    Cycle,
+    /// Some link's one declared parent is itself only pending -- an unrealized chain.
     Chain,
-    /// The claim declares more than one parent, with no mainline to choose.
+    /// Some link declares more than one parent, with no mainline to choose.
     Merge,
 }
 
@@ -769,10 +780,62 @@ fn record_if_more_specific(
     }
 }
 
+/// [`ClaimChainWalkError`] -> `show`'s own `(priority, reason)` (0.56.0 step 3f): unlike `extract`
+/// (`classify_claim_chain_walk_error`, `crate::extract`), which refuses the whole command, `show`
+/// never refuses -- every structural failure becomes a reason, ranked by
+/// [`UnresolvedReasonPriority`] against whatever any other claim naming this patch already
+/// recorded. `ParentNotSealed`/`SeveralParents` keep this function's own pre-3f wording and
+/// substrings verbatim (`show::tests` pins them), now naming which link the walk actually stopped
+/// at -- in a multi-hop chain that need not be the foot claim `resolve_pending_patch_lifecycle`
+/// started from. `SharedBlock`/`Cycle` are new: the one-hop code this function had before 3f could
+/// never produce them (a single claim has no "chain" to collide or loop within).
+fn unresolved_reason_for_walk_error(
+    error: ClaimChainWalkError,
+) -> (UnresolvedReasonPriority, String) {
+    match error {
+        ClaimChainWalkError::ParentNotSealed { claim_id, parent } => (
+            UnresolvedReasonPriority::Chain,
+            format!(
+                "the claim naming this patch's chain names parent block {parent} at claim \
+                 {claim_id}, which is not itself sealed or received yet -- it is still part of \
+                 an unrealized chain of claims"
+            ),
+        ),
+        ClaimChainWalkError::SeveralParents { claim_id, count } => (
+            UnresolvedReasonPriority::Merge,
+            format!(
+                "the claim {claim_id} in this patch's chain names more than one parent block \
+                 ({count}), with no mainline to choose"
+            ),
+        ),
+        ClaimChainWalkError::SharedBlock { block_id, .. } => (
+            UnresolvedReasonPriority::SharedBlock,
+            format!(
+                "this patch's chain needs to resolve block {block_id}, which more than one held \
+                 claim recognizes, with none or more than one of them signed by an adopted key: \
+                 refusing to guess which is true"
+            ),
+        ),
+        ClaimChainWalkError::Cycle { claim_ids } => (
+            UnresolvedReasonPriority::Cycle,
+            format!(
+                "this patch's chain loops back on itself: {}",
+                claim_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        ),
+    }
+}
+
 /// Resolve a **pending** patch's own node-addressed operations against the claim that names it
 /// (0.56.0 step 1 part 1b; planeter letter 2026-10-21 §2's own "parent block id the claim names";
 /// step 1b2, R4: a reader must not refuse because of a claim, and must say which claim resolved
-/// the path).
+/// the path; 0.56.0 step 3f, D4: a one-hop check is no longer enough -- a claim's own declared
+/// parent may itself be only a prospective block another held, unsealed claim recognizes, so this
+/// now calls the same chain walk `extract --claim` already uses, [`walk_claim_chain`]).
 ///
 /// **"The claim's parent block" is `RecognitionClaimPayload::parent_block_ids`, not `block_id`.**
 /// `block_id` is the block the claim says these patches *would* be sealed into -- the block it
@@ -792,28 +855,25 @@ fn record_if_more_specific(
 /// - **An invalid signature skips the claim before any fold is attempted** (R4): a claim whose own
 ///   MAINTAINER signature `claims_naming_patch` reports invalid (the same case `sync-pending-v1`
 ///   reports as `"invalid"`, "the one value a tool must treat as an alarm") must not be allowed to
-///   choose the path `show` prints.
-/// - `parent_block_ids` empty (a root claim): folds from an empty [`NodeLifecycleState`], the same
-///   starting point [`block_starting_state`]'s own `Root` arm already uses.
-/// - `parent_block_ids` exactly one, and that one block id is itself sealed or received (checked
-///   against the same local-ref-tip/received-pointer-tip union [`patch_ids_pending_excluding_received`]
-///   already walks, narrowed here to block-id membership via `ancestors_inclusive` instead of
-///   patch-id accumulation): folds from that block's own end state
-///   ([`lifecycle_state_at`], the same call [`block_starting_state`] makes for a real block's own
-///   parent).
-/// - `parent_block_ids` exactly one, but not itself sealed or received: this claim is part of an
-///   unrealized chain -- skipped, named as the reason if no other claim does better.
-/// - `parent_block_ids` with more than one entry (a merge-shaped claim): no `mainline_parent_id`
-///   exists on `RecognitionClaimPayload` to pick one from (unlike `BlockPayload`) -- skipped, named
-///   as its own distinct reason.
-/// - **A fold failure becomes that claim's own reason, not a propagated `Err`** (R4): the fold
-///   itself is the same [`apply_one_patch_with_materialize_fallback`] driver `show()`'s own block
-///   loop already uses, over the claim's own `patch_ids` (its stated order, not a real block's)
-///   instead of `block.patch_ids`, stopping once the target patch has been applied -- but an
-///   untrusted claim's own declared parent not actually fitting its patches (an `EditText` naming
-///   a node absent there, for example) must not make the whole `show <patch>` call refuse; the
-///   next claim (if any) is tried instead, the same "readers report, gates refuse" rule 1a's R1
-///   already established for `sync pending`'s own signature handling.
+///   choose the path `show` prints -- the starting claim itself, and (3f) **any link the walk
+///   resolves mid-chain from a different held claim**, since [`walk_claim_chain`] never judges a
+///   signature by design (`crate::claim_chain`'s own module doc): that is this caller's own job.
+/// - **The walk** ([`walk_claim_chain`]) takes it from there: it is the identical walk `extract
+///   --claim` uses, structurally finding a reachable anchor (or genesis) through however many
+///   unsealed claims stand between this claim and one, and reporting every structural failure
+///   along the way ([`unresolved_reason_for_walk_error`]) rather than refusing -- a dead-end
+///   parent, an unpickable merge, a shared-block collision, or a cycle.
+/// - Once the walk succeeds, folding is the identical two-level loop this function always had,
+///   just now over every link root to foot instead of one claim's own `patch_ids` alone: the
+///   anchor's own end state (or an empty [`NodeLifecycleState`] for genesis, the same starting
+///   point [`block_starting_state`]'s own `Root` arm uses), folded with
+///   [`apply_one_patch_with_materialize_fallback`] link by link, stopping the moment the target
+///   patch has been applied.
+/// - **A fold failure becomes that link's own reason, not a propagated `Err`** (R4, extended to
+///   every link): an untrusted claim's own declared parent not actually fitting its patches (an
+///   `EditText` naming a node absent there, for example) must not make the whole `show <patch>`
+///   call refuse; the next claim (if any) is tried instead, the same "readers report, gates
+///   refuse" rule 1a's R1 already established for `sync pending`'s own signature handling.
 ///
 /// **When several claims fail, the most specific reason is reported** (R4, ruled explicitly), not
 /// simply whichever was tried last -- see [`UnresolvedReasonPriority`]'s own doc for the order and
@@ -832,7 +892,7 @@ fn resolve_pending_patch_lifecycle(
 
     let mut best_reason: Option<(UnresolvedReasonPriority, String)> = None;
     for claim in &claims {
-        if let Some(reason) = &claim.invalid_signature_reason {
+        if let ClaimChainSignatureOutcome::Invalid { reason, .. } = &claim.signature {
             record_if_more_specific(
                 &mut best_reason,
                 UnresolvedReasonPriority::InvalidSignature,
@@ -843,34 +903,48 @@ fn resolve_pending_patch_lifecycle(
             );
             continue;
         }
-        let anchor = match claim.payload.parent_block_ids.as_slice() {
-            [] => None,
-            [parent] => {
-                if block_is_sealed_or_received(layout, object_store, *parent)? {
-                    Some(*parent)
-                } else {
-                    record_if_more_specific(
-                        &mut best_reason,
-                        UnresolvedReasonPriority::Chain,
-                        format!(
-                            "the claim naming this patch names parent block {parent}, which is \
-                             not itself sealed or received yet -- it is still part of an \
-                             unrealized chain of claims"
-                        ),
-                    );
-                    continue;
-                }
-            }
-            _ => {
-                record_if_more_specific(
-                    &mut best_reason,
-                    UnresolvedReasonPriority::Merge,
-                    "the claim naming this patch names more than one parent block, with no \
-                     mainline to choose"
-                        .to_string(),
-                );
+
+        let chain = match walk_claim_chain(
+            layout,
+            object_store,
+            claim.claim_id,
+            claim.payload.clone(),
+            claim.signature.clone(),
+        )? {
+            Ok(chain) => chain,
+            Err(walk_error) => {
+                let (priority, reason) = unresolved_reason_for_walk_error(walk_error);
+                record_if_more_specific(&mut best_reason, priority, reason);
                 continue;
             }
+        };
+
+        // The walk itself never judges a signature (`crate::claim_chain`'s own module doc): a
+        // link resolved mid-walk from a *different* held claim could still be `Invalid`, even
+        // though the starting claim above was not.
+        if let Some((invalid_claim_id, reason)) =
+            chain.links.iter().find_map(|link| match &link.signature {
+                ClaimChainSignatureOutcome::Invalid { reason, .. } => {
+                    Some((link.claim_id, reason.clone()))
+                }
+                _ => None,
+            })
+        {
+            record_if_more_specific(
+                &mut best_reason,
+                UnresolvedReasonPriority::InvalidSignature,
+                format!(
+                    "the claim {invalid_claim_id} in this patch's chain has an invalid \
+                     MAINTAINER signature, so the chain is skipped rather than used to resolve a \
+                     path: {reason}"
+                ),
+            );
+            continue;
+        }
+
+        let anchor = match chain.anchor {
+            ClaimChainAnchor::Genesis => None,
+            ClaimChainAnchor::Block(block_id) => Some(block_id),
         };
         let mut state = match anchor {
             Some(anchor_id) => lifecycle_state_at(object_store, anchor_id)?.state().clone(),
@@ -882,34 +956,45 @@ fn resolve_pending_patch_lifecycle(
         };
         let mut text_cache = TextCache::new();
         let mut fold_failed = false;
-        for claim_patch_id in &claim.payload.patch_ids {
-            if let Err(err) = apply_one_patch_with_materialize_fallback(
-                Some(layout),
-                object_store,
-                *claim_patch_id,
-                &mut state,
-                &mut text_cache,
-                sealed_lineage,
-            ) {
-                record_if_more_specific(
-                    &mut best_reason,
-                    UnresolvedReasonPriority::FoldFailure,
-                    format!(
-                        "the claim naming this patch does not fold against its own declared \
-                         parent: {err}"
-                    ),
-                );
-                fold_failed = true;
-                break;
-            }
-            if *claim_patch_id == patch_id {
-                return Ok(PendingPathResolution::Resolved(claim.claim_id, state));
+        'links: for link in &chain.links {
+            for claim_patch_id in &link.patch_ids {
+                if let Err(err) = apply_one_patch_with_materialize_fallback(
+                    Some(layout),
+                    object_store,
+                    *claim_patch_id,
+                    &mut state,
+                    &mut text_cache,
+                    sealed_lineage,
+                ) {
+                    record_if_more_specific(
+                        &mut best_reason,
+                        UnresolvedReasonPriority::FoldFailure,
+                        format!(
+                            "the claim {} in this patch's chain does not fold against its own \
+                             declared parent: {err}",
+                            link.claim_id
+                        ),
+                    );
+                    fold_failed = true;
+                    break 'links;
+                }
+                if *claim_patch_id == patch_id {
+                    debug_assert_eq!(
+                        link.claim_id, claim.claim_id,
+                        "the resolving link must be the chain's own foot, the caller's own \
+                         starting claim: claims_naming_patch only ever returns a claim whose own \
+                         patch_ids contains patch_id directly, and the chain's own foot is that \
+                         starting claim by construction"
+                    );
+                    return Ok(PendingPathResolution::Resolved(link.claim_id, state));
+                }
             }
         }
         debug_assert!(
             fold_failed,
-            "claims_naming_patch only returns a claim whose own patch_ids contains patch_id; \
-             the loop above must either resolve or record a fold failure before falling through"
+            "walk_claim_chain's own foot link is the starting claim, whose own patch_ids \
+             contains patch_id (claims_naming_patch's own guarantee); the loop above must either \
+             resolve or record a fold failure before falling through"
         );
     }
     let (_, reason) = best_reason.ok_or_else(|| {

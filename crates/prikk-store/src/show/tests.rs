@@ -2776,3 +2776,214 @@ fn show_names_a_reason_for_a_bare_sealed_patchs_unresolved_path() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// 0.56.0 step 3f, D4: `show` now resolves a pending patch through a **two-link** chain, not only
+/// one hop -- a root claim recognizing the real, sealed anchor, and a foot claim (the one naming
+/// the pending patch being shown) whose own declared parent is the root claim's own `block_id`,
+/// itself still only pending. Before 3f, the one-hop check would have read the foot claim's own
+/// parent as "not itself sealed or received" and stopped there; the chain walk now continues
+/// through the root claim to the real anchor.
+#[test]
+fn show_resolves_a_pending_patchs_path_through_a_two_link_chain() {
+    let root = unique_temp_dir("show-pending-two-link-chain");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x61; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    let anchor_block_id = current_block_id(&layout);
+
+    // The root link: an unrelated pending patch, recognized by a claim whose own parent is the
+    // real, sealed anchor -- itself still only pending (never sealed), the chain's own unrealized
+    // middle link.
+    let root_blob_id = write_blob(&layout, BlobKind::Text, b"root link\n".to_vec());
+    let root_patch_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "root-link.txt".to_string(),
+                node_id: NodeId::from_bytes([0x62; 32]),
+                blob_id: root_blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+    );
+    let intermediate_block_id = ObjectId::from_bytes([0x63; 32]);
+    let root_claim_id = write_claim(
+        &layout,
+        intermediate_block_id,
+        vec![root_patch_id],
+        vec![anchor_block_id],
+    );
+
+    // The foot link: the patch actually being shown, recognized by a claim whose own parent is
+    // the root claim's own `block_id` -- not a real block at all, only a prospective one the root
+    // claim recognizes.
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let prospective_block_id = ObjectId::from_bytes([0x64; 32]);
+    let foot_claim_id = write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![intermediate_block_id],
+    );
+    assert_ne!(root_claim_id, foot_claim_id, "fixture sanity");
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    assert_eq!(
+        patch.resolved_through_claim_id,
+        Some(foot_claim_id),
+        "the claim naming this patch directly must be the one named, even though resolving it \
+         needed walking back through the root claim too"
+    );
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    assert_eq!(
+        operation.paths,
+        vec![ShowPathResolution::Path("a.txt".to_string())],
+        "the chain must walk through the root claim to the real, sealed anchor and resolve: {:?}",
+        operation.paths
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.56.0 step 3f, D1: two held claims both recognize the same prospective block as a chain link's
+/// own parent, with neither signed by an adopted key -- `show` cannot pick one without guessing,
+/// and reports that as the reason, rather than refusing or silently choosing.
+#[test]
+fn show_names_a_shared_block_collision_as_the_reason() {
+    let root = unique_temp_dir("show-pending-shared-block");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0x71; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+    let anchor_block_id = current_block_id(&layout);
+
+    // A second, never-adopted maintainer: both candidates below are signed by it, so neither reads
+    // `Sound` -- D1's own default (no single trusted candidate), not its one-sound exception.
+    let never_adopted =
+        Ed25519MaintainerSigner::from_seed("show-never-adopted", &[0x72; 32]).unwrap();
+
+    let shared_block_id = ObjectId::from_bytes([0x73; 32]);
+    let candidate_a_blob = write_blob(&layout, BlobKind::Text, b"a\n".to_vec());
+    let candidate_a_patch = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "a-candidate.txt".to_string(),
+                node_id: NodeId::from_bytes([0x74; 32]),
+                blob_id: candidate_a_blob,
+                mode: 0o100_644,
+            }),
+        }],
+    );
+    let candidate_a_claim_id = write_signed_claim(
+        &layout,
+        &never_adopted,
+        shared_block_id,
+        vec![candidate_a_patch],
+        vec![anchor_block_id],
+    );
+
+    let candidate_b_blob = write_blob(&layout, BlobKind::Text, b"b\n".to_vec());
+    let candidate_b_patch = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "b-candidate.txt".to_string(),
+                node_id: NodeId::from_bytes([0x75; 32]),
+                blob_id: candidate_b_blob,
+                mode: 0o100_644,
+            }),
+        }],
+    );
+    let candidate_b_claim_id = write_signed_claim(
+        &layout,
+        &never_adopted,
+        shared_block_id,
+        vec![candidate_b_patch],
+        vec![anchor_block_id],
+    );
+    assert_ne!(candidate_a_claim_id, candidate_b_claim_id, "fixture sanity");
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let prospective_block_id = ObjectId::from_bytes([0x76; 32]);
+    write_claim(
+        &layout,
+        prospective_block_id,
+        vec![pending_id],
+        vec![shared_block_id],
+    );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Pending);
+    assert_eq!(
+        patch.resolved_through_claim_id, None,
+        "a shared-block collision must not be mistaken for a resolution"
+    );
+    let [operation] = patch.operations.as_slice() else {
+        panic!("expected one operation, got {:?}", patch.operations);
+    };
+    let [path] = operation.paths.as_slice() else {
+        panic!("expected one path, got {:?}", operation.paths);
+    };
+    match path {
+        ShowPathResolution::Unresolved {
+            reason: Some(reason),
+            ..
+        } => {
+            assert!(
+                reason.contains("more than one held claim recognizes"),
+                "reason must name the shared-block collision: {reason}"
+            );
+            assert!(
+                reason.contains(&shared_block_id.to_string()),
+                "reason must name the colliding block: {reason}"
+            );
+        }
+        other => panic!("expected Unresolved with a reason, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}

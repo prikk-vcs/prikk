@@ -385,22 +385,23 @@ pub(crate) fn classify_claim_signature(
 }
 
 /// One recognition claim naming a pending patch, as [`claims_naming_patch`] hands it back to
-/// `show` (0.56.0 step 1b2, R4): the claim's own id, its full payload (`show` needs
+/// `show` (0.56.0 step 1b2, R4; 0.56.0 step 3f: carries the full three-way signature outcome, not
+/// just invalid-or-not, so `show`'s own call into `crate::claim_chain::walk_claim_chain` has a
+/// `start_signature` to pass): the claim's own id, its full payload (`show` needs
 /// `parent_block_ids` and `patch_ids`, which `patch_exchange::PendingPatchClaim` -- built for
-/// `sync-pending-v1` alone -- does not carry), and whether this claim's own MAINTAINER signature
-/// is usable at all.
+/// `sync-pending-v1` alone -- does not carry), and its own MAINTAINER signature's outcome.
 pub(crate) struct ClaimNamingPatch {
     /// The claim's own content-addressed id.
     pub(crate) claim_id: ObjectId,
     /// The claim's full payload.
     pub(crate) payload: RecognitionClaimPayload,
-    /// `Some(reason)` when this claim's own MAINTAINER signature failed to verify
-    /// ([`verify_claim_signature`] returned `Err`) -- the same case `sync-pending-v1` reports as
-    /// `"invalid"`, "the one value a tool must treat as an alarm." `None` when the signature is
-    /// usable (`Sound` or `Unverifiable` -- both usable here; unlike `sync-pending-v1`, `show`
-    /// does not otherwise distinguish them, since neither blocks using the claim to resolve a
-    /// path).
-    pub(crate) invalid_signature_reason: Option<String>,
+    /// This claim's own MAINTAINER signature, classified exactly as the chain walk's own starting
+    /// link needs it ([`classify_claim_signature`]) -- `Sound` and `Unverifiable` are both usable
+    /// by `show` (unlike `sync-pending-v1`, it does not otherwise distinguish them, since neither
+    /// blocks using the claim to resolve a path); `Invalid` is skipped before any fold is
+    /// attempted, the same case `sync-pending-v1` reports as `"invalid"`, "the one value a tool
+    /// must treat as an alarm."
+    pub(crate) signature: ClaimChainSignatureOutcome,
 }
 
 /// Every held recognition claim naming `patch_id`, sorted by claim id (0.56.0 step 1b: `show`'s
@@ -441,15 +442,11 @@ pub(crate) fn claims_naming_patch(
             if !payload.patch_ids.contains(&patch_id) {
                 continue;
             }
-            let invalid_signature_reason =
-                match verify_claim_signature(&record.envelope, &trust_policy) {
-                    Ok(_) => None,
-                    Err(err) => Some(err.to_string()),
-                };
+            let signature = classify_claim_signature(&record.envelope, &trust_policy);
             matches.push(ClaimNamingPatch {
                 claim_id,
                 payload,
-                invalid_signature_reason,
+                signature,
             });
         }
     }

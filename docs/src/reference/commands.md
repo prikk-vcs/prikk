@@ -272,23 +272,33 @@ clearing the queue afterward — `show` resolves this by looking for a real obje
 falling back to the queue, so `"sealed"` wins.
 
 A pending patch's own node-addressed operations (`edit-text`, `replace-binary`, `change-perm`)
-resolve a real path when a recognition claim naming it names a single parent block this
-repository already holds, sealed or received — folding that claim's own patches onto that
-parent's state, the same way a sealed block's own patches fold onto its parent's. When a claim
-resolves the path, that patch's own `"resolved_through_claim_id"` names the claim's id (`null`
-otherwise); a tool can look up that claim's own signature outcome in `sync pending`'s own
-`sync-pending-v1` listing. A claim whose own MAINTAINER signature is invalid is skipped outright,
-never used to choose a path; a claim whose own patches do not actually fold against its own
-declared parent is skipped the same way, its own fold failure named as the reason — in neither
-case does `show` itself refuse. **The path stays unresolved** when every claim naming the patch
-fails: no held claim names it at all; every claim's declared parent is itself only pending, part
-of a chain of claims that is not yet realized; or every claim names more than one parent, with no
-mainline to pick. `"unresolved_node_id"` carries a `"reason"` alongside it in every such case,
-naming which applies, rather than guessing a path — and when more than one claim fails for a
-different reason, the most specific one is reported: an invalid signature first, then a fold
-failure, then a chain, then a merge. A bare sealed patch id shown directly stays unresolved too,
-also naming why: `show` does not search for the block that sealed a patch shown by its own id;
-`prikk log` or `prikk tree` finds it.
+resolve a real path when a recognition claim naming it leads back, through as many further held
+claims as it takes (0.56.0 step 3f — before this, only one hop), to a real parent block this
+repository already holds, sealed or received — folding every link's own patches in order onto that
+real parent's state, the same way a sealed block's own patches fold onto its parent's. A claim's
+own declared parent need not itself be sealed or received: it can instead be the prospective block
+*another* held, unsealed claim recognizes, and that claim's own parent carries on from there, and
+so on, the identical chain walk `extract --claim` uses. When the chain resolves the path, that
+patch's own `"resolved_through_claim_id"` names the claim given on the command line (the chain's
+own foot), never an earlier link in its own chain; a tool can look up that claim's own signature
+outcome in `sync pending`'s own `sync-pending-v1` listing. A claim whose own MAINTAINER signature
+is invalid is skipped outright, never used to choose a path — checked at every link the chain
+walks through, not only the one named directly; a link whose own patches do not actually fold
+against its own declared parent is skipped the same way, its own fold failure named as the reason
+— in neither case does `show` itself refuse. **The path stays unresolved** when every claim naming
+the patch fails: no held claim names it at all; some link's declared parent is itself only
+pending, part of a chain of claims that is not yet realized; some link names more than one parent,
+with no mainline to pick; the chain needs to resolve a block that two or more held claims
+recognize, with none or more than one of them signed by an adopted key (a shared-block collision);
+or the chain loops back on itself (a cycle). `"unresolved_node_id"` carries a `"reason"` alongside
+it in every such case, naming which applies, rather than guessing a path — and when more than one
+claim fails for a different reason, the most specific one is reported, in this order: an invalid
+signature, a fold failure, a shared-block collision, a cycle, a chain, then a merge (the first two
+are about the failing claim's or link's own soundness; the collision and the cycle are specific,
+nameable facts about the store's state; the last two name only where the walk stopped, with
+nothing more specific to go on). A bare sealed patch id shown directly stays unresolved too, also
+naming why: `show` does not search for the block that sealed a patch shown by its own id; `prikk
+log` or `prikk tree` finds it.
 
 **`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches
 accepted into this repository (`sync accept`) and not sealed by any history it holds, its own or
