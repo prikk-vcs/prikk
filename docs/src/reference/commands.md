@@ -218,15 +218,16 @@ actually write to, which is not always the same name a `--ref` comparison asked 
 are additive and distinct from `"class"`/`"ref_state_chain"` above, which answer only the `--ref`
 comparison.
 
-**A path this version of `prikk` does not accept is not damage.** `verify`, `doctor`, and `show`
-each classify a path that fails this version's own path rule (today: non-ASCII) distinctly from
-genuine corruption: the message says that this path is outside what this version of `prikk`
-accepts, and that a newer version of `prikk` may have written it — never "malformed", never "does
-not decode". `doctor`'s own recommendation for this case says no repair is needed, rather than
-telling the operator to preserve the repository and inspect the failing object or block. `tree`,
-`extract`, and `commit` already name the same rule directly, in the validator's own words, with no
-"malformed"/damage framing to begin with. Every one of these commands still refuses; only the
-classification and wording changed.
+**A path this version of `prikk` does not accept is not damage.** `verify`, `doctor`, `show`, and
+`commit` (when it replays existing history to derive state) each classify a path that fails this
+version's own path rule (today: non-ASCII) distinctly from genuine corruption: the message says
+that this path is outside what this version of `prikk` accepts, and that a newer version of
+`prikk` may have written it — never "malformed", never "does not decode". `doctor`'s own
+recommendation for this case says no repair is needed, rather than telling the operator to
+preserve the repository and inspect the failing object or block. `tree` and `extract` already
+name the same rule directly, in the validator's own words, with no "malformed"/damage framing to
+begin with. Every one of these commands still refuses; only the classification and wording
+changed.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
