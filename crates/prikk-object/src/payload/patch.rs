@@ -16,7 +16,7 @@ mod operations;
 
 pub use operations::{
     ChangePerm, CreateFile, CreateSymlink, DeleteNode, DeleteNodePreimage, EditText, RenamePath,
-    ReplaceBinary, is_canonical_file_mode,
+    ReplaceBinary, authoring_path_error, is_canonical_file_mode,
 };
 
 /// Number of bytes in a content-anchored text span hash.

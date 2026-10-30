@@ -31,5 +31,7 @@ mod rfc126_aud08_seal_update_seq_overflow;
 mod seal_recovery;
 #[path = "commit_and_seal/seal_trust_gate.rs"]
 mod seal_trust_gate;
+#[path = "commit_and_seal/step3e_t2_non_ascii_authoring.rs"]
+mod step3e_t2_non_ascii_authoring;
 #[path = "support/mod.rs"]
 mod support;

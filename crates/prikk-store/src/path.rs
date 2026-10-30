@@ -54,22 +54,15 @@ pub(crate) fn pathbuf_to_slash_string(path: &Path) -> Result<String> {
 
 /// Reword a `RepoPath::parse`/`validate_repo_path` refusal for the authoring context: a live
 /// worktree file's name, reached while `commit` (or `diff`'s own worktree-side read) scans the
-/// worktree -- never stored or delivered history (0.56.0 step 3d2). Structural: matches
-/// [`PrikkError::NonAsciiRepoPath`], never any error's rendered text. Every other
-/// `validate_repo_path` refusal (empty, absolute, too-long, a reserved component, ...) passes
-/// through unchanged -- those are permanently invalid, not a statement about this version
-/// specifically, so they keep `InvalidName`'s own wording. The same conversion
-/// `prikk-object::payload::patch::operations`'s own `authoring_path_error` applies at encode time;
-/// this is the earlier point in the same `commit` call where the identical refusal is actually
-/// first raised, scanning the worktree before any `Patch` operation is ever constructed.
-pub(crate) fn authoring_path_error(err: PrikkError) -> PrikkError {
-    match err {
-        PrikkError::NonAsciiRepoPath { path } => PrikkError::InvalidName(format!(
-            "this version of prikk does not accept non-ASCII repository paths: {path}"
-        )),
-        other => other,
-    }
-}
+/// worktree -- never stored or delivered history (0.56.0 step 3d2). Used at this crate's own five
+/// worktree-scan call sites, the earlier point in the same `commit` call where this refusal is
+/// actually first raised, before any `Patch` operation is ever constructed.
+///
+/// `pub(crate) use`, not a second definition (0.56.0 step 3e T2): this is the identical function
+/// `prikk-object`'s own `CreateFile`/`DeleteNode`/`RenamePath`/`CreateSymlink::validate()` already
+/// call at encode time -- re-exported here, never duplicated, so the sentence cannot drift between
+/// the two crates again.
+pub(crate) use prikk_object::authoring_path_error;
 
 #[cfg(test)]
 mod tests;

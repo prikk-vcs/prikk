@@ -34,7 +34,12 @@ pub fn is_canonical_file_mode(mode: u32) -> bool {
 /// `validate_repo_path` refusal (empty, absolute, too-long, a reserved component, ...) passes
 /// through unchanged -- those are permanently invalid, not a statement about this version
 /// specifically, so they keep `InvalidName`'s own wording.
-fn authoring_path_error(err: PrikkError) -> PrikkError {
+///
+/// `pub` (0.56.0 step 3e T2): the one definition, called from here (`CreateFile`/`DeleteNode`/
+/// `RenamePath`/`CreateSymlink`'s own `validate()`) and re-exported for `prikk-store`'s own five
+/// worktree-scan call sites (`crate::path::authoring_path_error` there is now a re-export of this
+/// function, not a second copy) -- so the sentence cannot drift between the two crates again.
+pub fn authoring_path_error(err: PrikkError) -> PrikkError {
     match err {
         PrikkError::NonAsciiRepoPath { path } => PrikkError::InvalidName(format!(
             "this version of prikk does not accept non-ASCII repository paths: {path}"
