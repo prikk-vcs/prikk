@@ -12,6 +12,8 @@
 //! version of prikk may have written it", wrong for a file the test itself just wrote by hand) and
 //! never the retired "deferred until ... implemented" wording.
 
+#![allow(clippy::unwrap_used)]
+
 use crate::support::{commit, init, unique_repo};
 
 /// `commit` of a brand-new worktree file whose name is non-ASCII: the authoring sentence, naming
