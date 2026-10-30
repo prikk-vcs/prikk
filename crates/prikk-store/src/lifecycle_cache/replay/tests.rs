@@ -1677,3 +1677,69 @@ fn apply_queued_patch_envelopes_resolves_a_two_node_swap() {
         "node 0x22 must have moved to a.txt"
     );
 }
+
+/// 0.56.0 step 3d (A6): a queued patch whose own `CreateFile` operation names a non-ASCII path --
+/// the exact shape a newer `prikk` version (once it supports Unicode paths) could write, and that
+/// this version's own `CreateFile::validate`/`validate_repo_path` refuses to *author* -- built by
+/// driving `prikk_object::CanonicalWriter` directly, bypassing `CreateFile`'s own validating
+/// `encode_canonical` (the same bypass `archive::tests::seal_one_block_with_an_outside_version_rule_patch`
+/// uses at the whole-repository level; this is the same fixture one layer down, reached through
+/// `apply_queued_patch_envelopes` -- the production fold site `commit --from-worktree`'s own
+/// unsealed-queue replay reaches, per this function's own doc comment above). Proves the fix at its
+/// narrowest point: `read_patch_operations_from_envelope` must classify this as
+/// [`LifecycleReplayError::OutsideVersionRuleInLineage`], not [`LifecycleReplayError::MalformedPatchInLineage`],
+/// and the resulting [`prikk_error::PrikkError`] must say so, never "malformed".
+#[test]
+fn apply_queued_patch_envelopes_classifies_a_non_ascii_path_as_outside_version_rule_not_malformed()
+{
+    use prikk_object::{CanonicalWriter, WireType};
+
+    // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, "pages/日本語.md").unwrap();
+    create_file.field_bytes(2, nid(0x51).as_bytes()).unwrap();
+    create_file.field_object_id(3, &oid(60)).unwrap();
+    create_file.field_u32(4, 0o100_644).unwrap();
+    let create_file_bytes = create_file.finish();
+
+    // Operation tags (payload/patch.rs): 1=op_seq, 10=CreateFile (nested Record).
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1).unwrap();
+    operation
+        .field_raw(10, WireType::Record, &create_file_bytes)
+        .unwrap();
+    let operation_bytes = operation.finish();
+
+    // PatchPayload tag 1: one operation, framed as a `RecordListItem`
+    // (`repeated_record_list`'s own wire shape).
+    let mut payload = CanonicalWriter::new();
+    payload
+        .field_raw(1, WireType::RecordListItem, &operation_bytes)
+        .unwrap();
+    let canonical_payload = payload.finish();
+
+    let envelope = ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
+    let record = WalRecord { seq: 1, envelope };
+
+    let reader = MockReader::new();
+    let mut state = NodeLifecycleState::new();
+    let mut text_cache = TextCache::new();
+    let err =
+        apply_queued_patch_envelopes(None, &reader, &[record], &mut state, &mut text_cache, None)
+            .expect_err("a non-ASCII path must still be refused, not silently accepted");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("outside what this version of prikk accepts")
+            && rendered.contains("newer version of prikk may have written it"),
+        "expected A6's own wording, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("is malformed") && !rendered.contains("does not decode"),
+        "a path outside this version's rule must never be called malformed/damaged: {rendered}"
+    );
+    assert_eq!(
+        err.decode_failure_kind(),
+        prikk_error::DecodeFailureKind::OutsideVersionRule,
+        "the classification must survive to `PrikkError`, not just the rendered text: {err:?}"
+    );
+}

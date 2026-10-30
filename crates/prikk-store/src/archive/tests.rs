@@ -124,6 +124,198 @@ pub(crate) fn seal_one_block_with_an_undecodable_patch(
     Ok(root_block_id)
 }
 
+/// 0.56.0 step 3d (A6): a `Patch` whose own `CreateFile` operation names a non-ASCII path -- the
+/// exact shape a newer `prikk` version (once it supports Unicode paths) could write, and that
+/// this version's own `CreateFile::validate`/`validate_repo_path` refuses to *author*. Built by
+/// driving `CanonicalWriter` directly (bypassing `CreateFile`'s/`Operation`'s/`PatchPayload`'s own
+/// validating `encode_canonical`, the same way `write_object` itself never calls
+/// `decode_patch_operations` -- see that function's own doc), then written straight to the store:
+/// this is a genuine write-time bypass, not something any writer here would actually refuse. No
+/// snapshot (`snapshot_blob_ref: None`): this fixture means to exercise `lifecycle_cache::replay`'s
+/// own classification (`LifecycleReplayError::OutsideVersionRuleInLineage`), not
+/// `snapshot.rs::not_decodable`'s sibling fix, which is covered by its own, narrower unit test.
+/// Deliberately **not** [`seal_one_block_with_an_undecodable_patch`]'s shape: that one is real
+/// corruption (a truncated payload); this one decodes as a structurally sound shape and fails only
+/// this version's own path rule -- the whole point A6 exists to tell apart.
+pub(crate) fn seal_one_block_with_an_outside_version_rule_patch(
+    layout: &RepositoryLayout,
+) -> prikk_error::Result<ObjectId> {
+    use prikk_object::{CanonicalWriter, NodeId, WireType};
+
+    let mut object_store = FileObjectStore::new(layout.clone());
+    let blob = crate::test_gates::test_support::signed_patch_blob_envelope();
+    let blob_id = blob.object_id();
+    object_store.write_object(&blob)?;
+
+    // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, "pages/日本語.md")?;
+    create_file.field_bytes(2, NodeId::from_bytes([0x51; 32]).as_bytes())?;
+    create_file.field_object_id(3, &blob_id)?;
+    create_file.field_u32(4, 0o100_644)?;
+    let create_file_bytes = create_file.finish();
+
+    // Operation tags (payload/patch.rs): 1=op_seq, 10=CreateFile (nested Record).
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1)?;
+    operation.field_raw(10, WireType::Record, &create_file_bytes)?;
+    let operation_bytes = operation.finish();
+
+    // PatchPayload tag 1: one operation, framed as a `RecordListItem` (`repeated_record_list`'s
+    // own wire shape) -- every other PatchPayload field (intent/preconditions/purpose/message) is
+    // omitted here exactly as the validating encoder omits them for this fixture's own shape
+    // (`intent: None, preconditions: [], purpose: Normal, message: None`).
+    let mut payload = CanonicalWriter::new();
+    payload.field_raw(1, WireType::RecordListItem, &operation_bytes)?;
+    let canonical_payload = payload.finish();
+
+    let mut patch = prikk_object::ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
+    patch.add_signature(crate::test_gates::test_support::rollback_author_signature())?;
+    let patch_id = object_store.write_object(&patch)?;
+
+    let root_block = signed_block(BlockKind::Root, Vec::new(), vec![patch_id], None);
+    let root_block_id = object_store.write_object(&root_block)?;
+
+    let ref_store = RefStore::new(layout.clone());
+    let ref_state = crate::test_gates::test_support::signed_ref_state_envelope(
+        "heads/main",
+        None,
+        root_block_id,
+        1,
+    );
+    let ref_state_id = ref_state.object_id();
+    let ref_update = crate::test_gates::test_support::signed_ref_update_envelope(
+        "heads/main",
+        None,
+        ref_state_id,
+        root_block_id,
+        1,
+    );
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+    Ok(root_block_id)
+}
+
+/// 0.56.0 step 3d (A6): manual-measurement escape hatch, not part of the regression suite. Set
+/// `PRIKK_A6_FIXTURE_DIR` to a directory and run `cargo test --ignored
+/// write_a6_fixture_for_manual_cli_measurement` to materialize the fixture there for the real
+/// `prikk` CLI binary to be pointed at directly (the fresh measurement this round's own report
+/// requires). A no-op (not a failure) when the variable is unset, so this never runs by accident
+/// in an ordinary sweep even without `#[ignore]`'s own protection.
+#[test]
+#[ignore = "manual measurement aid, not a regression test -- set PRIKK_A6_FIXTURE_DIR to use it"]
+fn write_a6_fixture_for_manual_cli_measurement() {
+    let Ok(dir) = std::env::var("PRIKK_A6_FIXTURE_DIR") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(dir);
+    let layout = RepositoryLayout::init(&path).expect("init repository layout");
+    seal_one_block_with_an_outside_version_rule_patch(&layout)
+        .expect("seal the outside-version-rule fixture");
+}
+
+/// 0.56.0 step 3d (A6): `verify` and `doctor`, against the outside-version-rule fixture, must
+/// classify it distinctly from damage -- never "malformed"/"does not decode", never "preserve the
+/// repository and inspect the failing object/block before attempting repair". Fresh-measured
+/// against the real `prikk` CLI binary too (this round's own report), on both sides of the fix;
+/// this is the permanent regression form of that same measurement.
+#[test]
+fn verify_and_doctor_classify_the_outside_version_rule_fixture_not_as_damage() {
+    let dir = unique_temp_dir("a6-verify-doctor");
+    let layout = RepositoryLayout::init(&dir).expect("init repository layout");
+    seal_one_block_with_an_outside_version_rule_patch(&layout)
+        .expect("seal the outside-version-rule fixture");
+
+    let report =
+        crate::verify_repository(&layout).expect("verify_repository itself must not error");
+    let failed = report
+        .block_state_outcomes
+        .iter()
+        .find_map(|outcome| match &outcome.status {
+            crate::BlockStateStatus::Failed { message, kind } => Some((message.clone(), *kind)),
+            _ => None,
+        })
+        .expect("the fixture's own block must be a Failed block-state outcome");
+    assert_eq!(
+        failed.1,
+        prikk_error::DecodeFailureKind::OutsideVersionRule,
+        "got: {failed:?}"
+    );
+    assert!(
+        failed
+            .0
+            .contains("outside what this version of prikk accepts")
+            && failed
+                .0
+                .contains("newer version of prikk may have written it"),
+        "got: {}",
+        failed.0
+    );
+    assert!(
+        !failed.0.contains("is malformed") && !failed.0.contains("does not decode"),
+        "got: {}",
+        failed.0
+    );
+
+    let doctor_report = crate::doctor_repository(&layout);
+    assert!(
+        !doctor_report.is_healthy(),
+        "every reader still refuses -- doctor must still report an error-severity issue"
+    );
+    let issue = doctor_report
+        .issues
+        .iter()
+        .find(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected the new issue code, got: {:?}",
+                doctor_report.issues
+            )
+        });
+    assert!(
+        issue.recommendation.contains("no repair is needed"),
+        "got: {}",
+        issue.recommendation
+    );
+    assert!(
+        !doctor_report
+            .issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE"),
+        "the generic damage code must not also fire for this same object: {:?}",
+        doctor_report.issues
+    );
+}
+
+/// 0.56.0 step 3d (A6): `show`, against the same fixture, must say the same thing `verify`/`doctor`
+/// do -- never "is malformed". `show` reaches the fixture's block through a different code path
+/// (`lifecycle_cache::replay`'s own lineage walk, not Phase B's topological block-state pass), so
+/// this is a genuinely separate call site, not a restatement of the test above.
+#[test]
+fn show_classifies_the_outside_version_rule_fixture_not_as_malformed() {
+    let dir = unique_temp_dir("a6-show");
+    let layout = RepositoryLayout::init(&dir).expect("init repository layout");
+    let block_id = seal_one_block_with_an_outside_version_rule_patch(&layout)
+        .expect("seal the outside-version-rule fixture");
+
+    let err =
+        crate::show(&layout, block_id).expect_err("the fixture's own block must still refuse");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("outside what this version of prikk accepts")
+            && rendered.contains("newer version of prikk may have written it"),
+        "got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("is malformed") && !rendered.contains("does not decode"),
+        "got: {rendered}"
+    );
+}
+
 /// Decode one manifest entry's own `(kind, offset, length, checksum)`, test-only -- the real
 /// decoder is Part V's job. Returns `(repository_format, tool_version, entries)`. `pub(in
 /// crate::archive)`: `archive::verify`'s own tests need to locate a specific section's own byte

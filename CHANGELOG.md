@@ -56,6 +56,14 @@
   correctly read it and refused as a rollback or similar. A `remotes/…` name now resolves against
   what was actually received; if nothing was received under that exact name, the command refuses
   by name rather than giving a misleading answer. A `heads/…` or `tags/…` name is unaffected.
+- **A path this version of `prikk` does not accept is reported as outside this version's own
+  rule, never as damage.** `verify`, `doctor`, and `show` each say, in their own words, that this
+  path is outside what this version of `prikk` accepts, and that a newer version of `prikk` may
+  have written it — never "malformed", never "does not decode", and `doctor` no longer tells the
+  operator to "preserve the repository and inspect the failing object/block before attempting
+  repair" for this specific case, since nothing here is damaged. `tree`, `extract`, and `commit`
+  already refused this cleanly, by the same rule, with no change needed. Every one of these
+  commands still refuses; only how the refusal is classified and worded has changed.
 
 ### Added
 

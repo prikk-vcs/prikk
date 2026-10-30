@@ -82,7 +82,7 @@ pub(super) fn assert_object_item_failed(report: &RepositoryVerification, expecte
         "expected at least one item to fail, got: {report:?}"
     );
     let found = report.object_outcomes.iter().any(|outcome| {
-        matches!(&outcome.status, ObjectItemStatus::Failed { message } if message.contains(expected_substring))
+        matches!(&outcome.status, ObjectItemStatus::Failed { message, .. } if message.contains(expected_substring))
     });
     assert!(
         found,
@@ -151,7 +151,7 @@ pub(super) fn assert_block_state_failed(report: &RepositoryVerification, expecte
         "expected at least one item to fail, got: {report:?}"
     );
     let found = report.block_state_outcomes.iter().any(|outcome| {
-        matches!(&outcome.status, BlockStateStatus::Failed { message } if message.contains(expected_substring))
+        matches!(&outcome.status, BlockStateStatus::Failed { message, .. } if message.contains(expected_substring))
     });
     assert!(
         found,

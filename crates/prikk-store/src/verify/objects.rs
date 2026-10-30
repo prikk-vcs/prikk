@@ -44,6 +44,11 @@ pub enum ObjectItemStatus {
     Failed {
         /// The error the check raised.
         message: String,
+        /// 0.56.0 step 3d (A6): whether this is genuine corruption or specifically a path this
+        /// version's own path rule refuses (a newer `prikk` version may have written it). Carried
+        /// here, alongside `message`, because by this point the original `PrikkError` is gone --
+        /// a reader downstream (`doctor`'s advice) needs the classification, not just the text.
+        kind: prikk_error::DecodeFailureKind,
     },
 }
 
@@ -304,6 +309,9 @@ pub(super) fn verify_objects(
                     "index entry for {} names a record at offset {} that cannot be read: {message}",
                     entry.object_id, entry.offset
                 ),
+                // Container framing, never a path-rule refusal: this is a record this scan could not
+                // even read as a frame, well below any patch-operation decode.
+                kind: prikk_error::DecodeFailureKind::Corrupt,
             },
         });
     }
@@ -388,6 +396,9 @@ fn verify_object_type_container(
                     path: locator,
                     status: ObjectItemStatus::Failed {
                         message: message.clone(),
+                        // Container-record framing (bad checksum, torn frame): never a path-rule
+                        // refusal, which can only surface decoding a Patch's own operations.
+                        kind: prikk_error::DecodeFailureKind::Corrupt,
                     },
                 });
             } else {
@@ -450,11 +461,16 @@ fn verify_object_type_container(
                 });
             }
             Err(err) => {
+                // 0.56.0 step 3d (A6): classify before `err` is folded into `message` below, so a
+                // path this version's own rule refuses (a newer `prikk` version may have written it)
+                // is never reported as a failed object needing repair.
+                let kind = err.decode_failure_kind();
                 summary.item_outcomes.push(ObjectItemOutcome {
                     object_type,
                     path: locator,
                     status: ObjectItemStatus::Failed {
                         message: err.to_string(),
+                        kind,
                     },
                 });
             }

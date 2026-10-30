@@ -270,7 +270,7 @@ fn clear_stale_locks_for_test(layout: &RepositoryLayout) {
 /// two live in different languages and there is no single source both could share.
 fn dangling_reference_finding(verification: &RepositoryVerification) -> Option<String> {
     for outcome in &verification.object_outcomes {
-        if let ObjectItemStatus::Failed { message } = &outcome.status {
+        if let ObjectItemStatus::Failed { message, .. } = &outcome.status {
             if message.contains("references missing") || message.contains("names missing") {
                 return Some(format!(
                     "object {:?} ({}): {message}",
@@ -281,7 +281,7 @@ fn dangling_reference_finding(verification: &RepositoryVerification) -> Option<S
         }
     }
     for outcome in &verification.block_state_outcomes {
-        if let BlockStateStatus::Failed { message } = &outcome.status {
+        if let BlockStateStatus::Failed { message, .. } = &outcome.status {
             if message.to_lowercase().contains("state root") {
                 return Some(format!("block {}: {message}", outcome.block_id));
             }

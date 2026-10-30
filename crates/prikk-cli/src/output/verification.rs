@@ -387,7 +387,7 @@ pub(crate) fn print_verify_report(
         failed_objects.len()
     );
     for outcome in failed_objects {
-        if let ObjectItemStatus::Failed { message } = &outcome.status {
+        if let ObjectItemStatus::Failed { message, .. } = &outcome.status {
             println!(
                 "object {} ({}): failed: {message}",
                 outcome.path.display(),
@@ -430,7 +430,7 @@ pub(crate) fn print_verify_report(
     for outcome in incomplete_blocks {
         match &outcome.status {
             BlockStateStatus::Verified => {}
-            BlockStateStatus::Failed { message } => {
+            BlockStateStatus::Failed { message, .. } => {
                 println!("block {}: state-root failed: {message}", outcome.block_id);
             }
             BlockStateStatus::NotEvaluated { blocked_by } => {

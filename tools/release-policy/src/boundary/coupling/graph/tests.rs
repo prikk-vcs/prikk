@@ -162,7 +162,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // write sequence: 166 -> 167.
     // 0.54.0 step 3 Part 5d added `extract_refusal`, `extract`'s own refusal classification shared
     // by `extract` (upper) and `patch_replay::extract` (lower): 167 -> 168.
-    assert_eq!(modules.len(), 168, "modules: {modules:?}");
+    // 0.56.0 step 3d (A6) added `lifecycle_cache::replay::classify`, split out of `replay` itself
+    // (over the size-check limit): 168 -> 169.
+    assert_eq!(modules.len(), 169, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

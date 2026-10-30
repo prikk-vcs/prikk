@@ -83,6 +83,8 @@ pub(crate) enum LifecycleReplayError {
         /// Why it could not be read.
         detail: String,
     },
+    /// A6: a patch decodes, but an operation's path fails this version's own rule -- not damage.
+    OutsideVersionRuleInLineage { patch_id: ObjectId, detail: String },
     /// A blob required to resolve a lifecycle state effect is absent. (2c-2b onward.)
     MissingBlobForLifecycleEffect {
         /// The blob an effect needed.
@@ -140,6 +142,10 @@ impl fmt::Display for LifecycleReplayError {
                     "lifecycle replay: patch {patch_id} is malformed ({detail})"
                 )
             }
+            Self::OutsideVersionRuleInLineage { patch_id, detail } => write!(
+                f,
+                "lifecycle replay: patch {patch_id} is outside what this version of prikk accepts, and a newer version of prikk may have written it ({detail})"
+            ),
             Self::MissingBlobForLifecycleEffect { blob_id } => {
                 write!(
                     f,
@@ -167,7 +173,11 @@ impl fmt::Display for LifecycleReplayError {
 
 impl From<LifecycleReplayError> for PrikkError {
     fn from(value: LifecycleReplayError) -> Self {
-        Self::Integrity(value.to_string())
+        use LifecycleReplayError::OutsideVersionRuleInLineage;
+        match &value {
+            OutsideVersionRuleInLineage { .. } => Self::InvalidName(value.to_string()),
+            _ => Self::Integrity(value.to_string()),
+        }
     }
 }
 
@@ -831,9 +841,8 @@ fn apply_state_effect_with_materialize_fallback<R: BlobKindResolver + BlobConten
     }
 }
 
-/// Read and decode a patch's operations directly from an in-memory envelope, mapping every failure to
-/// `MalformedPatchInLineage`. Unlike [`read_patch_operations`], no object-store read is involved —
-/// used for queued WAL records, which are not yet durable objects.
+/// Read and decode a patch's operations from an envelope (no object-store read -- used for queued
+/// WAL records), classified via [`classify_decode_failure`].
 fn read_patch_operations_from_envelope(
     envelope: &prikk_object::ObjectEnvelope,
     patch_id: ObjectId,
@@ -844,12 +853,8 @@ fn read_patch_operations_from_envelope(
             detail: format!("object is not a Patch ({} found)", envelope.object_type),
         });
     }
-    decode_patch_operations(&envelope.canonical_payload, envelope.schema_version).map_err(|e| {
-        LifecycleReplayError::MalformedPatchInLineage {
-            patch_id,
-            detail: e.to_string(),
-        }
-    })
+    decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)
+        .map_err(|e| classify::classify_decode_failure(patch_id, e))
 }
 
 fn replay_chain_with_appended_patches(
@@ -953,12 +958,8 @@ fn read_patch_operations(
             });
         }
     }
-    decode_patch_operations(&envelope.canonical_payload, envelope.schema_version).map_err(|e| {
-        LifecycleReplayError::MalformedPatchInLineage {
-            patch_id,
-            detail: e.to_string(),
-        }
-    })
+    decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)
+        .map_err(|e| classify::classify_decode_failure(patch_id, e))
 }
 
 // Test-support instrument for RFC 136 increment 2c's design round (option (i): how much of a full
@@ -1193,6 +1194,7 @@ pub(crate) fn id_only_history_for_test_support(
 
 mod effect;
 use effect::apply_state_effect;
+mod classify;
 
 #[cfg(test)]
 mod tests;

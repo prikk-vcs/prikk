@@ -622,6 +622,11 @@ pub enum BlockStateStatus {
     Failed {
         /// The error the check raised.
         message: String,
+        /// 0.56.0 step 3d (A6): whether this is genuine corruption or specifically a path this
+        /// version's own path rule refuses (a newer `prikk` version may have written it). See
+        /// `verify::objects::ObjectItemStatus::Failed`'s own doc for why this is a separate field
+        /// rather than something re-derived from `message` later.
+        kind: prikk_error::DecodeFailureKind,
     },
     /// This block's state-derivation parent did not itself evaluate (`Failed` or `NotEvaluated`), so
     /// this block's own state is undefined by construction and `verify_block_v2_state` was never
@@ -789,9 +794,14 @@ pub(crate) fn verify_blocks_topological(
         } else {
             match verify_block_v2_state(reader, id, payload, memo) {
                 Ok(()) => BlockStateStatus::Verified,
-                Err(err) => BlockStateStatus::Failed {
-                    message: err.to_string(),
-                },
+                Err(err) => {
+                    // 0.56.0 step 3d (A6): classify before folding `err` into `message` below.
+                    let kind = err.decode_failure_kind();
+                    BlockStateStatus::Failed {
+                        message: err.to_string(),
+                        kind,
+                    }
+                }
             }
         };
         peak = peak.max(memo.len());

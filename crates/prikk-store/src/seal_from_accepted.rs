@@ -364,6 +364,10 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
         | LifecycleReplayError::LineageCycle { .. }
         | LifecycleReplayError::HorizonNotInLineage { .. }
         | LifecycleReplayError::MalformedPatchInLineage { .. }
+        // 0.56.0 step 3d (A6) added this variant for the six readers it names (verify, doctor, show,
+        // tree, extract, commit); this candidate-patch-application path is not one of them and is out
+        // of that round's scope, so it is bucketed here unchanged rather than re-litigated.
+        | LifecycleReplayError::OutsideVersionRuleInLineage { .. }
         | LifecycleReplayError::MissingBlobForLifecycleEffect { .. } => PrikkError::Integrity(
             format!("seal refused: integrity -- this repository's own state is broken ({error})"),
         ),

@@ -1015,40 +1015,80 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // preserve `repair_repository`'s refusal gate at item granularity, the same way the loop
             // above preserves it at stage granularity.
             for outcome in &verification.object_outcomes {
-                if let ObjectItemStatus::Failed { message } = &outcome.status {
+                if let ObjectItemStatus::Failed { message, kind } = &outcome.status {
+                    // 0.56.0 step 3d (A6): a path this version's own path rule refuses (a newer
+                    // `prikk` version may have written it) is not damage, so it gets its own code
+                    // and advice instead of "preserve and inspect" -- that advice is for real
+                    // corruption, and this repository has none.
+                    let (code, recommendation) = match kind {
+                        prikk_error::DecodeFailureKind::OutsideVersionRule => (
+                            "PRIKK-DOCTOR-VERIFY-OBJECT-OUTSIDE-VERSION-RULE",
+                            "no repair is needed: this path is outside what this version of prikk \
+                             accepts, and a newer version of prikk may have written it"
+                                .to_string(),
+                        ),
+                        prikk_error::DecodeFailureKind::Corrupt => (
+                            "PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE",
+                            "preserve the repository and inspect the failing object before \
+                             attempting repair"
+                                .to_string(),
+                        ),
+                    };
                     issues.push(DoctorIssue::error(
-                        "PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE",
+                        code,
                         format!(
                             "object {} ({}) failed verification: {message}",
                             outcome.path.display(),
                             outcome.object_type
                         ),
-                        "preserve the repository and inspect the failing object before attempting repair",
+                        recommendation,
                     ));
                 }
             }
             for outcome in &verification.block_state_outcomes {
-                let message = match &outcome.status {
+                let (code, message, recommendation) = match &outcome.status {
                     BlockStateStatus::Verified => continue,
-                    BlockStateStatus::Failed { message } => {
+                    // 0.56.0 step 3d (A6): same split as the object loop above -- a path this
+                    // version's own path rule refuses is not damage.
+                    BlockStateStatus::Failed {
+                        message,
+                        kind: prikk_error::DecodeFailureKind::OutsideVersionRule,
+                    } => (
+                        "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE",
                         format!(
                             "Block {} state-root verification failed: {message}",
                             outcome.block_id
-                        )
-                    }
-                    BlockStateStatus::NotEvaluated { blocked_by } => {
+                        ),
+                        "no repair is needed: this path is outside what this version of prikk \
+                         accepts, and a newer version of prikk may have written it"
+                            .to_string(),
+                    ),
+                    BlockStateStatus::Failed {
+                        message,
+                        kind: prikk_error::DecodeFailureKind::Corrupt,
+                    } => (
+                        "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE",
+                        format!(
+                            "Block {} state-root verification failed: {message}",
+                            outcome.block_id
+                        ),
+                        "preserve the repository and inspect the failing block before attempting \
+                         repair"
+                            .to_string(),
+                    ),
+                    BlockStateStatus::NotEvaluated { blocked_by } => (
+                        "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE",
                         format!(
                             "Block {} state root could not be verified because its state-derivation \
                              parent {blocked_by} did not evaluate",
                             outcome.block_id
-                        )
-                    }
+                        ),
+                        "preserve the repository and inspect the failing block before attempting \
+                         repair"
+                            .to_string(),
+                    ),
                 };
-                issues.push(DoctorIssue::error(
-                    "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE",
-                    message,
-                    "preserve the repository and inspect the failing block before attempting repair",
-                ));
+                issues.push(DoctorIssue::error(code, message, recommendation));
             }
             // DC-95 Stage 2 Level 2 (refs half): same reasoning as the two loops above, one level
             // in for `verify_refs`'s own items -- a single ref's pointer file, log file, or

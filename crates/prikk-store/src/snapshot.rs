@@ -103,8 +103,11 @@ pub struct SnapshotManifest {
 }
 
 impl SnapshotManifest {
-    /// Decode a manifest from a `SNAPSHOT` Blob's content. Every failure is `Integrity`: a snapshot
-    /// that does not decode is damage, whatever byte was wrong.
+    /// Decode a manifest from a `SNAPSHOT` Blob's content. Every failure is `Integrity` -- a snapshot
+    /// that does not decode is damage, whatever byte was wrong -- **except** an entry whose path this
+    /// version's own path rule refuses (today: non-ASCII), which `not_decodable` keeps as
+    /// `InvalidName`: that is not damage, only a path a newer `prikk` version may have written
+    /// (0.56.0 step 3d, A6).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let Some(mut rest) = bytes.strip_prefix(SNAPSHOT_MAGIC) else {
             return Err(PrikkError::Integrity(format!(
@@ -152,6 +155,15 @@ fn magic_found(bytes: &[u8]) -> String {
 fn not_decodable(err: PrikkError) -> PrikkError {
     match err {
         PrikkError::Integrity(_) => err,
+        // 0.56.0 step 3d (A6): a path this version's own path rule refuses (today: non-ASCII) is not
+        // damage -- kept as `InvalidName`, never folded into `Integrity`, so a reader two hops up
+        // (`verify`'s object check, `doctor`'s advice) can still tell it apart from a manifest that
+        // really does not decode. The message says so plainly, since a newer `prikk` version may have
+        // written this path.
+        PrikkError::InvalidName(detail) => PrikkError::InvalidName(format!(
+            "this path is outside what this version of prikk accepts, and a newer version of prikk \
+             may have written it ({detail})"
+        )),
         other => PrikkError::Integrity(format!("snapshot manifest does not decode: {other}")),
     }
 }
@@ -176,8 +188,10 @@ pub(crate) struct SnapshotFile {
 ///    its own block is damage);
 /// 3. every content Blob a file entry names is present -- asked of the store's index, never read.
 ///
-/// All three are `Integrity`. Step 3 comes after step 2, so a forged manifest never directs a single
-/// presence check.
+/// Steps 2 and 3 are always `Integrity`. Step 1's decode is `Integrity` too, **except** when the
+/// manifest's own entries fail only this version's path rule (0.56.0 step 3d, A6): `SnapshotManifest`
+/// `::decode`'s own `not_decodable` keeps that case as `InvalidName`, since it is not damage. Step 3
+/// comes after step 2, so a forged manifest never directs a single presence check.
 pub(crate) fn validate_snapshot_manifest(
     reader: &impl ObjectReader,
     block_id: ObjectId,

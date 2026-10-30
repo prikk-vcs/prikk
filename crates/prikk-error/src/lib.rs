@@ -187,6 +187,35 @@ impl fmt::Display for PrikkError {
     }
 }
 
+/// 0.56.0 step 3d (A6): whether a decode/verification failure is genuine corruption, or specifically
+/// this version's own path rule refusing a path that a newer `prikk` version may have written. A
+/// patch written by a newer binary decodes fine as a structural shape but can fail this one semantic
+/// check (today: [`PrikkError::InvalidName`]'s non-ASCII-path refusal) -- that is not damage, and a
+/// caller that needs to say so distinctly (rather than calling a healthy repository "malformed")
+/// matches this value, never the rendered `Display` text, which can be edited without anyone
+/// noticing the classification silently dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecodeFailureKind {
+    /// A truncated varint, bad canonical encoding, wrong field count, or other real damage.
+    Corrupt,
+    /// This version's own path rule refuses a path; a newer `prikk` version may have written it.
+    OutsideVersionRule,
+}
+
+impl PrikkError {
+    /// Classify this error as corruption or a semantic path-rule refusal (0.56.0 step 3d, A6).
+    /// Every wrapping site between a `Patch`'s own operations and a user-facing message calls this
+    /// *before* folding the error into a `String`, so the classification survives the fold instead
+    /// of being re-derived (or lost) later from text that can drift.
+    #[must_use]
+    pub fn decode_failure_kind(&self) -> DecodeFailureKind {
+        match self {
+            Self::InvalidName(_) => DecodeFailureKind::OutsideVersionRule,
+            _ => DecodeFailureKind::Corrupt,
+        }
+    }
+}
+
 impl std::error::Error for PrikkError {}
 
 impl From<std::io::Error> for PrikkError {
