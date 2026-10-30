@@ -25,6 +25,23 @@ pub enum PrikkError {
     InvalidSignature(String),
     /// A path-like name failed Prikk path/ref validation.
     InvalidName(String),
+    /// 0.56.0 step 3d2 (A6 correction): `validate_repo_path`'s non-ASCII refusal, specifically --
+    /// the one `InvalidName` cause that is genuinely version-relative (a future `prikk` version may
+    /// accept non-ASCII paths; no future version will ever accept an empty, absolute, too-long, or
+    /// otherwise ill-formed path, so every other `validate_repo_path` refusal stays plain
+    /// [`Self::InvalidName`]). Exists apart from `InvalidName` for the same reason
+    /// [`Self::IncompletePublication`] exists apart from [`Self::Precondition`]: a caller
+    /// ([`Self::decode_failure_kind`]) that needs to tell this cause apart from every other decode
+    /// failure matches the variant, never the rendered text. Its own `Display` is the sentence for
+    /// reading stored or delivered history (every reader, and every importer's admission decode) --
+    /// the common case this variant reaches unwrapped; the five authoring call sites
+    /// (`prikk-object`'s own `payload/patch/operations.rs`, reached from `commit` encoding a
+    /// worktree file) explicitly reword it into [`Self::InvalidName`] with the authoring sentence
+    /// instead, since a worktree file is not "stored or delivered history".
+    NonAsciiRepoPath {
+        /// The offending path, exactly as given to `validate_repo_path`.
+        path: String,
+    },
     /// A persistent object had an unexpected type.
     ObjectTypeMismatch {
         /// The object type required by the caller.
@@ -149,6 +166,11 @@ impl fmt::Display for PrikkError {
             Self::InvalidObjectId(msg) => write!(f, "invalid object id: {msg}"),
             Self::InvalidSignature(msg) => write!(f, "invalid signature: {msg}"),
             Self::InvalidName(msg) => write!(f, "invalid name: {msg}"),
+            Self::NonAsciiRepoPath { path } => write!(
+                f,
+                "invalid name: {path} is outside what this version of prikk accepts, and a newer \
+                 version of prikk may have written it"
+            ),
             Self::ObjectTypeMismatch { expected, actual } => {
                 write!(f, "object type mismatch: expected {expected}, got {actual}")
             }
@@ -187,13 +209,20 @@ impl fmt::Display for PrikkError {
     }
 }
 
-/// 0.56.0 step 3d (A6): whether a decode/verification failure is genuine corruption, or specifically
-/// this version's own path rule refusing a path that a newer `prikk` version may have written. A
-/// patch written by a newer binary decodes fine as a structural shape but can fail this one semantic
-/// check (today: [`PrikkError::InvalidName`]'s non-ASCII-path refusal) -- that is not damage, and a
-/// caller that needs to say so distinctly (rather than calling a healthy repository "malformed")
-/// matches this value, never the rendered `Display` text, which can be edited without anyone
-/// noticing the classification silently dropped.
+/// 0.56.0 step 3d (A6), narrowed in step 3d2: whether a decode/verification failure is genuine
+/// corruption, or specifically this version's own path rule refusing a path that a newer `prikk`
+/// version may have written. A patch written by a newer binary decodes fine as a structural shape
+/// but can fail this one semantic check ([`PrikkError::NonAsciiRepoPath`]) -- that is not damage,
+/// and a caller that needs to say so distinctly (rather than calling a healthy repository
+/// "malformed") matches this value, never the rendered `Display` text, which can be edited without
+/// anyone noticing the classification silently dropped.
+///
+/// **3d2 correction:** 3d's own first version matched every [`PrikkError::InvalidName`], regardless
+/// of which of `validate_repo_path`'s several refusal causes raised it. Only the non-ASCII cause is
+/// genuinely version-relative; an empty, absolute, too-long, or otherwise ill-formed path is
+/// permanently invalid and no future `prikk` version will ever accept one, so calling that case
+/// `OutsideVersionRule` would be actively wrong. [`PrikkError::NonAsciiRepoPath`] now exists apart
+/// from `InvalidName` specifically so this match can tell the two apart structurally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeFailureKind {
     /// A truncated varint, bad canonical encoding, wrong field count, or other real damage.
@@ -210,7 +239,7 @@ impl PrikkError {
     #[must_use]
     pub fn decode_failure_kind(&self) -> DecodeFailureKind {
         match self {
-            Self::InvalidName(_) => DecodeFailureKind::OutsideVersionRule,
+            Self::NonAsciiRepoPath { .. } => DecodeFailureKind::OutsideVersionRule,
             _ => DecodeFailureKind::Corrupt,
         }
     }

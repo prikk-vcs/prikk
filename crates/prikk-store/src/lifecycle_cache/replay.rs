@@ -83,8 +83,8 @@ pub(crate) enum LifecycleReplayError {
         /// Why it could not be read.
         detail: String,
     },
-    /// A6: a patch decodes, but an operation's path fails this version's own rule -- not damage.
-    OutsideVersionRuleInLineage { patch_id: ObjectId, detail: String },
+    /// A6/3d2: a path fails this version's own rule, not damage; `path` is the offending path.
+    OutsideVersionRuleInLineage { patch_id: ObjectId, path: String },
     /// A blob required to resolve a lifecycle state effect is absent. (2c-2b onward.)
     MissingBlobForLifecycleEffect {
         /// The blob an effect needed.
@@ -142,9 +142,9 @@ impl fmt::Display for LifecycleReplayError {
                     "lifecycle replay: patch {patch_id} is malformed ({detail})"
                 )
             }
-            Self::OutsideVersionRuleInLineage { patch_id, detail } => write!(
+            Self::OutsideVersionRuleInLineage { patch_id, path } => write!(
                 f,
-                "lifecycle replay: patch {patch_id} is outside what this version of prikk accepts, and a newer version of prikk may have written it ({detail})"
+                "lifecycle replay: patch {patch_id}: {path} is outside what this version of prikk accepts, and a newer version of prikk may have written it"
             ),
             Self::MissingBlobForLifecycleEffect { blob_id } => {
                 write!(
@@ -174,9 +174,9 @@ impl fmt::Display for LifecycleReplayError {
 impl From<LifecycleReplayError> for PrikkError {
     fn from(value: LifecycleReplayError) -> Self {
         use LifecycleReplayError::OutsideVersionRuleInLineage;
-        match &value {
-            OutsideVersionRuleInLineage { .. } => Self::InvalidName(value.to_string()),
-            _ => Self::Integrity(value.to_string()),
+        match value {
+            OutsideVersionRuleInLineage { path, .. } => Self::NonAsciiRepoPath { path },
+            other => Self::Integrity(other.to_string()),
         }
     }
 }

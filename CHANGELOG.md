@@ -57,14 +57,20 @@
   what was actually received; if nothing was received under that exact name, the command refuses
   by name rather than giving a misleading answer. A `heads/…` or `tags/…` name is unaffected.
 - **A path this version of `prikk` does not accept is reported as outside this version's own
-  rule, never as damage.** `verify`, `doctor`, `show`, and `commit` (when it replays existing
-  history to derive state) each say, in their own words, that this path is outside what this
-  version of `prikk` accepts, and that a newer version of `prikk` may have written it — never
-  "malformed", never "does not decode", and `doctor` no longer tells the operator to "preserve the
-  repository and inspect the failing object/block before attempting repair" for this specific
-  case, since nothing here is damaged. `tree` and `extract` already refused this cleanly, by the
-  same rule, with no change needed. Every one of these commands still refuses; only how the
-  refusal is classified and worded has changed.
+  rule, never as damage — and, reading stored or delivered history, names the path, not a
+  roadmap statement.** Every reader (`verify`, `doctor`, `show`, `tree`, `extract`, and `commit`
+  when it replays existing history to derive state) and every importer's admission check
+  (`bundle import`/`verify`/`preview`, `archive import`/`verify`) now say the identical sentence:
+  that this path is outside what this version of `prikk` accepts, and that a newer version of
+  `prikk` may have written it — never "malformed", never "does not decode", and never "non-ASCII
+  paths are deferred until Unicode NFC normalization is implemented", which used to follow in a
+  parenthesis even where the rest of the message had already been corrected. `doctor`'s own
+  recommendation for this case now also says to read the repository with a newer version of
+  `prikk`, in addition to saying no repair is needed. A worktree file with such a name, reached
+  while authoring a commit (including from `diff`'s and `status`'s own worktree scans), is told
+  something different and actionable instead: that this version of `prikk` does not accept
+  non-ASCII repository paths, naming the file. Every one of these commands still refuses; only
+  how the refusal is classified and worded has changed.
 
 ### Added
 

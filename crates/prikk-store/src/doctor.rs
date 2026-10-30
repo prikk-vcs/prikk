@@ -1024,7 +1024,8 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         prikk_error::DecodeFailureKind::OutsideVersionRule => (
                             "PRIKK-DOCTOR-VERIFY-OBJECT-OUTSIDE-VERSION-RULE",
                             "no repair is needed: this path is outside what this version of prikk \
-                             accepts, and a newer version of prikk may have written it"
+                             accepts, and a newer version of prikk may have written it; read it \
+                             with a newer version of prikk"
                                 .to_string(),
                         ),
                         prikk_error::DecodeFailureKind::Corrupt => (
@@ -1060,7 +1061,8 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                             outcome.block_id
                         ),
                         "no repair is needed: this path is outside what this version of prikk \
-                         accepts, and a newer version of prikk may have written it"
+                         accepts, and a newer version of prikk may have written it; read it with \
+                         a newer version of prikk"
                             .to_string(),
                     ),
                     BlockStateStatus::Failed {

@@ -31,7 +31,7 @@ use crate::patch_replay::decode::{
     DecodedOperationKind, DecodedPatchOperation, decode_patch_message, decode_patch_operations,
 };
 use crate::patch_replay::resolve_folded_worktree_baseline;
-use crate::path::{RepoPath, join_repo_path_to_root};
+use crate::path::{RepoPath, authoring_path_error, join_repo_path_to_root};
 use crate::rename_declaration::read_rename_declarations;
 use crate::wal::{Wal, WalReplay};
 use crate::{ActiveRefMetadata, read_active_ref_metadata};
@@ -373,7 +373,11 @@ fn scan_untracked(
             continue;
         }
         let repo_path = path_to_repo_string(root, &path);
-        match repo_path.and_then(|text| RepoPath::parse(&text).map(|_| text)) {
+        match repo_path.and_then(|text| {
+            RepoPath::parse(&text)
+                .map_err(authoring_path_error)
+                .map(|_| text)
+        }) {
             Ok(text) => {
                 if !baseline_paths.contains(&text) && !seen_paths.contains(&text) {
                     // RFC 147 §2e: an untracked symlink (or FIFO, socket, device) is still

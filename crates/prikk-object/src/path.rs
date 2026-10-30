@@ -82,10 +82,15 @@ pub fn validate_repo_path(value: &str) -> Result<()> {
         ));
     }
     if !value.is_ascii() {
-        return Err(PrikkError::InvalidName(
-            "non-ASCII paths are deferred until Unicode NFC normalization is implemented"
-                .to_string(),
-        ));
+        // 0.56.0 step 3d2: a dedicated variant, not `InvalidName` -- this is the one
+        // `validate_repo_path` refusal that is genuinely version-relative (a future `prikk` may
+        // accept non-ASCII paths; see `PrikkError::NonAsciiRepoPath`'s own doc comment), so every
+        // caller downstream that needs to say so distinctly matches the variant, never rendered
+        // text. Its own `Display` is the "reading" sentence; `prikk-object`'s own authoring call
+        // sites (`payload/patch/operations.rs`) reword it for `commit`.
+        return Err(PrikkError::NonAsciiRepoPath {
+            path: value.to_string(),
+        });
     }
     if value.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
         return Err(PrikkError::InvalidName(

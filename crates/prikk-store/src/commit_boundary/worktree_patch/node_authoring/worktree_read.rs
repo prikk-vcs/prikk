@@ -29,7 +29,7 @@ use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::{
     ReplayManifestEntry, resolve_folded_worktree_baseline_without_cache_write,
 };
-use crate::path::RepoPath;
+use crate::path::{RepoPath, authoring_path_error};
 use crate::rename_declaration::read_rename_declarations;
 use crate::wal::Wal;
 
@@ -105,7 +105,9 @@ fn manifest_entry(
     };
     Ok(ReplayManifestEntry {
         node_id,
-        path: RepoPath::parse(path)?,
+        // Worktree-side (this function's only callers): a live worktree file's name, the same
+        // authoring context `commit` itself scans (0.56.0 step 3d2).
+        path: RepoPath::parse(path).map_err(authoring_path_error)?,
         bytes,
         mode,
         kind: Some(kind),

@@ -27,6 +27,7 @@ use prikk_object::{
 
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
+    decode_patch_operations_for_admission,
 };
 
 /// RFC 126 §2 (`algebra-property-tests-handoff-v1.md` §4): reused as a leaf strategy by the patch
@@ -755,4 +756,110 @@ proptest! {
     ) {
         let _ = decode_patch_operations(&bytes, 1);
     }
+}
+
+/// 0.56.0 step 3d2: `decode_patch_operations_for_admission` is the one decode every importer's
+/// admission runs (`bundle import`'s own `closure_metadata_for`, `archive import`'s stage 1,
+/// `archive verify`'s two passes) -- a non-ASCII `CreateFile` path, hand-crafted by driving
+/// `prikk_object::CanonicalWriter` directly (bypassing `CreateFile::encode_canonical`'s own
+/// validating `self.validate()?`, the same bypass `lifecycle_cache::replay::tests`'s sibling test
+/// uses), must give the *reading* sentence here -- naming the path, never "deferred", and never the
+/// *authoring* sentence (`commit`'s own wording), since an importer is reading delivered history,
+/// not authoring a worktree file.
+#[test]
+fn decode_patch_operations_for_admission_gives_the_reading_sentence_for_a_non_ascii_path() {
+    use prikk_object::{CanonicalWriter, WireType};
+
+    let mut create_file = CanonicalWriter::new();
+    create_file
+        .field_repo_path(1, "pages/日本語.md")
+        .expect("repo path field");
+    create_file
+        .field_bytes(2, NodeId::from_bytes([7u8; 32]).as_bytes())
+        .expect("node_id field");
+    create_file
+        .field_object_id(3, &ObjectId::from_bytes([8u8; 32]))
+        .expect("blob_id field");
+    create_file.field_u32(4, 0o100_644).expect("mode field");
+    let create_file_bytes = create_file.finish();
+
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1).expect("op_seq field");
+    operation
+        .field_raw(10, WireType::Record, &create_file_bytes)
+        .expect("CreateFile kind field");
+    let operation_bytes = operation.finish();
+
+    let mut payload = CanonicalWriter::new();
+    payload
+        .field_raw(1, WireType::RecordListItem, &operation_bytes)
+        .expect("operation list field");
+    let canonical_payload = payload.finish();
+
+    let err = decode_patch_operations_for_admission(
+        &canonical_payload,
+        prikk_object::PATCH_PARENT_IDS_RETIRED_SCHEMA,
+    )
+    .expect_err("a non-ASCII path must still refuse admission, not be admitted silently");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("pages/日本語.md")
+            && rendered.contains("outside what this version of prikk accepts")
+            && rendered.contains("newer version of prikk may have written it"),
+        "expected the reading sentence naming the path, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("deferred") && !rendered.contains("does not accept non-ASCII"),
+        "admission must never give the authoring sentence or the retired \"deferred\" wording: \
+         {rendered}"
+    );
+    assert_eq!(
+        err.decode_failure_kind(),
+        prikk_error::DecodeFailureKind::OutsideVersionRule
+    );
+}
+
+/// 0.56.0 step 3d2, step 6's narrowing: an empty path is a permanently invalid `validate_repo_path`
+/// refusal, not a version-relative one -- no future `prikk` will ever accept it -- so it must
+/// classify as `Corrupt`, never `OutsideVersionRule`, even though it is the identical `InvalidName`
+/// family 3d's own first version matched unconditionally.
+#[test]
+fn decode_patch_operations_for_admission_classifies_an_empty_path_as_corrupt_not_outside_version_rule()
+ {
+    use prikk_object::{CanonicalWriter, WireType};
+
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, "").expect("repo path field");
+    create_file
+        .field_bytes(2, NodeId::from_bytes([7u8; 32]).as_bytes())
+        .expect("node_id field");
+    create_file
+        .field_object_id(3, &ObjectId::from_bytes([8u8; 32]))
+        .expect("blob_id field");
+    create_file.field_u32(4, 0o100_644).expect("mode field");
+    let create_file_bytes = create_file.finish();
+
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1).expect("op_seq field");
+    operation
+        .field_raw(10, WireType::Record, &create_file_bytes)
+        .expect("CreateFile kind field");
+    let operation_bytes = operation.finish();
+
+    let mut payload = CanonicalWriter::new();
+    payload
+        .field_raw(1, WireType::RecordListItem, &operation_bytes)
+        .expect("operation list field");
+    let canonical_payload = payload.finish();
+
+    let err = decode_patch_operations_for_admission(
+        &canonical_payload,
+        prikk_object::PATCH_PARENT_IDS_RETIRED_SCHEMA,
+    )
+    .expect_err("an empty path must still refuse, as before 3d2");
+    assert_eq!(
+        err.decode_failure_kind(),
+        prikk_error::DecodeFailureKind::Corrupt,
+        "an empty path is permanently invalid, not a statement about this version: {err}"
+    );
 }

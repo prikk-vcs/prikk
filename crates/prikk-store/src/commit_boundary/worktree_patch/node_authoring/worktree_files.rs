@@ -17,7 +17,7 @@ use crate::foundation::fsutil::{
     EntryKind, RootFileStat, list_directory, stat_file_state_if_exists,
 };
 use crate::ignore::{IgnoreRules, should_skip_discovery};
-use crate::path::pathbuf_to_slash_string;
+use crate::path::{authoring_path_error, pathbuf_to_slash_string};
 
 /// A worktree regular file's metadata, gathered without reading its content.
 ///
@@ -143,8 +143,9 @@ fn walk_dir(
         // raises; naming it is the same decision. Only the *name* is judged here: a stat failure below is a
         // real error and still propagates.
         if let Some(collected) = refused.as_deref_mut() {
-            if let Err(err) =
-                pathbuf_to_slash_string(&path).and_then(|relative| RepoPath::parse(&relative))
+            if let Err(err) = pathbuf_to_slash_string(&path)
+                .and_then(|relative| RepoPath::parse(&relative))
+                .map_err(authoring_path_error)
             {
                 collected.push(RefusedEntry {
                     path: refused_path_text(&path),
@@ -168,7 +169,9 @@ fn insert_regular_file(
     // exercised on, but the same latent defect the ignore mechanism's own bug surfaced); routed
     // through the one converter now, not left as a second, differently-correct copy of the fix.
     let rel = pathbuf_to_slash_string(path).map_err(AuthorError::Store)?;
-    let repo_path = RepoPath::parse(&rel).map_err(AuthorError::Store)?;
+    let repo_path = RepoPath::parse(&rel)
+        .map_err(authoring_path_error)
+        .map_err(AuthorError::Store)?;
     let stat: RootFileStat = stat_file_state_if_exists(layout.worktree_mutation_root(), path)
         .map_err(AuthorError::Store)?
         .ok_or_else(|| {

@@ -260,9 +260,12 @@ fn an_inline_test_module_is_not_production() {
         // (a comment plus the acquisition, plus an explicit `drop` once both blob-writing loops are
         // done) and threads a `&ContainerLockGuard` through `plan_replace_binary`/
         // `write_content_blob` to every call site, 1500 -> 1525, then `cargo fmt` joined one
-        // two-line `let` back onto one line, 1525 -> 1524.
+        // two-line `let` back onto one line, 1525 -> 1524. 0.56.0 step 3d2: the new-file create
+        // site's `RepoPath::parse` now rewords a non-ASCII refusal into the authoring sentence
+        // (`.map_err(authoring_path_error)`, one extra line plus the call it was chained onto),
+        // 1524 -> 1526.
         physical,
-        1524,
+        1526,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -272,7 +275,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1475);
+    assert_eq!(counted.production_lines, 1477);
     assert_eq!(
         physical - counted.production_lines,
         49,

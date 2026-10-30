@@ -53,7 +53,7 @@ use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
 use crate::node::node_lifecycle::{LiveNode, NodeContent, NodeLifecycleState};
 use crate::object_store::{ObjectReader, ObjectWriteSession};
 use crate::patch_replay::resolve_folded_worktree_baseline;
-use crate::path::RepoPath;
+use crate::path::{RepoPath, authoring_path_error};
 use crate::rename_declaration::{clear_rename_declarations, read_rename_declarations};
 use crate::text_span;
 use crate::worktree_marker::worktree_is_dirty;
@@ -876,7 +876,9 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // E1: mint fresh ids in canonical path order, inserting into the working state immediately.
     create_candidates.sort_by(|a, b| a.0.cmp(&b.0));
     for (path, bytes, mode) in &create_candidates {
-        let repo_path = RepoPath::parse(path).map_err(AuthorError::Store)?;
+        let repo_path = RepoPath::parse(path)
+            .map_err(authoring_path_error)
+            .map_err(AuthorError::Store)?;
         let (blob_kind, node_kind) = classify_new(bytes);
         let blob_id = write_content_blob(&mut object_store, &object_store_lock, blob_kind, bytes)?;
         let node_id = generator
