@@ -282,8 +282,7 @@ fn case3_rollback_draft_append_inverse_then_self_switch_applies_the_deletion() {
     // outcome here would be asserting something false.
     let after_seal_switch = switch(&repo, "heads/main");
     assert!(
-        stdout(&after_seal_switch).contains("already")
-            && after_seal_switch.status.success(),
+        stdout(&after_seal_switch).contains("already") && after_seal_switch.status.success(),
         "the self-switch no-op (pre-existing, block-identity-only) fires before the ordinary \
          materialization path is ever reached: {}",
         stdout(&after_seal_switch)

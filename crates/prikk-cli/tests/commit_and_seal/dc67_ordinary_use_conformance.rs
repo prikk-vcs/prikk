@@ -81,7 +81,10 @@ const N: u32 = 3;
 /// `rm` standing in for one). 0.56.0 step W2d: `sequence_06` below is rewritten to use this.
 fn switch(repo: &std::path::Path, target: &str) {
     ok(
-        &prikk(repo).args(["branch", "switch", target]).output().unwrap(),
+        &prikk(repo)
+            .args(["branch", "switch", target])
+            .output()
+            .unwrap(),
         &format!("branch switch {target}"),
     );
 }
