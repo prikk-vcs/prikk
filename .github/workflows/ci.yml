@@ -417,15 +417,14 @@ jobs:
       # DC-89: a realistic small project's worth of history, not a single genesis commit -- still
       # authored with the real binary, still on Linux. Two commits on heads/main (a create, then
       # an edit to the *same* file -- an edit exercises replay and anchoring that a create alone
-      # never touches); a short-lived heads/docs branch with its own sealed commit, then closed
-      # ("not delete -- pointer, history, and objects stay", per its own help text -- exactly the
-      # state worth carrying across this boundary); a tag at heads/main's current tip. Everything
-      # here is sealed -- see the worktree-pollution note below for why.
+      # never touches); a short-lived heads/docs branch with its own sealed commit; a tag at
+      # heads/main's current tip. Everything here is sealed -- see the worktree-pollution note
+      # below for why.
       #
       # DC-89 worktree-pollution fix: heads/docs's own commit EDITS readme.txt -- it does not
       # create a second file. This tool shares one worktree across every ref (there is no
       # per-branch checkout yet); a second file (`docs.txt`, this step's first attempt) sits in the
-      # worktree, unremoved, after heads/docs is closed -- it reads as a *new* file to
+      # worktree, unremoved, after heads/docs is left -- it reads as a *new* file to
       # windows-mutate's and linux-mutate-reference's own commit against heads/main,
       # which run against this exact fixture later. A new file means a CreateFile operation, which
       # mints a fresh NodeId from the OS CSPRNG (node_id_gen.rs) -- different per platform by
@@ -435,6 +434,38 @@ jobs:
       # node ids and produced two different blocks on the same machine, before this fix). Editing
       # readme.txt again on heads/docs leaves nothing extra in the worktree, so the later mutation
       # jobs see only their own single append and mint no node id at all.
+      #
+      # 0.56.0 step W2e: a real `branch switch heads/docs` happens here, before docs' own commit --
+      # not `commit --ref heads/docs` authored from a worktree that never actually switched there.
+      # Before this round, the pointer stayed on heads/main throughout (`commit --ref`/`branch
+      # create`/`branch close` never move it), while the worktree's recorded baseline ended up
+      # naming heads/docs -- a real divergence between the current-branch pointer and the
+      # worktree's own record that this cycle's new guard (0.56.0 W2, "the worktree follows the
+      # current branch") now correctly refuses on: the two `mutate the fixture on *` jobs below,
+      # committing onto heads/main from this exact worktree with no switch of their own, hit
+      # `refusing to commit: heads/main is now at Block ..., and this worktree was last written
+      # from Block ...` (CI run `41208295481`; red since `304644bd`). A real switch is this
+      # project's own established fix for exactly this multi-ref-without-a-switch shape (the same
+      # one `dc67`/`dc74`/`rfc156`'s own test fixtures needed this cycle, per
+      # `.git-exclude/review-request/0.56.0-step-3w2c-report.md` and `-3w2d-report.md`).
+      #
+      # `branch close heads/docs` is **not** run here any more, and this is deliberate, not an
+      # oversight: closing the *current* branch leaves `.prikk/current-branch` naming a closed
+      # ref, which every later command that resolves the current branch strictly then refuses on
+      # (`log`, `commit`, and -- critically -- `branch switch`'s own `from` resolution, which falls
+      # back to `None` and can no longer use the recorded baseline to resync at all; measured
+      # directly against a scratch fixture, not assumed). heads/docs is left **open** here,
+      # deliberately, so this job's own packaged worktree still physically holds its three-line
+      # readme.txt (non-linux-verify's `worktree-status --ref heads/docs` below still needs
+      # exactly that) while the current-branch pointer and the worktree's own recorded baseline
+      # agree (both name heads/docs) -- which is exactly what lets the two mutation jobs below
+      # resync with an ordinary, non-self `branch switch heads/main` (the record's `ref_name`
+      # matches `from`, so the switch uses the *recorded* baseline, not heads/main's live state,
+      # to judge "clean" -- see `branch_switch.rs`'s own `from_files_against_record_or_live`/
+      # `require_clean`). Each mutation job now closes heads/docs itself, immediately after
+      # switching away from it -- the same "leave before close" order `dc67::sequence_06`'s own
+      # rewrite this cycle already established (switching away from a branch while it is still
+      # open, then closing it, never the reverse).
       - name: Author the fixture repository
         run: |
           mkdir -p fixture-repo
@@ -450,10 +481,10 @@ jobs:
           ../target/debug/prikk commit -m "expand readme"
           ../target/debug/prikk seal --allow-no-audit
           ../target/debug/prikk branch create heads/docs --from heads/main
+          ../target/debug/prikk branch switch heads/docs
           echo "see also: the docs branch, opened to work out how this section should read" >> readme.txt
           ../target/debug/prikk commit --ref heads/docs -m "note the docs branch in the readme"
           ../target/debug/prikk seal --allow-no-audit --ref heads/docs
-          ../target/debug/prikk branch close heads/docs
           ../target/debug/prikk tag create tags/v1 --target heads/main
       # DC-71 B2 ruling: actions/upload-artifact's zip does not preserve empty directories (e.g.
       # refs/tmp, a required-but-empty directory — layout.rs), so the conformance job downloaded a
@@ -635,6 +666,14 @@ jobs:
       # linux-mutate-reference's own `echo`, so the two platforms author byte-identical content
       # rather than diverging on line endings for a reason that has nothing to do with what this
       # job exists to check.
+      # 0.56.0 step W2e: `branch switch heads/main`, then `branch close heads/docs`, before the
+      # mutation's own append -- see the fixture job's own "Author the fixture repository" comment
+      # for why. The fixture's current branch and worktree arrive here still on heads/docs (open,
+      # holding its own three-line readme.txt); this is the real, non-self switch away from it
+      # that resyncs the worktree to heads/main's live two-line content before this job authors
+      # its own, separate third line -- without it, the ordinary `commit` below correctly refuses
+      # (`refusing to commit: heads/main is now at Block ..., and this worktree was last written
+      # from Block ...`), which is exactly how CI went red at `304644bd`.
       - name: Mutate the fixture on Windows
         shell: bash
         env:
@@ -642,6 +681,8 @@ jobs:
           TEMP: ${{ runner.temp }}
         run: |
           cd fixture-repo
+          ../target/debug/prikk branch switch heads/main
+          ../target/debug/prikk branch close heads/docs
           echo "cross-platform history check" >> readme.txt
           ../target/debug/prikk commit -m cross-platform-history-check
           ../target/debug/prikk seal --allow-no-audit
@@ -713,9 +754,14 @@ jobs:
         run: |
           mkdir -p fixture-repo
           tar -xzf fixture-repo.tar.gz -C fixture-repo
+      # 0.56.0 step W2e: see the matching step's own comment in `windows-mutate` above -- identical
+      # reasoning, identical two commands, before the identical append, so both platforms take the
+      # same path and the cross-platform identity comparison below still compares like with like.
       - name: Mutate the fixture identically on Linux
         run: |
           cd fixture-repo
+          ../target/debug/prikk branch switch heads/main
+          ../target/debug/prikk branch close heads/docs
           echo "cross-platform history check" >> readme.txt
           ../target/debug/prikk commit -m cross-platform-history-check
           ../target/debug/prikk seal --allow-no-audit
@@ -807,7 +853,9 @@ jobs:
   # proving a claim that cannot be proven in one process on one machine.
   #
   # Sender = the existing `fixture` job's own repository, reused, not re-authored (it already
-  # carries real history: two commits on heads/main, a closed branch, a tag). Receiver = a fresh
+  # carries real history: two commits on heads/main, a second branch, a tag -- 0.56.0 step W2e:
+  # heads/docs is left open in this specific artifact now, closed only by the two mutation jobs
+  # that consume a separate copy of it, see the fixture job's own comment). Receiver = a fresh
   # `prikk init` on Windows -- chosen over macOS because it is where path and filesystem behaviour
   # differs the most from the sender.
   #
