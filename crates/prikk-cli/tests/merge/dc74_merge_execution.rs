@@ -243,6 +243,13 @@ fn merge_refuses_delete_mutation_conflict() {
     );
     ok(&seal(&repo, "heads/main"), "seal main");
 
+    // 0.56.0 step W2d: a real switch to topic before staging topic's own independent edit -- this
+    // fixture committed directly onto `heads/topic` from main's own post-delete worktree before
+    // this round (the ref-agnostic idiom `require_concrete_record`'s now-removed exemption used to
+    // let through); the symmetric rule correctly reads that as stale (the record, naming main's
+    // post-delete state, disagrees with topic's own live a.txt), so a real switch is required, same
+    // fix as the four tests above and `dc67::sequence_06`.
+    switch(&repo, "heads/topic");
     std::fs::write(repo.join("a.txt"), b"topic edits content").unwrap();
     ok(
         &commit(&repo, "heads/topic", "topic edits a.txt"),

@@ -277,9 +277,13 @@ fn an_inline_test_module_is_not_production() {
         // and `path_is_stale`'s own doc comment is re-derived to state, with the empirical
         // evidence, why `require_concrete_record` is kept rather than removed, 1833 -> 1862, then
         // `commit`'s own worktree-baseline write site threads the ordered queued patch ids (the
-        // record's new content identity) through, 1862 -> 1871.
+        // record's new content identity) through, 1862 -> 1871. 0.56.0 step W2d-1:
+        // `require_concrete_record` is removed entirely (the asymmetry's own justification,
+        // `dc67::sequence_06`, was itself not a real counter-example -- see this round's report),
+        // and `path_is_stale`'s doc comment is re-derived again to state why plainly, a net
+        // shrink: 1871 -> 1853.
         physical,
-        1871,
+        1853,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -289,7 +293,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1822);
+    assert_eq!(counted.production_lines, 1804);
     assert_eq!(
         physical - counted.production_lines,
         49,

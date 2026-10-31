@@ -32,14 +32,19 @@
 //!    identically at generation 1), so it doesn't confirm the RFC's specific prediction by itself, but
 //!    it is a real, reportable gap this suite surfaced. Both sequences verify via `verify` and the
 //!    still-committed worktree instead, documented inline at each site.
-//! 2. **prikk has no "checkout branch into the worktree" step for active editing** — only
-//!    `--patch-materialize`, which is read-only and writes to a separate directory. An ordinary
+//! 2. **Historical, now closed by 0.56.0's `branch switch <name>` (RFC 151 §2.3).** At the time this
+//!    finding was first written, prikk had no "checkout branch into the worktree" step for active
+//!    editing — only `--patch-materialize`, read-only, into a separate directory — so an ordinary
 //!    two-branch workflow (commit on one branch, switch, commit on the other) run from one physical
-//!    worktree directory is not directly supported: a file created for branch A is picked up as a new,
-//!    untracked create relative to branch B's own baseline too, unless the user manually removes it
-//!    first. `sequence_06` documents and works around this inline. This is not a bug — nothing crashes
-//!    or corrupts state — but it is a real capability gap an ordinary multi-branch user would hit
-//!    immediately, discovered by trying the sequence rather than by inspection.
+//!    worktree directory was not directly supported: a file created for branch A would be picked up
+//!    as a new, untracked create relative to branch B's own baseline too, unless the user manually
+//!    removed it first. `sequence_06` worked around this inline. 0.56.0 added a real `branch switch`
+//!    command, and step W2d (the measured hazard a merge-then-overwrite case exposed in the
+//!    comparison this suite's own `sequence_06` idiom had been read as justifying — see that test's
+//!    own doc comment) rewrote `sequence_06` to use it for real, rather than the manual-removal
+//!    idiom. This finding is kept here, marked closed, rather than deleted, since it is exactly the
+//!    kind of capability gap this suite exists to surface, and its resolution is itself evidence the
+//!    suite worked.
 //!
 //! Per the RFC's own framing (§2: "either outcome is a good one; only not looking is bad"), both are
 //! reported here as their own findings, not fixed in this increment (criterion 4) — the fixes, if any
@@ -65,11 +70,21 @@
 use std::os::unix::fs::PermissionsExt;
 
 use crate::support::{
-    branch_close, branch_create, commit, generation, init, ok, rebuild_from_sealed_history, seal,
-    tag_create, unique_repo, verify,
+    branch_close, branch_create, commit, generation, init, ok, prikk, rebuild_from_sealed_history,
+    seal, tag_create, unique_repo, verify,
 };
 
 const N: u32 = 3;
+
+/// `branch switch <target>`, asserting success — the same idiom `dc74_merge_execution.rs` and
+/// `dc75_merge_two_edits.rs` already use for the identical purpose (a real switch, not a hand
+/// `rm` standing in for one). 0.56.0 step W2d: `sequence_06` below is rewritten to use this.
+fn switch(repo: &std::path::Path, target: &str) {
+    ok(
+        &prikk(repo).args(["branch", "switch", target]).output().unwrap(),
+        &format!("branch switch {target}"),
+    );
+}
 
 /// §3.2: edit the same **binary** file across N generations — the `ReplaceBinary` counterpart to
 /// DC-65's text-file coverage. Content is deliberately invalid UTF-8 so `classify_new` selects
@@ -231,6 +246,19 @@ fn sequence_05_mode_changes_with_and_without_content_changes() {
 }
 
 /// §3.6: branch, commit on both branches, close one, `verify`, keep committing on the other.
+///
+/// **0.56.0 step W2d: rewritten to `branch switch` for real between rounds, the same fix `dc74`'s
+/// divergent-edit tests already got this cycle.** The original version alternated `commit`s
+/// between `heads/main` and `heads/topic` from one physical worktree, manually `rm`-ing the other
+/// ref's own file before each round's commit rather than ever actually switching — the only way to
+/// drive a two-branch workflow before 0.56.0 added `branch switch`. The architect's own W2d review
+/// found that idiom was never actually safe by construction: it happened, by this test's own
+/// deliberate design, to never collide on a real path, which is why it was wrongly read as a
+/// counter-example to a fully symmetric staleness rule (see `node_authoring.rs`'s `path_is_stale`
+/// doc for the measured hazard that correction closes). Real switches materialize each branch's
+/// own tip directly — `topic.txt` disappears on its own when switching to `heads/main` (topic's
+/// tip never had it on main, so it is simply not in what a switch writes), and vice versa — so the
+/// manual `std::fs::remove_file` calls are gone, not merely relocated.
 #[test]
 fn sequence_06_branch_commit_both_close_one_keep_committing_other() {
     let repo = unique_repo("seq06-branch-close-continue");
@@ -241,18 +269,8 @@ fn sequence_06_branch_commit_both_close_one_keep_committing_other() {
         "create topic",
     );
 
-    // prikk has no "checkout branch into the worktree" step for active editing (only
-    // `--patch-materialize`, read-only, into a separate directory) — the worktree simply reflects
-    // whatever is on disk relative to whichever `--ref` a commit names. Alternating commits to two
-    // refs from one physical worktree therefore requires removing the other ref's own file first, or
-    // it would be picked up as a new, untracked create relative to *this* ref's baseline too. This is
-    // not a workaround for a defect; it is how an ordinary two-branch workflow must be driven today,
-    // and is recorded as a real coverage gap in this suite's "what remains uncovered" statement.
     for round in 1..=N {
-        let topic_file = repo.join("topic.txt");
-        if topic_file.exists() {
-            std::fs::remove_file(&topic_file).unwrap();
-        }
+        switch(&repo, "heads/main");
         generation(
             &repo,
             "heads/main",
@@ -260,7 +278,7 @@ fn sequence_06_branch_commit_both_close_one_keep_committing_other() {
             format!("main {round}").as_bytes(),
             &format!("main gen{round}"),
         );
-        std::fs::remove_file(repo.join("main.txt")).unwrap();
+        switch(&repo, "heads/topic");
         generation(
             &repo,
             "heads/topic",
@@ -270,10 +288,17 @@ fn sequence_06_branch_commit_both_close_one_keep_committing_other() {
         );
     }
 
+    // Switch away from topic *before* closing it -- the user's own path. Closing the branch the
+    // worktree is currently standing on would leave the next switch's own `from` unresolvable
+    // (`current_branch` deliberately refuses to name a closed branch as current -- see
+    // `refs.rs::current_branch`'s own doc), which is a real, deliberate, pre-existing refusal, not
+    // a defect to route around: a switch with an unresolvable `from` has no old baseline to delete
+    // against (this file's own module doc, "an unresolvable pointer... passes from = None"). An
+    // ordinary user closes a branch after leaving it, not while standing on it, so this is the
+    // realistic order, not a workaround.
+    switch(&repo, "heads/main");
     ok(&branch_close(&repo, "heads/topic"), "close topic");
     ok(&verify(&repo), "verify after closing topic");
-
-    std::fs::remove_file(repo.join("topic.txt")).unwrap();
     for round in (N + 1)..=(N + 2) {
         generation(
             &repo,

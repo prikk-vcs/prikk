@@ -322,69 +322,48 @@ impl BaselinePathState {
 /// ruling's own "unless the worktree already holds the live state for it," characterized once,
 /// mechanically, rather than re-derived at each call site.
 ///
-/// **`require_concrete_record` is the one asymmetry W2b's own measurement found necessary, and
-/// 0.56.0 step W2c re-checked it empirically against the corrected, ref-gate-free rule rather
-/// than assuming the ref gate's removal made it moot.** W2c's own ruling asked exactly this
-/// question: with `recorded_names_canonical_ref` gone (see the call sites below -- staleness is
-/// now judged in states, never in which ref the record names), does `dc67_ordinary_use_
-/// conformance::sequence_06_branch_commit_both_close_one_keep_committing_other` still need the
-/// asymmetry, or does the corrected rule make the record's "silence" about a path never arise?
-/// **Measured, not assumed: removing this parameter entirely (making every site, including the
-/// deletion loop, use a plain symmetric `!=`) was tried and makes `sequence_06` fail**, refusing
-/// `commit --ref heads/main`'s own round-2 `main.txt` edit with "the worktree holds content for
-/// main.txt, but it does not match heads/main's current state" -- even though `main.txt` was
-/// never touched by anything other than `heads/main`'s own prior, legitimate commits. The cause
-/// is unchanged by the ref-gate's removal: alternating `commit`s between `heads/main` and
-/// `heads/topic` from one physical worktree leaves the record naming whichever ref committed
-/// last, and `heads/topic`'s own history never mentions `main.txt` at all (`Absent` in the
-/// recorded split) -- a plain `!=` against `main.txt`'s real, concrete live entry on `heads/main`
-/// reads as "stale," not because any producer silently moved anything, but merely because the
-/// record's one slot currently describes a disjoint-history ref that was simply never asked
-/// about this path. **A recorded baseline that is silent about a path can never contradict that
-/// path's live state** -- there is no claim to contradict -- so `require_concrete_record: true`
-/// (every site but the deletion loop) returns `false` outright when the record has no entry for
-/// `path` at all, letting the ordinary multi-ref authoring idiom (W2's own deviation #4) through
-/// untouched; this is the ruling's own "case where the symmetric rule refuses something that is
-/// not a hazard," demonstrated by running the suite, not argued from the shape of the rule. The
-/// deletion loop alone keeps `require_concrete_record: false`, the original, *symmetric*
-/// comparison: there, a recorded baseline silent about a path the worktree is missing **is**
-/// exactly the hazard (W2's own five cases, and W2b's case 2 and case 5) -- the one direction
-/// where "no claim" must still refuse, because nothing else explains the live tip having gained
-/// content this worktree was never shown. Kept, not removed; see
-/// `.git-exclude/review-request/0.56.0-step-3w2c-report.md` for the full empirical record.
+/// **The comparison is symmetric at every site, unconditionally. There is no `require_concrete_
+/// record` parameter.** W2b introduced that asymmetry (a record silent about a path -- no
+/// concrete entry for it at all -- was exempted from counting as stale at every site but the
+/// deletion loop), and W2c re-checked and kept it rather than removing it, on the strength of
+/// `dc67_ordinary_use_conformance::sequence_06_branch_commit_both_close_one_keep_committing_other`:
+/// removing the asymmetry made that test's round-2 `main.txt` edit onto `heads/main` refuse, even
+/// though nothing had moved `main.txt` behind anyone's back -- `heads/topic`'s own history is
+/// simply silent about `main.txt`, because round 1's commit onto `heads/topic` left the record
+/// naming `heads/topic`, and that sequence never genuinely switched branches; it only ever
+/// alternated commits from one physical worktree, manually removing each ref's own file first.
 ///
-/// **0.56.0 step W2c re-derivation:** this refinement no longer coexists with a ref-name gate
-/// (W2b's `recorded_names_canonical_ref`, removed this round) -- it stands alone now, and was
-/// re-verified empirically, not assumed, to still be necessary on its own: flipping
-/// `require_concrete_record` to `false` at every non-deletion site (a fully symmetric rule
-/// everywhere) and re-running `dc67_ordinary_use_conformance::sequence_06_branch_commit_both_
-/// close_one_keep_committing_other` reproduces the exact same failure the original W2b round
-/// measured -- `main.txt`'s own, legitimate next edit onto `heads/main`, committed right after a
-/// commit onto `heads/topic` moved the record there, refuses with "the worktree holds content
-/// for, but it does not match heads/main's current state... main.txt", even though no producer
-/// touched anything. Removing the ref-name gate does not retire this hazard: the gate answered a
-/// *different* question ("does the record's claim even apply to this ref") than this refinement
-/// answers ("is a recorded *absence* a claim at all"), and a record can be silent about a path
-/// for an entirely mundane reason -- it currently names a sibling ref whose own history simply
-/// never mentions that path -- independent of whether that sibling's *concrete* entries (if any)
-/// for other paths are still compared in full (which, after W2c, they now always are). So
-/// `require_concrete_record` is sufficient and correct standing alone: it is the one place "the
-/// record has nothing to say about this path" is distinguished from "the record says something
-/// that disagrees," and only the latter is ever evidence of staleness for a would-author site.
+/// **0.56.0 step W2d: that measurement was itself wrong, and the exemption is removed.** The
+/// architect's own review measured a real hazard it let through: `feature` adds `c.txt`; a merge
+/// brings it onto `main`'s live tip; the worktree is never told (today's known materialization
+/// gap). The record, left naming whatever it last named, has no concrete entry for `c.txt` at
+/// all -- so `require_concrete_record` read that silence as "nothing to contradict," and a user
+/// who never saw the merge, creating their own `c.txt` by hand, sailed through as an ordinary
+/// create. After `seal`, the merged file was silently replaced by the user's own, unrelated
+/// content. `sequence_06` was never actually evidence the asymmetry is *needed* -- it only showed
+/// that its own alternating-commit idiom, which never switches branches for real, collides with a
+/// symmetric rule. That idiom was never safe by construction; it merely never happened, by the
+/// test's own deliberate design, to collide on a real path. The fix is the same one `dc74`'s
+/// divergent-edit tests already needed: stop relying on a worktree that was never actually
+/// switched. `sequence_06` is rewritten (see its own doc comment) to `branch switch` for real
+/// between rounds, and with that fix in place the symmetric rule no longer refuses it -- there is
+/// no longer a "silent record, real hazard-free path" case left to exempt. The comparison below is
+/// now a plain `!=`, at every per-path site (the main loop, the rename loop, and the deletion
+/// loop, which was already symmetric): for every path where the record disagrees with the live
+/// state being committed onto, the worktree must already hold that live state, or the commit
+/// refuses -- regardless of whether the record is silent about the path or concretely disagrees
+/// with it. See `.git-exclude/review-request/0.56.0-step-3w2d-report.md` for the measured case and
+/// the `sequence_06` rewrite.
 fn path_is_stale(
     path: &str,
     recorded: Option<&BaselineSplit>,
     live_files: &BTreeMap<String, BaselineFile>,
     live_symlinks: &BTreeMap<String, NodeId>,
-    require_concrete_record: bool,
 ) -> bool {
     let Some((recorded_files, recorded_symlinks)) = recorded else {
         return false;
     };
     let recorded_state = BaselinePathState::of(path, recorded_files, recorded_symlinks);
-    if require_concrete_record && recorded_state == BaselinePathState::Absent {
-        return false;
-    }
     BaselinePathState::of(path, live_files, live_symlinks) != recorded_state
 }
 
@@ -853,12 +832,14 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // live state actually agree -- shared, undiverged history -- not, as W2b had it, on every
         // path merely because the record names a different ref. See `path_is_stale`'s own doc for
         // the measured hazard this closes (a cross-ref edit reverting a diverged change).
+        // 0.56.0 step W2d: the comparison is unconditionally symmetric now (`require_concrete_
+        // record` removed) -- see `path_is_stale`'s own doc for why the asymmetry's own
+        // justification (`dc67::sequence_06`) was itself not a real counter-example.
         let is_stale = path_is_stale(
             path,
             recorded_baseline.as_ref(),
             &baseline_files,
             &baseline_symlinks,
-            true,
         );
         if let Some(base) = baseline_files.get(path) {
             // Existing node: kind is authoritative (E4); compare in that kind, never reclassify.
@@ -1011,13 +992,12 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // deletion." Skips the whole triplet (RenamePath, and any simultaneous content/mode change
         // on the same node) for this pair -- one node, one staleness verdict.
         // 0.56.0 step W2c: no longer gated on which ref the record names, same reason as the main
-        // loop above.
+        // loop above. 0.56.0 step W2d: unconditionally symmetric, same reason as the main loop.
         if path_is_stale(
             old_path,
             recorded_baseline.as_ref(),
             &baseline_files,
             &baseline_symlinks,
-            true,
         ) {
             stale_paths.insert(old_path.clone(), StalePathReason::PresentButStale);
             continue;
@@ -1105,10 +1085,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // cannot be the user's deletion, because there was never a chance to delete it. This is the
     // special case `path_is_stale`'s general rule reduces to ("worktree absent, live present") --
     // the same function every other per-path site above already calls, not a second check.
-    // `require_concrete_record: false` -- the one site that keeps the *symmetric* comparison: a
-    // record silent about `path` (no concrete claim at all) is exactly W2's own original hazard
-    // here (every one of its five cases, and this round's case 2 and case 5), because nothing else
-    // explains the live tip having gained a path this worktree was never shown.
+    // This loop already used the symmetric comparison before W2d (it never took
+    // `require_concrete_record`'s now-removed exemption): a record silent about `path` (no
+    // concrete claim at all) is exactly W2's own original hazard here (every one of its five
+    // cases, and W2b's case 2 and case 5), because nothing else explains the live tip having
+    // gained a path this worktree was never shown. 0.56.0 step W2d: every other site now matches
+    // this one, so the comment that used to distinguish this loop as "the one site that keeps the
+    // symmetric comparison" no longer applies -- there is only one comparison now.
     for (path, base) in &baseline_files {
         if !worktree.contains_key(path) {
             if renamed_away.contains(path) {
@@ -1120,7 +1103,6 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                 recorded_baseline.as_ref(),
                 &baseline_files,
                 &baseline_symlinks,
-                false,
             ) {
                 stale_paths.insert(path.clone(), StalePathReason::AbsentFromWorktree);
                 continue;
