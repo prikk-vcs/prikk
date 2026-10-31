@@ -19,6 +19,19 @@
 //!   for the shapes no honest CLI flow can produce at all (a claim whose own patch does not fold, a
 //!   shared block recognized by two independent claims, a cycle). The compiled binary still does
 //!   every read: only the fixture's own setup bypasses the CLI.
+//!
+//! **0.56.0 step 3f2 addendum:** three further tests, below the original seven, close the same gap
+//! for `outside-version-rule` -- the id R1 (`1fbba9fa`) gave `extract --claim`'s own chain-fold
+//! classification, and 3f2 now also gives `extract --ref`'s own fallback classification for the
+//! identical cause (a path outside this version's own rule, today non-ASCII), where it had
+//! previously and wrongly read `damaged-repository`. These use a third hand-crafted shape beyond
+//! the two above: a `Block`/`RefState`/`RefUpdate` triple written directly and published onto
+//! `heads/main` through `RefStore::publish`, the same technique
+//! `branch_and_tag/dc61_branch_closure.rs`'s own `reopening_a_closed_branch_is_an_ordinary_cas_update`
+//! test uses to advance a ref by hand -- no honest `commit`/`seal` ever produces a non-ASCII or
+//! empty repo path (0.56.0 step 3d2's own authoring-side refusal), so `extract --ref`'s own
+//! coverage of this cause needs the identical bypass the claim-chain tests already use for their
+//! own hand-crafted patches.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -28,13 +41,14 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use prikk_object::{
-    BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, NodeId, ObjectEnvelope,
-    ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
-    RecognitionClaimPayload,
+    BlobKind, BlobPayload, BlockKind, BlockPayload, CanonicalEncode, ChangePerm, CreateFile,
+    NodeId, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload,
+    PatchPurpose, RecognitionClaimPayload, RefStatePayload, RefUpdatePayload,
 };
 use prikk_store::{
-    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectWriter,
-    RepositoryLayout, author_signature, maintainer_signature,
+    Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectReader,
+    ObjectWriter, RefPublication, RefStore, RepositoryLayout, author_signature,
+    compute_state_root, maintainer_signature,
 };
 
 fn stdout(output: &Output) -> String {
@@ -768,6 +782,304 @@ fn extract_claim_refuses_claim_chain_cycle() {
     let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(stderr_text.contains(&claim_f.to_string()), "{stderr_text}");
     assert!(stderr_text.contains(&claim_g.to_string()), "{stderr_text}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ---------------------------------------------------------------------------------------------
+// 0.56.0 step 3f2: `outside-version-rule`, through both `extract --ref` and `extract --claim`.
+// ---------------------------------------------------------------------------------------------
+
+/// `extract --ref <point> --format json`, writing into a fresh target under `repo`'s own unique
+/// temp area -- the CLI-level twin of `extract_claim_json`, above, kept local to this file rather
+/// than imported from `extract_and_read/extract.rs`'s own (non-`pub(crate)`) `extract(...)`
+/// helper, which a sibling module cannot reach.
+fn extract_ref_json(repo: &Path, point: &str, target: &Path) -> Output {
+    support::prikk(repo)
+        .args([
+            "extract",
+            "--ref",
+            point,
+            "--format",
+            "json",
+            target.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+}
+
+/// A single `CreateFile` patch naming `path` exactly as given, built by driving
+/// `prikk_object::CanonicalWriter` directly -- bypassing `CreateFile`'s own validating
+/// `encode_canonical`/`validate_repo_path`, the same bypass
+/// `crates/prikk-store/src/extract/tests.rs::write_non_ascii_path_patch` uses one layer down, and
+/// `crates/prikk-store/src/patch_replay/tests/proptest_round_trip.rs:832`'s own one-line technique
+/// for an empty path -- ported here so this file's own CLI-level tests can drive both the
+/// non-ASCII and the empty-path shape through the identical fixture code. No honest CLI `commit`
+/// can author either path (3d2's own authoring-side refusal), so this is the only way to get one
+/// into a chain this binary will read.
+fn write_hand_crafted_create_file_patch(
+    store: &mut FileObjectStore,
+    author: &Ed25519AuthorSigner,
+    path: &str,
+    node_byte: u8,
+) -> ObjectId {
+    use prikk_object::{CanonicalWriter, WireType};
+
+    // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, path).unwrap();
+    create_file
+        .field_bytes(2, NodeId::from_bytes([node_byte; 32]).as_bytes())
+        .unwrap();
+    create_file
+        .field_object_id(3, &ObjectId::from_bytes([node_byte.wrapping_add(1); 32]))
+        .unwrap();
+    create_file.field_u32(4, 0o100_644).unwrap();
+    let create_file_bytes = create_file.finish();
+
+    // Operation tags (payload/patch.rs): 1=op_seq, 10=CreateFile (nested Record).
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1).unwrap();
+    operation
+        .field_raw(10, WireType::Record, &create_file_bytes)
+        .unwrap();
+    let operation_bytes = operation.finish();
+
+    // PatchPayload tag 1: one operation, framed as a `RecordListItem` (`repeated_record_list`'s
+    // own wire shape).
+    let mut payload = CanonicalWriter::new();
+    payload
+        .field_raw(1, WireType::RecordListItem, &operation_bytes)
+        .unwrap();
+    let canonical_payload = payload.finish();
+
+    let mut patch = ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
+    let patch_id = patch.object_id();
+    let patch_sig = author_signature(author, patch_id).unwrap();
+    patch.add_signature(patch_sig).unwrap();
+    store.write_object(&patch).unwrap()
+}
+
+/// Write a real, maintainer-signed `Block` carrying `patch_ids` over `parent_block_id`, then
+/// publish it onto `ref_name` as the new CAS tip through `RefStore::publish` -- the identical
+/// `Block`/`RefState`/`RefUpdate` triple `prikk seal` would publish for an honest generation, built
+/// by hand here only because no honest `commit` can author the non-ASCII/empty-path patches this
+/// file needs inside it (`branch_and_tag/dc61_branch_closure.rs`'s own
+/// `reopening_a_closed_branch_is_an_ordinary_cas_update` test advances a ref by hand the same way).
+/// `signer` must be a key this repository has already adopted (`admitted_repo`'s own genesis seal
+/// adopts `support::MAINTAINER_KEY_ID`/`support::MAINTAINER_SEED`), or `RefStore::publish` itself
+/// refuses before extract ever sees this block.
+fn publish_block_with_patches(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    parent_block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    signer: &Ed25519MaintainerSigner,
+) -> ObjectId {
+    let mut store = FileObjectStore::new(layout.clone());
+
+    // `replay_for_extract` never reads a block's own `state_merkle_root` (it recomputes live
+    // state from the patches themselves); `compute_state_root(&[])` is exactly what
+    // `test_support.rs::signed_block`'s own default uses for the identical reason.
+    let state_root = compute_state_root(&[]).unwrap();
+    let block_payload = BlockPayload {
+        parent_block_ids: vec![parent_block_id],
+        kind: BlockKind::Normal,
+        patch_ids,
+        state_merkle_root: state_root,
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let mut block_envelope =
+        ObjectEnvelope::unsigned(ObjectType::Block, 2, block_payload.to_canonical_bytes().unwrap());
+    let block_id = block_envelope.object_id();
+    let block_sig = maintainer_signature(signer, ObjectType::Block, block_id).unwrap();
+    block_envelope.add_signature(block_sig).unwrap();
+    store.write_object(&block_envelope).unwrap();
+
+    let ref_store = RefStore::new(layout.clone());
+    let current_ref_state_id = ref_store
+        .read_current_ref_state_id(ref_name)
+        .unwrap()
+        .unwrap();
+    let current_envelope = store
+        .read_typed(current_ref_state_id, ObjectType::RefState)
+        .unwrap()
+        .unwrap();
+    let current_payload = RefStatePayload::decode_canonical(
+        &current_envelope.canonical_payload,
+        current_envelope.schema_version,
+    )
+    .unwrap();
+
+    let new_ref_state_payload = RefStatePayload {
+        ref_name: ref_name.to_string(),
+        kind: current_payload.kind,
+        target_object_id: block_id,
+        update_seq: current_payload.update_seq + 1,
+        previous_ref_state_id: Some(current_ref_state_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(
+        ObjectType::RefState,
+        1,
+        new_ref_state_payload.to_canonical_bytes().unwrap(),
+    );
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(maintainer_signature(signer, ObjectType::RefState, ref_state_id).unwrap())
+        .unwrap();
+
+    let ref_update_payload = RefUpdatePayload {
+        ref_name: ref_name.to_string(),
+        old_ref_state_id: Some(current_ref_state_id),
+        new_ref_state_id: ref_state_id,
+        new_target_object_id: block_id,
+        update_seq: current_payload.update_seq + 1,
+        created_at: 0,
+        author_key_id: signer.key_id().to_string(),
+    };
+    let mut ref_update_envelope = ObjectEnvelope::unsigned(
+        ObjectType::RefUpdate,
+        1,
+        ref_update_payload.to_canonical_bytes().unwrap(),
+    );
+    let ref_update_id = ref_update_envelope.object_id();
+    ref_update_envelope
+        .add_signature(maintainer_signature(signer, ObjectType::RefUpdate, ref_update_id).unwrap())
+        .unwrap();
+
+    let publication = RefPublication {
+        ref_name: ref_name.to_string(),
+        expected_previous_ref_state_id: Some(current_ref_state_id),
+        ref_state: ref_state_envelope,
+        ref_update: ref_update_envelope,
+    };
+    ref_store.publish(&publication).unwrap();
+    block_id
+}
+
+/// The trusted maintainer signer `admitted_repo`'s own genesis seal already adopts
+/// (`support::MAINTAINER_KEY_ID`/`support::MAINTAINER_SEED`) -- reused here, rather than a fresh
+/// never-adopted key, since the published ref itself (unlike a provisional claim chain) must carry
+/// a signature this repository's own trust policy accepts before `extract --ref` ever reaches the
+/// replay this test is actually proving.
+fn admitted_maintainer_signer() -> Ed25519MaintainerSigner {
+    Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+        .unwrap()
+}
+
+/// **Test 8** (3f2): `extract --ref` on a chain whose single non-genesis block carries the
+/// hand-crafted non-ASCII patch gives `outside-version-rule` -- the bug the review found (3f2's own
+/// motivating finding): before this round, `classify_prikk_error_fallback`'s only two arms (`Io`,
+/// else `DamagedRepository`) put this exact cause under `damaged-repository`, contradicting the
+/// `message` text that already correctly said this is not damage. Run twice: once against the ref
+/// name, once against the bare block id (`extract --ref` accepts either, `is_point_name`'s own
+/// dispatch, and both resolve to the identical `Point` before `prepare_extract_plan` ever runs, so
+/// one assertion inside this test covers the bare-block-id path too without a second fixture).
+#[test]
+fn extract_ref_refuses_outside_version_rule_for_a_non_ascii_path_in_the_chain() {
+    let (repo, layout, genesis_block) = admitted_repo("step3f2-ref-outside-version-rule");
+    let mut store = FileObjectStore::new(layout.clone());
+    let author = author_signer("step3f2-ref-outside-version-author", 0x91);
+    let signer = admitted_maintainer_signer();
+
+    let non_ascii_patch =
+        write_hand_crafted_create_file_patch(&mut store, &author, "pages/日本語.md", 0x92);
+    let tip_block = publish_block_with_patches(
+        &layout,
+        "heads/main",
+        genesis_block,
+        vec![non_ascii_patch],
+        &signer,
+    );
+
+    let target = target_dir("step3f2-ref-outside-version-rule-out");
+    let output = extract_ref_json(&repo, "heads/main", &target);
+    assert_refusal_json(
+        &output,
+        "outside-version-rule",
+        None,
+        "outside what this version of prikk accepts",
+    );
+
+    // The identical cause, reached by naming the tip block directly rather than through the ref --
+    // `classify_extract_plan_error`/`classify_prikk_error_fallback` run the same way regardless of
+    // how the point was named.
+    let target_by_block_id = target_dir("step3f2-ref-outside-version-rule-blockid-out");
+    let output_by_block_id = extract_ref_json(&repo, &tip_block.to_string(), &target_by_block_id);
+    assert_refusal_json(
+        &output_by_block_id,
+        "outside-version-rule",
+        None,
+        "outside what this version of prikk accepts",
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **Test 9** (3f2): `extract --claim` on a one-link chain whose own (foot) patch is the
+/// hand-crafted non-ASCII one also gives `outside-version-rule` -- the first test to assert the
+/// actual printed `refusal-v1` id through the compiled binary for this cause (R1, `1fbba9fa`,
+/// proved only the library-level `err.kind`/message text:
+/// `prepare_extract_plan_for_claim_reads_the_outside_version_sentence_not_claim_does_not_fold_mid_chain`
+/// in `crates/prikk-store/src/extract/tests.rs`).
+#[test]
+fn extract_claim_refuses_outside_version_rule_for_a_non_ascii_path() {
+    let (repo, layout, genesis_block) = admitted_repo("step3f2-claim-outside-version-rule");
+    let mut store = FileObjectStore::new(layout.clone());
+    let author = author_signer("step3f2-claim-outside-version-author", 0x93);
+
+    let non_ascii_patch =
+        write_hand_crafted_create_file_patch(&mut store, &author, "pages/日本語.md", 0x94);
+    let foot_claim = write_claim_signed_by(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: ObjectId::from_bytes([0x95; 32]),
+            patch_ids: vec![non_ascii_patch],
+            parent_block_ids: vec![genesis_block],
+        },
+        &maintainer_signer("step3f2-claim-outside-version-maintainer", 0x96),
+    );
+
+    let target = target_dir("step3f2-claim-outside-version-rule-out");
+    let output = extract_claim_json(&repo, &foot_claim.to_string(), &target);
+    assert_refusal_json(
+        &output,
+        "outside-version-rule",
+        None,
+        "outside what this version of prikk accepts",
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **Test 10** (3f2): an empty path through the identical `--ref` chain still gives
+/// `damaged-repository`, never `outside-version-rule` -- proof that 3d2's own narrowing (only the
+/// non-ASCII cause is version-relative; an empty path is permanently invalid, no future `prikk`
+/// will ever accept it) stays narrow now that `outside-version-rule` exists as a real id a careless
+/// classification could otherwise have swallowed this case into.
+#[test]
+fn extract_ref_still_refuses_an_empty_path_as_damaged_repository() {
+    let (repo, layout, genesis_block) = admitted_repo("step3f2-ref-empty-path-damaged");
+    let mut store = FileObjectStore::new(layout.clone());
+    let author = author_signer("step3f2-ref-empty-path-author", 0x97);
+    let signer = admitted_maintainer_signer();
+
+    let empty_path_patch = write_hand_crafted_create_file_patch(&mut store, &author, "", 0x98);
+    publish_block_with_patches(
+        &layout,
+        "heads/main",
+        genesis_block,
+        vec![empty_path_patch],
+        &signer,
+    );
+
+    let target = target_dir("step3f2-ref-empty-path-damaged-out");
+    let output = extract_ref_json(&repo, "heads/main", &target);
+    assert_refusal_json(&output, "damaged-repository", None, "invalid name");
 
     let _ = std::fs::remove_dir_all(&repo);
 }

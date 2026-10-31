@@ -45,11 +45,11 @@ use crate::{current_branch, open_repository};
 /// `refusal-v1`'s own ids (0.54.0 step 3 Part 5d, `not-a-repository` added in Part 5e,
 /// `destination-inside-repository` and `claim-parent-not-sealed` added in 0.55.0 step 1,
 /// `claim-signature-invalid`/`claim-does-not-fold`/`claim-chain-shared-block`/`claim-chain-cycle`
-/// added in 0.56.0 step 3e) -- this project's first machine-readable refusal document, designed as
-/// a precedent other commands adopt when next touched. **Exhaustive by construction**: no `match`
-/// over this enum anywhere in this module has a wildcard arm, so a next refusal `extract` grows
-/// later, without updating this enum, is a compile error here, not a silently missing id in the
-/// document.
+/// added in 0.56.0 step 3e, `outside-version-rule` added in 0.56.0 step 3f2) -- this project's
+/// first machine-readable refusal document, designed as a precedent other commands adopt when next
+/// touched. **Exhaustive by construction**: no `match` over this enum anywhere in this module has
+/// a wildcard arm, so a next refusal `extract` grows later, without updating this enum, is a
+/// compile error here, not a silently missing id in the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtractRefusalId {
     OverMaxBytes,
@@ -68,6 +68,7 @@ enum ExtractRefusalId {
     ClaimChainCycle,
     CaseCollision,
     NoCheckpointInReach,
+    OutsideVersionRule,
     DamagedRepository,
     IoFailure,
     NotARepository,
@@ -92,6 +93,7 @@ impl ExtractRefusalId {
             Self::ClaimChainCycle => "claim-chain-cycle",
             Self::CaseCollision => "case-collision",
             Self::NoCheckpointInReach => "no-checkpoint-in-reach",
+            Self::OutsideVersionRule => "outside-version-rule",
             Self::DamagedRepository => "damaged-repository",
             Self::IoFailure => "io-failure",
             Self::NotARepository => "not-a-repository",
@@ -111,14 +113,21 @@ fn no_checkpoint_reason_id(reason: NoCheckpointReason) -> &'static str {
 
 /// The fallback classification for an error not already classified at its own raise site: by
 /// `PrikkError`'s own variant, never by its message text (`PrikkError` is `#[non_exhaustive]`, so
-/// this `match` keeps its own wildcard arm -- the two buckets it chooses between are themselves
+/// this `match` keeps its own wildcard arm -- the three buckets it chooses between are themselves
 /// documented catch-alls, not individually enumerated ids, so this is not the same thing as a
-/// wildcard over `ExtractRefusalId`). `Io` is a real I/O or resource failure; everything else here
-/// names a problem with persisted data (a malformed object, a type mismatch, an unsupported
-/// format, ...) -- structural damage this repository did not expect to find.
+/// wildcard over `ExtractRefusalId`). `Io` is a real I/O or resource failure. The second arm
+/// (0.56.0 step 3f2, correcting 3f's own R1) is this version's own path rule refusing a path a
+/// newer `prikk` may have written (today: non-ASCII) -- classified from
+/// [`prikk_error::PrikkError::decode_failure_kind`], never from this error's variant or message
+/// text directly, which is the one abstraction `prikk-error` built for exactly this question.
+/// Everything else here names a problem with persisted data (a malformed object, a type mismatch,
+/// an unsupported format, ...) -- structural damage this repository did not expect to find.
 fn classify_prikk_error_fallback(error: &prikk_error::PrikkError) -> ExtractRefusalId {
     match error {
         prikk_error::PrikkError::Io { .. } => ExtractRefusalId::IoFailure,
+        _ if error.decode_failure_kind() == prikk_error::DecodeFailureKind::OutsideVersionRule => {
+            ExtractRefusalId::OutsideVersionRule
+        }
         _ => ExtractRefusalId::DamagedRepository,
     }
 }

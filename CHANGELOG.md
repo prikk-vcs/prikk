@@ -81,8 +81,9 @@
   the way a parent that was never received at all already did. A claim whose own patch does not
   actually apply onto the state before it now reads as that specifically, rather than as generic
   repository damage — except a patch whose own path is simply outside this version's own rule (one
-  a newer `prikk` may have written), which reads exactly as `extract --ref` already reads the
-  identical path, never as an unsound claim. None of this affects a claim whose own signature is
+  a newer `prikk` may have written), which classifies as `outside-version-rule` — the same id
+  `extract --ref` now gives for the identical cause — never as an unsound claim. None of this
+  affects a claim whose own signature is
   simply unadopted (not forged) rather than invalid — that continues to extract, as it always has.
 - **`show` of a pending patch now resolves through a chain of unsealed recognition claims, not only
   one hop.** Before this, a claim whose own declared parent was itself only another pending claim's
@@ -96,6 +97,15 @@
   anywhere in the chain is still skipped, not only at the claim named directly;
   `"resolved_through_claim_id"` is still the claim naming the patch, never an earlier link in its
   own chain.
+- **`extract --ref` now reports a path outside this version's own rule as `outside-version-rule`
+  under `--format json`, not `damaged-repository`.** The point's own history already told the
+  truth in its `message` text — that the path is outside what this version of `prikk` accepts,
+  and that a newer version of `prikk` may have written it — but the machine-readable `refusal` id
+  next to it, under `extract --ref`'s own `refusal-v1` document, still said `damaged-repository`,
+  which a script reading only the id (not the prose) would misread as corruption. `extract --claim`
+  now gives the identical id for the identical cause, matching the sentence it already gave. An
+  empty, absolute, too-long, or otherwise ill-formed path is unaffected and still reads
+  `damaged-repository`: only the genuinely version-relative cause (today: non-ASCII) moved.
 
 ### Added
 

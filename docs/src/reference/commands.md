@@ -450,11 +450,12 @@ classified by a fallback, rather than exiting `1` under `--format json` with not
 {"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
 ```
 
-`refusal` is one of nineteen stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`refusal` is one of twenty stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
 `destination-exists`, `destination-inside-repository`, `temporary-sibling-exists`, `point-not-found`,
 `claim-not-found`, `not-a-claim`, `claim-has-several-parents`, `claim-parent-not-sealed`,
 `claim-signature-invalid`, `claim-does-not-fold`, `claim-chain-shared-block`, `claim-chain-cycle`,
-`case-collision`, `no-checkpoint-in-reach`, `not-a-repository`, `damaged-repository`, `io-failure`.
+`case-collision`, `no-checkpoint-in-reach`, `not-a-repository`, `outside-version-rule`,
+`damaged-repository`, `io-failure`.
 `claim-parent-not-sealed` means some link's own declared parent is neither itself reachable from any
 branch or received history this repository holds, nor recognized by any other held claim — seal or
 receive it first, then extract the claim again; this repository is not damaged.
@@ -464,10 +465,17 @@ directly on the command line is checked exactly the same way as every other link
 walk builds from it. `claim-does-not-fold` means some link's own patches do not actually apply onto
 the state the chain has built up to that point — that claim is unsound, not this repository. A
 link whose own patch names a path outside this version's own rule (today: non-ASCII) is not this
-case: it reads `damaged-repository`, with the same "outside what this version of `prikk` accepts"
+case: it reads `outside-version-rule`, with the same "outside what this version of `prikk` accepts"
 sentence `extract --ref` already gives for the identical path (see "A path this version of `prikk`
 does not accept is not damage", above) — a claim can be perfectly sound and still carry a patch a
 newer `prikk` wrote.
+`outside-version-rule` itself means the refusal's own cause was a path this version of `prikk`'s own
+rule refuses (today: non-ASCII), never corruption — classified structurally from
+`PrikkError::decode_failure_kind()`, never from the message text, and given both by `extract --ref`
+(a point whose own history replays a patch naming such a path) and by `extract --claim` (a chain
+link whose own patch names one) for the identical underlying cause. An empty, absolute, too-long,
+or otherwise ill-formed path is a different, permanently invalid cause — no future version of
+`prikk` will ever accept it — and still reads `damaged-repository`, never this id.
 `claim-chain-shared-block` means two or more held claims recognize the same block the walk needed to
 resolve, with none, or more than one, signed by a key this repository has adopted — picking one
 without that would be a guess. `claim-chain-cycle` means the walk would have revisited a block it
@@ -484,7 +492,7 @@ never part of the refusal's own text itself; the JSON document never paraphrases
 **This is this project's own, reusable form for a JSON refusal** — `refusal-v1`'s shape
 (`schema_version`, `command`, `refusal`, `reason`, `message`) was designed as a precedent other
 commands adopt when next touched, not a one-off specific to `extract`. `bundle import` is its
-second adopter (see above), for exactly three of its own refusals; `extract`'s own nineteen ids
+second adopter (see above), for exactly three of its own refusals; `extract`'s own twenty ids
 above are unaffected.
 
 **Removing a received pointer: `received remove`.** `received remove <remotes/…> [--plan-only]`
