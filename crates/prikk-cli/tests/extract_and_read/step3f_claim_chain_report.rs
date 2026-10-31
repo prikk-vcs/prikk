@@ -47,8 +47,8 @@ use prikk_object::{
 };
 use prikk_store::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, FileObjectStore, MaintainerSigner, ObjectReader,
-    ObjectWriter, RefPublication, RefStore, RepositoryLayout, author_signature,
-    compute_state_root, maintainer_signature,
+    ObjectWriter, RefPublication, RefStore, RepositoryLayout, author_signature, compute_state_root,
+    maintainer_signature,
 };
 
 fn stdout(output: &Output) -> String {
@@ -891,8 +891,11 @@ fn publish_block_with_patches(
         mainline_parent_id: None,
         merge_baseline_block_id: None,
     };
-    let mut block_envelope =
-        ObjectEnvelope::unsigned(ObjectType::Block, 2, block_payload.to_canonical_bytes().unwrap());
+    let mut block_envelope = ObjectEnvelope::unsigned(
+        ObjectType::Block,
+        2,
+        block_payload.to_canonical_bytes().unwrap(),
+    );
     let block_id = block_envelope.object_id();
     let block_sig = maintainer_signature(signer, ObjectType::Block, block_id).unwrap();
     block_envelope.add_signature(block_sig).unwrap();
