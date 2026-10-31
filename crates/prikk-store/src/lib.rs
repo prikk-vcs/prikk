@@ -395,7 +395,10 @@ pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout}
 // `worktree_status`/`patch_checkout`/`worktree`/`seal_from_accepted`-adjacent call sites. `seal`
 // itself lives in `prikk-cli`, so its own write call reaches the writer through this same re-export
 // list, widened only as far as that one caller needs.
-pub use worktree_baseline::{record_initial_worktree_baseline, record_worktree_baseline};
+pub use worktree_baseline::{
+    record_initial_worktree_baseline, record_worktree_baseline,
+    worktree_baseline_matches_fold_being_sealed,
+};
 pub use worktree_marker::{
     ProvisionalClearOutcome, ProvisionalWorktree, clear_provisional_marker_if_unchanged,
     ensure_worktree_replay_verified, provisional_marker_bytes, provisional_worktree,

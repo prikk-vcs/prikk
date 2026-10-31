@@ -136,11 +136,19 @@
   own current tip (the exact situation the point above now refuses to commit through) — and
   switching away and back did not help either, since leaving was itself refused against the
   branch's own moved tip. Naming the current branch now resyncs when the worktree's own recorded
-  state disagrees with what the branch currently resolves to, including when only the branch's own
-  *queued, unsealed* fold moved (for example `rollback-draft --append-inverse`, which never touches
-  the sealed branch or the worktree): it materializes the branch's current files, fold included,
-  and clears the staleness, the same way switching to a different branch always has. It remains the
-  documented no-op whenever the worktree's record is already current.
+  state disagrees with the branch's own sealed tip, the same way switching to a different branch
+  always has. It remains the documented no-op whenever the worktree's record is already current.
+  A moved *queued, unsealed* fold (for example `rollback-draft --append-inverse`, which never
+  touches the sealed branch or the worktree) is detected the same way, but is never resynced by a
+  self-switch materializing it directly — doing so would write the sealed portion of the worktree
+  through the lifecycle cache rather than the verified-anchor replay every other switch uses, so a
+  self-switch over a non-empty, behind-reading queue refuses instead, naming `seal` then `branch
+  switch <the current branch>` again as the way out. `seal` only advances the worktree's own
+  recorded baseline when it already matched the fold it just sealed — a queued fold the worktree
+  was never written to match (`rollback-draft --append-inverse`'s own shape) leaves the record
+  exactly where it was, so this second switch now genuinely resyncs through the ordinary,
+  verified-anchor path, rather than reading the record's own fresh-but-untrue agreement with the
+  newly sealed tip as "nothing to do."
 - **`worktree-status` reports "behind `<ref>`" instead of listing every file a moved ref added as
   `missing`**, when the worktree's own record shows it has fallen behind that ref — the same
   staleness `commit`'s new refusal above detects, including a ref whose sealed tip has not moved

@@ -14,6 +14,7 @@ use prikk_store::{
     MaintainerSigner, ObjectWriteSession, RefPublication, RefStore, RepositoryLayout, Wal,
     finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
     seal_block, validate_local_branch_ref, verify_signer_trusted,
+    worktree_baseline_matches_fold_being_sealed,
 };
 
 mod support;
@@ -183,6 +184,21 @@ fn seal_active_no_audit(
         .map_err(|err| err.to_string())?;
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     let current = current_ref_state(&layout, &object_store, &ref_store, &ref_name)?;
+    // 0.56.0 step W2e: read once, here -- after `current_ref_state` above has already confirmed
+    // the ref's own pointer/log state is sound (not before: this predicate's own
+    // `resolve_worktree_baseline` call resolves the same ref, and reading it any earlier than
+    // this surfaced a *less specific* integrity error for a corrupted-pointer-with-ref-log-history
+    // repository than the one `current_ref_state` itself already gives, measured directly against
+    // `genesis_end_to_end::seal_rejects_missing_pointer_with_ref_log_history` while drafting this
+    // round -- moved here to fix it, not merely to make this one test pass) -- and before anything
+    // below drains or advances this ref. The comparison this needs is "does the worktree's
+    // recorded baseline already match the fold about to be sealed" (the sealed tip `ref_name`
+    // resolves to right now, plus this exact `replay`, not yet drained). See
+    // `worktree_baseline_matches_fold_being_sealed`'s own doc for why this must gate both record
+    // writes below (the DC-38 retry path and the ordinary seal path), not merely one of them.
+    let record_matches_fold_being_sealed =
+        worktree_baseline_matches_fold_being_sealed(&layout, &ref_name, &replay)
+            .map_err(|err| err.to_string())?;
     let wal_patch_ids = collect_wal_patch_ids(&replay.records)?;
     if let Some(current) = current.as_ref() {
         if current_tip_matches_wal_patches(&object_store, current, &wal_patch_ids)? {
@@ -198,15 +214,24 @@ fn seal_active_no_audit(
             )?;
             finish_active_publication_cleanup(&layout, &active_lock)
                 .map_err(|err| err.to_string())?;
-            // 0.56.0 step W2 (R1): the fold is now sealed -- the new block, WAL back to empty.
-            prikk_store::record_worktree_baseline(
-                &layout,
-                &ref_name,
-                Some(current.target_block_id),
-                0,
-                &[],
-            )
-            .map_err(|err| err.to_string())?;
+            // 0.56.0 step W2 (R1), amended step W2e: the fold is now sealed -- the new block, WAL
+            // back to empty -- but the record only advances to claim that when the worktree's own
+            // recorded baseline actually matched the fold just sealed (`record_matches_fold_being_sealed`,
+            // computed above, before this drain). Otherwise the worktree was never told about
+            // whatever just got folded in (`rollback-draft --append-inverse`'s own shape), and
+            // advancing the record here would falsely claim it now matches a tip it was never
+            // written to match; leaving it untouched is what lets the next comparison correctly
+            // read `Behind` and resync through `branch switch`.
+            if record_matches_fold_being_sealed {
+                prikk_store::record_worktree_baseline(
+                    &layout,
+                    &ref_name,
+                    Some(current.target_block_id),
+                    0,
+                    &[],
+                )
+                .map_err(|err| err.to_string())?;
+            }
             return Ok(SealCommandResult {
                 ref_name,
                 patch_count: wal_patch_ids.len(),
@@ -286,9 +311,13 @@ fn seal_active_no_audit(
         )
         .map_err(|err| err.to_string())?;
     finish_active_publication_cleanup(&layout, &active_lock).map_err(|err| err.to_string())?;
-    // 0.56.0 step W2 (R1): the fold is now sealed -- the new block, WAL back to empty.
-    prikk_store::record_worktree_baseline(&layout, &ref_name, Some(block_id), 0, &[])
-        .map_err(|err| err.to_string())?;
+    // 0.56.0 step W2 (R1), amended step W2e: see the DC-38 retry path's own identical comment
+    // above -- the same `record_matches_fold_being_sealed`, computed once before this seal drained
+    // anything, gates this write too.
+    if record_matches_fold_being_sealed {
+        prikk_store::record_worktree_baseline(&layout, &ref_name, Some(block_id), 0, &[])
+            .map_err(|err| err.to_string())?;
+    }
     Ok(SealCommandResult {
         ref_name,
         patch_count: patch_ids.len(),

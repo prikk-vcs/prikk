@@ -263,49 +263,43 @@ fn case3_rollback_draft_append_inverse_then_self_switch_applies_the_deletion() {
         "seal --allow-no-audit --ref heads/main (drains the queued inverse)",
     );
 
-    // **A found, not fixed, residual gap (0.56.0-step-3w2d-report.md §<W2d-2>)**: the ruling's own
-    // prescribed "way out" -- `seal`, then `branch switch` again, "materializes through the
-    // verified path" -- does not complete for this exact fixture. `seal` always writes the
-    // worktree-baseline record as matching the new sealed tip (`record_worktree_baseline(...,
-    // Some(block_id), 0, &[])`, unconditionally -- `seal.rs`), which is correct for every ordinary
-    // commit (the worktree's own files are always what got sealed) but not for
-    // `rollback-draft --append-inverse`, whose queued patch never touched the worktree. So
-    // immediately after this `seal`, `compare_worktree_baseline` reads `Current` (recorded and
-    // live block identity trivially agree, both just written by the same `seal`), and the
-    // self-switch no-op early-return (`branch_switch.rs`, pre-existing since W2, unrelated to this
-    // round's own edit) fires *before* reaching the ordinary, verified-anchor materialization path
-    // at all -- it never even asks whether the worktree's actual bytes match. The self-switch
-    // below therefore reports `already_current`, not a resync, and `a.txt` is never removed --
-    // even though `worktree-status`'s own, separate, real-file-content check correctly still flags
-    // it (asserted below). This is reported in full in this round's own report rather than
-    // asserted here as the ruling's own text describes it, because asserting the ruling's claimed
-    // outcome here would be asserting something false.
+    // 0.56.0 step W2e closes the dead end 0.56.0-step-3w2d-report.md's own §2c found (W2d-2's own
+    // "found, not fixed" residual gap): `seal` no longer advances the worktree-baseline record
+    // unconditionally. Here, right before this `seal` drained the queue, the record (still naming
+    // the pre-rollback-draft genesis block, queued_fold empty) disagreed with the fold about to be
+    // sealed (the same genesis block, but with the inverse patch folded on top) -- a `Behind`
+    // comparison, exactly what `worktree-status` already reported above. Because it disagreed,
+    // `seal` left the record untouched rather than claiming the worktree now matched a tip it was
+    // never actually written to match. So, immediately after `seal`, the record still names the
+    // genesis block -- genuinely behind the ref's new, post-seal tip (where `a.txt` is deleted) --
+    // and the self-switch below's own pre-existing no-op early-return (block-identity only) no
+    // longer misreads this as `Current`: it correctly falls through to the ordinary,
+    // verified-anchor materialization path (`replay_for_verified_worktree_write`), which deletes
+    // `a.txt` for real. This is the ruling's own originally-described outcome ("seal, then branch
+    // switch again -- succeeds, and the file the inverse deleted is now actually gone from the
+    // worktree"), which W2d-2's report had to document as not completing; it completes now.
     let after_seal_switch = switch(&repo, "heads/main");
+    ok(
+        &after_seal_switch,
+        "branch switch heads/main, after seal, resyncs for real",
+    );
     assert!(
-        stdout(&after_seal_switch).contains("already") && after_seal_switch.status.success(),
-        "the self-switch no-op (pre-existing, block-identity-only) fires before the ordinary \
-         materialization path is ever reached: {}",
+        !stdout(&after_seal_switch).contains("already"),
+        "this is a real resync, not the block-identity no-op: {}",
         stdout(&after_seal_switch)
     );
     assert!(
-        repo.join("a.txt").exists(),
-        "a.txt is NOT removed by this self-switch -- the discovered gap, not the ruling's own \
-         claimed outcome"
+        !repo.join("a.txt").exists(),
+        "the inverse's own deletion is now actually applied to the worktree"
     );
 
-    // `worktree-status`'s own, independent, real-file-content check still correctly reports the
-    // hazard -- it is the block-identity-only comparison the no-op trusts, not this check, that is
-    // the gap.
+    // `worktree-status` independently confirms clean: the record now matches heads/main's live
+    // (post-seal) tip, which really is what the worktree holds.
     let status_after = worktree_status(&repo);
-    assert_eq!(
-        status_after.status.code(),
-        Some(1),
-        "worktree-status must still report a.txt as untracked against the (deleted) baseline: {}",
-        stdout(&status_after)
-    );
+    ok(&status_after, "worktree-status is clean after the resync");
     assert!(
-        stdout(&status_after).contains("untracked a.txt"),
-        "the real-content check correctly sees what the no-op's identity check misses: {}",
+        stdout(&status_after).contains("clean against baseline"),
+        "the worktree genuinely matches the baseline now, not merely by a stale record's say-so: {}",
         stdout(&status_after)
     );
 

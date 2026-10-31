@@ -362,6 +362,44 @@ pub(crate) enum WorktreeBaselineComparison {
     },
 }
 
+/// Whether the worktree's recorded baseline already matches `ref_name`'s state **as it stands
+/// right now** -- `Current` or `NoRecord` (R1's "treated as matching" rule, the same one every
+/// other caller of `WorktreeBaselineComparison` already applies), never `Behind` (0.56.0 step
+/// W2e). `pub`, not `pub(crate)`: `seal` lives in `prikk-cli`
+/// (`crates/prikk-cli/src/seal.rs`), not this crate, and is the one external caller -- the same
+/// shape [`record_worktree_baseline`] beside it already has.
+///
+/// **Why `seal` needs this, stated once here rather than at each call site.** Before this round,
+/// `seal` wrote the worktree-baseline record unconditionally to match the newly sealed tip,
+/// whether or not the worktree's own files actually reflected what was just sealed. That is
+/// correct for every *ordinary* commit (the worktree's own files are always what `commit`
+/// packaged, since `commit` authors from whatever is on disk), but `rollback-draft
+/// --append-inverse` queues a patch straight onto the active WAL **without ever touching the
+/// worktree** -- so after sealing its queued inverse, an unconditional record write would claim
+/// the worktree now matches a tip it was never actually written to match. The next self-switch
+/// would then read that lie as `Current` (trivially: both the record and the live ref were just
+/// written by the same `seal`) and silently no-op instead of resyncing, even though
+/// `worktree-status` independently still correctly flags the worktree as dirty -- `seal` draining
+/// the queue is not supposed to also assert something about files it never wrote.
+///
+/// `seal` calls this once, before draining the active WAL, passing exactly the WAL it is about to
+/// drain (`active_replay` in `compare_worktree_baseline`'s own sense: the sealed tip `ref_name`
+/// resolves to right now, plus this exact queue folded on top) -- precisely "the fold being
+/// sealed," before any write moves it. Only when this reads `true` does `seal` advance the record
+/// to the new tip, exactly as it always did; otherwise it leaves the record exactly where it was,
+/// so the *next* comparison correctly reads `Behind` against the (now empty, post-seal) active
+/// WAL and resyncs through the ordinary, verified-anchor `branch switch` path.
+pub fn worktree_baseline_matches_fold_being_sealed(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<bool> {
+    Ok(matches!(
+        compare_worktree_baseline(layout, ref_name, active_replay)?,
+        WorktreeBaselineComparison::Current | WorktreeBaselineComparison::NoRecord
+    ))
+}
+
 /// Compare the worktree's recorded baseline against `ref_name`'s live state (R2).
 pub(crate) fn compare_worktree_baseline(
     layout: &RepositoryLayout,

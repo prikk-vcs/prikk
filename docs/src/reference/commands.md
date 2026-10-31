@@ -173,17 +173,26 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   still authors exactly as before, including a genuine deletion, edit, mode change, or rename of
   content this worktree really did hold.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
-  record shows the worktree behind that branch's live tip — either its sealed block, or (0.56.0 step
-  W2c) only its queued, unsealed fold, as `rollback-draft --append-inverse` moves without touching
-  the sealed branch or the worktree — naming the current branch now materializes the branch's
-  current files, fold included, and clears the staleness — the same write-then-publish choreography
-  switching to a different branch already uses — instead of the unconditional no-op RFC 147 §2j gave
-  it. Both directions of `require_clean` (leaving a branch, and this same-branch resync) judge
-  "clean" against the worktree's recorded state when it disagrees with the branch's live one, not
-  against the live tip itself — which is what lets a switch away from a stale branch, and this
-  same-branch resync, both succeed where each used to refuse or no-op. Switching to a *different*
-  branch still materializes only that branch's sealed tip, never its own queued fold, unchanged by
-  this round.
+  record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
+  materializes the branch's current files and clears the staleness — the same write-then-publish
+  choreography switching to a different branch already uses — instead of the unconditional no-op
+  RFC 147 §2j gave it. Both directions of `require_clean` (leaving a branch, and this same-branch
+  resync) judge "clean" against the worktree's recorded state when it disagrees with the branch's
+  live one, not against the live tip itself — which is what lets a switch away from a stale
+  branch, and this same-branch resync, both succeed where each used to refuse or no-op. Switching
+  to a *different* branch still materializes only that branch's sealed tip, never its own queued
+  fold, unchanged by this round.
+  - **A moved, queued, unsealed fold (0.56.0 step W2c) — as `rollback-draft --append-inverse`
+    moves without touching the sealed branch or the worktree — is detected the same way, but a
+    bare same-branch resync never materializes it directly (0.56.0 step W2d-2): doing so would
+    write the sealed portion of the worktree through the lifecycle cache rather than the
+    verified-anchor replay every other switch in this command uses, so it refuses instead, naming
+    `seal` then `branch switch <the current branch>` again. `seal` (0.56.0 step W2e) only advances
+    the worktree's own recorded baseline when it already matched the fold it just sealed, so a
+    fold the worktree was never written to match leaves the record exactly where it was — which is
+    what lets this second switch genuinely resync through the ordinary, verified-anchor path,
+    rather than reading the record's own fresh-but-untrue agreement with the newly sealed tip as
+    "nothing to do."
 - **`worktree-status` reports `behind <ref>`** instead of listing every file a moved ref added as
   `missing`, specifically when the record shows this worktree behind the ref it is reporting on —
   its sealed block, its queued fold, or both — (not when a file was genuinely deleted, which still
