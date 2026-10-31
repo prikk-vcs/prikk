@@ -83,8 +83,8 @@
   repository damage — except a patch whose own path is simply outside this version's own rule (one
   a newer `prikk` may have written), which classifies as `outside-version-rule` — the same id
   `extract --ref` now gives for the identical cause — never as an unsound claim. None of this
-  affects a claim whose own signature is
-  simply unadopted (not forged) rather than invalid — that continues to extract, as it always has.
+  affects a claim whose own signature is simply unadopted (not forged) rather than invalid — that
+  continues to extract, as it always has.
 - **`show` of a pending patch now resolves through a chain of unsealed recognition claims, not only
   one hop.** Before this, a claim whose own declared parent was itself only another pending claim's
   prospective block — never sealed or received — read as an unrealized chain and stayed unresolved,
