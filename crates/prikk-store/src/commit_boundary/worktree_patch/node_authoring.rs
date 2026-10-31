@@ -244,11 +244,14 @@ struct BaselineFile {
     mode: u32,
 }
 
+/// A baseline's own split, as [`split_baseline`] produces it: files by path, symlinks by path.
+/// Named (0.56.0 step W2b, `clippy::type_complexity`) because it is now also threaded through
+/// [`path_is_stale`]'s own signature, not only held locally.
+type BaselineSplit = (BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>);
+
 /// A baseline's live nodes as authoring sees them: files by path, and symlink nodes by path (tracked so a change
 /// touching one can fail closed). **The one split** `commit` and `prikk diff`'s worktree read both use.
-fn split_baseline(
-    state: &NodeLifecycleState,
-) -> (BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>) {
+fn split_baseline(state: &NodeLifecycleState) -> BaselineSplit {
     let mut files: BTreeMap<String, BaselineFile> = BTreeMap::new();
     let mut symlinks: BTreeMap<String, NodeId> = BTreeMap::new();
     for (node_id, node) in state.live_nodes() {
@@ -340,7 +343,7 @@ impl BaselinePathState {
 /// was never shown.
 fn path_is_stale(
     path: &str,
-    recorded: Option<&(BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>)>,
+    recorded: Option<&BaselineSplit>,
     live_files: &BTreeMap<String, BaselineFile>,
     live_symlinks: &BTreeMap<String, NodeId>,
     require_concrete_record: bool,
@@ -644,27 +647,26 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // never stale, so this round behaves exactly as before W2 for a repository with no record).
     let recorded_identity =
         crate::worktree_baseline::read_worktree_baseline(layout).map_err(AuthorError::Store)?;
-    let recorded_baseline: Option<(BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>)> =
-        match &recorded_identity {
-            None => None,
-            Some(recorded) => {
-                // A fresh, throwaway cache -- never `queue_text_cache`, which `plan_edit_text` below
-                // reuses for the *target* ref's own folding; sharing it here would let a node that
-                // exists in both the recorded and the target state, with different text, poison the
-                // other's cached materialization.
-                let mut recorded_text_cache = crate::lifecycle_cache::replay::TextCache::new();
-                let recorded_state = crate::patch_replay::resolve_state_at_recorded_baseline(
-                    layout,
-                    &object_store,
-                    recorded.baseline,
-                    recorded.wal_sequence,
-                    &active_replay,
-                    &mut recorded_text_cache,
-                )
-                .map_err(AuthorError::Store)?;
-                Some(split_baseline(&recorded_state.state))
-            }
-        };
+    let recorded_baseline: Option<BaselineSplit> = match &recorded_identity {
+        None => None,
+        Some(recorded) => {
+            // A fresh, throwaway cache -- never `queue_text_cache`, which `plan_edit_text` below
+            // reuses for the *target* ref's own folding; sharing it here would let a node that
+            // exists in both the recorded and the target state, with different text, poison the
+            // other's cached materialization.
+            let mut recorded_text_cache = crate::lifecycle_cache::replay::TextCache::new();
+            let recorded_state = crate::patch_replay::resolve_state_at_recorded_baseline(
+                layout,
+                &object_store,
+                recorded.baseline,
+                recorded.wal_sequence,
+                &active_replay,
+                &mut recorded_text_cache,
+            )
+            .map_err(AuthorError::Store)?;
+            Some(split_baseline(&recorded_state.state))
+        }
+    };
     // 0.56.0 step W2b: whether the record genuinely names *this* `canonical_ref` -- found
     // necessary only by running the full suite (not anticipated by the ruling's own text), gating
     // every per-path site below that is not the deletion loop (see `path_is_stale`'s own doc for
