@@ -322,25 +322,55 @@ impl BaselinePathState {
 /// ruling's own "unless the worktree already holds the live state for it," characterized once,
 /// mechanically, rather than re-derived at each call site.
 ///
-/// **`require_concrete_record` is the one asymmetry this round's own measurement (not the brief)
-/// found necessary**, re-running the full suite rather than assuming the five hazard cases were
-/// the whole story: a *symmetric* `!=` everywhere broke `dc67_ordinary_use_conformance::sequence_
-/// 06_branch_commit_both_close_one_keep_committing_other`, an ordinary pre-existing test that
-/// alternates `commit`s between two sibling branches (`heads/main`/`heads/topic`) from one
-/// physical worktree, editing `main.txt` on `heads/main` right after a commit onto `heads/topic`
-/// moved the record there. `heads/topic`'s own history never mentions `main.txt` at all (`Absent`
-/// in the recorded split), so a plain `!=` against `main.txt`'s real, concrete live entry on
-/// `heads/main` read as "stale" -- not because any producer silently changed anything, but merely
-/// because the record's one slot currently names an unrelated, disjoint-history ref. **A recorded
-/// baseline that is silent about a path can never contradict that path's live state** -- there is
-/// no claim to contradict -- so `require_concrete_record: true` (every site but the deletion loop)
-/// returns `false` outright when the record has no entry for `path` at all, letting the ordinary
-/// multi-ref authoring idiom (W2's own deviation #4) through untouched. The deletion loop alone
-/// keeps `require_concrete_record: false`, the original, *symmetric* comparison: there, a
-/// recorded baseline silent about a path the worktree is missing **is** exactly the hazard (W2's
-/// own five cases, and this round's case 2 and case 5) -- the one direction where "no claim" must
-/// still refuse, because nothing else explains the live tip having gained content this worktree
-/// was never shown.
+/// **`require_concrete_record` is the one asymmetry W2b's own measurement found necessary, and
+/// 0.56.0 step W2c re-checked it empirically against the corrected, ref-gate-free rule rather
+/// than assuming the ref gate's removal made it moot.** W2c's own ruling asked exactly this
+/// question: with `recorded_names_canonical_ref` gone (see the call sites below -- staleness is
+/// now judged in states, never in which ref the record names), does `dc67_ordinary_use_
+/// conformance::sequence_06_branch_commit_both_close_one_keep_committing_other` still need the
+/// asymmetry, or does the corrected rule make the record's "silence" about a path never arise?
+/// **Measured, not assumed: removing this parameter entirely (making every site, including the
+/// deletion loop, use a plain symmetric `!=`) was tried and makes `sequence_06` fail**, refusing
+/// `commit --ref heads/main`'s own round-2 `main.txt` edit with "the worktree holds content for
+/// main.txt, but it does not match heads/main's current state" -- even though `main.txt` was
+/// never touched by anything other than `heads/main`'s own prior, legitimate commits. The cause
+/// is unchanged by the ref-gate's removal: alternating `commit`s between `heads/main` and
+/// `heads/topic` from one physical worktree leaves the record naming whichever ref committed
+/// last, and `heads/topic`'s own history never mentions `main.txt` at all (`Absent` in the
+/// recorded split) -- a plain `!=` against `main.txt`'s real, concrete live entry on `heads/main`
+/// reads as "stale," not because any producer silently moved anything, but merely because the
+/// record's one slot currently describes a disjoint-history ref that was simply never asked
+/// about this path. **A recorded baseline that is silent about a path can never contradict that
+/// path's live state** -- there is no claim to contradict -- so `require_concrete_record: true`
+/// (every site but the deletion loop) returns `false` outright when the record has no entry for
+/// `path` at all, letting the ordinary multi-ref authoring idiom (W2's own deviation #4) through
+/// untouched; this is the ruling's own "case where the symmetric rule refuses something that is
+/// not a hazard," demonstrated by running the suite, not argued from the shape of the rule. The
+/// deletion loop alone keeps `require_concrete_record: false`, the original, *symmetric*
+/// comparison: there, a recorded baseline silent about a path the worktree is missing **is**
+/// exactly the hazard (W2's own five cases, and W2b's case 2 and case 5) -- the one direction
+/// where "no claim" must still refuse, because nothing else explains the live tip having gained
+/// content this worktree was never shown. Kept, not removed; see
+/// `.git-exclude/review-request/0.56.0-step-3w2c-report.md` for the full empirical record.
+///
+/// **0.56.0 step W2c re-derivation:** this refinement no longer coexists with a ref-name gate
+/// (W2b's `recorded_names_canonical_ref`, removed this round) -- it stands alone now, and was
+/// re-verified empirically, not assumed, to still be necessary on its own: flipping
+/// `require_concrete_record` to `false` at every non-deletion site (a fully symmetric rule
+/// everywhere) and re-running `dc67_ordinary_use_conformance::sequence_06_branch_commit_both_
+/// close_one_keep_committing_other` reproduces the exact same failure the original W2b round
+/// measured -- `main.txt`'s own, legitimate next edit onto `heads/main`, committed right after a
+/// commit onto `heads/topic` moved the record there, refuses with "the worktree holds content
+/// for, but it does not match heads/main's current state... main.txt", even though no producer
+/// touched anything. Removing the ref-name gate does not retire this hazard: the gate answered a
+/// *different* question ("does the record's claim even apply to this ref") than this refinement
+/// answers ("is a recorded *absence* a claim at all"), and a record can be silent about a path
+/// for an entirely mundane reason -- it currently names a sibling ref whose own history simply
+/// never mentions that path -- independent of whether that sibling's *concrete* entries (if any)
+/// for other paths are still compared in full (which, after W2c, they now always are). So
+/// `require_concrete_record` is sufficient and correct standing alone: it is the one place "the
+/// record has nothing to say about this path" is distinguished from "the record says something
+/// that disagrees," and only the latter is ever evidence of staleness for a would-author site.
 fn path_is_stale(
     path: &str,
     recorded: Option<&BaselineSplit>,
@@ -645,6 +675,16 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // nothing is lost because topic's own baseline at that point has nothing stale for this
     // worktree. `None` when there is no record (R1's own migration-safety rule: every path is then
     // never stale, so this round behaves exactly as before W2 for a repository with no record).
+    //
+    // 0.56.0 step W2c: W2b's own further refinement, gating `path_is_stale` on whether the record
+    // happened to name `canonical_ref` by name (`recorded_names_canonical_ref`), is removed. It
+    // reopened the hazard for an edit: `commit --ref heads/feature` from a worktree recorded
+    // against `heads/main`, where `heads/feature` itself diverged on a path this worktree still
+    // holds the pre-divergence bytes for, silently reverted `heads/feature`'s own sealed change,
+    // because the gate switched the whole check off whenever the record named a different ref.
+    // The rule is stated in states, never in ref names, and is enforced unconditionally below --
+    // the legitimate multi-ref idiom above survives only on the paths where the record and the
+    // live state actually agree, never merely because the record names a different ref.
     let recorded_identity =
         crate::worktree_baseline::read_worktree_baseline(layout).map_err(AuthorError::Store)?;
     let recorded_baseline: Option<BaselineSplit> = match &recorded_identity {
@@ -667,21 +707,6 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             Some(split_baseline(&recorded_state.state))
         }
     };
-    // 0.56.0 step W2b: whether the record genuinely names *this* `canonical_ref` -- found
-    // necessary only by running the full suite (not anticipated by the ruling's own text), gating
-    // every per-path site below that is not the deletion loop (see `path_is_stale`'s own doc for
-    // the real test, `dc67_ordinary_use_conformance::sequence_06_...`, and `dc74_merge_execution`'s
-    // four divergent-edit tests, that proved a content/mode/node comparison against a *different*
-    // ref's own recorded history is meaningless noise, not a staleness signal, for an edit, mode
-    // change, create, or rename: two sibling branches' own histories legitimately disagree about a
-    // shared path's content the moment either one diverges, and that disagreement is not a
-    // producer silently moving `canonical_ref` out from under this worktree. The deletion loop
-    // alone stays cross-ref-tolerant (case 4's own requirement -- `commit --ref heads/feature`
-    // must still refuse outright even though the record names `heads/main`).
-    let recorded_names_canonical_ref = recorded_identity
-        .as_ref()
-        .is_some_and(|recorded| recorded.ref_name == canonical_ref);
-
     let baseline_state: NodeLifecycleState = resolved.state;
 
     // Baseline file view: path -> (node_id, kind, blob_id, mode). Symlink nodes are tracked so a
@@ -817,19 +842,24 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             // destination check above already refused that case).
             continue;
         }
-        // 0.56.0 step W2b: computed once per path, consulted only from inside a branch that has
+        // 0.56.0 step W2c: computed once per path, consulted only from inside a branch that has
         // already decided something would be authored for `path` -- never unconditionally.
-        // Gated on `recorded_names_canonical_ref` (see that binding's own doc): an edit, mode
-        // change, or create can only be stale against a record that genuinely describes *this*
-        // ref's own history.
-        let is_stale = recorded_names_canonical_ref
-            && path_is_stale(
-                path,
-                recorded_baseline.as_ref(),
-                &baseline_files,
-                &baseline_symlinks,
-                true,
-            );
+        // **No longer gated on which ref the record names** (W2b's own `recorded_names_canonical_
+        // ref` removed): the rule is stated in states, never in ref names -- for every path where
+        // the record disagrees with `canonical_ref`'s own live state, the worktree must already
+        // hold that live state, or the commit refuses, *regardless* of which ref the record
+        // itself names. The legitimate multi-ref idiom (committing onto a sibling while the
+        // record still names another ref) survives only on the paths where the record and the
+        // live state actually agree -- shared, undiverged history -- not, as W2b had it, on every
+        // path merely because the record names a different ref. See `path_is_stale`'s own doc for
+        // the measured hazard this closes (a cross-ref edit reverting a diverged change).
+        let is_stale = path_is_stale(
+            path,
+            recorded_baseline.as_ref(),
+            &baseline_files,
+            &baseline_symlinks,
+            true,
+        );
         if let Some(base) = baseline_files.get(path) {
             // Existing node: kind is authoritative (E4); compare in that kind, never reclassify.
             match base.kind {
@@ -979,17 +1009,16 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // exempt it from the deletion loop below, as W2's own version did unconditionally) is what
         // keeps a stale rename from bypassing the check by being claimed early as "not a plain
         // deletion." Skips the whole triplet (RenamePath, and any simultaneous content/mode change
-        // on the same node) for this pair -- one node, one staleness verdict. Gated on
-        // `recorded_names_canonical_ref`, same reason as the main loop above.
-        if recorded_names_canonical_ref
-            && path_is_stale(
-                old_path,
-                recorded_baseline.as_ref(),
-                &baseline_files,
-                &baseline_symlinks,
-                true,
-            )
-        {
+        // on the same node) for this pair -- one node, one staleness verdict.
+        // 0.56.0 step W2c: no longer gated on which ref the record names, same reason as the main
+        // loop above.
+        if path_is_stale(
+            old_path,
+            recorded_baseline.as_ref(),
+            &baseline_files,
+            &baseline_symlinks,
+            true,
+        ) {
             stale_paths.insert(old_path.clone(), StalePathReason::PresentButStale);
             continue;
         }

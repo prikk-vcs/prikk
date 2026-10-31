@@ -272,9 +272,12 @@ fn an_inline_test_module_is_not_production() {
         // per-path checks threaded into the create/edit/mode-change/rename sites, and the
         // generalized refusal message), 1621 -> 1831, then a named `BaselineSplit` type alias for
         // `clippy::type_complexity` (the gate's own clippy run, not anticipated by the ruling),
-        // 1831 -> 1833.
+        // 1831 -> 1833. 0.56.0 step W2c: the ref-name gate (`recorded_names_canonical_ref`) is
+        // removed -- staleness is judged in states only, never in which ref the record names --
+        // and `path_is_stale`'s own doc comment is re-derived to state, with the empirical
+        // evidence, why `require_concrete_record` is kept rather than removed, 1833 -> 1862.
         physical,
-        1833,
+        1862,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -284,7 +287,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1784);
+    assert_eq!(counted.production_lines, 1813);
     assert_eq!(
         physical - counted.production_lines,
         49,

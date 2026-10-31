@@ -63,6 +63,17 @@ fn two_author_patch(tag: &str, corrupt_second: bool) -> (PathBuf, ObjectId) {
         .unwrap();
     support::ok(&support::seal(&repo, "heads/main"), "seal a");
 
+    // 0.56.0 step W2c: alternating commits between two refs (`heads/main`, then `heads/elsewhere`)
+    // from one physical worktree requires removing the other ref's own file first -- the same
+    // idiom `dc67_ordinary_use_conformance::sequence_06` already documents as how an ordinary
+    // multi-ref workflow is driven today, not a workaround for a defect. Without this, the
+    // worktree's record (still naming `heads/main`, concrete for `a.txt`) disagrees with
+    // `heads/elsewhere`'s own live state (unborn, no `a.txt` at all) on a path the worktree still
+    // physically holds, which `commit`'s generalized staleness guard (W2b/W2c) now correctly
+    // refuses: this test's own point is the second author's signature on `b.txt`, never `a.txt`
+    // under `heads/elsewhere`.
+    std::fs::remove_file(repo.join("a.txt")).unwrap();
+
     std::fs::write(repo.join("b.txt"), b"beta\n").unwrap();
     support::ok(
         &support::prikk(&repo)

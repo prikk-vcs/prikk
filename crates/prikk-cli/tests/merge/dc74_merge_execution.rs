@@ -73,6 +73,20 @@ fn set_mode(path: &std::path::Path, mode: u32) {
     std::fs::set_permissions(path, perms).unwrap();
 }
 
+/// 0.56.0 step W2c: `branch switch` exists (RFC 151), so a sibling branch's own divergent staging
+/// is done by actually switching to it first, the way a user must -- never by hand-resetting the
+/// shared worktree to simulate what a real switch would materialize. Same idiom as
+/// `dc75_merge_two_edits.rs::switch`.
+fn switch(repo: &std::path::Path, target: &str) {
+    ok(
+        &prikk(repo)
+            .args(["branch", "switch", target])
+            .output()
+            .unwrap(),
+        &format!("branch switch {target}"),
+    );
+}
+
 #[test]
 fn merge_adopts_patches_byte_identical_and_rebuilds_byte_exact() {
     let repo = unique_repo("dc74-adoption-and-rebuild");
@@ -172,8 +186,13 @@ fn merge_refuses_same_path_create_conflict_with_no_partial_state() {
         "commit main",
     );
     ok(&seal(&repo, "heads/main"), "seal main");
-    std::fs::remove_file(repo.join("conflict.txt")).unwrap();
 
+    // 0.56.0 step W2c: a real `branch switch` to topic, not a hand `rm` of main's own
+    // `conflict.txt`, before staging topic's own independent creation of it -- the worktree must
+    // genuinely be on `heads/topic` (whose own history never saw `conflict.txt` at all) before the
+    // write below, the way a user must, for the staged divergence to be the hazard under test
+    // rather than a worktree the commit guard correctly refuses as stale against `heads/main`.
+    switch(&repo, "heads/topic");
     std::fs::write(repo.join("conflict.txt"), b"topic version").unwrap();
     ok(
         &commit(&repo, "heads/topic", "topic writes conflict.txt"),
@@ -260,6 +279,10 @@ fn merge_refuses_replace_binary_conflict() {
         "commit main",
     );
     ok(&seal(&repo, "heads/main"), "seal main");
+    // 0.56.0 step W2c: a real `branch switch` to topic before staging topic's own independent
+    // replace -- the worktree must actually be on `heads/topic` (whose own `bin.dat` is still the
+    // genesis bytes) before the write below, the way a user must.
+    switch(&repo, "heads/topic");
 
     std::fs::write(repo.join("bin.dat"), [0xcc, 0xdd, 0xee]).unwrap();
     ok(
@@ -299,9 +322,11 @@ fn merge_refuses_change_perm_conflict() {
         "commit main",
     );
     ok(&seal(&repo, "heads/main"), "seal main");
-    // No branch-switch command exists; reset the shared worktree to the baseline mode before
-    // simulating topic's own independent chmod.
-    set_mode(&repo.join("a.txt"), 0o644);
+    // 0.56.0 step W2c: a real `branch switch` to topic before staging topic's own independent
+    // chmod -- the worktree must actually be on `heads/topic` (whose own `a.txt` is still mode
+    // 0o644, the genesis mode) before the `set_mode` below, the way a user must. This also lands
+    // the worktree back at 0o644 for free, replacing the old hand-reset.
+    switch(&repo, "heads/topic");
 
     set_mode(&repo.join("a.txt"), 0o755);
     ok(
@@ -342,6 +367,10 @@ fn merge_refuses_overlapping_text_edit_divergence() {
         "commit main",
     );
     ok(&seal(&repo, "heads/main"), "seal main");
+    // 0.56.0 step W2c: a real `branch switch` to topic before staging topic's own independent
+    // edit -- the worktree must actually be on `heads/topic` (whose own `a.txt` is still the
+    // genesis text) before the write below, the way a user must.
+    switch(&repo, "heads/topic");
 
     std::fs::write(repo.join("a.txt"), b"alpha beta2 gamma\n").unwrap();
     ok(
