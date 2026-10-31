@@ -69,6 +69,21 @@ fn rollback_draft_verify_prefix_changes_to_precondition() {
         .unwrap();
     support::ok(&draft, "rollback-draft onto an empty active WAL");
 
+    // 0.56.0 step W2b: the draft's own inverse is `delete-file genesis.txt` (the only operation
+    // `genesis`'s one commit has to invert) -- queued on the active WAL, not yet sealed, and never
+    // written to the worktree (`rollback-draft` only appends a patch; the note in its own report
+    // says so: "rollback refs, audit policy, and worktree writes remain later PRs"). The worktree
+    // still physically holds `genesis.txt` at this point, which `worktree-status` already reported
+    // as "changed against baseline" (untracked) even before this round. Removing it here brings
+    // the worktree's own physical state in line with what the draft already queues, exactly as a
+    // caller who read that status would do by hand -- not a workaround for this round's own guard:
+    // without it, this setup step's own `write_and_commit` would (correctly, as of W2b) refuse,
+    // because authoring it would silently re-create `genesis.txt` as a brand-new node, undoing the
+    // draft's own queued deletion the moment an unrelated file is committed alongside it. This test
+    // is about `rollback-draft-verify`'s own refusal wording, not this interaction, so the setup is
+    // adjusted to not exercise it.
+    std::fs::remove_file(repo.join("genesis.txt")).unwrap();
+
     // Queue a second record alongside the rollback draft -- the active WAL is no longer *only*
     // the draft.
     write_and_commit(
