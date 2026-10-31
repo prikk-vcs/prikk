@@ -107,35 +107,46 @@
   empty, absolute, too-long, or otherwise ill-formed path is unaffected and still reads
   `damaged-repository`: only the genuinely version-relative cause (today: non-ASCII) moved.
 - **`commit` now refuses to author over a path that is stale against this worktree's own recorded
-  baseline, instead of silently signing a lie about it.** Before this, each per-path authoring
-  decision only ever compared the worktree against the ref's own *current* state — so a producer
-  that moved the ref forward without ever writing the worktree (`merge --into`, `archive import
-  --adopt`, `sync seal --claim`, `branch create --from` onto the unborn current branch) or a
-  `commit --ref <other>` targeting a branch this worktree had never synced to, left the next
-  ordinary commit reading the gap as whatever shape it happened to take: a path "missing from the
-  worktree" was authored as a deletion, even when the worktree had simply never received it; a
-  path whose content, mode, or node the producer had actually changed was authored as an ordinary
-  edit, mode change, or rename, silently reverting the producer's own change (or, if the worktree's
-  bytes had since diverged a third way, recording a conflict as if it were ordinary). `commit` now
+  baseline, instead of silently signing a lie about it — whether or not the record names the ref
+  being committed onto.** Before this, each per-path authoring decision only ever compared the
+  worktree against the ref's own *current* state — so a producer that moved the ref forward
+  without ever writing the worktree (`merge --into`, `archive import --adopt`, `sync seal --claim`,
+  `branch create --from` onto the unborn current branch) or a `commit --ref <other>` targeting a
+  branch this worktree had never synced to, left the next ordinary commit reading the gap as
+  whatever shape it happened to take: a path "missing from the worktree" was authored as a
+  deletion, even when the worktree had simply never received it; a path whose content, mode, or
+  node the producer had actually changed was authored as an ordinary edit, mode change, or rename,
+  silently reverting the producer's own change (or, if the worktree's bytes had since diverged a
+  third way, recording a conflict as if it were ordinary) — and this last shape stayed possible
+  even after an earlier correction of this same point, for a `commit --ref <other>` specifically,
+  because that correction stopped checking a path at all once the record named a different ref,
+  rather than checking the path's own state regardless of which ref the record names. `commit` now
   remembers, per path, what this worktree was last actually written from, and refuses before
   authoring anything for a path whose live and recorded states disagree — in content, mode, kind,
   presence, or the node it belongs to — naming every such path and the command that resyncs
   (`prikk branch switch <the current branch>`). A path that is not stale, or a worktree that
   already holds the live state for a stale one, is authored exactly as before; a genuine deletion,
   edit, mode change, or rename of content this worktree really did hold still authors normally.
+  Committing onto a different ref than the one the worktree's record names is still ordinary and
+  unrefused on every path where the record and that ref's live state genuinely agree (shared,
+  undiverged history) — only a path where they disagree is ever in question, never the ref name
+  itself.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and
   switching away and back did not help either, since leaving was itself refused against the
   branch's own moved tip. Naming the current branch now resyncs when the worktree's own recorded
-  state disagrees with what the branch currently resolves to: it materializes the branch's current
-  files and clears the staleness, the same way switching to a different branch always has. It
-  remains the documented no-op whenever the worktree's record is already current.
+  state disagrees with what the branch currently resolves to, including when only the branch's own
+  *queued, unsealed* fold moved (for example `rollback-draft --append-inverse`, which never touches
+  the sealed branch or the worktree): it materializes the branch's current files, fold included,
+  and clears the staleness, the same way switching to a different branch always has. It remains the
+  documented no-op whenever the worktree's record is already current.
 - **`worktree-status` reports "behind `<ref>`" instead of listing every file a moved ref added as
   `missing`**, when the worktree's own record shows it has fallen behind that ref — the same
-  staleness `commit`'s new refusal above detects. A file the user genuinely deleted is unaffected
-  and still reports as `missing`; `--format json` carries the same fact as a new, additive
-  `"behind_ref"` field, `null` when the worktree is current.
+  staleness `commit`'s new refusal above detects, including a ref whose sealed tip has not moved
+  but whose queued fold has. A file the user genuinely deleted is unaffected and still reports as
+  `missing`; `--format json` carries the same fact as a new, additive `"behind_ref"` field, `null`
+  when the worktree is current.
 
 ### Added
 

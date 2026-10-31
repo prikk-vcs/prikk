@@ -144,40 +144,51 @@ repository at open. See [Release Compatibility](release-compatibility.md).
 **The worktree's recorded baseline (0.56.0, R1/R2).** `setup`/`init`, `branch switch`, both
 `checkout --patch-materialize`/`--snapshot-materialize` writers, `commit` and `seal` each record
 what this worktree was last made to match: a ref's sealed tip block (or none, for an unborn ref)
-plus how many of the active WAL's queued patches are folded on top. This is worktree-local
-operational state, like the unclean-shutdown marker beside it — never part of any versioned object,
-and `verify`/`doctor` do not look at it.
+plus a content identity over whichever of the active WAL's queued patches are folded on top, in
+their own order — not a bare count, so a `doctor` repair that removes one specific queued patch is
+told apart from an identical commit retried after a crash. This is worktree-local operational
+state, like the unclean-shutdown marker beside it — never part of any versioned object, and
+`verify`/`doctor` do not look at it.
 - **`commit` (and `commit --ref <x>`) refuses to author over a path that is stale against this
   worktree's own record — content, mode, kind, presence, or the node it belongs to — unless the
-  worktree already holds the live state for it** — `precondition not met: refusing to commit: <ref>
-  is now at <state>, and this worktree was last written from <state>; ...; run `prikk branch switch
-  <the current branch>` ... then commit again`, before authoring anything, naming every such path.
-  A path missing from the worktree that the record also never explains reads "not in this worktree,
-  and never were" (the deletion-shaped case: `merge --into`, `archive import --adopt`, `sync seal
+  worktree already holds the live state for it, and this holds in exactly the same way whichever
+  ref the record itself names.** `precondition not met: refusing to commit: <ref> is now at <state>,
+  and this worktree was last written from <state>; ...; run `prikk branch switch <the current
+  branch>` ... then commit again`, before authoring anything, naming every such path. A path
+  missing from the worktree that the record also never explains reads "not in this worktree, and
+  never were" (the deletion-shaped case: `merge --into`, `archive import --adopt`, `sync seal
   --claim`, `branch create --from` onto the unborn current branch, or `commit --ref <other>` from a
   worktree recorded against a different branch, each moved the ref without the worktree's
   knowledge). A path the worktree still physically holds, but whose content, mode, or node disagrees
   between the record and the ref's current state, reads as the worktree holding content that does
   not match the ref's current state — because authoring it now would either revert whatever moved
   the ref underneath this worktree, or record a conflict (the worktree holding a third state) as an
-  ordinary edit. Either way the commit refuses rather than guess. A path that is not stale, or one
-  the worktree already matches the live state for, still authors exactly as before — including the
-  ordinary multi-ref idiom of committing onto a sibling branch from a worktree recorded against a
-  different one, and a genuine deletion, edit, mode change, or rename of content this worktree
-  really did hold.
+  ordinary edit. Either way the commit refuses rather than guess. Staleness is judged per path, in
+  states, never by comparing ref names: committing onto a ref other than the one the record names is
+  ordinary and unrefused on every path where the record and that ref's live state genuinely agree
+  (shared, undiverged history), the same as committing onto the ref the record does name — but a
+  path where they genuinely disagree refuses exactly the same way regardless of which ref the record
+  happens to name, including an edit that would otherwise silently revert a sibling branch's own
+  diverged change. A path that is not stale, or one the worktree already matches the live state for,
+  still authors exactly as before, including a genuine deletion, edit, mode change, or rename of
+  content this worktree really did hold.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
-  record shows the worktree behind that branch's live tip, naming the current branch now
-  materializes the branch's current files and clears the staleness — the same write-then-publish
-  choreography switching to a different branch already uses — instead of the unconditional no-op
-  RFC 147 §2j gave it. Both directions of `require_clean` (leaving a branch, and this same-branch
-  resync) judge "clean" against the worktree's recorded state when it disagrees with the branch's
-  live one, not against the live tip itself — which is what lets a switch away from a stale branch,
-  and this same-branch resync, both succeed where each used to refuse or no-op.
+  record shows the worktree behind that branch's live tip — either its sealed block, or (0.56.0 step
+  W2c) only its queued, unsealed fold, as `rollback-draft --append-inverse` moves without touching
+  the sealed branch or the worktree — naming the current branch now materializes the branch's
+  current files, fold included, and clears the staleness — the same write-then-publish choreography
+  switching to a different branch already uses — instead of the unconditional no-op RFC 147 §2j gave
+  it. Both directions of `require_clean` (leaving a branch, and this same-branch resync) judge
+  "clean" against the worktree's recorded state when it disagrees with the branch's live one, not
+  against the live tip itself — which is what lets a switch away from a stale branch, and this
+  same-branch resync, both succeed where each used to refuse or no-op. Switching to a *different*
+  branch still materializes only that branch's sealed tip, never its own queued fold, unchanged by
+  this round.
 - **`worktree-status` reports `behind <ref>`** instead of listing every file a moved ref added as
-  `missing`, specifically when the record shows this worktree behind the ref it is reporting on (not
-  when a file was genuinely deleted, which still reports as `missing`). `--format json` carries this
-  as an additive `"behind_ref"` field beside `"queued_elsewhere"`, `null` when the worktree is
-  current or no record exists.
+  `missing`, specifically when the record shows this worktree behind the ref it is reporting on —
+  its sealed block, its queued fold, or both — (not when a file was genuinely deleted, which still
+  reports as `missing`). `--format json` carries this as an additive `"behind_ref"` field beside
+  `"queued_elsewhere"`, `null` when the worktree is current or no record exists.
 
 **`bundle import` and `bundle preview` classify a delivery against the pointer it would replace,
 in six classes:** `no-local-history` (nothing to compare against), `already-at-tip` (identical to

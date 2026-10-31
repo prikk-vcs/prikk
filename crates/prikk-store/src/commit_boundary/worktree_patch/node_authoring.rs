@@ -1369,15 +1369,24 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         clear_rename_declarations(layout).map_err(AuthorError::Store)?;
     }
 
-    // 0.56.0 step W2 (R1): the worktree is now "the queued fold" at this new sequence -- the sealed
-    // baseline this commit authored against (`lineage_baseline_block_id`, unchanged by `commit`
-    // itself) with the active WAL folded up to the sequence this append just returned. Costs no
-    // replay: this is exactly what this call already knows, the moment it knows it.
+    // 0.56.0 step W2 (R1), amended step W2c: the worktree is now "the queued fold" at this new
+    // sequence -- the sealed baseline this commit authored against (`lineage_baseline_block_id`,
+    // unchanged by `commit` itself) with the active WAL folded up to the sequence this append just
+    // returned, identified by content (every patch id this ref's queue now holds, in order: the
+    // queue as it stood before this append, plus the patch this call just appended -- costs no
+    // extra replay, `active_replay.records` is already in scope and `patch_id` is already known).
+    let queued_patch_ids: Vec<ObjectId> = active_replay
+        .records
+        .iter()
+        .map(|record| record.envelope.object_id())
+        .chain(std::iter::once(patch_id))
+        .collect();
     crate::worktree_baseline::record_worktree_baseline(
         layout,
         &canonical_ref,
         lineage_baseline_block_id,
         wal_sequence,
+        &queued_patch_ids,
     )
     .map_err(AuthorError::Store)?;
 

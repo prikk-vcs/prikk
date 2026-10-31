@@ -139,7 +139,7 @@ pub(crate) fn simulate_one_seal(
     // every one of this crate's own tests that seals through this simulation, then commits again,
     // needs the record current exactly as a real `prikk seal` leaves it, or R2's guard (correctly)
     // reads it as stale.
-    crate::worktree_baseline::record_worktree_baseline(layout, ref_name, Some(block_id), 0)?;
+    crate::worktree_baseline::record_worktree_baseline(layout, ref_name, Some(block_id), 0, &[])?;
     Ok(published)
 }
 

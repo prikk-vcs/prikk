@@ -221,14 +221,28 @@ pub(crate) fn worktree_status_over_sound_replay(
     // (measured: enough extra object/pointer-index reading to trip `store_size_independence`'s
     // ref-count ceiling for this call).
     let canonical_ref = validate_local_branch_ref(ref_name)?;
+    // 0.56.0 step W2c: `queued_fold` mirrors `wal_sequence`'s own "owned by this ref, or nothing
+    // queued at all" condition -- `resolved.queued_on_other_ref` already answers exactly that
+    // (there is only one active WAL; when it is not owned by some other ref, every record in
+    // `active_replay` belongs to `ref_name` itself, empty or not).
+    let (wal_sequence, queued_fold) = if resolved.queued_on_other_ref.is_some() {
+        (0, crate::worktree_baseline::empty_queued_fold_digest())
+    } else {
+        let ids: Vec<ObjectId> = active_replay
+            .records
+            .iter()
+            .map(|record| record.envelope.object_id())
+            .collect();
+        (
+            active_replay.records.last().map_or(0, |record| record.seq),
+            crate::worktree_baseline::queued_fold_digest(&ids),
+        )
+    };
     let live = crate::worktree_baseline::WorktreeBaselineIdentity {
         ref_name: canonical_ref,
         baseline: resolved.lineage.map(|(block, _)| block),
-        wal_sequence: if resolved.queued_on_other_ref.is_some() {
-            0
-        } else {
-            active_replay.records.last().map_or(0, |record| record.seq)
-        },
+        wal_sequence,
+        queued_fold,
     };
     let mut report = worktree_status_from_resolved(layout, ref_name, resolved)?;
     if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =

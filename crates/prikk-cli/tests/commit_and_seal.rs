@@ -37,5 +37,7 @@ mod step3e_t2_non_ascii_authoring;
 mod step3w2_worktree_baseline;
 #[path = "commit_and_seal/step3w2b_stale_authoring.rs"]
 mod step3w2b_stale_authoring;
+#[path = "commit_and_seal/step3w2c_cross_ref_and_fold_resync.rs"]
+mod step3w2c_cross_ref_and_fold_resync;
 #[path = "support/mod.rs"]
 mod support;

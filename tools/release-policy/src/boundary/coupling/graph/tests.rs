@@ -169,7 +169,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 0.56.0 step W2 added `worktree_baseline` (R1/R2's recorded-baseline record) and
     // `patch_replay::recorded_baseline` (split out for `size-check`, same reason as A6 above):
     // 170 -> 172.
-    assert_eq!(modules.len(), 172, "modules: {modules:?}");
+    // 0.56.0 step W2c added `patch_replay::folded_materialize` (the self-switch resync's own
+    // whole-manifest materializer, split out for the identical `size-check` reason): 172 -> 173.
+    assert_eq!(modules.len(), 173, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

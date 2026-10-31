@@ -275,9 +275,11 @@ fn an_inline_test_module_is_not_production() {
         // 1831 -> 1833. 0.56.0 step W2c: the ref-name gate (`recorded_names_canonical_ref`) is
         // removed -- staleness is judged in states only, never in which ref the record names --
         // and `path_is_stale`'s own doc comment is re-derived to state, with the empirical
-        // evidence, why `require_concrete_record` is kept rather than removed, 1833 -> 1862.
+        // evidence, why `require_concrete_record` is kept rather than removed, 1833 -> 1862, then
+        // `commit`'s own worktree-baseline write site threads the ordered queued patch ids (the
+        // record's new content identity) through, 1862 -> 1871.
         physical,
-        1862,
+        1871,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -287,7 +289,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1813);
+    assert_eq!(counted.production_lines, 1822);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -366,7 +368,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // tests` at the end, `cfg(test)`-invisible, not a separate file) and `patch_replay/recorded_
     // baseline.rs` (split out of `patch_replay.rs`, over the size-check limit, same reason as A6
     // above): 171 -> 173.
-    assert_eq!(store.production_files, 173);
+    // 0.56.0 step W2c added `patch_replay/folded_materialize.rs` (the self-switch resync's own
+    // whole-manifest materializer, kept as its own small file for the identical reason): 173 -> 174.
+    assert_eq!(store.production_files, 174);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

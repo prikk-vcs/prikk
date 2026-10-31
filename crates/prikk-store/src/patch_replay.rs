@@ -26,12 +26,16 @@ pub(crate) mod anchor;
 pub(crate) mod apply;
 pub(crate) mod decode;
 pub(crate) mod extract;
+// 0.56.0 step W2c: kept as its own small file, same reason as `recorded_baseline` below --
+// `size-check`'s own gate, not a style preference.
+pub(crate) mod folded_materialize;
 pub(crate) mod read;
 // 0.56.0 step W2: kept as its own small file, not folded into this one, specifically to leave this
 // file's own line count where it was -- `size-check`'s own gate, not a style preference.
 pub(crate) mod recorded_baseline;
 
 pub use anchor::SnapshotAnchorFallback;
+pub(crate) use folded_materialize::materialize_folded_manifest;
 pub(crate) use recorded_baseline::resolve_state_at_recorded_baseline;
 
 use prikk_error::{PrikkError, Result};
