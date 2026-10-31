@@ -232,7 +232,11 @@ impl From<PrikkError> for AuthorError {
     }
 }
 
-/// A baseline live file node, resolved from the replay-derived state.
+/// A baseline live file node, resolved from the replay-derived state. Derives `PartialEq`/`Eq`/
+/// `Copy` (0.56.0 step W2b) so [`BaselinePathState`]'s own derived `PartialEq` can compare one
+/// baseline's entry for a path against another's, field for field, with no hand-picked subset of
+/// fields and no second comparison written by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BaselineFile {
     node_id: NodeId,
     kind: NodeKind,
@@ -266,6 +270,103 @@ fn split_baseline(
         }
     }
     (files, symlinks)
+}
+
+/// A path's state as a baseline sees it: presence, kind, the node it belongs to, its content, and
+/// its mode -- the five dimensions 0.56.0 step W2b's own staleness rule names, read off the same
+/// `BaselineFile`/symlink maps [`split_baseline`] already produces for the live baseline and (as
+/// of this round) the recorded one too. [`BaselineFile`] derives `PartialEq`, so this type's own
+/// derived one compares every field, never a hand-picked subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaselinePathState {
+    File(BaselineFile),
+    Symlink(NodeId),
+    Absent,
+}
+
+impl BaselinePathState {
+    fn of(
+        path: &str,
+        files: &BTreeMap<String, BaselineFile>,
+        symlinks: &BTreeMap<String, NodeId>,
+    ) -> Self {
+        if let Some(file) = files.get(path) {
+            Self::File(*file)
+        } else if let Some(node_id) = symlinks.get(path) {
+            Self::Symlink(*node_id)
+        } else {
+            Self::Absent
+        }
+    }
+}
+
+/// 0.56.0 step W2b: whether `path` is **stale** -- its state in the live baseline disagrees with
+/// its state in this worktree's own recorded one, in content, mode, kind, presence, or the node it
+/// belongs to (the ruling's own five dimensions -- exactly what [`BaselinePathState`]'s derived
+/// `PartialEq` compares). `recorded` is `None` when this worktree has no record at all: R1's own
+/// migration rule, preserved exactly here too -- a path is never stale against a baseline that was
+/// never recorded, so a repository that predates this round, or one an older binary wrote to,
+/// behaves exactly as it did before W2 and before W2b both.
+///
+/// **This is the one rule that replaces W2's own deletion-only "never held" check** -- the ruling's
+/// own instruction was not to add a second check beside it. Every per-path authoring site below
+/// (creates, edits, mode changes, a confirmed rename's own source node, and the deletion-inference
+/// loop) calls this same function, at the exact point each one has already decided "there is
+/// something to author here" (the worktree's current entry for `path` differs from the live
+/// baseline's). A path that is stale but for which nothing would be authored -- the worktree
+/// already holds the live state -- is never even asked about, because nothing below calls this
+/// function except from inside a branch that is about to plan an operation. That is exactly the
+/// ruling's own "unless the worktree already holds the live state for it," characterized once,
+/// mechanically, rather than re-derived at each call site.
+///
+/// **`require_concrete_record` is the one asymmetry this round's own measurement (not the brief)
+/// found necessary**, re-running the full suite rather than assuming the five hazard cases were
+/// the whole story: a *symmetric* `!=` everywhere broke `dc67_ordinary_use_conformance::sequence_
+/// 06_branch_commit_both_close_one_keep_committing_other`, an ordinary pre-existing test that
+/// alternates `commit`s between two sibling branches (`heads/main`/`heads/topic`) from one
+/// physical worktree, editing `main.txt` on `heads/main` right after a commit onto `heads/topic`
+/// moved the record there. `heads/topic`'s own history never mentions `main.txt` at all (`Absent`
+/// in the recorded split), so a plain `!=` against `main.txt`'s real, concrete live entry on
+/// `heads/main` read as "stale" -- not because any producer silently changed anything, but merely
+/// because the record's one slot currently names an unrelated, disjoint-history ref. **A recorded
+/// baseline that is silent about a path can never contradict that path's live state** -- there is
+/// no claim to contradict -- so `require_concrete_record: true` (every site but the deletion loop)
+/// returns `false` outright when the record has no entry for `path` at all, letting the ordinary
+/// multi-ref authoring idiom (W2's own deviation #4) through untouched. The deletion loop alone
+/// keeps `require_concrete_record: false`, the original, *symmetric* comparison: there, a
+/// recorded baseline silent about a path the worktree is missing **is** exactly the hazard (W2's
+/// own five cases, and this round's case 2 and case 5) -- the one direction where "no claim" must
+/// still refuse, because nothing else explains the live tip having gained content this worktree
+/// was never shown.
+fn path_is_stale(
+    path: &str,
+    recorded: Option<&(BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>)>,
+    live_files: &BTreeMap<String, BaselineFile>,
+    live_symlinks: &BTreeMap<String, NodeId>,
+    require_concrete_record: bool,
+) -> bool {
+    let Some((recorded_files, recorded_symlinks)) = recorded else {
+        return false;
+    };
+    let recorded_state = BaselinePathState::of(path, recorded_files, recorded_symlinks);
+    if require_concrete_record && recorded_state == BaselinePathState::Absent {
+        return false;
+    }
+    BaselinePathState::of(path, live_files, live_symlinks) != recorded_state
+}
+
+/// Why a stale path's authoring was refused (0.56.0 step W2b) -- collected across every per-path
+/// site above into one refusal, named before anything is written to the active WAL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StalePathReason {
+    /// Not present in the worktree at all. W2's own original (and, per the ruling, now the special
+    /// case this general rule reduces to) shape: "worktree absent, live present."
+    AbsentFromWorktree,
+    /// Present in the worktree, with content/mode/kind that does not match the live baseline --
+    /// authoring now would either revert a producer's change (the worktree holds the record's old
+    /// state) or record a conflict as an ordinary edit (the worktree holds a third state). Both
+    /// refuse the same way; the ruling's own words are "either way: refuse."
+    PresentButStale,
 }
 
 /// A planned, fully-resolved operation prior to canonical ordering / `op_seq` assignment.
@@ -521,49 +622,63 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         None => (None, None),
     };
 
-    // 0.56.0 step W2 (R2): the paths this worktree's own recorded baseline held, if any record
-    // exists -- consulted *per path* by the deletion-inference loop below, not as a blanket
-    // ref-level gate here. A blanket "does the recorded identity match `canonical_ref`'s live one"
-    // gate (tried first, in an earlier round of this same change) refused real, legitimate usage
-    // this codebase's own test suite already relies on: committing onto a ref other than the one the
-    // worktree was last recorded against is completely safe whenever *that ref's own baseline* has
-    // nothing missing from disk -- `dc74_merge_execution`'s fixtures author directly onto a sibling
-    // branch (`commit --ref heads/topic` while the worktree is recorded against `heads/main`) purely
-    // to stage history, never switching the worktree, and nothing is lost because topic's own
-    // baseline at that point has no file this worktree lacks. What the ruling's "missing cannot tell
-    // a deletion from a file never held" is actually about is narrower: a specific baseline path,
-    // for *this* `canonical_ref`, that is missing from disk *and* was never part of what this
-    // worktree's record says it was last written from. `None` when there is no record (R1's own
-    // migration-safety rule: treated as matching, so every `Missing` path is still inferred a
-    // deletion exactly as before this round).
+    // 0.56.0 step W2b: the recorded baseline's own full file/symlink split, not just a set of path
+    // names (W2's own original, narrower shape) -- staleness is a per-path *state* comparison
+    // (content, mode, kind, presence, and the node a path belongs to), not a presence check alone,
+    // so [`split_baseline`] -- the exact function that already turns the live baseline into
+    // `baseline_files`/`baseline_symlinks` below -- is reused here against the recorded replay too.
+    // One derivation for "what a baseline's live nodes look like," not two.
+    //
+    // Consulted *per path*, by every per-path authoring site below (creates, edits, mode changes,
+    // a confirmed rename's own source node, and the deletion-inference loop), through
+    // [`path_is_stale`] -- not as a blanket ref-level gate here. A blanket "does the recorded
+    // identity match `canonical_ref`'s live one" gate (tried first, in an earlier round of this
+    // same change, W2's own deviation #4) refused real, legitimate usage this codebase's own test
+    // suite already relies on: committing onto a ref other than the one the worktree was last
+    // recorded against is completely safe whenever *that ref's own baseline* has nothing stale
+    // relative to the record for the paths that actually matter -- `dc74_merge_execution`'s
+    // fixtures author directly onto a sibling branch (`commit --ref heads/topic` while the worktree
+    // is recorded against `heads/main`) purely to stage history, never switching the worktree, and
+    // nothing is lost because topic's own baseline at that point has nothing stale for this
+    // worktree. `None` when there is no record (R1's own migration-safety rule: every path is then
+    // never stale, so this round behaves exactly as before W2 for a repository with no record).
     let recorded_identity =
         crate::worktree_baseline::read_worktree_baseline(layout).map_err(AuthorError::Store)?;
-    let recorded_paths: Option<std::collections::BTreeSet<String>> = match &recorded_identity {
-        None => None,
-        Some(recorded) => {
-            // A fresh, throwaway cache -- never `queue_text_cache`, which `plan_edit_text` below
-            // reuses for the *target* ref's own folding; sharing it here would let a node that
-            // exists in both the recorded and the target state, with different text, poison the
-            // other's cached materialization.
-            let mut recorded_text_cache = crate::lifecycle_cache::replay::TextCache::new();
-            let recorded_state = crate::patch_replay::resolve_state_at_recorded_baseline(
-                layout,
-                &object_store,
-                recorded.baseline,
-                recorded.wal_sequence,
-                &active_replay,
-                &mut recorded_text_cache,
-            )
-            .map_err(AuthorError::Store)?;
-            Some(
-                recorded_state
-                    .state
-                    .live_nodes()
-                    .map(|(_, node)| node.path.as_str().to_string())
-                    .collect(),
-            )
-        }
-    };
+    let recorded_baseline: Option<(BTreeMap<String, BaselineFile>, BTreeMap<String, NodeId>)> =
+        match &recorded_identity {
+            None => None,
+            Some(recorded) => {
+                // A fresh, throwaway cache -- never `queue_text_cache`, which `plan_edit_text` below
+                // reuses for the *target* ref's own folding; sharing it here would let a node that
+                // exists in both the recorded and the target state, with different text, poison the
+                // other's cached materialization.
+                let mut recorded_text_cache = crate::lifecycle_cache::replay::TextCache::new();
+                let recorded_state = crate::patch_replay::resolve_state_at_recorded_baseline(
+                    layout,
+                    &object_store,
+                    recorded.baseline,
+                    recorded.wal_sequence,
+                    &active_replay,
+                    &mut recorded_text_cache,
+                )
+                .map_err(AuthorError::Store)?;
+                Some(split_baseline(&recorded_state.state))
+            }
+        };
+    // 0.56.0 step W2b: whether the record genuinely names *this* `canonical_ref` -- found
+    // necessary only by running the full suite (not anticipated by the ruling's own text), gating
+    // every per-path site below that is not the deletion loop (see `path_is_stale`'s own doc for
+    // the real test, `dc67_ordinary_use_conformance::sequence_06_...`, and `dc74_merge_execution`'s
+    // four divergent-edit tests, that proved a content/mode/node comparison against a *different*
+    // ref's own recorded history is meaningless noise, not a staleness signal, for an edit, mode
+    // change, create, or rename: two sibling branches' own histories legitimately disagree about a
+    // shared path's content the moment either one diverges, and that disagreement is not a
+    // producer silently moving `canonical_ref` out from under this worktree. The deletion loop
+    // alone stays cross-ref-tolerant (case 4's own requirement -- `commit --ref heads/feature`
+    // must still refuse outright even though the record names `heads/main`).
+    let recorded_names_canonical_ref = recorded_identity
+        .as_ref()
+        .is_some_and(|recorded| recorded.ref_name == canonical_ref);
 
     let baseline_state: NodeLifecycleState = resolved.state;
 
@@ -684,6 +799,11 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
 
     let mut planned: Vec<PlannedOp> = Vec::new();
 
+    // 0.56.0 step W2b: every path found stale-and-about-to-be-authored, across every per-path site
+    // below -- the one collection point the generalized rule feeds, named in full before anything
+    // is written (see the refusal built from it, after the deletion loop further down).
+    let mut stale_paths: BTreeMap<String, StalePathReason> = BTreeMap::new();
+
     // Fresh creates are collected first, then minted in canonical path order (E1) — so path->node_id
     // assignment is independent of worktree traversal order. Each carries its normalized mode.
     let mut create_candidates: Vec<(String, Vec<u8>, u32)> = Vec::new();
@@ -695,6 +815,19 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             // destination check above already refused that case).
             continue;
         }
+        // 0.56.0 step W2b: computed once per path, consulted only from inside a branch that has
+        // already decided something would be authored for `path` -- never unconditionally.
+        // Gated on `recorded_names_canonical_ref` (see that binding's own doc): an edit, mode
+        // change, or create can only be stale against a record that genuinely describes *this*
+        // ref's own history.
+        let is_stale = recorded_names_canonical_ref
+            && path_is_stale(
+                path,
+                recorded_baseline.as_ref(),
+                &baseline_files,
+                &baseline_symlinks,
+                true,
+            );
         if let Some(base) = baseline_files.get(path) {
             // Existing node: kind is authoritative (E4); compare in that kind, never reclassify.
             match base.kind {
@@ -708,6 +841,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                         BlobKind::Text,
                     )?;
                     if resolved.content_hash != base.blob_id {
+                        if is_stale {
+                            stale_paths.insert(path.clone(), StalePathReason::PresentButStale);
+                            continue;
+                        }
                         let bytes = match resolved.bytes {
                             Some(bytes) => bytes,
                             None => read_existing_file_bytes(layout, path, BlobKind::Text)?,
@@ -733,6 +870,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                         BlobKind::Binary,
                     )?;
                     if resolved.content_hash != base.blob_id {
+                        if is_stale {
+                            stale_paths.insert(path.clone(), StalePathReason::PresentButStale);
+                            continue;
+                        }
                         let bytes = match resolved.bytes {
                             Some(bytes) => bytes,
                             None => read_existing_file_bytes(layout, path, BlobKind::Binary)?,
@@ -756,13 +897,27 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             // (symlink nodes never reach here — they live in `baseline_symlinks`). The canonical
             // operation sort places `ChangePerm` before any `ReplaceBinary`/`EditText` content op.
             if let Some(op) = plan_mode_change_if_observed(base, meta.mode, path) {
-                planned.push(op);
+                if is_stale {
+                    stale_paths.insert(path.clone(), StalePathReason::PresentButStale);
+                } else {
+                    planned.push(op);
+                }
             }
         } else if baseline_symlinks.contains_key(path) {
             return Err(AuthorError::UnsupportedSymlinkAuthoring(format!(
                 "{path}: symlink node modification is out of scope"
             )));
         } else {
+            // 0.56.0 step W2b: no baseline node tracks `path` in the *live* baseline, but the
+            // worktree still holds a file there -- about to be authored as a fresh `CreateFile`.
+            // When the record disagrees (it tracked a node at this path, now gone from the live
+            // baseline -- a producer's deletion this worktree was never told about), authoring the
+            // create would re-materialize stale content under a brand-new node id instead of
+            // refusing -- exactly the "producer's deletion" shape the ruling names by reasoning.
+            if is_stale {
+                stale_paths.insert(path.clone(), StalePathReason::PresentButStale);
+                continue;
+            }
             // A path with no baseline node is genuinely new; there is nothing a cache could have
             // recorded for it yet, so it is always read. The read is cached anyway so an unchanged
             // re-commit of the same content (once this path is itself a baseline node) can skip it.
@@ -816,6 +971,26 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                  authoring"
             )))
         })?;
+        // 0.56.0 step W2b: the node a declared rename moves is itself checked against the record,
+        // at its *source* path -- the ruling's own "the node it belongs to" dimension, for a
+        // rename specifically. Refusing here (rather than letting `renamed_away.contains(old_path)`
+        // exempt it from the deletion loop below, as W2's own version did unconditionally) is what
+        // keeps a stale rename from bypassing the check by being claimed early as "not a plain
+        // deletion." Skips the whole triplet (RenamePath, and any simultaneous content/mode change
+        // on the same node) for this pair -- one node, one staleness verdict. Gated on
+        // `recorded_names_canonical_ref`, same reason as the main loop above.
+        if recorded_names_canonical_ref
+            && path_is_stale(
+                old_path,
+                recorded_baseline.as_ref(),
+                &baseline_files,
+                &baseline_symlinks,
+                true,
+            )
+        {
+            stale_paths.insert(old_path.clone(), StalePathReason::PresentButStale);
+            continue;
+        }
         planned.push(PlannedOp {
             kind: OperationKind::RenamePath(RenamePath {
                 node_id: base.node_id,
@@ -894,28 +1069,41 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
 
     // Deletions: baseline files absent from the worktree.
     //
-    // 0.56.0 step W2 (R2): a candidate absent from both the worktree *and* this worktree's own
-    // recorded baseline (when one exists) was never materialized here at all -- its absence cannot
-    // be the user's deletion, because there was never a chance to delete it. Refused, collecting
-    // every such path, rather than silently authoring `delete-file` for it.
-    let mut never_held = Vec::new();
+    // 0.56.0 step W2b: a candidate absent from the worktree *and* stale against this worktree's
+    // own recorded baseline (when one exists) was never materialized here at all -- its absence
+    // cannot be the user's deletion, because there was never a chance to delete it. This is the
+    // special case `path_is_stale`'s general rule reduces to ("worktree absent, live present") --
+    // the same function every other per-path site above already calls, not a second check.
+    // `require_concrete_record: false` -- the one site that keeps the *symmetric* comparison: a
+    // record silent about `path` (no concrete claim at all) is exactly W2's own original hazard
+    // here (every one of its five cases, and this round's case 2 and case 5), because nothing else
+    // explains the live tip having gained a path this worktree was never shown.
     for (path, base) in &baseline_files {
         if !worktree.contains_key(path) {
             if renamed_away.contains(path) {
                 // Claimed above by a confirmed rename's own RenamePath -- not a plain deletion.
                 continue;
             }
-            if let Some(recorded_paths) = &recorded_paths {
-                if !recorded_paths.contains(path) {
-                    never_held.push(path.clone());
-                    continue;
-                }
+            if path_is_stale(
+                path,
+                recorded_baseline.as_ref(),
+                &baseline_files,
+                &baseline_symlinks,
+                false,
+            ) {
+                stale_paths.insert(path.clone(), StalePathReason::AbsentFromWorktree);
+                continue;
             }
             planned.push(plan_delete(base, path));
         }
     }
-    if !never_held.is_empty() {
-        never_held.sort();
+    // 0.56.0 step W2b: one refusal, naming every path collected as stale-and-about-to-be-authored
+    // across every per-path site above (creates, edits, mode changes, renames, and the deletion
+    // loop just above) -- before anything is written. `AbsentFromWorktree` keeps W2's own original
+    // wording verbatim (including "never were"); `PresentButStale` is the generalization this round
+    // adds (an edit, mode change, create or rename that would revert a producer's change or record
+    // a conflict as an ordinary one).
+    if !stale_paths.is_empty() {
         let recorded_desc = match &recorded_identity {
             Some(recorded) => format!(
                 "this worktree was last written from {}",
@@ -924,20 +1112,42 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                     recorded.wal_sequence
                 )
             ),
-            // Unreachable in practice: `recorded_paths` is only `Some` (so `never_held` can be
+            // Unreachable in practice: `recorded_baseline` is only `Some` (so `stale_paths` can be
             // non-empty) when `recorded_identity` is also `Some` -- kept as a real sentence, not an
             // `unreachable!()`, since a refusal message must never panic to compose.
             None => "this worktree has no recorded baseline".to_string(),
         };
+        let mut absent: Vec<&str> = Vec::new();
+        let mut present: Vec<&str> = Vec::new();
+        for (path, reason) in &stale_paths {
+            match reason {
+                StalePathReason::AbsentFromWorktree => absent.push(path.as_str()),
+                StalePathReason::PresentButStale => present.push(path.as_str()),
+            }
+        }
+        let mut clauses = Vec::new();
+        if !absent.is_empty() {
+            clauses.push(format!(
+                "{} path(s) the new state has are not in this worktree, and never were: {}",
+                absent.len(),
+                absent.join(", ")
+            ));
+        }
+        if !present.is_empty() {
+            clauses.push(format!(
+                "{} path(s) the worktree holds content for, but it does not match {canonical_ref}'s \
+                 current state, so authoring now would either revert that change or record a \
+                 conflict as an ordinary one: {}",
+                present.len(),
+                present.join(", ")
+            ));
+        }
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
-            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {} path(s) \
-             the new state has are not in this worktree, and never were: {}; committing now \
-             would record them as deleted; run `prikk branch switch <the current branch>` (`prikk \
-             status` names the current branch) to bring the worktree up to date, then commit \
-             again",
+            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; run \
+             `prikk branch switch <the current branch>` (`prikk status` names the current \
+             branch) to bring the worktree up to date, then commit again",
             crate::worktree_baseline::describe_identity(lineage_baseline_block_id, 0),
-            never_held.len(),
-            never_held.join(", ")
+            clauses.join("; ")
         ))));
     }
     for path in baseline_symlinks.keys() {

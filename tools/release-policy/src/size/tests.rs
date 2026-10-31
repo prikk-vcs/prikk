@@ -265,9 +265,14 @@ fn an_inline_test_module_is_not_production() {
         // (`.map_err(authoring_path_error)`, one extra line plus the call it was chained onto),
         // 1524 -> 1526. 0.56.0 step W2: R2's per-path "never held" deletion-inference check (R1's
         // read of the recorded baseline, the refusal message, and the record write after a
-        // successful commit), 1526 -> 1621.
+        // successful commit), 1526 -> 1621. 0.56.0 step W2b: the guard generalized from
+        // deletions alone to every stale path (the `BaselinePathState`/`StalePathReason` types,
+        // `path_is_stale`'s own asymmetric `require_concrete_record` parameter and the
+        // `recorded_names_canonical_ref` gate its own real-suite regressions required, the
+        // per-path checks threaded into the create/edit/mode-change/rename sites, and the
+        // generalized refusal message), 1621 -> 1831.
         physical,
-        1621,
+        1831,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -277,7 +282,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1572);
+    assert_eq!(counted.production_lines, 1782);
     assert_eq!(
         physical - counted.production_lines,
         49,

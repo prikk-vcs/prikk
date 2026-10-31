@@ -106,17 +106,23 @@
   now gives the identical id for the identical cause, matching the sentence it already gave. An
   empty, absolute, too-long, or otherwise ill-formed path is unaffected and still reads
   `damaged-repository`: only the genuinely version-relative cause (today: non-ASCII) moved.
-- **`commit` now refuses a path that would record as deleted but was never in this worktree,
-  instead of silently authoring `delete-file` for it.** Before this, "missing from the worktree"
-  was read as a deletion no matter why the path was missing — including when some other command
-  (`merge --into`, `archive import --adopt`, `sync seal --claim`, or `branch create --from` onto
-  the unborn current branch) had moved the ref forward without ever writing the worktree, or when
-  `commit --ref <other>` targeted a branch this worktree had never been synced to. Either way, the
-  next ordinary commit silently signed a lie: that the user had deleted a file they never even
-  received. `commit` now remembers, per path, whether this worktree was ever actually written from
-  a state that held it, and refuses — naming every such path, and the command that resyncs
-  (`prikk branch switch <the current branch>`) — before authoring anything. A genuine deletion (a
-  file this worktree really did hold, then lost) still authors `delete-file` exactly as before.
+- **`commit` now refuses to author over a path that is stale against this worktree's own recorded
+  baseline, instead of silently signing a lie about it.** Before this, each per-path authoring
+  decision only ever compared the worktree against the ref's own *current* state — so a producer
+  that moved the ref forward without ever writing the worktree (`merge --into`, `archive import
+  --adopt`, `sync seal --claim`, `branch create --from` onto the unborn current branch) or a
+  `commit --ref <other>` targeting a branch this worktree had never synced to, left the next
+  ordinary commit reading the gap as whatever shape it happened to take: a path "missing from the
+  worktree" was authored as a deletion, even when the worktree had simply never received it; a
+  path whose content, mode, or node the producer had actually changed was authored as an ordinary
+  edit, mode change, or rename, silently reverting the producer's own change (or, if the worktree's
+  bytes had since diverged a third way, recording a conflict as if it were ordinary). `commit` now
+  remembers, per path, what this worktree was last actually written from, and refuses before
+  authoring anything for a path whose live and recorded states disagree — in content, mode, kind,
+  presence, or the node it belongs to — naming every such path and the command that resyncs
+  (`prikk branch switch <the current branch>`). A path that is not stale, or a worktree that
+  already holds the live state for a stale one, is authored exactly as before; a genuine deletion,
+  edit, mode change, or rename of content this worktree really did hold still authors normally.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

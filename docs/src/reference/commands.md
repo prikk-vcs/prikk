@@ -147,16 +147,24 @@ what this worktree was last made to match: a ref's sealed tip block (or none, fo
 plus how many of the active WAL's queued patches are folded on top. This is worktree-local
 operational state, like the unclean-shutdown marker beside it — never part of any versioned object,
 and `verify`/`doctor` do not look at it.
-- **`commit` (and `commit --ref <x>`) refuses a path it would otherwise record as deleted, when this
-  worktree's own record shows it was never actually written from a state that held that path** —
-  `precondition not met: refusing to commit: <ref> is now at <state>, and this worktree was last
-  written from <state>; N path(s) the new state has are not in this worktree, and never were:
-  <paths>; ...; run `prikk branch switch <the current branch>` ... then commit again` — before
-  authoring anything. This is what keeps `merge --into`, `archive import --adopt`, `sync seal
-  --claim`, `branch create --from` onto the unborn current branch, and `commit --ref <other>` from a
-  worktree recorded against a different branch from ever signing a path's absence as the user's own
-  deletion when the worktree never had a chance to hold it. A path the worktree's record *does* show
-  it once held still authors `delete-file`, exactly as before.
+- **`commit` (and `commit --ref <x>`) refuses to author over a path that is stale against this
+  worktree's own record — content, mode, kind, presence, or the node it belongs to — unless the
+  worktree already holds the live state for it** — `precondition not met: refusing to commit: <ref>
+  is now at <state>, and this worktree was last written from <state>; ...; run `prikk branch switch
+  <the current branch>` ... then commit again`, before authoring anything, naming every such path.
+  A path missing from the worktree that the record also never explains reads "not in this worktree,
+  and never were" (the deletion-shaped case: `merge --into`, `archive import --adopt`, `sync seal
+  --claim`, `branch create --from` onto the unborn current branch, or `commit --ref <other>` from a
+  worktree recorded against a different branch, each moved the ref without the worktree's
+  knowledge). A path the worktree still physically holds, but whose content, mode, or node disagrees
+  between the record and the ref's current state, reads as the worktree holding content that does
+  not match the ref's current state — because authoring it now would either revert whatever moved
+  the ref underneath this worktree, or record a conflict (the worktree holding a third state) as an
+  ordinary edit. Either way the commit refuses rather than guess. A path that is not stale, or one
+  the worktree already matches the live state for, still authors exactly as before — including the
+  ordinary multi-ref idiom of committing onto a sibling branch from a worktree recorded against a
+  different one, and a genuine deletion, edit, mode change, or rename of content this worktree
+  really did hold.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish
