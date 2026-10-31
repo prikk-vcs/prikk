@@ -148,56 +148,48 @@ pub fn switch_branch(
             )));
         }
     }
+    // 0.56.0 step W2d-2: a **self-switch** (`from == Some(target)`) whose active WAL is non-empty
+    // and whose queued fold has moved (`compare_worktree_baseline` reads `Behind`) now refuses here,
+    // before any write, rather than materializing. W2c's own fold-materializing branch (removed by
+    // this round -- see the deleted `patch_replay::folded_materialize` module and this file's own
+    // git history) built the sealed portion of what it wrote through
+    // `resolve_folded_worktree_baseline`, the lifecycle cache -- never through
+    // `replay_for_verified_worktree_write`'s own RFC 136 verified-anchor gate, the way every other
+    // worktree-overwriting path in this function does. A resync that bypasses that gate is a
+    // destructive write on an unverified derivation (the review's own words). Refusal 2, just
+    // above, has already confirmed a non-empty active WAL here is owned by `target` itself, so this
+    // check only ever fires for the ref actually being switched to -- never another ref's work.
+    // The way out this names (`seal`, then `branch switch` again) drains the queue into a new
+    // sealed tip, after which the active WAL is empty, this condition no longer applies, and the
+    // ordinary materialization below (always `replay_for_verified_worktree_write`) handles it
+    // through the verified path, same as any other switch. The fold's own content-identity digest
+    // (`WorktreeBaselineIdentity::queued_fold`, compared by `compare_worktree_baseline`) is kept --
+    // it is what *detects* this case; only the materialization branch that tried to *act* on the
+    // detection by writing unverified bytes is removed.
+    if from == Some(target.as_str()) && !active_replay.records.is_empty() {
+        if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { .. } =
+            crate::worktree_baseline::compare_worktree_baseline(layout, &target, &active_replay)?
+        {
+            return Err(PrikkError::Precondition(format!(
+                "the active WAL holds a queued fold for {target} that has moved without its \
+                 sealed block moving; a self-switch cannot resync it without bypassing the \
+                 verified-anchor write gate. Run `prikk seal --allow-no-audit --ref {target}` to \
+                 drain the queue, then `prikk branch switch {target}` again (nothing was written)"
+            )));
+        }
+    }
 
     // RFC 136 increment 2b: the target's tree may start only at a replay-verified snapshot.
     let (target_replay, anchor_fallback) =
         crate::patch_replay::replay_for_verified_worktree_write(layout, &target)?;
-    // 0.56.0 step W2c: for a **self-switch** resync (`from == Some(target)`, falling through from
-    // the no-op check above because the worktree is stale) whose active WAL is non-empty, the
-    // sealed-tip-only manifest above is not enough -- `rollback-draft --append-inverse` moves only
-    // the queued fold, never the sealed block, so a producer's change can be invisible to this
-    // materializer even though `compare_worktree_baseline` (this same round) now correctly detects
-    // it as stale. Refusal 2, just above, has already confirmed that a non-empty active WAL here is
-    // owned by `target` itself (self-switch's own single-ref-ownership guarantee), so folding it in
-    // is always sound, never another ref's work leaking into this one. Reuses
-    // `resolve_folded_worktree_baseline` -- the exact derivation `commit`/`worktree-status` already
-    // share -- plus `folded_materialize::materialize_folded_manifest` to turn its lifecycle-only
-    // state into real bytes (see that module's own doc for why a new, small materializer, not a
-    // widened `node_authoring.rs` helper). Every other switch (switching away, or a self-switch with
-    // nothing queued) is untouched: `target_manifest` stays the sealed-tip-only replay exactly as
-    // before, with its own `anchor_fallback` tracking intact.
-    // `recorded_queued_ids`/`recorded_wal_sequence` are what the record write at the end of this
-    // function names as "folded in": empty/`0` for every ordinary switch (sealed tip only, today's
-    // unchanged behavior), or the active WAL's own records, in order, for the one case fixed this
-    // round.
-    let (target_manifest, recorded_queued_ids, recorded_wal_sequence): (_, Vec<ObjectId>, u64) =
-        if from == Some(target.as_str()) && !active_replay.records.is_empty() {
-            let object_store = ObjectReadSnapshot::open(layout)?;
-            let mut queue_text_cache = crate::lifecycle_cache::replay::TextCache::new();
-            let folded = crate::patch_replay::resolve_folded_worktree_baseline(
-                layout,
-                &object_store,
-                &target,
-                &active_replay,
-                &mut queue_text_cache,
-            )?;
-            let manifest = crate::patch_replay::materialize_folded_manifest(
-                layout,
-                &object_store,
-                &folded.state,
-                folded.lineage,
-                &queue_text_cache,
-            )?;
-            let queued_ids: Vec<ObjectId> = active_replay
-                .records
-                .iter()
-                .map(|record| record.envelope.object_id())
-                .collect();
-            let wal_sequence = active_replay.records.last().map_or(0, |record| record.seq);
-            (manifest, queued_ids, wal_sequence)
-        } else {
-            (target_replay.manifest, Vec::new(), 0)
-        };
+    // 0.56.0 step W2d-2: every switch -- including a self-switch -- now always writes exactly the
+    // sealed-tip-only, verified-anchor manifest. `recorded_queued_ids`/`recorded_wal_sequence` are
+    // therefore always empty/`0` here, as they were before W2c's now-removed branch: the one case
+    // that would have recorded a non-empty fold (self-switch, non-empty queue, `Behind`) is refused
+    // above instead of reaching this point.
+    let target_manifest = target_replay.manifest;
+    let recorded_queued_ids: Vec<ObjectId> = Vec::new();
+    let recorded_wal_sequence: u64 = 0;
     let target_files: BTreeMap<&str, &ReplayManifestEntry> = target_manifest
         .files
         .iter()

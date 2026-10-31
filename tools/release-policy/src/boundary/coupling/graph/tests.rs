@@ -171,7 +171,10 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 170 -> 172.
     // 0.56.0 step W2c added `patch_replay::folded_materialize` (the self-switch resync's own
     // whole-manifest materializer, split out for the identical `size-check` reason): 172 -> 173.
-    assert_eq!(modules.len(), 173, "modules: {modules:?}");
+    // 0.56.0 step W2d-2 removed `patch_replay::folded_materialize` entirely (zero remaining
+    // callers once the self-switch fold-materializing branch it existed for was removed): 173 ->
+    // 172.
+    assert_eq!(modules.len(), 172, "modules: {modules:?}");
     assert!(
         !modules
             .iter()
