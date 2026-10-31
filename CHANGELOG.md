@@ -138,6 +138,17 @@
   branch's own moved tip. Naming the current branch now resyncs when the worktree's own recorded
   state disagrees with the branch's own sealed tip, the same way switching to a different branch
   always has. It remains the documented no-op whenever the worktree's record is already current.
+  Both directions judge "clean", and which files the old baseline held, against the worktree's
+  recorded baseline whenever one exists, whichever ref it names — never only when the record
+  happens to already name the branch being switched to or from. Before this, a `commit --ref
+  <other>` (which records the ref it actually authored onto, not the current-branch pointer) left
+  the pointer and the record naming two different refs, and the record was then never consulted
+  for either switch direction — both fell back to comparing against the pointer's own live state,
+  which the worktree genuinely disagreed with, so neither a self-switch nor a switch to the ref the
+  record actually named could ever resync; an ordinary commit afterward refused as stale and named
+  a self-switch that itself refused the same way. A record is always what the worktree was
+  actually, physically last written to match, so using it is never less correct than trusting the
+  pointer's own live state.
   A moved *queued, unsealed* fold (for example `rollback-draft --append-inverse`, which never
   touches the sealed branch or the worktree) is detected the same way, but is never resynced by a
   self-switch materializing it directly — doing so would write the sealed portion of the worktree

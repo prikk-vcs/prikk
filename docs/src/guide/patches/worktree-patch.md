@@ -30,6 +30,8 @@ Authoring compares the worktree against a baseline node lifecycle state:
 
 `commit --ref heads/topic` on an unborn ref creates an independent Root history from the current
 worktree. It does not copy/fork `heads/main`, switch the checkout branch, or create a merge base.
+A later `prikk branch switch heads/topic` brings the current-branch pointer in line with what the
+worktree already holds.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is

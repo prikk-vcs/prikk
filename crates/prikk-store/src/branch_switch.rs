@@ -350,13 +350,20 @@ fn baseline_files(
     Ok(file_map_from_state(&resolved.state))
 }
 
-/// [`baseline_files`], but read from `from`'s *recorded* baseline instead of its live tip, when the
-/// record genuinely names `from` and is stale against it (0.56.0 step W2, R2): "clean" (and what is
-/// safe to overwrite or delete) must be judged against what the worktree was actually last
-/// materialized from, never against a tip some other command moved `from` to since -- that is what
-/// makes a resync (self-switch or switching away) possible at all when `from` has moved underneath
-/// this worktree. Falls back to [`baseline_files`]'s live derivation for every other case (no record,
-/// current record, or a record naming some other ref entirely), which is today's unchanged behavior.
+/// [`baseline_files`], but read from the worktree's *recorded* baseline instead of `from`'s live tip,
+/// whenever a record exists and is stale against `from` (0.56.0 step W2, R2; generalized step W2f):
+/// "clean" (and what is safe to overwrite or delete) must be judged against what the worktree was
+/// actually last materialized from, never against a tip some other command moved `from` to since --
+/// that is what makes a resync (self-switch or switching away) possible at all when `from` has moved
+/// underneath this worktree. **Used whenever `compare_worktree_baseline` reads `Behind` at all, no
+/// matter which ref `recorded.ref_name` names** -- a `commit --ref <other>` records the ref it
+/// authored onto, which is never the pointer (`from`) by construction in exactly the stuck case this
+/// generalizes for, so gating on `recorded.ref_name == from` made the record unreachable for either
+/// switch direction out of that state. The record is always an accurate description of the
+/// worktree's own physical files as of its last write (R1), so using it here is never less correct
+/// than trusting `from`'s own live state -- only falls back to [`baseline_files`]'s live derivation
+/// under `NoRecord`/`Current` (no record, or the record already agrees with `from`'s live tip, so
+/// there is nothing to resolve).
 fn from_files_against_record_or_live(
     layout: &RepositoryLayout,
     from: &str,
@@ -365,19 +372,17 @@ fn from_files_against_record_or_live(
     if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =
         crate::worktree_baseline::compare_worktree_baseline(layout, from, active_replay)?
     {
-        if recorded.ref_name == from {
-            let object_store = ObjectReadSnapshot::open(layout)?;
-            let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
-            let resolved = crate::patch_replay::resolve_state_at_recorded_baseline(
-                layout,
-                &object_store,
-                recorded.baseline,
-                recorded.wal_sequence,
-                active_replay,
-                &mut text_cache,
-            )?;
-            return Ok(file_map_from_state(&resolved.state));
-        }
+        let object_store = ObjectReadSnapshot::open(layout)?;
+        let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+        let resolved = crate::patch_replay::resolve_state_at_recorded_baseline(
+            layout,
+            &object_store,
+            recorded.baseline,
+            recorded.wal_sequence,
+            active_replay,
+            &mut text_cache,
+        )?;
+        return Ok(file_map_from_state(&resolved.state));
     }
     baseline_files(layout, from, active_replay)
 }
@@ -400,10 +405,14 @@ fn file_map_from_state(
 /// already absent where the target has no file, is where an interrupted switch left it -- accepted,
 /// so running the switch again completes it.
 ///
-/// 0.56.0 step W2 (R2): when `from`'s record genuinely names `from` and is stale against its live
-/// tip, the comparison baseline is the *recorded* state, not the live one -- otherwise this read
+/// 0.56.0 step W2 (R2), generalized step W2f: whenever a record exists and is stale against `from`'s
+/// live tip, the comparison baseline is the *recorded* state, not the live one -- otherwise this read
 /// against `from`'s live tip would see every file the ref gained since as "missing" and refuse,
-/// exactly §2.7's deadlock. Unaffected (today's live comparison) in every other case.
+/// exactly §2.7's deadlock. **Used whenever `compare_worktree_baseline` reads `Behind` at all,
+/// regardless of which ref `recorded.ref_name` names** -- see [`from_files_against_record_or_live`]'s
+/// own doc for why a `recorded.ref_name == from` gate made this unreachable for the one case it most
+/// needed to cover (a worktree stuck after `commit --ref <other>`). Unaffected (today's live
+/// comparison) only under `NoRecord`/`Current`.
 fn require_clean(
     layout: &RepositoryLayout,
     from: &str,
@@ -413,9 +422,7 @@ fn require_clean(
     let comparison =
         crate::worktree_baseline::compare_worktree_baseline(layout, from, active_replay)?;
     let report = match &comparison {
-        crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. }
-            if recorded.ref_name == from =>
-        {
+        crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } => {
             crate::worktree_status::worktree_status_against_recorded_baseline(
                 layout,
                 from,

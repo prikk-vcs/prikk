@@ -41,5 +41,7 @@ mod step3w2b_stale_authoring;
 mod step3w2c_cross_ref_and_fold_resync;
 #[path = "commit_and_seal/step3w2d_symmetric_record_silence.rs"]
 mod step3w2d_symmetric_record_silence;
+#[path = "commit_and_seal/step3w2f_record_outlives_pointer.rs"]
+mod step3w2f_record_outlives_pointer;
 #[path = "support/mod.rs"]
 mod support;

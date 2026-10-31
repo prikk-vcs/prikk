@@ -177,11 +177,17 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   materializes the branch's current files and clears the staleness — the same write-then-publish
   choreography switching to a different branch already uses — instead of the unconditional no-op
   RFC 147 §2j gave it. Both directions of `require_clean` (leaving a branch, and this same-branch
-  resync) judge "clean" against the worktree's recorded state when it disagrees with the branch's
-  live one, not against the live tip itself — which is what lets a switch away from a stale
-  branch, and this same-branch resync, both succeed where each used to refuse or no-op. Switching
-  to a *different* branch still materializes only that branch's sealed tip, never its own queued
-  fold, unchanged by this round.
+  resync) judge "clean", and which files the old baseline held, against the worktree's recorded
+  state whenever a record exists and disagrees with the branch's live one — **whichever ref the
+  record itself names**, not only when it happens to already name the branch being left or
+  switched to — falling back to the live tip itself only when no record exists, or the record
+  already agrees with it. (0.56.0 step W2f: before this, a `commit --ref <other>` left the record
+  naming a different ref than the current-branch pointer, and the record was then never consulted
+  for either switch direction — both fell back to the pointer's own live state, which the worktree
+  genuinely disagreed with, so neither direction could ever resync.) This is what lets a switch
+  away from a stale branch, and this same-branch resync, both succeed where each used to refuse or
+  no-op. Switching to a *different* branch still materializes only that branch's sealed tip, never
+  its own queued fold, unchanged by this round.
   - **A moved, queued, unsealed fold (0.56.0 step W2c) — as `rollback-draft --append-inverse`
     moves without touching the sealed branch or the worktree — is detected the same way, but a
     bare same-branch resync never materializes it directly (0.56.0 step W2d-2): doing so would
