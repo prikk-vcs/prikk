@@ -116,6 +116,10 @@ mod wal;
 // grouped with `active` specifically, not with this family.
 mod verified_blocks;
 mod worktree;
+// 0.56.0 step W2 (R1/R2): the recorded worktree baseline -- grouped with this same family since it
+// depends on `patch_replay`/`wal`/`commit_boundary`'s active-ref-ownership exactly as
+// `worktree_status` already does.
+mod worktree_baseline;
 mod worktree_marker;
 mod worktree_status;
 
@@ -385,6 +389,13 @@ pub use verify::{
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};
+// 0.56.0 step W2 (R1): only the one entry point the CLI needs (`init`/`setup`'s own establishment of
+// a fresh repository's genesis record) is public -- the comparison predicate (R2) and the record
+// writer/reader stay `pub(crate)`, consumed only from inside this crate's own `commit`/`branch_switch`/
+// `worktree_status`/`patch_checkout`/`worktree`/`seal_from_accepted`-adjacent call sites. `seal`
+// itself lives in `prikk-cli`, so its own write call reaches the writer through this same re-export
+// list, widened only as far as that one caller needs.
+pub use worktree_baseline::{record_initial_worktree_baseline, record_worktree_baseline};
 pub use worktree_marker::{
     ProvisionalClearOutcome, ProvisionalWorktree, clear_provisional_marker_if_unchanged,
     ensure_worktree_replay_verified, provisional_marker_bytes, provisional_worktree,

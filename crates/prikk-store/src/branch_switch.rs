@@ -100,16 +100,32 @@ pub fn switch_branch(
     // sealed -- checked *before* refusal 1, which is about a target that names something else. The
     // unpublished current branch is never "does not exist" here (RFC 147 §2i's own ruling), so this
     // must not funnel through that refusal even by accident.
+    //
+    // 0.56.0 step W2 (R2): amended -- naming the current branch is a no-op only when the record also
+    // shows this worktree is not behind it. When it is (some other command moved the ref without
+    // touching the worktree), falling through to the ordinary materialization below is the resync:
+    // this is what dissolves §2.7's deadlock ("switch to yourself" used to be an unconditional
+    // no-op, so there was no command that could ever bring a stale worktree back in sync). A cheap,
+    // separate WAL read here (not the one `active_replay` below becomes) -- its own soundness is
+    // refusal 2's job, just below, not this check's.
     if from == Some(target.as_str()) && !worktree_is_dirty(layout)? {
-        return Ok(BranchSwitchReport {
-            from: Some(target.clone()),
-            to: target,
-            written_files: 0,
-            unchanged_files: 0,
-            deleted_files: 0,
-            already_current: true,
-            anchor_fallback: None,
-        });
+        let probe_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+        let current = matches!(
+            crate::worktree_baseline::compare_worktree_baseline(layout, &target, &probe_replay)?,
+            crate::worktree_baseline::WorktreeBaselineComparison::NoRecord
+                | crate::worktree_baseline::WorktreeBaselineComparison::Current
+        );
+        if current {
+            return Ok(BranchSwitchReport {
+                from: Some(target.clone()),
+                to: target,
+                written_files: 0,
+                unchanged_files: 0,
+                deleted_files: 0,
+                already_current: true,
+                anchor_fallback: None,
+            });
+        }
     }
 
     // Refusal 1: an existing, open local branch.
@@ -143,13 +159,13 @@ pub fn switch_branch(
         .map(|entry| (entry.path.as_str(), entry))
         .collect();
     let from_files = match from {
-        Some(from) => baseline_files(layout, from, &active_replay)?,
+        Some(from) => from_files_against_record_or_live(layout, from, &active_replay)?,
         None => BTreeMap::new(),
     };
 
     // Refusal 3: clean against the branch being left.
     if let Some(from) = from {
-        require_clean(layout, from, &target_files)?;
+        require_clean(layout, from, &target_files, &active_replay)?;
     }
 
     // Refusal 4, and the plan: every decision made before the first write.
@@ -231,6 +247,16 @@ pub fn switch_branch(
     }
     write_current_branch(layout, &target)?;
     clear_worktree_dirty(layout)?;
+    // 0.56.0 step W2 (R1): written last, inside this same dirty-marker choreography, after the
+    // marker clears -- the worktree now matches `target`'s sealed tip (this materializer never folds
+    // the active WAL, confirmed by `target_manifest` coming only from `replay_for_verified_worktree_
+    // write`, never from a `resolve_folded_worktree_baseline*` call), so `wal_sequence` is `0`.
+    crate::worktree_baseline::record_worktree_baseline(
+        layout,
+        &target,
+        Some(target_replay.target_block_id),
+        0,
+    )?;
 
     Ok(BranchSwitchReport {
         from: from.map(str::to_string),
@@ -269,7 +295,7 @@ fn require_open_branch(layout: &RepositoryLayout, target: &str) -> Result<()> {
 }
 
 /// The old baseline's files: path -> (blob, kind), from the same folded baseline `worktree-status`
-/// and `commit` agree on.
+/// and `commit` agree on -- `from`'s *live* fold, today's derivation.
 fn baseline_files(
     layout: &RepositoryLayout,
     from: &str,
@@ -282,8 +308,45 @@ fn baseline_files(
         from,
         active_replay,
     )?;
-    Ok(resolved
-        .state
+    Ok(file_map_from_state(&resolved.state))
+}
+
+/// [`baseline_files`], but read from `from`'s *recorded* baseline instead of its live tip, when the
+/// record genuinely names `from` and is stale against it (0.56.0 step W2, R2): "clean" (and what is
+/// safe to overwrite or delete) must be judged against what the worktree was actually last
+/// materialized from, never against a tip some other command moved `from` to since -- that is what
+/// makes a resync (self-switch or switching away) possible at all when `from` has moved underneath
+/// this worktree. Falls back to [`baseline_files`]'s live derivation for every other case (no record,
+/// current record, or a record naming some other ref entirely), which is today's unchanged behavior.
+fn from_files_against_record_or_live(
+    layout: &RepositoryLayout,
+    from: &str,
+    active_replay: &crate::wal::WalReplay,
+) -> Result<BTreeMap<String, (ObjectId, NodeKind)>> {
+    if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =
+        crate::worktree_baseline::compare_worktree_baseline(layout, from, active_replay)?
+    {
+        if recorded.ref_name == from {
+            let object_store = ObjectReadSnapshot::open(layout)?;
+            let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+            let resolved = crate::patch_replay::resolve_state_at_recorded_baseline(
+                layout,
+                &object_store,
+                recorded.baseline,
+                recorded.wal_sequence,
+                active_replay,
+                &mut text_cache,
+            )?;
+            return Ok(file_map_from_state(&resolved.state));
+        }
+    }
+    baseline_files(layout, from, active_replay)
+}
+
+fn file_map_from_state(
+    state: &crate::node::node_lifecycle::NodeLifecycleState,
+) -> BTreeMap<String, (ObjectId, NodeKind)> {
+    state
         .live_nodes()
         .filter_map(|(_, node)| match &node.content {
             NodeContent::File { blob_id, .. } => {
@@ -291,18 +354,38 @@ fn baseline_files(
             }
             _ => None,
         })
-        .collect())
+        .collect()
 }
 
 /// Refusal 3. While the worktree-dirty marker is set, a path already holding the target's bytes, or
 /// already absent where the target has no file, is where an interrupted switch left it -- accepted,
 /// so running the switch again completes it.
+///
+/// 0.56.0 step W2 (R2): when `from`'s record genuinely names `from` and is stale against its live
+/// tip, the comparison baseline is the *recorded* state, not the live one -- otherwise this read
+/// against `from`'s live tip would see every file the ref gained since as "missing" and refuse,
+/// exactly §2.7's deadlock. Unaffected (today's live comparison) in every other case.
 fn require_clean(
     layout: &RepositoryLayout,
     from: &str,
     target_files: &BTreeMap<&str, &ReplayManifestEntry>,
+    active_replay: &crate::wal::WalReplay,
 ) -> Result<()> {
-    let report = worktree_status(layout, from)?;
+    let comparison =
+        crate::worktree_baseline::compare_worktree_baseline(layout, from, active_replay)?;
+    let report = match &comparison {
+        crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. }
+            if recorded.ref_name == from =>
+        {
+            crate::worktree_status::worktree_status_against_recorded_baseline(
+                layout,
+                from,
+                recorded,
+                active_replay,
+            )?
+        }
+        _ => worktree_status(layout, from)?,
+    };
     let resuming = worktree_is_dirty(layout)?;
     let mut dirty = Vec::new();
     for change in &report.changes {

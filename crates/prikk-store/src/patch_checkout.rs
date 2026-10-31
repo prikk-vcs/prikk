@@ -233,6 +233,15 @@ fn materialize_patch_checkout_inner(
         0
     };
     clear_worktree_dirty(layout)?;
+    // 0.56.0 step W2 (R1): this materializes the sealed tip only -- the active WAL, if any, is never
+    // folded into a `checkout --patch-materialize` write (confirmed: nothing in this file reads
+    // `Wal`/`WalReplay`) -- so `wal_sequence` is always `0` here, truthfully.
+    crate::worktree_baseline::record_worktree_baseline(
+        layout,
+        &snapshot.ref_name,
+        Some(snapshot.target_block_id),
+        0,
+    )?;
     let paths = snapshot
         .manifest
         .files

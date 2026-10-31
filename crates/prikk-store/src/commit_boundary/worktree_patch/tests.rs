@@ -172,6 +172,11 @@ fn seal_active_patch(layout: &RepositoryLayout, ref_name: &str) -> ObjectId {
 
     let active_lock = ActiveLock::acquire(layout, DEFAULT_ACTIVE_NAME).unwrap();
     finish_active_publication_cleanup(layout, &active_lock).unwrap();
+    // 0.56.0 step W2 (R1): this helper hand-rolls what a real `prikk seal` does, so it must also
+    // hand-roll that fix's one new step -- otherwise the next commit in the same test sees a stale
+    // record and R2's guard (correctly, for a real seal) refuses it.
+    crate::worktree_baseline::record_worktree_baseline(layout, ref_name, Some(block_id), 0)
+        .unwrap();
     block_id
 }
 

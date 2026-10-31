@@ -32,6 +32,7 @@ use crate::patch_replay::decode::{
 };
 use crate::patch_replay::resolve_folded_worktree_baseline;
 use crate::path::{RepoPath, authoring_path_error, join_repo_path_to_root};
+use crate::refs::validate_local_branch_ref;
 use crate::rename_declaration::read_rename_declarations;
 use crate::wal::{Wal, WalReplay};
 use crate::{ActiveRefMetadata, read_active_ref_metadata};
@@ -67,6 +68,14 @@ pub struct WorktreeStatusReport {
     /// RFC 147 §2f: each carries what the next `commit` will do with it, from the classifier commit
     /// itself obeys (`declaration_resolution`) — never a second reading of the same rules.
     pub declarations: Vec<DeclarationOutcome>,
+    /// `Some(ref_name)` when `ref_name`'s recorded worktree baseline (0.56.0 step W2, R1) is behind
+    /// its live tip -- some other command moved the ref since this worktree was last written, and
+    /// the `Missing` entries above that this causes are not a deletion the user made. `None` when no
+    /// record exists (R1's migration fallback) or the record is current. The prose printer reports
+    /// this instead of walking every such `Missing` entry one by one (R2); `changes` itself is left
+    /// exactly as a live replay against the ref's current tip would report it either way, so a
+    /// `--format json` consumer that wants the raw per-path facts still has them.
+    pub behind_ref: Option<String>,
 }
 
 impl WorktreeStatusReport {
@@ -206,7 +215,68 @@ pub(crate) fn worktree_status_over_sound_replay(
         active_replay,
         &mut text_cache,
     )?;
+    // 0.56.0 step W2 (R2): the live identity this report's own `resolved` already derived --
+    // `compare_worktree_baseline_with_live`'s own doc explains why this reuses it rather than calling
+    // `compare_worktree_baseline`, which would resolve the live baseline a second, avoidable time
+    // (measured: enough extra object/pointer-index reading to trip `store_size_independence`'s
+    // ref-count ceiling for this call).
+    let canonical_ref = validate_local_branch_ref(ref_name)?;
+    let live = crate::worktree_baseline::WorktreeBaselineIdentity {
+        ref_name: canonical_ref,
+        baseline: resolved.lineage.map(|(block, _)| block),
+        wal_sequence: if resolved.queued_on_other_ref.is_some() {
+            0
+        } else {
+            active_replay.records.last().map_or(0, |record| record.seq)
+        },
+    };
+    let mut report = worktree_status_from_resolved(layout, ref_name, resolved)?;
+    if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =
+        crate::worktree_baseline::compare_worktree_baseline_with_live(layout, live)?
+    {
+        // Only when the record genuinely names `ref_name` itself -- a record naming some other ref
+        // entirely is an odd case this report does not try to characterize as "behind".
+        if recorded.ref_name == report.ref_name {
+            report.behind_ref = Some(report.ref_name.clone());
+        }
+    }
+    Ok(report)
+}
 
+/// [`worktree_status_over_sound_replay`], against an **explicit recorded baseline** instead of
+/// `ref_name`'s live tip (0.56.0 step W2, R2): what `branch_switch.rs`'s `require_clean` needs when
+/// the worktree's record for the branch being left is stale -- "clean" must be judged against what
+/// the worktree was actually last materialized from, never against a tip some other command moved it
+/// to since. Reuses every line of the declaration/ignore/untracked logic
+/// [`worktree_status_from_resolved`] already has; only the baseline derivation differs.
+pub(crate) fn worktree_status_against_recorded_baseline(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    recorded: &crate::worktree_baseline::WorktreeBaselineIdentity,
+    active_replay: &WalReplay,
+) -> Result<WorktreeStatusReport> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let mut text_cache = TextCache::new();
+    let resolved = crate::patch_replay::resolve_state_at_recorded_baseline(
+        layout,
+        &object_store,
+        recorded.baseline,
+        recorded.wal_sequence,
+        active_replay,
+        &mut text_cache,
+    )?;
+    worktree_status_from_resolved(layout, ref_name, resolved)
+}
+
+/// The body [`worktree_status_over_sound_replay`] and [`worktree_status_against_recorded_baseline`]
+/// share (0.56.0 step W2): everything downstream of having a [`crate::patch_replay::FoldedWorktreeBaseline`]
+/// in hand, however it was derived. Neither `object_store` nor `active_replay` is needed again past
+/// this point -- confirmed by reading the whole function body below before this split, not assumed.
+fn worktree_status_from_resolved(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    resolved: crate::patch_replay::FoldedWorktreeBaseline,
+) -> Result<WorktreeStatusReport> {
     let mut baseline_nodes: BTreeMap<String, DeclaredSource> = BTreeMap::new();
     let mut baseline_paths = BTreeSet::new();
     let mut seen_paths = BTreeSet::new();
@@ -330,6 +400,7 @@ pub(crate) fn worktree_status_over_sound_replay(
         changes,
         queued_elsewhere: resolved.queued_on_other_ref,
         declarations,
+        behind_ref: None,
     })
 }
 

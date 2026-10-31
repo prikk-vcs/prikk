@@ -127,7 +127,7 @@ const UPPER_LAYER: [&str; 30] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-const LOWER_LAYER: [&str; 38] = [
+const LOWER_LAYER: [&str; 39] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -159,6 +159,10 @@ const LOWER_LAYER: [&str; 38] = [
     "trust_index",
     "wal",
     "worktree_marker",
+    // 0.56.0 step W2: the recorded worktree baseline (R1/R2), read and written by `commit`
+    // (`commit_boundary::worktree_patch`) itself, not only by the CLI -- so, unlike
+    // `worktree_status`/`branch_switch` above, it sits here: a lower module depends on it.
+    "worktree_baseline",
     // RFC 136 increment 2c: a snapshot anchor that could not be used, and the per-thread list the CLI drains to
     // name it on stderr. Depends on no store module (only `prikk_object`); `lifecycle_cache::anchored_text` and
     // `patch_replay::anchor` (both lower) record and construct it, and `lib.rs` exports the drain.
@@ -581,6 +585,42 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 not, since the edges that close the loop do not pass through \
                                 `anchored_parent_state` at all",
     },
+    DeclaredCycle {
+        edges: &[("commit_boundary::worktree_patch", "worktree_baseline")],
+        reason: "0.56.0 step W2 (R1/R2): `node_authoring.rs` calls `worktree_baseline::read_\
+                  worktree_baseline`/`resolve_state_at_recorded_baseline` to tell a deliberate \
+                  deletion from a file never held, and `record_worktree_baseline` to keep the \
+                  record current -- the same co-designed shape `active <-> worktree_patch` above \
+                  already is",
+        what_would_remove_it: "passing the comparison in from a caller above both modules instead \
+                                of asking mid-call -- not attempted, same reason as the pair above",
+    },
+    DeclaredCycle {
+        edges: &[("worktree_baseline", "commit_boundary::active")],
+        reason: "0.56.0 step W2: the comparison needs active-WAL ownership, which only \
+                  `commit_boundary::active::active_ref_ownership` (via the crate-root re-export \
+                  RFC 130 §1 already warned about) answers -- closing the loop the entry above opens",
+        what_would_remove_it: "duplicating the ownership read instead of asking `commit_boundary::\
+                                active` -- worse, not better",
+    },
+    DeclaredCycle {
+        edges: &[("worktree_baseline", "patch_replay")],
+        reason: "0.56.0 step W2: the comparison replays the recorded identity through \
+                  `patch_replay::resolve_state_at_recorded_baseline` (kept there, not duplicated, \
+                  so it shares `single_parent_chain`/`resolve_baseline_state_with` with every other \
+                  baseline derivation) and reads the live one through `resolve_worktree_baseline`",
+        what_would_remove_it: "moving that function into `worktree_baseline` -- real, but it would \
+                                re-import `patch_replay`'s own internals rather than reuse them, \
+                                the same duplication RFC 122's cycle above already rejected",
+    },
+    DeclaredCycle {
+        edges: &[("worktree_baseline", "refs")],
+        reason: "0.56.0 step W2: every read/write validates its ref name through `refs::validate_\
+                  local_branch_ref`, the one function every ref-name-taking module already calls",
+        what_would_remove_it: "duplicating ref-name validation locally -- this gate's own `refs \
+                                <-> trust`/`refs <-> commit_boundary::active` entries already treat \
+                                that as worse than the edge",
+    },
 ];
 
 /// One declared hub: a module with high fan-in *and* high fan-out, and why that is consolidation
@@ -776,6 +816,16 @@ const DECLARED_HUBS: &[DeclaredHub] = &[
                   for the same container-scan primitives `patch_exchange` already used; `received`, \
                   for the received-pointer walk 0.56.0 step 1a2 added) and the one new fan-in edge \
                   (`show`) are this one relocation, not reach that crept outward on its own",
+    },
+    DeclaredHub {
+        module: "worktree_baseline",
+        reason: "0.56.0 step W2 (R1/R2): the one worktree-baseline record. Fan-in \
+                  (`commit_boundary::worktree_patch`, `branch_switch`, `worktree_status`, \
+                  `worktree`, `patch_checkout`, `rfc111_seal_simulation`) is every site the ruling \
+                  names as a required write or read for one shared record and predicate ('one \
+                  predicate, not four copies'), not reach that crept outward. Fan-out \
+                  (`patch_replay`, `refs`, `commit_boundary::active`, this crate's durable-file \
+                  toolkit) is the three cycle edges declared above",
     },
 ];
 

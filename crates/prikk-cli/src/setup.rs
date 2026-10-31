@@ -124,6 +124,10 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
         .map_err(|err| format!("failed to create {}: {err}", root.display()))?;
 
     let layout = RepositoryLayout::init(root.clone()).map_err(|err| err.to_string())?;
+    // 0.56.0 step W2 (R1): see `run_init`'s identical call -- `setup` performs `init` as its own
+    // first step (this function's own doc), so it needs the same genesis-record establishment, not a
+    // second, independently-written one.
+    prikk_store::record_initial_worktree_baseline(&layout).map_err(|err| err.to_string())?;
     println!(
         "initialized Prikk repository at {}",
         root.join(".prikk").display()

@@ -106,6 +106,30 @@
   now gives the identical id for the identical cause, matching the sentence it already gave. An
   empty, absolute, too-long, or otherwise ill-formed path is unaffected and still reads
   `damaged-repository`: only the genuinely version-relative cause (today: non-ASCII) moved.
+- **`commit` now refuses a path that would record as deleted but was never in this worktree,
+  instead of silently authoring `delete-file` for it.** Before this, "missing from the worktree"
+  was read as a deletion no matter why the path was missing — including when some other command
+  (`merge --into`, `archive import --adopt`, `sync seal --claim`, or `branch create --from` onto
+  the unborn current branch) had moved the ref forward without ever writing the worktree, or when
+  `commit --ref <other>` targeted a branch this worktree had never been synced to. Either way, the
+  next ordinary commit silently signed a lie: that the user had deleted a file they never even
+  received. `commit` now remembers, per path, whether this worktree was ever actually written from
+  a state that held it, and refuses — naming every such path, and the command that resyncs
+  (`prikk branch switch <the current branch>`) — before authoring anything. A genuine deletion (a
+  file this worktree really did hold, then lost) still authors `delete-file` exactly as before.
+- **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
+  branch you were already on did nothing, even when the worktree had fallen behind that branch's
+  own current tip (the exact situation the point above now refuses to commit through) — and
+  switching away and back did not help either, since leaving was itself refused against the
+  branch's own moved tip. Naming the current branch now resyncs when the worktree's own recorded
+  state disagrees with what the branch currently resolves to: it materializes the branch's current
+  files and clears the staleness, the same way switching to a different branch always has. It
+  remains the documented no-op whenever the worktree's record is already current.
+- **`worktree-status` reports "behind `<ref>`" instead of listing every file a moved ref added as
+  `missing`**, when the worktree's own record shows it has fallen behind that ref — the same
+  staleness `commit`'s new refusal above detects. A file the user genuinely deleted is unaffected
+  and still reports as `missing`; `--format json` carries the same fact as a new, additive
+  `"behind_ref"` field, `null` when the worktree is current.
 
 ### Added
 

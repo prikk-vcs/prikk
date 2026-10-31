@@ -33,5 +33,7 @@ mod seal_recovery;
 mod seal_trust_gate;
 #[path = "commit_and_seal/step3e_t2_non_ascii_authoring.rs"]
 mod step3e_t2_non_ascii_authoring;
+#[path = "commit_and_seal/step3w2_worktree_baseline.rs"]
+mod step3w2_worktree_baseline;
 #[path = "support/mod.rs"]
 mod support;

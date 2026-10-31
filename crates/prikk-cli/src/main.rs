@@ -217,7 +217,13 @@ fn run_init(path: Option<String>) -> std::result::Result<(), CliError> {
         Some(path) => PathBuf::from(path),
         None => current_dir()?,
     };
-    RepositoryLayout::init(root.clone()).map_err(|err| err.to_string())?;
+    let layout = RepositoryLayout::init(root.clone()).map_err(|err| err.to_string())?;
+    // 0.56.0 step W2 (R1): a fresh repository's worktree starts empty, matching the unborn
+    // `heads/main` branch `init` itself just established -- recorded explicitly rather than left to
+    // the "no record reads as matching" migration fallback, so the record exists uniformly from the
+    // start. A no-op on an already-initialized repository (`record_initial_worktree_baseline`'s own
+    // doc).
+    prikk_store::record_initial_worktree_baseline(&layout).map_err(|err| err.to_string())?;
     println!(
         "initialized Prikk repository at {}",
         root.join(".prikk").display()

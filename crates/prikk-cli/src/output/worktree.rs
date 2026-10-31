@@ -54,6 +54,12 @@ pub(crate) fn print_worktree_status(
     } else {
         println!("worktree: changed against baseline");
         for change in &report.changes {
+            // 0.56.0 step W2 (R2): when the record shows this worktree behind `ref`, a `Missing`
+            // entry here is a file the ref gained since, never a deletion candidate -- reported once
+            // below as "behind <ref>" instead of one line per path.
+            if report.behind_ref.is_some() && change.kind == WorktreeChangeKind::Missing {
+                continue;
+            }
             // The marker is a bracketed suffix, deliberately: the entry line's first word is still
             // the change kind, so a consumer splitting on it reads exactly what it read before.
             let refused = match &change.refusal {
@@ -68,6 +74,14 @@ pub(crate) fn print_worktree_status(
                 refused
             );
         }
+    }
+    if let Some(behind_ref) = &report.behind_ref {
+        println!(
+            "worktree: behind {behind_ref} ({} file(s) it added since this worktree was last \
+             written from it are not here yet; not a deletion); run `prikk branch switch <the \
+             current branch>` (`prikk status` names the current branch) to catch up",
+            report.count_kind(WorktreeChangeKind::Missing)
+        );
     }
     // RFC 144 §4o.3: a declaration made and forgotten becomes permanent history at the next
     // commit, so it must be visible in the command whose job is what this commit will do.
@@ -165,6 +179,17 @@ pub(crate) fn print_worktree_status_json(
             escape_json_string(other_ref)
         )),
         None => json.push_str("  \"queued_elsewhere\": null,\n"),
+    }
+    // 0.56.0 step W2 (R2): additive within `worktree-status-report-v1`, on `queued_elsewhere`'s own
+    // precedent -- `null` unless the record shows this worktree behind `ref`. `changes` itself is
+    // left exactly as a live replay would report it (including any `Missing` entries this causes),
+    // so a JSON consumer that wants the raw per-path facts keeps them; this field only adds context.
+    match &report.behind_ref {
+        Some(behind_ref) => json.push_str(&format!(
+            "  \"behind_ref\": {},\n",
+            escape_json_string(behind_ref)
+        )),
+        None => json.push_str("  \"behind_ref\": null,\n"),
     }
     json.push_str("  \"changes\": [");
     for (index, change) in report.changes.iter().enumerate() {

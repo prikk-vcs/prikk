@@ -198,6 +198,14 @@ fn seal_active_no_audit(
             )?;
             finish_active_publication_cleanup(&layout, &active_lock)
                 .map_err(|err| err.to_string())?;
+            // 0.56.0 step W2 (R1): the fold is now sealed -- the new block, WAL back to empty.
+            prikk_store::record_worktree_baseline(
+                &layout,
+                &ref_name,
+                Some(current.target_block_id),
+                0,
+            )
+            .map_err(|err| err.to_string())?;
             return Ok(SealCommandResult {
                 ref_name,
                 patch_count: wal_patch_ids.len(),
@@ -277,6 +285,9 @@ fn seal_active_no_audit(
         )
         .map_err(|err| err.to_string())?;
     finish_active_publication_cleanup(&layout, &active_lock).map_err(|err| err.to_string())?;
+    // 0.56.0 step W2 (R1): the fold is now sealed -- the new block, WAL back to empty.
+    prikk_store::record_worktree_baseline(&layout, &ref_name, Some(block_id), 0)
+        .map_err(|err| err.to_string())?;
     Ok(SealCommandResult {
         ref_name,
         patch_count: patch_ids.len(),

@@ -263,9 +263,11 @@ fn an_inline_test_module_is_not_production() {
         // two-line `let` back onto one line, 1525 -> 1524. 0.56.0 step 3d2: the new-file create
         // site's `RepoPath::parse` now rewords a non-ASCII refusal into the authoring sentence
         // (`.map_err(authoring_path_error)`, one extra line plus the call it was chained onto),
-        // 1524 -> 1526.
+        // 1524 -> 1526. 0.56.0 step W2: R2's per-path "never held" deletion-inference check (R1's
+        // read of the recorded baseline, the refusal message, and the record write after a
+        // successful commit), 1526 -> 1621.
         physical,
-        1526,
+        1621,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -275,7 +277,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1477);
+    assert_eq!(counted.production_lines, 1572);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -350,7 +352,11 @@ fn a_cfg_test_subtree_is_never_walked() {
     // already `cfg(test)`-invisible: 169 -> 170.
     // 0.56.0 step 3e added `claim_chain.rs`; its own `claim_chain/tests.rs` is `cfg(test)`-invisible:
     // 170 -> 171.
-    assert_eq!(store.production_files, 171);
+    // 0.56.0 step W2 added `worktree_baseline.rs` (its own tests are an inline `#[cfg(test)] mod
+    // tests` at the end, `cfg(test)`-invisible, not a separate file) and `patch_replay/recorded_
+    // baseline.rs` (split out of `patch_replay.rs`, over the size-check limit, same reason as A6
+    // above): 171 -> 173.
+    assert_eq!(store.production_files, 173);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

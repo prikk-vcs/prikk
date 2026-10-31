@@ -134,6 +134,12 @@ pub(crate) fn simulate_one_seal(
         &publication,
     )?;
     finish_active_publication_cleanup(layout, &active_lock)?;
+    // 0.56.0 step W2 (R1): mirrors `seal_active_no_audit`'s own new-content-path fix, for the same
+    // "one implementation, not two that could drift apart" reason this module's own doc states --
+    // every one of this crate's own tests that seals through this simulation, then commits again,
+    // needs the record current exactly as a real `prikk seal` leaves it, or R2's guard (correctly)
+    // reads it as stale.
+    crate::worktree_baseline::record_worktree_baseline(layout, ref_name, Some(block_id), 0)?;
     Ok(published)
 }
 

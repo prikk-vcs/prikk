@@ -520,6 +520,51 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         Some((baseline_block, horizon)) => (Some(baseline_block), Some(horizon)),
         None => (None, None),
     };
+
+    // 0.56.0 step W2 (R2): the paths this worktree's own recorded baseline held, if any record
+    // exists -- consulted *per path* by the deletion-inference loop below, not as a blanket
+    // ref-level gate here. A blanket "does the recorded identity match `canonical_ref`'s live one"
+    // gate (tried first, in an earlier round of this same change) refused real, legitimate usage
+    // this codebase's own test suite already relies on: committing onto a ref other than the one the
+    // worktree was last recorded against is completely safe whenever *that ref's own baseline* has
+    // nothing missing from disk -- `dc74_merge_execution`'s fixtures author directly onto a sibling
+    // branch (`commit --ref heads/topic` while the worktree is recorded against `heads/main`) purely
+    // to stage history, never switching the worktree, and nothing is lost because topic's own
+    // baseline at that point has no file this worktree lacks. What the ruling's "missing cannot tell
+    // a deletion from a file never held" is actually about is narrower: a specific baseline path,
+    // for *this* `canonical_ref`, that is missing from disk *and* was never part of what this
+    // worktree's record says it was last written from. `None` when there is no record (R1's own
+    // migration-safety rule: treated as matching, so every `Missing` path is still inferred a
+    // deletion exactly as before this round).
+    let recorded_identity =
+        crate::worktree_baseline::read_worktree_baseline(layout).map_err(AuthorError::Store)?;
+    let recorded_paths: Option<std::collections::BTreeSet<String>> = match &recorded_identity {
+        None => None,
+        Some(recorded) => {
+            // A fresh, throwaway cache -- never `queue_text_cache`, which `plan_edit_text` below
+            // reuses for the *target* ref's own folding; sharing it here would let a node that
+            // exists in both the recorded and the target state, with different text, poison the
+            // other's cached materialization.
+            let mut recorded_text_cache = crate::lifecycle_cache::replay::TextCache::new();
+            let recorded_state = crate::patch_replay::resolve_state_at_recorded_baseline(
+                layout,
+                &object_store,
+                recorded.baseline,
+                recorded.wal_sequence,
+                &active_replay,
+                &mut recorded_text_cache,
+            )
+            .map_err(AuthorError::Store)?;
+            Some(
+                recorded_state
+                    .state
+                    .live_nodes()
+                    .map(|(_, node)| node.path.as_str().to_string())
+                    .collect(),
+            )
+        }
+    };
+
     let baseline_state: NodeLifecycleState = resolved.state;
 
     // Baseline file view: path -> (node_id, kind, blob_id, mode). Symlink nodes are tracked so a
@@ -848,14 +893,52 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     }
 
     // Deletions: baseline files absent from the worktree.
+    //
+    // 0.56.0 step W2 (R2): a candidate absent from both the worktree *and* this worktree's own
+    // recorded baseline (when one exists) was never materialized here at all -- its absence cannot
+    // be the user's deletion, because there was never a chance to delete it. Refused, collecting
+    // every such path, rather than silently authoring `delete-file` for it.
+    let mut never_held = Vec::new();
     for (path, base) in &baseline_files {
         if !worktree.contains_key(path) {
             if renamed_away.contains(path) {
                 // Claimed above by a confirmed rename's own RenamePath -- not a plain deletion.
                 continue;
             }
+            if let Some(recorded_paths) = &recorded_paths {
+                if !recorded_paths.contains(path) {
+                    never_held.push(path.clone());
+                    continue;
+                }
+            }
             planned.push(plan_delete(base, path));
         }
+    }
+    if !never_held.is_empty() {
+        never_held.sort();
+        let recorded_desc = match &recorded_identity {
+            Some(recorded) => format!(
+                "this worktree was last written from {}",
+                crate::worktree_baseline::describe_identity(
+                    recorded.baseline,
+                    recorded.wal_sequence
+                )
+            ),
+            // Unreachable in practice: `recorded_paths` is only `Some` (so `never_held` can be
+            // non-empty) when `recorded_identity` is also `Some` -- kept as a real sentence, not an
+            // `unreachable!()`, since a refusal message must never panic to compose.
+            None => "this worktree has no recorded baseline".to_string(),
+        };
+        return Err(AuthorError::Store(PrikkError::Precondition(format!(
+            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {} path(s) \
+             the new state has are not in this worktree, and never were: {}; committing now \
+             would record them as deleted; run `prikk branch switch <the current branch>` (`prikk \
+             status` names the current branch) to bring the worktree up to date, then commit \
+             again",
+            crate::worktree_baseline::describe_identity(lineage_baseline_block_id, 0),
+            never_held.len(),
+            never_held.join(", ")
+        ))));
     }
     for path in baseline_symlinks.keys() {
         if !worktree.contains_key(path) {
@@ -1044,6 +1127,18 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     if !live_declarations.is_empty() {
         clear_rename_declarations(layout).map_err(AuthorError::Store)?;
     }
+
+    // 0.56.0 step W2 (R1): the worktree is now "the queued fold" at this new sequence -- the sealed
+    // baseline this commit authored against (`lineage_baseline_block_id`, unchanged by `commit`
+    // itself) with the active WAL folded up to the sequence this append just returned. Costs no
+    // replay: this is exactly what this call already knows, the moment it knows it.
+    crate::worktree_baseline::record_worktree_baseline(
+        layout,
+        &canonical_ref,
+        lineage_baseline_block_id,
+        wal_sequence,
+    )
+    .map_err(AuthorError::Store)?;
 
     Ok(WorktreePatchCommitReport {
         ref_name: canonical_ref,

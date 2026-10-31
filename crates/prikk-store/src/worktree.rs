@@ -95,6 +95,9 @@ pub fn materialize_snapshot_checkout(
     mark_worktree_dirty(layout, &MarkedTarget::Checkout(ref_name.to_string()))?;
     let write_report = materialize_replay_manifest_entries(layout, &manifest)?;
     clear_worktree_dirty(layout)?;
+    // 0.56.0 step W2 (R1): the snapshot materializer never folds the active WAL either (no
+    // `Wal`/`WalReplay` use in this file) -- `wal_sequence` is always `0`.
+    crate::worktree_baseline::record_worktree_baseline(layout, ref_name, Some(block_id), 0)?;
     Ok(SnapshotMaterializationReport {
         ref_name: ref_name.to_string(),
         provisional,
