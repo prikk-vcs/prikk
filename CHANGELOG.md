@@ -123,8 +123,16 @@
   rather than checking the path's own state regardless of which ref the record names. `commit` now
   remembers, per path, what this worktree was last actually written from, and refuses before
   authoring anything for a path whose live and recorded states disagree — in content, mode, kind,
-  presence, or the node it belongs to — naming every such path and the command that resyncs
-  (`prikk branch switch <the current branch>`). A path that is not stale, or a worktree that
+  presence, or the node it belongs to — naming every such path and the command that resyncs. The
+  way out always names `prikk branch switch <the record's own ref>` literally (the ref the
+  worktree's record actually names, never a placeholder — this always works, since the record is
+  always an accurate description of what the worktree physically holds), and additionally names
+  the current-branch self-switch, `prikk branch switch <the current branch>`, only when the branch
+  actually being committed onto is itself published — naming it unconditionally used to send a
+  user stuck on an unpublished current branch to a switch that itself refused ("... does not
+  exist; run `prikk branch create ...` first"), a dead end a real walkthrough
+  (`docs/src/guide/patches/worktree-patch.md`'s `commit --ref heads/topic` on a genuinely unborn
+  ref) reaches. A path that is not stale, or a worktree that
   already holds the live state for a stale one, is authored exactly as before; a genuine deletion,
   edit, mode change, or rename of content this worktree really did hold still authors normally.
   Committing onto a different ref than the one the worktree's record names is still ordinary and
@@ -148,7 +156,13 @@
   record actually named could ever resync; an ordinary commit afterward refused as stale and named
   a self-switch that itself refused the same way. A record is always what the worktree was
   actually, physically last written to match, so using it is never less correct than trusting the
-  pointer's own live state.
+  pointer's own live state. The self-switch now also resyncs when the current branch has never
+  been published at all (no `RefState` exists for it yet) and the record reads behind it — before
+  this, naming the current branch in that exact shape refused unconditionally ("`<branch>` does
+  not exist; run `prikk branch create <branch>` first"), even though the worktree's own record
+  already named exactly what it should resync to. It now materializes the branch's own empty
+  (never-published) state and records that, narrowly for this one shape — every other target still
+  refuses without a published `RefState`, open-or-closed check unaffected.
   A moved *queued, unsealed* fold (for example `rollback-draft --append-inverse`, which never
   touches the sealed branch or the worktree) is detected the same way, but is never resynced by a
   self-switch materializing it directly — doing so would write the sealed portion of the worktree

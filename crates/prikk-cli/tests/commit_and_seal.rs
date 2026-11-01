@@ -43,5 +43,7 @@ mod step3w2c_cross_ref_and_fold_resync;
 mod step3w2d_symmetric_record_silence;
 #[path = "commit_and_seal/step3w2f_record_outlives_pointer.rs"]
 mod step3w2f_record_outlives_pointer;
+#[path = "commit_and_seal/step3w3_0_refusal_names_a_way_out_that_works.rs"]
+mod step3w3_0_refusal_names_a_way_out_that_works;
 #[path = "support/mod.rs"]
 mod support;

@@ -2,7 +2,10 @@
 //! pointer from one branch to another, losing nothing.
 //!
 //! **Refusals, in order, each `Precondition` naming the way out:**
-//! 1. the target is not an existing local branch, or is closed;
+//! 1. the target is not an existing local branch, or is closed -- except a self-switch whose own
+//!    comparison already reads `Behind` against an unpublished target (0.56.0 step W3-0): RFC 147
+//!    §2i's own "an unpublished current branch is never 'does not exist'" extends here too, and
+//!    the switch materializes the target's empty (Genesis) state instead;
 //! 2. the active WAL holds unsealed work owned by a ref other than the target;
 //! 3. the worktree is not clean against the branch being left (`worktree_status`'s own report --
 //!    untracked files are not a difference this refuses on; they are never touched);
@@ -52,7 +55,8 @@ use crate::lock::ActiveLock;
 use crate::node::node_lifecycle::NodeContent;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::{
-    ReplayManifestEntry, SnapshotAnchorFallback, resolve_folded_worktree_baseline_with_own_cache,
+    ReplayManifest, ReplayManifestEntry, SnapshotAnchorFallback,
+    resolve_folded_worktree_baseline_with_own_cache,
 };
 use crate::refs::{RefStore, validate_local_branch_ref};
 use crate::wal::Wal;
@@ -128,8 +132,34 @@ pub fn switch_branch(
         }
     }
 
-    // Refusal 1: an existing, open local branch.
-    require_open_branch(layout, &target)?;
+    // Refusal 1: an existing, open local branch -- except a self-switch whose own comparison
+    // already reads `Behind` against a target with no published `RefState` at all (0.56.0 step
+    // W3-0). RFC 147 §2i's own reasoning ("an unpublished current branch is never 'does not
+    // exist'") already governs the no-op path just above; it has no equivalent here, so this
+    // self-switch refused unconditionally even though the no-op path would treat the same target
+    // as existing were the comparison `Current`/`NoRecord` instead of `Behind` -- exactly the
+    // `worktree-patch.md` walkthrough's own stuck shape (`commit --ref heads/topic` on a
+    // genuinely unborn ref, then `seal`, leaves `heads/main` unpublished and the record `Behind`
+    // it). A cheap, separate WAL read here, mirroring the no-op check's own `probe_replay` just
+    // above -- its own soundness is refusal 2's job, just below, not this check's. Scoped as
+    // narrowly as the shape itself: any other target lacking a published `RefState` (one never
+    // named by `commit --ref`, or a genuinely nonexistent branch) still refuses exactly as before,
+    // since `from == Some(target.as_str())` is false for it.
+    let self_switch_unpublished_behind = from == Some(target.as_str())
+        && RefStore::new(layout.clone())
+            .read_current_ref_state_id(&target)?
+            .is_none()
+        && matches!(
+            crate::worktree_baseline::compare_worktree_baseline(
+                layout,
+                &target,
+                &Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?,
+            )?,
+            crate::worktree_baseline::WorktreeBaselineComparison::Behind { .. }
+        );
+    if !self_switch_unpublished_behind {
+        require_open_branch(layout, &target)?;
+    }
 
     // Refusal 2: unsealed work belongs to the target or to nobody.
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
@@ -179,15 +209,35 @@ pub fn switch_branch(
         }
     }
 
-    // RFC 136 increment 2b: the target's tree may start only at a replay-verified snapshot.
-    let (target_replay, anchor_fallback) =
-        crate::patch_replay::replay_for_verified_worktree_write(layout, &target)?;
+    // RFC 136 increment 2b: the target's tree may start only at a replay-verified snapshot --
+    // except the self-switch-to-unpublished-`Behind` shape just exempted from refusal 1 above
+    // (0.56.0 step W3-0), whose target has no published tip to anchor replay at in the first
+    // place. Its true "sealed tip" is RFC 147 §2i's own Genesis: an empty baseline, the same shape
+    // `resolve_worktree_baseline`'s own `Genesis` branch (`patch_replay.rs`) already gives an
+    // unpublished ref elsewhere in this codebase (`commit --ref <unborn ref>`'s own authoring
+    // path). `replay_for_verified_worktree_write` itself errors ("ref ... is not published") for
+    // exactly this ref, so it is not called for this one case -- the empty manifest is built by
+    // hand instead, with no baseline block and no anchor to have fallen back from.
+    let (target_manifest, target_baseline_block_id, anchor_fallback): (
+        ReplayManifest,
+        Option<ObjectId>,
+        Option<SnapshotAnchorFallback>,
+    ) = if self_switch_unpublished_behind {
+        (ReplayManifest { files: Vec::new() }, None, None)
+    } else {
+        let (target_replay, anchor_fallback) =
+            crate::patch_replay::replay_for_verified_worktree_write(layout, &target)?;
+        (
+            target_replay.manifest,
+            Some(target_replay.target_block_id),
+            anchor_fallback,
+        )
+    };
     // 0.56.0 step W2d-2: every switch -- including a self-switch -- now always writes exactly the
     // sealed-tip-only, verified-anchor manifest. `recorded_queued_ids`/`recorded_wal_sequence` are
     // therefore always empty/`0` here, as they were before W2c's now-removed branch: the one case
     // that would have recorded a non-empty fold (self-switch, non-empty queue, `Behind`) is refused
     // above instead of reaching this point.
-    let target_manifest = target_replay.manifest;
     let recorded_queued_ids: Vec<ObjectId> = Vec::new();
     let recorded_wal_sequence: u64 = 0;
     let target_files: BTreeMap<&str, &ReplayManifestEntry> = target_manifest
@@ -292,7 +342,7 @@ pub fn switch_branch(
     crate::worktree_baseline::record_worktree_baseline(
         layout,
         &target,
-        Some(target_replay.target_block_id),
+        target_baseline_block_id,
         recorded_wal_sequence,
         &recorded_queued_ids,
     )?;

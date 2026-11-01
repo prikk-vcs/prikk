@@ -153,8 +153,17 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   worktree's own record — content, mode, kind, presence, or the node it belongs to — unless the
   worktree already holds the live state for it, and this holds in exactly the same way whichever
   ref the record itself names.** `precondition not met: refusing to commit: <ref> is now at <state>,
-  and this worktree was last written from <state>; ...; run `prikk branch switch <the current
-  branch>` ... then commit again`, before authoring anything, naming every such path. A path
+  and this worktree was last written from <state>; ...; run `prikk branch switch <the record's own
+  ref>` ... then commit again`, before authoring anything, naming every such path. The way out
+  named is `prikk branch switch <the record's own ref>` — the ref the worktree's own record
+  actually names, substituted literally, never a placeholder, since switching to it always works
+  (the record is always an accurate description of what the worktree physically holds). The
+  current-branch self-switch, `prikk branch switch <the current branch>`, is named *additionally*
+  only when the ref actually being committed onto is itself published (0.56.0 step W3-0) — naming
+  it unconditionally used to send a user stuck on an unpublished current branch to a switch that
+  itself refused ("... does not exist; run `prikk branch create ...` first"), a dead end the
+  `worktree-patch.md` walkthrough's own `commit --ref heads/topic` on a genuinely unborn ref
+  reaches. A path
   missing from the worktree that the record also never explains reads "not in this worktree, and
   never were" (the deletion-shaped case: `merge --into`, `archive import --adopt`, `sync seal
   --claim`, `branch create --from` onto the unborn current branch, or `commit --ref <other>` from a
@@ -188,6 +197,17 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   away from a stale branch, and this same-branch resync, both succeed where each used to refuse or
   no-op. Switching to a *different* branch still materializes only that branch's sealed tip, never
   its own queued fold, unchanged by this round.
+  - **The self-switch also now resyncs when the current branch has never been published at all
+    (0.56.0 step W3-0)** — no `RefState` exists for it yet, and the record reads behind it (the
+    `worktree-patch.md` walkthrough's own shape: `commit --ref heads/topic` on a genuinely unborn
+    ref, then `seal`, leaves the current branch unpublished). Before this, naming the current
+    branch in that exact shape refused unconditionally, at the existing-branch check every switch
+    opens with, with a wholly different message ("`<branch>` does not exist; run `prikk branch
+    create <branch>` first") — even though the worktree's own record already named exactly what it
+    should resync to. It now materializes the branch's own empty (never-published) state, judges
+    "clean" against the record the same way every other behind-reading switch does, and records
+    that — narrowly for this one shape; every other target still refuses without a published
+    `RefState`, open-or-closed check unaffected.
   - **A moved, queued, unsealed fold (0.56.0 step W2c) — as `rollback-draft --append-inverse`
     moves without touching the sealed branch or the worktree — is detected the same way, but a
     bare same-branch resync never materializes it directly (0.56.0 step W2d-2): doing so would

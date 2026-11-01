@@ -1155,10 +1155,38 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                 present.join(", ")
             ));
         }
+        // 0.56.0 step W3-0: name a way out that works in the state found, not always the generic
+        // self-switch placeholder -- which refuses too, at `branch switch`'s refusal 1, whenever
+        // `canonical_ref` is unpublished (`.git-exclude/reviewed/0.56.0-step-3w2f-review-v1.md`'s
+        // own finding, from the `worktree-patch.md` walkthrough: a fresh repo, `commit --ref
+        // heads/topic` on a genuinely unborn ref, then `seal`, leaves `heads/main` unpublished).
+        // `branch switch <recorded ref>` -- the ref the worktree's own record actually names, read
+        // directly off `recorded_identity` (already in scope, not the pointer, so this is not a
+        // layering violation of RFC 151 §2.1) -- is named always: R1's own invariant (the record is
+        // always an accurate description of what the worktree physically holds) means switching to
+        // it never fails for lack of a published tip. The self-switch (`branch switch <the current
+        // branch>`, still the placeholder wording -- this store layer still cannot resolve the
+        // pointer's own name) is named *additionally*, only when `canonical_ref` is itself published
+        // (`lineage_baseline_block_id.is_some()`, cheap, already in scope) -- this message does not
+        // attempt to re-derive whether `branch_switch.rs`'s own narrower W3-0 exemption (self-switch
+        // to an unpublished, `Behind`-reading target) would apply to this specific case; naming only
+        // the always-correct route in the unpublished case is a deliberate simplification, per the
+        // ruling's own "only when the current branch is published" wording.
+        let record_switch = recorded_identity
+            .as_ref()
+            .map(|recorded| format!("`prikk branch switch {}`", recorded.ref_name));
+        let self_switch = "`prikk branch switch <the current branch>` (`prikk status` names the \
+                            current branch)";
+        let ways_out = match (&record_switch, lineage_baseline_block_id.is_some()) {
+            (Some(record_switch), true) => format!("run {record_switch}, or {self_switch},"),
+            (Some(record_switch), false) => format!("run {record_switch}"),
+            // Unreachable alongside `recorded_desc`'s own `None` arm, for the same reason -- kept
+            // as a real sentence, never `unreachable!()`.
+            (None, _) => format!("run {self_switch}"),
+        };
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
-            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; run \
-             `prikk branch switch <the current branch>` (`prikk status` names the current \
-             branch) to bring the worktree up to date, then commit again",
+            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; {ways_out} \
+             to bring the worktree up to date, then commit again",
             crate::worktree_baseline::describe_identity(lineage_baseline_block_id, 0),
             clauses.join("; ")
         ))));
