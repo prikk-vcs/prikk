@@ -11,8 +11,11 @@
 //! 2. Capture the files the current branch's own live tip is about to stop being (judged against the
 //!    record exactly like [`crate::branch_switch`]'s own resync, since after step 3 that tip is no
 //!    longer reachable as "the ref's live state" at all). Steps 1 and 2 are combined in
-//!    [`require_worktree_clean_and_capture`], called once, immediately after the producer's own R4
-//!    check, before it builds or writes anything of its own.
+//!    [`require_worktree_clean_and_capture`], called once, after every one of the producer's own
+//!    read-only refusals (its R4 check, any RFC 164 Rule D tail/damage check, and so on -- each of
+//!    those must still refuse before this call ever runs, since it derives and caches lifecycle
+//!    state as a side effect, which a refusal must not leave behind either), but before it builds
+//!    or writes anything of its own.
 //! 2b. Immediately before the producer's own publish (step 3) -- not bundled with steps 1-2 any
 //!    more -- mark the worktree dirty as a `Switch` to the current branch
 //!    ([`mark_current_branch_switch_pending`]), using the `PendingCurrentBranchMaterialization` step
