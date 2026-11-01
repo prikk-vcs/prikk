@@ -123,8 +123,7 @@ fn make_a_txt_stale_via_sync_seal(repo: &Path, new_content: &[u8]) {
         "archive export",
     );
 
-    let mirror =
-        support::unique_repo(&format!("w2b-stale-mirror-{}", support::unique_suffix()));
+    let mirror = support::unique_repo(&format!("w2b-stale-mirror-{}", support::unique_suffix()));
     support::init(&mirror);
     support::trust_maintainer(&mirror);
     ok(
@@ -186,10 +185,8 @@ fn make_a_txt_stale_via_sync_seal(repo: &Path, new_content: &[u8]) {
             .unwrap(),
         "sync build",
     );
-    let claims_file = std::env::temp_dir().join(format!(
-        "w2b-stale-claims-{}.txt",
-        support::unique_suffix()
-    ));
+    let claims_file =
+        std::env::temp_dir().join(format!("w2b-stale-claims-{}.txt", support::unique_suffix()));
     ok(
         &support::prikk(repo)
             .args([

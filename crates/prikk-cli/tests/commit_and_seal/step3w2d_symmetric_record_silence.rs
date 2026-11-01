@@ -102,7 +102,13 @@ fn make_new_file_appear_on_main_via_sync_seal(repo: &Path, path: &str, content: 
         &switch(&mirror, "heads/main"),
         "branch switch heads/main in mirror (normalize the adopted ref)",
     );
-    support::generation(&mirror, "heads/main", path, content, "add path, in mirror only");
+    support::generation(
+        &mirror,
+        "heads/main",
+        path,
+        content,
+        "add path, in mirror only",
+    );
 
     let have_file =
         std::env::temp_dir().join(format!("w2d-stale-have-{}.bin", support::unique_suffix()));
@@ -143,10 +149,8 @@ fn make_new_file_appear_on_main_via_sync_seal(repo: &Path, path: &str, content: 
             .unwrap(),
         "sync build",
     );
-    let claims_file = std::env::temp_dir().join(format!(
-        "w2d-stale-claims-{}.txt",
-        support::unique_suffix()
-    ));
+    let claims_file =
+        std::env::temp_dir().join(format!("w2d-stale-claims-{}.txt", support::unique_suffix()));
     ok(
         &support::prikk(repo)
             .args([

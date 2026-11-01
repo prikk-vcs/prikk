@@ -36,7 +36,10 @@ use crate::{
 const MAIN: &str = "heads/main";
 
 /// Publish `heads/main`'s genesis block, containing `files`, as a root block.
-fn publish_genesis(layout: &RepositoryLayout, files: &[(&str, &[u8])]) -> prikk_error::Result<ObjectId> {
+fn publish_genesis(
+    layout: &RepositoryLayout,
+    files: &[(&str, &[u8])],
+) -> prikk_error::Result<ObjectId> {
     let mut object_store = FileObjectStore::new(layout.clone());
     let mut operations = Vec::new();
     for (index, (path, bytes)) in files.iter().enumerate() {

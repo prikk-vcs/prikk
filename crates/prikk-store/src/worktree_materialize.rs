@@ -213,7 +213,9 @@ pub(crate) fn plan_materialization<'a>(
                 {
                     writes.push(entry);
                 } else {
-                    in_the_way.push(format!("{path} (a file that is not part of the prior state)"));
+                    in_the_way.push(format!(
+                        "{path} (a file that is not part of the prior state)"
+                    ));
                 }
             }
             Some(_) => in_the_way.push(format!("{path} (not a regular file)")),

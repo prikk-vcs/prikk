@@ -215,8 +215,7 @@ fn every_seal_path_yields_its_pinned_block_id() {
     let accepted = tip(&layout, FEATURE);
 
     // 4. `merge`: a Merge block on main adopting feature's c.txt from baseline `sealed`.
-    let report =
-        execute_merge(&layout, sealed, MAIN, FEATURE, &maintainer, None).expect("merge");
+    let report = execute_merge(&layout, sealed, MAIN, FEATURE, &maintainer, None).expect("merge");
     assert_eq!(report.block_id, tip(&layout, MAIN));
     let merged = report.block_id;
 

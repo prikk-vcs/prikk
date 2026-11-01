@@ -907,9 +907,15 @@ fn same_state_across_a_merge() {
     crate::rfc111_seal_simulation::simulate_one_seal(&history.layout, side_ref, &signer).unwrap();
 
     // Merge `heads/side` into `heads/main`.
-    let report =
-        crate::execute_merge(&history.layout, baseline, "heads/main", side_ref, &signer, None)
-            .unwrap();
+    let report = crate::execute_merge(
+        &history.layout,
+        baseline,
+        "heads/main",
+        side_ref,
+        &signer,
+        None,
+    )
+    .unwrap();
 
     let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
     let block_ids = super::super::read::single_parent_chain(&reader, report.block_id).unwrap();

@@ -346,7 +346,13 @@ pub fn execute_merge(
             unchanged_files,
             deleted_files,
             anchor_fallback,
-        }) => (true, written_files, unchanged_files, deleted_files, anchor_fallback),
+        }) => (
+            true,
+            written_files,
+            unchanged_files,
+            deleted_files,
+            anchor_fallback,
+        ),
         None => (false, 0, 0, 0, None),
     };
 

@@ -129,7 +129,10 @@ fn make_main_stale_via_sync_seal(repo: &Path, sibling_name: &str, extra_path: &s
         "archive export",
     );
 
-    let mirror = support::unique_repo(&format!("w2-section-2-7-mirror-{}", support::unique_suffix()));
+    let mirror = support::unique_repo(&format!(
+        "w2-section-2-7-mirror-{}",
+        support::unique_suffix()
+    ));
     support::init(&mirror);
     support::trust_maintainer(&mirror);
     ok(
@@ -151,7 +154,10 @@ fn make_main_stale_via_sync_seal(repo: &Path, sibling_name: &str, extra_path: &s
         &support::branch_create(&mirror, sibling_name, "heads/main"),
         "branch create sibling in mirror",
     );
-    ok(&switch(&mirror, sibling_name), "switch to sibling in mirror");
+    ok(
+        &switch(&mirror, sibling_name),
+        "switch to sibling in mirror",
+    );
     support::generation(
         &mirror,
         sibling_name,
@@ -168,8 +174,10 @@ fn make_main_stale_via_sync_seal(repo: &Path, sibling_name: &str, extra_path: &s
         "merge --into heads/main in mirror (builds the new blocks to sync back)",
     );
 
-    let have_file =
-        std::env::temp_dir().join(format!("w2-section-2-7-have-{}.bin", support::unique_suffix()));
+    let have_file = std::env::temp_dir().join(format!(
+        "w2-section-2-7-have-{}.bin",
+        support::unique_suffix()
+    ));
     ok(
         &support::prikk(repo)
             .args([
