@@ -47,5 +47,9 @@ mod step3w2f_record_outlives_pointer;
 mod step3w3_0_refusal_names_a_way_out_that_works;
 #[path = "commit_and_seal/step3w3_r4_queue_ownership.rs"]
 mod step3w3_r4_queue_ownership;
+#[path = "commit_and_seal/step3w3b_merge_into_current_branch.rs"]
+mod step3w3b_merge_into_current_branch;
+#[path = "commit_and_seal/step3w3b_rollback_draft_output_sentence.rs"]
+mod step3w3b_rollback_draft_output_sentence;
 #[path = "support/mod.rs"]
 mod support;

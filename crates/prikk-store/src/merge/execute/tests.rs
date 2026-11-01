@@ -103,6 +103,7 @@ fn execute_merge_names_ref_complete_for_another_refs_genuine_lead() -> prikk_err
         "heads/main",
         "heads/x",
         &signer,
+        None,
     ) {
         Err(error) => error.to_string(),
         Ok(report) => {

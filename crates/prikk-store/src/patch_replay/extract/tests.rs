@@ -908,7 +908,8 @@ fn same_state_across_a_merge() {
 
     // Merge `heads/side` into `heads/main`.
     let report =
-        crate::execute_merge(&history.layout, baseline, "heads/main", side_ref, &signer).unwrap();
+        crate::execute_merge(&history.layout, baseline, "heads/main", side_ref, &signer, None)
+            .unwrap();
 
     let reader = ObjectReadSnapshot::open(&history.layout).unwrap();
     let block_ids = super::super::read::single_parent_chain(&reader, report.block_id).unwrap();

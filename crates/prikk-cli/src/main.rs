@@ -344,6 +344,18 @@ fn run_merge(args: Vec<String>) -> std::result::Result<(), CliError> {
     }
     println!("block id: {}", report.block_id);
     println!("{} RefState: {}", report.into_ref, report.ref_state_id);
+    // 0.56.0 step W3b (R3): `into_ref` was the current branch, and a clean worktree, so this merge
+    // also materialized the new tip into it -- named plainly, the same shape `branch switch`'s own
+    // output already uses for its own written/unchanged/deleted counts.
+    if report.materialized_into_worktree {
+        crate::warn_anchor_fallbacks(report.materialization_anchor_fallback.iter());
+        println!(
+            "materialized into the worktree: files written: {}, unchanged: {}, deleted: {}",
+            report.materialized_written_files,
+            report.materialized_unchanged_files,
+            report.materialized_deleted_files,
+        );
+    }
     Ok(())
 }
 

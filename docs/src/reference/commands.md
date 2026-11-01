@@ -181,6 +181,16 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   diverged change. A path that is not stale, or one the worktree already matches the live state for,
   still authors exactly as before, including a genuine deletion, edit, mode change, or rename of
   content this worktree really did hold.
+  **0.56.0 step W3b:** `merge --into` the current branch now closes part of this gap for itself,
+  instead of only ever being caught by the refusal above. When the worktree is clean against its
+  own record, the merge marks it dirty as a `Switch` to the current branch (`worktree_marker.rs`),
+  publishes exactly as before, and then materializes the newly merged tip into the worktree through
+  the same verified path (`replay_for_verified_worktree_write`) `branch switch` already uses below —
+  the merged files are genuinely present afterward, the record ends current, and the next ordinary
+  commit finds nothing stale. A dirty worktree still refuses the merge itself, before any write,
+  naming the same paths `worktree-status` would. `archive import --adopt`, `sync seal --claim`, and
+  `branch create --from` onto the unborn current branch are unchanged this round and still rely only
+  on the refusal above.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

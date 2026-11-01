@@ -533,6 +533,7 @@ fn a_checkpoint_never_fails_a_seal_that_would_succeed_without_it() -> Result<()>
         MAIN,
         "heads/side",
         &sealer.maintainer,
+        None,
     )?;
     sealer.blocks.push(report.block_id);
     let op = sealer.edit(0xE1, b"edit 130\n")?;
@@ -888,6 +889,7 @@ fn seal_merge_and_verify_record_the_blocks_they_replay_verified() -> Result<()> 
         MAIN,
         "heads/side",
         &sealer.maintainer,
+        None,
     )?;
     assert!(
         load_verified_blocks(&sealer.layout).contains(&merged.block_id),
@@ -1117,8 +1119,14 @@ fn build_rfc159_shapes_history(name: &str) -> Result<Sealer> {
                 sealer.publish_branch(&branch, baseline)?;
                 let side_op = sealer.create(&format!("side{side}.txt"), 0xE0 + side, b"side\n")?;
                 sealer.seal_on(&branch, vec![side_op])?;
-                let merged =
-                    execute_merge(&sealer.layout, baseline, MAIN, &branch, &sealer.maintainer)?;
+                let merged = execute_merge(
+                    &sealer.layout,
+                    baseline,
+                    MAIN,
+                    &branch,
+                    &sealer.maintainer,
+                    None,
+                )?;
                 sealer.blocks.push(merged.block_id);
                 continue;
             }

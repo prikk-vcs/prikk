@@ -344,6 +344,16 @@ pub(crate) fn print_rollback_draft_report(layout: &RepositoryLayout, report: &Ro
         "note: this appended a signed inverse Patch draft to the active WAL only; run seal later \
          to publish it, and rollback refs, audit policy, and worktree writes remain later PRs"
     );
+    // 0.56.0 step W3b (R3's own ruling for `rollback-draft --append-inverse`): no materialization
+    // happens here, ever -- this moves only the active WAL's queued fold, never a sealed block, and
+    // the worktree was never told about the inverse in the first place. `seal`, then `branch switch
+    // <the current branch>`, is what applies it (the self-switch resync path, W2e/W2f's own
+    // territory, already tested there).
+    println!(
+        "note: the worktree is unchanged by this draft; run `prikk seal`, then `prikk branch \
+         switch {}`, to apply the inverse",
+        report.ref_name
+    );
 }
 
 /// Print a rollback draft verification report.

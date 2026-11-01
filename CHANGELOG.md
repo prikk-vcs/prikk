@@ -139,6 +139,15 @@
   unrefused on every path where the record and that ref's live state genuinely agree (shared,
   undiverged history) — only a path where they disagree is ever in question, never the ref name
   itself.
+  **0.56.0 step W3b:** `merge --into` the current branch now closes part of this gap for itself,
+  instead of only ever being caught by the refusal above. When the worktree is clean against its
+  own record, the merge marks it dirty as a `Switch` to the current branch, publishes exactly as
+  before, and then materializes the newly merged tip into the worktree through the same
+  verified path `branch switch` already uses — the merged files are genuinely present afterward,
+  the record ends current, and the next ordinary commit finds nothing stale. A dirty worktree
+  still refuses the merge itself, before any write, naming the same paths `worktree-status` would.
+  `archive import --adopt`, `sync seal --claim`, and `branch create --from` onto the unborn current
+  branch are unchanged this round and still rely only on the refusal above.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

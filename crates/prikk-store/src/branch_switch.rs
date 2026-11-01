@@ -52,12 +52,8 @@ use crate::foundation::fsutil::{
 };
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
-use crate::node::node_lifecycle::NodeContent;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
-use crate::patch_replay::{
-    ReplayManifest, ReplayManifestEntry, SnapshotAnchorFallback,
-    resolve_folded_worktree_baseline_with_own_cache,
-};
+use crate::patch_replay::{ReplayManifest, ReplayManifestEntry, SnapshotAnchorFallback};
 use crate::refs::{RefStore, validate_local_branch_ref};
 use crate::wal::Wal;
 use crate::worktree_marker::{
@@ -246,7 +242,11 @@ pub fn switch_branch(
         .map(|entry| (entry.path.as_str(), entry))
         .collect();
     let from_files = match from {
-        Some(from) => from_files_against_record_or_live(layout, from, &active_replay)?,
+        Some(from) => crate::worktree_materialize::baseline_files_against_record_or_live(
+            layout,
+            from,
+            &active_replay,
+        )?,
         None => BTreeMap::new(),
     };
 
@@ -383,74 +383,6 @@ fn require_open_branch(layout: &RepositoryLayout, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// The old baseline's files: path -> (blob, kind), from the same folded baseline `worktree-status`
-/// and `commit` agree on -- `from`'s *live* fold, today's derivation.
-fn baseline_files(
-    layout: &RepositoryLayout,
-    from: &str,
-    active_replay: &crate::wal::WalReplay,
-) -> Result<BTreeMap<String, (ObjectId, NodeKind)>> {
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let resolved = resolve_folded_worktree_baseline_with_own_cache(
-        layout,
-        &object_store,
-        from,
-        active_replay,
-    )?;
-    Ok(file_map_from_state(&resolved.state))
-}
-
-/// [`baseline_files`], but read from the worktree's *recorded* baseline instead of `from`'s live tip,
-/// whenever a record exists and is stale against `from` (0.56.0 step W2, R2; generalized step W2f):
-/// "clean" (and what is safe to overwrite or delete) must be judged against what the worktree was
-/// actually last materialized from, never against a tip some other command moved `from` to since --
-/// that is what makes a resync (self-switch or switching away) possible at all when `from` has moved
-/// underneath this worktree. **Used whenever `compare_worktree_baseline` reads `Behind` at all, no
-/// matter which ref `recorded.ref_name` names** -- a `commit --ref <other>` records the ref it
-/// authored onto, which is never the pointer (`from`) by construction in exactly the stuck case this
-/// generalizes for, so gating on `recorded.ref_name == from` made the record unreachable for either
-/// switch direction out of that state. The record is always an accurate description of the
-/// worktree's own physical files as of its last write (R1), so using it here is never less correct
-/// than trusting `from`'s own live state -- only falls back to [`baseline_files`]'s live derivation
-/// under `NoRecord`/`Current` (no record, or the record already agrees with `from`'s live tip, so
-/// there is nothing to resolve).
-fn from_files_against_record_or_live(
-    layout: &RepositoryLayout,
-    from: &str,
-    active_replay: &crate::wal::WalReplay,
-) -> Result<BTreeMap<String, (ObjectId, NodeKind)>> {
-    if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =
-        crate::worktree_baseline::compare_worktree_baseline(layout, from, active_replay)?
-    {
-        let object_store = ObjectReadSnapshot::open(layout)?;
-        let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
-        let resolved = crate::patch_replay::resolve_state_at_recorded_baseline(
-            layout,
-            &object_store,
-            recorded.baseline,
-            recorded.wal_sequence,
-            active_replay,
-            &mut text_cache,
-        )?;
-        return Ok(file_map_from_state(&resolved.state));
-    }
-    baseline_files(layout, from, active_replay)
-}
-
-fn file_map_from_state(
-    state: &crate::node::node_lifecycle::NodeLifecycleState,
-) -> BTreeMap<String, (ObjectId, NodeKind)> {
-    state
-        .live_nodes()
-        .filter_map(|(_, node)| match &node.content {
-            NodeContent::File { blob_id, .. } => {
-                Some((node.path.as_str().to_string(), (*blob_id, node.kind)))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Refusal 3. While the worktree-dirty marker is set, a path already holding the target's bytes, or
 /// already absent where the target has no file, is where an interrupted switch left it -- accepted,
 /// so running the switch again completes it.
@@ -459,10 +391,15 @@ fn file_map_from_state(
 /// live tip, the comparison baseline is the *recorded* state, not the live one -- otherwise this read
 /// against `from`'s live tip would see every file the ref gained since as "missing" and refuse,
 /// exactly §2.7's deadlock. **Used whenever `compare_worktree_baseline` reads `Behind` at all,
-/// regardless of which ref `recorded.ref_name` names** -- see [`from_files_against_record_or_live`]'s
-/// own doc for why a `recorded.ref_name == from` gate made this unreachable for the one case it most
-/// needed to cover (a worktree stuck after `commit --ref <other>`). Unaffected (today's live
-/// comparison) only under `NoRecord`/`Current`.
+/// regardless of which ref `recorded.ref_name` names** -- see
+/// [`crate::worktree_materialize::baseline_files_against_record_or_live`]'s own doc for why a
+/// `recorded.ref_name == from` gate made this unreachable for the one case it most needed to cover (a
+/// worktree stuck after `commit --ref <other>`). Unaffected (today's live comparison) only under
+/// `NoRecord`/`Current`.
+///
+/// 0.56.0 step W3b: the dirty-entry classification itself is
+/// [`crate::worktree_materialize::dirty_worktree_entries`], shared with the W3b producers' own clean
+/// check, which has no resumption case of its own and always passes a closure that answers `false`.
 fn require_clean(
     layout: &RepositoryLayout,
     from: &str,
@@ -483,10 +420,9 @@ fn require_clean(
         _ => worktree_status(layout, from)?,
     };
     let resuming = worktree_is_dirty(layout)?;
-    let mut dirty = Vec::new();
-    for change in &report.changes {
+    let dirty = crate::worktree_materialize::dirty_worktree_entries(&report, |change| {
         let target_entry = target_files.get(change.path.as_str());
-        let resumed = resuming
+        resuming
             && match change.kind {
                 WorktreeChangeKind::Modified => target_entry.is_some_and(|entry| {
                     std::fs::read(layout.root().join(&change.path))
@@ -494,19 +430,8 @@ fn require_clean(
                 }),
                 WorktreeChangeKind::Missing => target_entry.is_none(),
                 WorktreeChangeKind::Untracked | WorktreeChangeKind::UnsupportedPath => false,
-            };
-        match change.kind {
-            WorktreeChangeKind::Untracked => {}
-            _ if resumed => {}
-            kind => dirty.push(format!("{} ({})", change.path, kind.as_str())),
-        }
-    }
-    for declaration in &report.declarations {
-        dirty.push(format!(
-            "rename declaration {} -> {}",
-            declaration.old_path, declaration.new_path
-        ));
-    }
+            }
+    });
     if dirty.is_empty() {
         return Ok(());
     }

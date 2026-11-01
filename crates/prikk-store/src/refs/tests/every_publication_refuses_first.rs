@@ -330,7 +330,7 @@ fn merge_refuses_behind_another_refs_incomplete_publication() {
     build_incomplete_unrelated_ref(&layout);
     let before = snapshot_tree(&layout);
 
-    let result = execute_merge(&layout, main_target, "heads/main", "heads/topic", &signer);
+    let result = execute_merge(&layout, main_target, "heads/main", "heads/topic", &signer, None);
     assert!(result.is_err(), "{result:?}");
 
     assert_eq!(

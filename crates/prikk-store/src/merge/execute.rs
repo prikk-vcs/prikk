@@ -22,11 +22,18 @@ use prikk_object::{
 
 use crate::anchor_trust::AnchorSite;
 use crate::block_state::{StateAnchoring, seal_block_at};
+use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
+use crate::lock::ActiveLock;
 use crate::merge::evidence::{
     MergeEvidenceTarget, candidate_patch_ids, prepare_merge_evidence,
     verify_candidate_blocks_trusted,
 };
 use crate::received::validate_received_ref;
+use crate::wal::Wal;
+use crate::worktree_materialize::{
+    CurrentBranchMaterializeReport, materialize_after_publish,
+    require_clean_and_mark_current_branch_switch,
+};
 use crate::{
     BlockLineage, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
     RefPublication, RefStore, RepositoryLayout, maintainer_signature, validate_local_branch_ref,
@@ -52,6 +59,21 @@ pub struct MergeExecutionReport {
     pub block_id: ObjectId,
     /// New RefState ID.
     pub ref_state_id: ObjectId,
+    /// 0.56.0 step W3b (R3): `true` when `into_ref` was the current branch and this merge therefore
+    /// materialized its newly published tip into the worktree (clean-worktree precondition met).
+    /// `false` when `into_ref` was not the current branch, so the worktree was never this merge's
+    /// concern at all -- the same meaning `false` has here as "nothing to report," not "refused."
+    pub materialized_into_worktree: bool,
+    /// Files created or replaced in the worktree by this merge's own materialization; `0` when
+    /// [`materialized_into_worktree`](Self::materialized_into_worktree) is `false`.
+    pub materialized_written_files: usize,
+    /// Worktree files already present with identical bytes, found while materializing.
+    pub materialized_unchanged_files: usize,
+    /// Files of the pre-merge worktree the new tip lacks, deleted while materializing.
+    pub materialized_deleted_files: usize,
+    /// The replay-verified snapshot the materialization could not anchor at, if any (RFC 136
+    /// increment 2b) -- `None` whenever `materialized_into_worktree` is `false` too.
+    pub materialization_anchor_fallback: Option<crate::patch_replay::SnapshotAnchorFallback>,
 }
 
 /// Execute a merge: seal `from_ref`'s patches since `baseline_block_id` verbatim onto `into_ref`.
@@ -66,9 +88,15 @@ pub fn execute_merge(
     into_ref: &str,
     from_ref: &str,
     signer: &impl MaintainerSigner,
+    current_branch: Option<&str>,
 ) -> Result<MergeExecutionReport> {
     layout.require_current_format()?;
     let into_ref = validate_local_branch_ref(into_ref)?;
+    // 0.56.0 step W3b (R3): serialize with every other writer of the active WAL/worktree for the
+    // whole call, exactly the discipline `branch_switch.rs`'s own `switch_branch` already holds for
+    // its own writes -- `execute_merge` held no lock of its own before this round because it never
+    // wrote the worktree before this round either.
+    let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // RFC 165 R3 (C3): refuse while another ref's publication is incomplete, before any write --
     // `into_ref` excluded, since this merge is the thing that would resolve its own state, not
     // something blocked by it. A merge never writes `from_ref`, so it is never excluded.
@@ -274,8 +302,53 @@ pub fn execute_merge(
         ref_state: ref_state_envelope,
         ref_update: ref_update_envelope,
     };
+
+    // 0.56.0 step W3b (R3, `.git-exclude/reviewed/0.56.0-step-3w3-review-v1.md`'s ruling): when
+    // `into_ref` is the current branch, step 1 (judge the worktree clean against its record) and
+    // step 2 (mark it dirty as a `Switch` to `into_ref`) run here, right before step 3's publish --
+    // after the Block/RefState/RefUpdate objects above are already built (an orphaned, unreferenced
+    // Block if this refuses is the same harmless shape `ensure_into_ref_unmoved`'s own later-than-
+    // `seal_block_at` refusal already accepts, not a new risk), and before the one write (the ref
+    // move) that this round's own materialization depends on having already happened. Checked
+    // against `into_ref` specifically, never the raw `current_branch` string, so a caller that
+    // resolved the pointer for an unrelated ref never trips this.
+    let pending_materialization = if current_branch == Some(into_ref.as_str()) {
+        let active_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+        Some(require_clean_and_mark_current_branch_switch(
+            layout,
+            &into_ref,
+            &active_replay,
+            &format!("merging {from_ref} into {into_ref}"),
+        )?)
+    } else {
+        None
+    };
+
     let published_ref_state_id =
         ref_store.publish_with_object_store(&mut object_store, &publication)?;
+
+    // Step 4: materialize the tip just published, through the ordinary verified path -- a crash
+    // between the publish above and this call leaves the marker set and the record stale, both
+    // recoverable by `prikk branch switch <into_ref>` (the marker's own named route).
+    let materialization = pending_materialization
+        .map(|pending| materialize_after_publish(layout, pending))
+        .transpose()?;
+
+    let (
+        materialized_into_worktree,
+        materialized_written_files,
+        materialized_unchanged_files,
+        materialized_deleted_files,
+        materialization_anchor_fallback,
+    ) = match materialization {
+        Some(CurrentBranchMaterializeReport {
+            written_files,
+            unchanged_files,
+            deleted_files,
+            anchor_fallback,
+        }) => (true, written_files, unchanged_files, deleted_files, anchor_fallback),
+        None => (false, 0, 0, 0, None),
+    };
 
     Ok(MergeExecutionReport {
         into_ref,
@@ -286,6 +359,11 @@ pub fn execute_merge(
         adopted_patch_ids,
         block_id,
         ref_state_id: published_ref_state_id,
+        materialized_into_worktree,
+        materialized_written_files,
+        materialized_unchanged_files,
+        materialized_deleted_files,
+        materialization_anchor_fallback,
     })
 }
 

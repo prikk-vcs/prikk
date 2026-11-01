@@ -33,6 +33,14 @@ worktree. It does not copy/fork `heads/main`, switch the checkout branch, or cre
 A later `prikk branch switch heads/topic` brings the current-branch pointer in line with what the
 worktree already holds.
 
+**0.56.0 step W3b:** `merge --into` the current branch now writes the merged files into the
+worktree itself, when the worktree was clean against its own recorded baseline beforehand — it is
+no longer only `heads/main`'s ref that moves while the worktree is left to find out later, through
+a stale `commit` refusal or a `branch switch heads/main` resync. A dirty worktree still refuses the
+merge, before any write. `archive import --adopt`, `sync seal --claim`, and `branch create --from`
+onto the unborn current branch are not yet changed and still leave the worktree exactly as it was,
+recoverable the same way the `commit --ref heads/topic` walkthrough above is.
+
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
 non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`

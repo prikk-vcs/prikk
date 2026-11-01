@@ -1,0 +1,359 @@
+//! Shared worktree-materialization helpers for a producer that moves the **current branch** (0.56.0
+//! step W3b, `.git-exclude/reviewed/0.56.0-step-3w3-review-v1.md`'s own ruling for R3).
+//!
+//! **The ordering the ruling gives, so this module's own split matches it exactly:**
+//! 1. Judge the worktree clean against the record, under the producer's existing lock, before any
+//!    write ([`require_worktree_clean_for_current_branch`]).
+//! 2. Capture the files the current branch's own live tip is about to stop being (judged against the
+//!    record exactly like [`crate::branch_switch`]'s own resync, since after step 3 that tip is no
+//!    longer reachable as "the ref's live state" at all), then mark the worktree dirty as a `Switch`
+//!    to the current branch -- its own recorded way out, `branch switch <current branch>`, is exactly
+//!    what finishes a crash in the window this brackets
+//!    ([`require_clean_and_mark_current_branch_switch`], combining steps 1 and 2 so no caller can run
+//!    one without the other).
+//! 3. The producer's own publish call -- unchanged, not this module's concern.
+//! 4. Materialize the now-published tip through the ordinary verified path
+//!    ([`materialize_after_publish`]): `replay_for_verified_worktree_write`, the identical function
+//!    `branch_switch.rs`'s own ordinary (non-self-switch-exempted) path already uses, now reading the
+//!    tip step 3 just published. Write, delete what the captured old baseline held but the new tip
+//!    does not, record the new baseline, then clear the marker.
+//!
+//! **Shared, not copied**, with `crate::branch_switch`: the dirty-entry classification
+//! ([`dirty_worktree_entries`]), the record-aware "what did this ref's worktree last actually hold"
+//! derivation ([`baseline_files_against_record_or_live`]), and the write/delete/in-the-way planning a
+//! materialization performs ([`plan_materialization`]/[`apply_materialization_plan`]) are the exact
+//! logic `branch_switch.rs`'s own `require_clean` and its ordinary materialization loop use -- moved
+//! here so both files call one copy, confirmed by `branch_switch.rs` now calling every one of these
+//! instead of its own former inline versions.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use prikk_error::{PrikkError, Result};
+use prikk_object::{NodeKind, ObjectId};
+
+use crate::blob_access::ensure_blob_matches_node_kind;
+use crate::foundation::fsutil::{
+    EntryKind, MutationRoot, ensure_directory_required, inspect_entry, read_file_required,
+    remove_worktree_file_required, set_regular_file_mode_required, stat_file_state_if_exists,
+    write_worktree_file_atomically,
+};
+use crate::foundation::layout::RepositoryLayout;
+use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
+use crate::object_store::ObjectReadSnapshot;
+use crate::patch_replay::{
+    ReplayManifest, ReplayManifestEntry, SnapshotAnchorFallback,
+    replay_for_verified_worktree_write, resolve_folded_worktree_baseline_with_own_cache,
+    resolve_state_at_recorded_baseline,
+};
+use crate::wal::WalReplay;
+use crate::worktree_baseline::{
+    WorktreeBaselineComparison, compare_worktree_baseline, record_worktree_baseline,
+};
+use crate::worktree_marker::{MarkedTarget, clear_worktree_dirty, mark_worktree_dirty};
+use crate::worktree_status::{
+    WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, worktree_status,
+    worktree_status_against_recorded_baseline,
+};
+
+/// Entries in `report` that make the worktree not clean, in the shape every caller's own refusal
+/// renders: every `Missing`/`Modified`/`UnsupportedPath` change not excused by `resumed`, plus every
+/// live rename declaration. `Untracked` changes are never a reason to refuse. `branch_switch.rs`'s own
+/// `require_clean` has a genuine resumption case (a switch already interrupted and run again); every
+/// W3b producer has none, so its own `resumed` always answers `false`.
+pub(crate) fn dirty_worktree_entries(
+    report: &WorktreeStatusReport,
+    resumed: impl Fn(&WorktreeChange) -> bool,
+) -> Vec<String> {
+    let mut dirty = Vec::new();
+    for change in &report.changes {
+        match change.kind {
+            WorktreeChangeKind::Untracked => {}
+            _ if resumed(change) => {}
+            kind => dirty.push(format!("{} ({})", change.path, kind.as_str())),
+        }
+    }
+    for declaration in &report.declarations {
+        dirty.push(format!(
+            "rename declaration {} -> {}",
+            declaration.old_path, declaration.new_path
+        ));
+    }
+    dirty
+}
+
+/// Step 1 of the R3 ruling: refuse unless `current_branch`'s worktree is clean against its own
+/// record (or, lacking one, its live tip) -- the same comparison `branch_switch.rs`'s own
+/// `require_clean` uses for a self-switch, with no resumption case (see [`dirty_worktree_entries`]'s
+/// own doc for why).
+pub(crate) fn require_worktree_clean_for_current_branch(
+    layout: &RepositoryLayout,
+    current_branch: &str,
+    active_replay: &WalReplay,
+    verb: &str,
+) -> Result<()> {
+    let comparison = compare_worktree_baseline(layout, current_branch, active_replay)?;
+    let report = match &comparison {
+        WorktreeBaselineComparison::Behind { recorded, .. } => {
+            worktree_status_against_recorded_baseline(
+                layout,
+                current_branch,
+                recorded,
+                active_replay,
+            )?
+        }
+        _ => worktree_status(layout, current_branch)?,
+    };
+    let dirty = dirty_worktree_entries(&report, |_| false);
+    if dirty.is_empty() {
+        return Ok(());
+    }
+    Err(PrikkError::Precondition(format!(
+        "the worktree is not clean against {current_branch}: {}; commit it, or restore those files, \
+         before {verb} (`prikk worktree-status` lists them)",
+        dirty.join(", ")
+    )))
+}
+
+/// [`crate::branch_switch`]'s own "the branch being left"'s files, judged against the worktree's
+/// record whenever one exists and is stale, never only against the ref's own live tip -- moved here
+/// (0.56.0 step W3b) since the W3b producers need exactly this calculation themselves, *before* they
+/// publish: the instant they do, `ref_name`'s own live tip stops being the state this call must
+/// describe.
+pub(crate) fn baseline_files_against_record_or_live(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<BTreeMap<String, (ObjectId, NodeKind)>> {
+    if let WorktreeBaselineComparison::Behind { recorded, .. } =
+        compare_worktree_baseline(layout, ref_name, active_replay)?
+    {
+        let object_store = ObjectReadSnapshot::open(layout)?;
+        let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
+        let resolved = resolve_state_at_recorded_baseline(
+            layout,
+            &object_store,
+            recorded.baseline,
+            recorded.wal_sequence,
+            active_replay,
+            &mut text_cache,
+        )?;
+        return Ok(file_map_from_state(&resolved.state));
+    }
+    baseline_files(layout, ref_name, active_replay)
+}
+
+fn baseline_files(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<BTreeMap<String, (ObjectId, NodeKind)>> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let resolved = resolve_folded_worktree_baseline_with_own_cache(
+        layout,
+        &object_store,
+        ref_name,
+        active_replay,
+    )?;
+    Ok(file_map_from_state(&resolved.state))
+}
+
+fn file_map_from_state(state: &NodeLifecycleState) -> BTreeMap<String, (ObjectId, NodeKind)> {
+    state
+        .live_nodes()
+        .filter_map(|(_, node)| match &node.content {
+            NodeContent::File { blob_id, .. } => {
+                Some((node.path.as_str().to_string(), (*blob_id, node.kind)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn matches_blob(bytes: &[u8], blob: ObjectId, kind: NodeKind) -> bool {
+    ensure_blob_matches_node_kind(bytes, blob, kind).is_ok()
+}
+
+/// The write/delete/in-the-way plan for replacing `old_files` with `target_manifest`'s files --
+/// `branch_switch.rs`'s own ordinary-materialization loop (R2), moved here (0.56.0 step W3b) since the
+/// W3b producers need the identical plan (a new tip's manifest replacing a ref's own prior baseline)
+/// with nothing about "the branch being left" (a second, different ref) in it at all.
+pub(crate) struct MaterializationPlan<'a> {
+    pub(crate) writes: Vec<&'a ReplayManifestEntry>,
+    pub(crate) unchanged: Vec<&'a ReplayManifestEntry>,
+    pub(crate) deletes: Vec<String>,
+    pub(crate) in_the_way: Vec<String>,
+}
+
+pub(crate) fn plan_materialization<'a>(
+    root: &MutationRoot,
+    target_manifest: &'a ReplayManifest,
+    old_files: &BTreeMap<String, (ObjectId, NodeKind)>,
+) -> Result<MaterializationPlan<'a>> {
+    let target_files: BTreeMap<&str, &ReplayManifestEntry> = target_manifest
+        .files
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry))
+        .collect();
+    let mut writes = Vec::new();
+    let mut unchanged = Vec::new();
+    let mut deletes = Vec::new();
+    let mut in_the_way = Vec::new();
+    for entry in &target_manifest.files {
+        let path = entry.path.as_str();
+        match inspect_entry(root, Path::new(path))? {
+            None => writes.push(entry),
+            Some(EntryKind::Regular) => {
+                let current = read_file_required(root, Path::new(path))?;
+                if current == entry.bytes {
+                    unchanged.push(entry);
+                } else if old_files
+                    .get(path)
+                    .is_some_and(|(blob, kind)| matches_blob(&current, *blob, *kind))
+                {
+                    writes.push(entry);
+                } else {
+                    in_the_way.push(format!("{path} (a file that is not part of the prior state)"));
+                }
+            }
+            Some(_) => in_the_way.push(format!("{path} (not a regular file)")),
+        }
+    }
+    for (path, (blob, kind)) in old_files {
+        if target_files.contains_key(path.as_str()) {
+            continue;
+        }
+        match inspect_entry(root, Path::new(path))? {
+            None => {}
+            Some(EntryKind::Regular) => {
+                let current = read_file_required(root, Path::new(path))?;
+                if matches_blob(&current, *blob, *kind) {
+                    deletes.push(path.clone());
+                } else {
+                    in_the_way.push(format!("{path} (changed since the prior state)"));
+                }
+            }
+            Some(_) => in_the_way.push(format!("{path} (not a regular file)")),
+        }
+    }
+    Ok(MaterializationPlan {
+        writes,
+        unchanged,
+        deletes,
+        in_the_way,
+    })
+}
+
+pub(crate) fn apply_materialization_plan(
+    root: &MutationRoot,
+    plan: &MaterializationPlan<'_>,
+) -> Result<()> {
+    for entry in &plan.writes {
+        let relative = Path::new(entry.path.as_str());
+        let parent = relative.parent().unwrap_or_else(|| Path::new(""));
+        ensure_directory_required(root, parent)?;
+        write_worktree_file_atomically(root, relative, &entry.bytes)?;
+        set_regular_file_mode_required(root, relative, entry.mode)?;
+    }
+    for entry in &plan.unchanged {
+        let relative = Path::new(entry.path.as_str());
+        let mode = stat_file_state_if_exists(root, relative)?
+            .and_then(|stat| stat.mode)
+            .map(|mode| mode & 0o7777);
+        if mode != Some(entry.mode & 0o7777) {
+            set_regular_file_mode_required(root, relative, entry.mode)?;
+        }
+    }
+    for path in &plan.deletes {
+        remove_worktree_file_required(root, Path::new(path))?;
+    }
+    Ok(())
+}
+
+/// What step 1-2 capture, for step 4 ([`materialize_after_publish`]) to consume across the
+/// producer's own publish (step 3) in between.
+pub(crate) struct PendingCurrentBranchMaterialization {
+    current_branch: String,
+    old_files: BTreeMap<String, (ObjectId, NodeKind)>,
+}
+
+/// Steps 1 and 2 of the R3 ruling, combined so no caller can run one without the other: refuse unless
+/// `current_branch`'s worktree is clean against its record (step 1); otherwise capture the files its
+/// own live tip currently holds (before this producer's publish retires that tip), and mark the
+/// worktree dirty as a `Switch` to `current_branch` (step 2) -- the marker's own recorded way out,
+/// `branch switch <current_branch>`, is exactly what finishes a crash anywhere between this call and
+/// [`materialize_after_publish`]. Must be called under the producer's own active-WAL lock, before any
+/// write the producer makes of its own.
+pub(crate) fn require_clean_and_mark_current_branch_switch(
+    layout: &RepositoryLayout,
+    current_branch: &str,
+    active_replay: &WalReplay,
+    verb: &str,
+) -> Result<PendingCurrentBranchMaterialization> {
+    require_worktree_clean_for_current_branch(layout, current_branch, active_replay, verb)?;
+    let old_files = baseline_files_against_record_or_live(layout, current_branch, active_replay)?;
+    mark_worktree_dirty(layout, &MarkedTarget::Switch(current_branch.to_string()))?;
+    Ok(PendingCurrentBranchMaterialization {
+        current_branch: current_branch.to_string(),
+        old_files,
+    })
+}
+
+/// What [`materialize_after_publish`] did.
+pub(crate) struct CurrentBranchMaterializeReport {
+    pub(crate) written_files: usize,
+    pub(crate) unchanged_files: usize,
+    pub(crate) deleted_files: usize,
+    pub(crate) anchor_fallback: Option<SnapshotAnchorFallback>,
+}
+
+/// Step 4 of the R3 ruling: materialize `current_branch`'s now-published tip through the ordinary
+/// verified path -- `replay_for_verified_worktree_write`, the identical function
+/// `branch_switch.rs`'s own ordinary (non-self-switch-exempted) path already uses, now reading the tip
+/// the producer's own step 3 just published, so this is not stale the way it would have been before
+/// that publish. Writes, deletes what [`require_clean_and_mark_current_branch_switch`]'s captured old
+/// baseline held but the new tip does not, records the new baseline, then clears the marker -- the
+/// same order `branch_switch.rs` uses. Must be called only after the producer's own publish has
+/// already durably returned; a crash at any point up to and including the `in_the_way` refusal below
+/// leaves the marker set and the record stale, both of which `branch switch <current_branch>` (run
+/// again) resolves by re-running this exact function.
+pub(crate) fn materialize_after_publish(
+    layout: &RepositoryLayout,
+    pending: PendingCurrentBranchMaterialization,
+) -> Result<CurrentBranchMaterializeReport> {
+    let (target_replay, anchor_fallback) =
+        replay_for_verified_worktree_write(layout, &pending.current_branch)?;
+    let root = layout.worktree_mutation_root();
+    let plan = plan_materialization(root, &target_replay.manifest, &pending.old_files)?;
+    if !plan.in_the_way.is_empty() {
+        return Err(PrikkError::Precondition(format!(
+            "{} was published, but {} file(s) are in the way of materializing it into the worktree: \
+             {}; move them aside, then run `prikk branch switch {}` to finish (nothing was written \
+             just now)",
+            pending.current_branch,
+            plan.in_the_way.len(),
+            plan.in_the_way.join(", "),
+            pending.current_branch,
+        )));
+    }
+    apply_materialization_plan(root, &plan)?;
+    record_worktree_baseline(
+        layout,
+        &pending.current_branch,
+        Some(target_replay.target_block_id),
+        0,
+        &[],
+    )?;
+    clear_worktree_dirty(layout)?;
+    Ok(CurrentBranchMaterializeReport {
+        written_files: plan.writes.len(),
+        unchanged_files: plan.unchanged.len(),
+        deleted_files: plan.deletes.len(),
+        anchor_fallback,
+    })
+}
+
+// Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
+// need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
+#[cfg(test)]
+mod tests;

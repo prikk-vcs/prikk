@@ -362,7 +362,7 @@ fn equivalence_at_every_ordinal_merge() {
         crate::simulate_one_seal_for_test_support(layout, "heads/topic", &signer).unwrap();
 
         fail_after_for_test(point, skip);
-        let result = execute_merge(layout, main_target, "heads/main", "heads/topic", &signer);
+        let result = execute_merge(layout, main_target, "heads/main", "heads/topic", &signer, None);
         clear_failpoint_for_test();
         result.is_ok()
     });

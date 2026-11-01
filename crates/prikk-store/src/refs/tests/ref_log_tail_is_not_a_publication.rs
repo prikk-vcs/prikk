@@ -285,6 +285,7 @@ fn a_lead_free_tail_still_refuses_every_publication_that_appends_to_the_ref_log(
             "heads/main",
             "heads/topic",
             &maintainer(),
+            None,
         );
         assert!(result.is_err(), "{label}: merge must refuse over the tail");
         let message = result.unwrap_err().to_string();

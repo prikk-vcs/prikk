@@ -121,6 +121,10 @@ mod worktree;
 // `worktree_status` already does.
 mod worktree_baseline;
 mod worktree_marker;
+// 0.56.0 step W3b: the shared "clean against the record, mark dirty, materialize through the
+// verified path" sequence R3's ruling gives, used by `branch_switch` and by every producer that
+// moves the current branch.
+mod worktree_materialize;
 mod worktree_status;
 
 // RFC 131 §2.2a ruling (a): these eight were already one contiguous #[cfg(test)] run above --
