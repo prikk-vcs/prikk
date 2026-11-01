@@ -281,9 +281,13 @@ fn an_inline_test_module_is_not_production() {
         // `require_concrete_record` is removed entirely (the asymmetry's own justification,
         // `dc67::sequence_06`, was itself not a real counter-example -- see this round's report),
         // and `path_is_stale`'s doc comment is re-derived again to state why plainly, a net
-        // shrink: 1871 -> 1853.
+        // shrink: 1871 -> 1853. 0.56.0 step W3-0: the stale-commit refusal's own way-out
+        // composition is re-derived to name the record's own ref literally (read off
+        // `recorded_identity`, not the pointer) always, and the self-switch placeholder
+        // additionally only when `canonical_ref` is published -- a `record_switch`/`self_switch`/
+        // `ways_out` match plus its own doc comment, 1853 -> 1881.
         physical,
-        1853,
+        1881,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -293,7 +297,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1804);
+    assert_eq!(counted.production_lines, 1832);
     assert_eq!(
         physical - counted.production_lines,
         49,
