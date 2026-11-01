@@ -45,8 +45,9 @@ recoverable the same way the `commit --ref heads/topic` walkthrough above is.
 clean check ran after the merge's own Block/RefState/RefUpdate objects were already built and
 written, so a refused merge still left an orphaned, unreferenced Block behind in the object store
 (invisible in the worktree, but reported by `prikk verify` as an unreached object). The clean
-check now runs immediately after the merge's own ref-ownership check, before it builds or writes
-anything of its own; the dirty-worktree marker is set immediately before the publish instead. A
+check now runs after every one of the merge's own read-only refusals (its ref-ownership check and
+RFC 164 Rule D's own pointer-index check among them), before it builds or writes anything of its
+own; the dirty-worktree marker is set immediately before the publish instead. A
 refused merge into the current branch now writes nothing at all, anywhere in the repository.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The

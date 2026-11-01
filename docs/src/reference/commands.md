@@ -194,8 +194,9 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   **0.56.0 step W3c-1:** that "before any write" was not yet true -- the clean check
   (`require_worktree_clean_and_capture`) ran after `seal_block_at` had already built and written
   the merge's own Block/RefState/RefUpdate objects, so a refused merge still left an orphaned,
-  unreferenced Block behind. The clean check and the old-baseline capture now run immediately
-  after the merge's own ref-ownership check (`refuse_if_active_queue_owns_ref`), before any object
+  unreferenced Block behind. The clean check and the old-baseline capture now run after every one
+  of the merge's own read-only refusals (its ref-ownership check, `refuse_if_active_queue_owns_
+  ref`, and RFC 164 Rule D's own pointer-index tail/damage check among them), before any object
   write at all; the dirty-worktree marker (`mark_current_branch_switch_pending`) is set
   immediately before the publish instead. A refused merge into the current branch now genuinely
   writes nothing.

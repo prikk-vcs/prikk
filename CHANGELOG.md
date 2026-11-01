@@ -152,8 +152,9 @@
   after the merge's own Block, RefState, and RefUpdate objects were already built and durably
   written, so a refused merge still left an orphaned, unreferenced Block behind (`verify` would
   report it as an unreached object). The clean check, and the capture of the files the worktree
-  is about to stop holding, now run immediately after the merge's own ref-ownership check, before
-  it builds or writes a single object of its own; the dirty-worktree marker is set immediately
+  is about to stop holding, now run after every one of the merge's own read-only refusals (its
+  ref-ownership check and RFC 164 Rule D's own pointer-index check among them), before it builds
+  or writes a single object of its own; the dirty-worktree marker is set immediately
   before the publish instead. A refused merge into the current branch now genuinely writes
   nothing at all, confirmed by a whole-repository (worktree and `.prikk` both) comparison before
   and after the refusal, and by `verify` reporting zero unreached objects afterward.
