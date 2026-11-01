@@ -51,5 +51,7 @@ mod step3w3_r4_queue_ownership;
 mod step3w3b_merge_into_current_branch;
 #[path = "commit_and_seal/step3w3b_rollback_draft_output_sentence.rs"]
 mod step3w3b_rollback_draft_output_sentence;
+#[path = "commit_and_seal/step3w3c1_merge_refusal_writes_nothing.rs"]
+mod step3w3c1_merge_refusal_writes_nothing;
 #[path = "support/mod.rs"]
 mod support;

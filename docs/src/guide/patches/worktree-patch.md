@@ -41,6 +41,14 @@ merge, before any write. `archive import --adopt`, `sync seal --claim`, and `bra
 onto the unborn current branch are not yet changed and still leave the worktree exactly as it was,
 recoverable the same way the `commit --ref heads/topic` walkthrough above is.
 
+**0.56.0 step W3c-1:** "before any write" above is now actually true. As W3b first landed it, the
+clean check ran after the merge's own Block/RefState/RefUpdate objects were already built and
+written, so a refused merge still left an orphaned, unreferenced Block behind in the object store
+(invisible in the worktree, but reported by `prikk verify` as an unreached object). The clean
+check now runs immediately after the merge's own ref-ownership check, before it builds or writes
+anything of its own; the dirty-worktree marker is set immediately before the publish instead. A
+refused merge into the current branch now writes nothing at all, anywhere in the repository.
+
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
 non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`

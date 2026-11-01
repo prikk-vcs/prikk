@@ -1,22 +1,35 @@
 //! Shared worktree-materialization helpers for a producer that moves the **current branch** (0.56.0
 //! step W3b, `.git-exclude/reviewed/0.56.0-step-3w3-review-v1.md`'s own ruling for R3).
 //!
-//! **The ordering the ruling gives, so this module's own split matches it exactly:**
+//! **The ordering the ruling gives, so this module's own split matches it exactly** (0.56.0 step
+//! W3c-1, `.git-exclude/reviewed/0.56.0-step-3w3b-review-v1.md`'s own correction to W3b: the clean
+//! check and the capture must run *before any object write*, since neither one reads anything about
+//! the producer's own new state, and the marker must not be set until immediately before the
+//! publish, so a refusal between the two leaves nothing written at all):
 //! 1. Judge the worktree clean against the record, under the producer's existing lock, before any
-//!    write ([`require_worktree_clean_for_current_branch`]).
+//!    write at all -- not merely before the publish ([`require_worktree_clean_for_current_branch`]).
 //! 2. Capture the files the current branch's own live tip is about to stop being (judged against the
 //!    record exactly like [`crate::branch_switch`]'s own resync, since after step 3 that tip is no
-//!    longer reachable as "the ref's live state" at all), then mark the worktree dirty as a `Switch`
-//!    to the current branch -- its own recorded way out, `branch switch <current branch>`, is exactly
-//!    what finishes a crash in the window this brackets
-//!    ([`require_clean_and_mark_current_branch_switch`], combining steps 1 and 2 so no caller can run
-//!    one without the other).
+//!    longer reachable as "the ref's live state" at all). Steps 1 and 2 are combined in
+//!    [`require_worktree_clean_and_capture`], called once, immediately after the producer's own R4
+//!    check, before it builds or writes anything of its own.
+//! 2b. Immediately before the producer's own publish (step 3) -- not bundled with steps 1-2 any
+//!    more -- mark the worktree dirty as a `Switch` to the current branch
+//!    ([`mark_current_branch_switch_pending`]), using the `PendingCurrentBranchMaterialization` step
+//!    1-2 already captured. The marker's own recorded way out, `branch switch <current branch>`, is
+//!    exactly what finishes a crash anywhere from this point through [`materialize_after_publish`].
 //! 3. The producer's own publish call -- unchanged, not this module's concern.
 //! 4. Materialize the now-published tip through the ordinary verified path
 //!    ([`materialize_after_publish`]): `replay_for_verified_worktree_write`, the identical function
 //!    `branch_switch.rs`'s own ordinary (non-self-switch-exempted) path already uses, now reading the
 //!    tip step 3 just published. Write, delete what the captured old baseline held but the new tip
 //!    does not, record the new baseline, then clear the marker.
+//!
+//! **Why steps 1-2 need nothing about the producer's own new state:** both only read
+//! `current_branch`'s own *current* (pre-producer) record and its live worktree files -- confirmed
+//! by their own signatures, neither of which takes anything describing the producer's new content,
+//! Block, RefState, or RefUpdate. This is exactly why they can run this early, with the producer's
+//! own object-building work (e.g. `seal_block_at`) happening entirely in between step 2 and step 2b.
 //!
 //! **Shared, not copied**, with `crate::branch_switch`: the dirty-entry classification
 //! ([`dirty_worktree_entries`]), the record-aware "what did this ref's worktree last actually hold"
@@ -279,14 +292,14 @@ pub(crate) struct PendingCurrentBranchMaterialization {
     old_files: BTreeMap<String, (ObjectId, NodeKind)>,
 }
 
-/// Steps 1 and 2 of the R3 ruling, combined so no caller can run one without the other: refuse unless
-/// `current_branch`'s worktree is clean against its record (step 1); otherwise capture the files its
-/// own live tip currently holds (before this producer's publish retires that tip), and mark the
-/// worktree dirty as a `Switch` to `current_branch` (step 2) -- the marker's own recorded way out,
-/// `branch switch <current_branch>`, is exactly what finishes a crash anywhere between this call and
-/// [`materialize_after_publish`]. Must be called under the producer's own active-WAL lock, before any
-/// write the producer makes of its own.
-pub(crate) fn require_clean_and_mark_current_branch_switch(
+/// Steps 1 and 2 of the R3 ruling (0.56.0 step W3c-1: no longer bundled with the marker -- see
+/// [`mark_current_branch_switch_pending`] for that): refuse unless `current_branch`'s worktree is
+/// clean against its record (step 1); otherwise capture the files its own live tip currently holds
+/// (step 2), the only two things either step needs. Must be called under the producer's own
+/// active-WAL lock, **immediately after its own R4 check and before it builds or writes anything of
+/// its own** -- this is what makes a refusal here leave nothing written: there is nothing to undo
+/// yet.
+pub(crate) fn require_worktree_clean_and_capture(
     layout: &RepositoryLayout,
     current_branch: &str,
     active_replay: &WalReplay,
@@ -294,11 +307,27 @@ pub(crate) fn require_clean_and_mark_current_branch_switch(
 ) -> Result<PendingCurrentBranchMaterialization> {
     require_worktree_clean_for_current_branch(layout, current_branch, active_replay, verb)?;
     let old_files = baseline_files_against_record_or_live(layout, current_branch, active_replay)?;
-    mark_worktree_dirty(layout, &MarkedTarget::Switch(current_branch.to_string()))?;
     Ok(PendingCurrentBranchMaterialization {
         current_branch: current_branch.to_string(),
         old_files,
     })
+}
+
+/// Step 2b of the R3 ruling (0.56.0 step W3c-1): mark the worktree dirty as a `Switch` to the
+/// pending capture's own `current_branch`, using the value [`require_worktree_clean_and_capture`]
+/// already produced. Called **immediately before the producer's own publish (step 3)** -- not
+/// bundled with the clean check any more -- so the marker is set as late as it can be while still
+/// bracketing the publish: a crash anywhere from this call through [`materialize_after_publish`]
+/// leaves exactly the state `branch switch <current_branch>` (the marker's own named route)
+/// resolves.
+pub(crate) fn mark_current_branch_switch_pending(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+) -> Result<()> {
+    mark_worktree_dirty(
+        layout,
+        &MarkedTarget::Switch(pending.current_branch.clone()),
+    )
 }
 
 /// What [`materialize_after_publish`] did.
@@ -313,7 +342,7 @@ pub(crate) struct CurrentBranchMaterializeReport {
 /// verified path -- `replay_for_verified_worktree_write`, the identical function
 /// `branch_switch.rs`'s own ordinary (non-self-switch-exempted) path already uses, now reading the tip
 /// the producer's own step 3 just published, so this is not stale the way it would have been before
-/// that publish. Writes, deletes what [`require_clean_and_mark_current_branch_switch`]'s captured old
+/// that publish. Writes, deletes what [`require_worktree_clean_and_capture`]'s captured old
 /// baseline held but the new tip does not, records the new baseline, then clears the marker -- the
 /// same order `branch_switch.rs` uses. Must be called only after the producer's own publish has
 /// already durably returned; a crash at any point up to and including the `in_the_way` refusal below

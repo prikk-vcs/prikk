@@ -31,8 +31,8 @@ use crate::merge::evidence::{
 use crate::received::validate_received_ref;
 use crate::wal::Wal;
 use crate::worktree_materialize::{
-    CurrentBranchMaterializeReport, materialize_after_publish,
-    require_clean_and_mark_current_branch_switch,
+    CurrentBranchMaterializeReport, mark_current_branch_switch_pending, materialize_after_publish,
+    require_worktree_clean_and_capture,
 };
 use crate::{
     BlockLineage, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
@@ -134,6 +134,25 @@ pub fn execute_merge(
         &into_ref,
         &format!("merging {from_ref} into {into_ref}"),
     )?;
+    // 0.56.0 step W3c-1 (correcting W3b): when `into_ref` is the current branch, the clean check
+    // and the capture of the old baseline's files run *here* — immediately after the R4 check
+    // above and before anything below builds or writes a single object — not after `seal_block_at`
+    // as W3b had it. Neither step reads anything about this merge's own new content, so nothing
+    // about doing this early is unsafe; doing it late is what let a refused merge leave an orphaned
+    // Block behind (measured on `c9659ece`, `verify`: 1 unreached object). Checked against
+    // `into_ref` specifically, never the raw `current_branch` string, so a caller that resolved the
+    // pointer for an unrelated ref never trips this.
+    let pending_materialization = if current_branch == Some(into_ref.as_str()) {
+        let active_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+        Some(require_worktree_clean_and_capture(
+            layout,
+            &into_ref,
+            &active_replay,
+            &format!("merging {from_ref} into {into_ref}"),
+        )?)
+    } else {
+        None
+    };
     // DC-85: `from_ref` may be a local branch or a received ref (`remotes/<name>`) — never widen
     // `validate_local_branch_ref` itself to accept `remotes/`, since it also gates `into_ref` here
     // and `branch create --from` elsewhere; a merge source that happens to be received gets its own
@@ -303,26 +322,19 @@ pub fn execute_merge(
         ref_update: ref_update_envelope,
     };
 
-    // 0.56.0 step W3b (R3, `.git-exclude/reviewed/0.56.0-step-3w3-review-v1.md`'s ruling): when
-    // `into_ref` is the current branch, step 1 (judge the worktree clean against its record) and
-    // step 2 (mark it dirty as a `Switch` to `into_ref`) run here, right before step 3's publish --
-    // after the Block/RefState/RefUpdate objects above are already built (an orphaned, unreferenced
-    // Block if this refuses is the same harmless shape `ensure_into_ref_unmoved`'s own later-than-
-    // `seal_block_at` refusal already accepts, not a new risk), and before the one write (the ref
-    // move) that this round's own materialization depends on having already happened. Checked
-    // against `into_ref` specifically, never the raw `current_branch` string, so a caller that
-    // resolved the pointer for an unrelated ref never trips this.
-    let pending_materialization = if current_branch == Some(into_ref.as_str()) {
-        let active_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
-        Some(require_clean_and_mark_current_branch_switch(
-            layout,
-            &into_ref,
-            &active_replay,
-            &format!("merging {from_ref} into {into_ref}"),
-        )?)
-    } else {
-        None
-    };
+    // 0.56.0 step W3c-1: step 2b -- the marker is set immediately before the publish (step 3)
+    // below, using the capture already taken right after the R4 check, far above every object
+    // write this merge makes (`seal_block_at`, the RefState/RefUpdate envelopes). A refusal at any
+    // point between there and here (the confluence check, the signer check, `seal_block_at` itself)
+    // now leaves nothing written at all -- the standard `verify` holds every other producer to.
+    // 0.56.0 step W3c-1: step 2b -- the marker is set immediately before the publish (step 3)
+    // below, using the capture already taken right after the R4 check, far above every object
+    // write this merge makes (`seal_block_at`, the RefState/RefUpdate envelopes). A refusal at any
+    // point between there and here (the confluence check, the signer check, `seal_block_at` itself)
+    // now leaves nothing written at all -- the standard `verify` holds every other producer to.
+    if let Some(pending) = &pending_materialization {
+        mark_current_branch_switch_pending(layout, pending)?;
+    }
 
     let published_ref_state_id =
         ref_store.publish_with_object_store(&mut object_store, &publication)?;

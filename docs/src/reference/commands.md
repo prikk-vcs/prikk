@@ -191,6 +191,14 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   naming the same paths `worktree-status` would. `archive import --adopt`, `sync seal --claim`, and
   `branch create --from` onto the unborn current branch are unchanged this round and still rely only
   on the refusal above.
+  **0.56.0 step W3c-1:** that "before any write" was not yet true -- the clean check
+  (`require_worktree_clean_and_capture`) ran after `seal_block_at` had already built and written
+  the merge's own Block/RefState/RefUpdate objects, so a refused merge still left an orphaned,
+  unreferenced Block behind. The clean check and the old-baseline capture now run immediately
+  after the merge's own ref-ownership check (`refuse_if_active_queue_owns_ref`), before any object
+  write at all; the dirty-worktree marker (`mark_current_branch_switch_pending`) is set
+  immediately before the publish instead. A refused merge into the current branch now genuinely
+  writes nothing.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

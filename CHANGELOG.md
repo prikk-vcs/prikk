@@ -148,6 +148,15 @@
   still refuses the merge itself, before any write, naming the same paths `worktree-status` would.
   `archive import --adopt`, `sync seal --claim`, and `branch create --from` onto the unborn current
   branch are unchanged this round and still rely only on the refusal above.
+  **0.56.0 step W3c-1:** "before any write" above was not yet true as landed — the clean check ran
+  after the merge's own Block, RefState, and RefUpdate objects were already built and durably
+  written, so a refused merge still left an orphaned, unreferenced Block behind (`verify` would
+  report it as an unreached object). The clean check, and the capture of the files the worktree
+  is about to stop holding, now run immediately after the merge's own ref-ownership check, before
+  it builds or writes a single object of its own; the dirty-worktree marker is set immediately
+  before the publish instead. A refused merge into the current branch now genuinely writes
+  nothing at all, confirmed by a whole-repository (worktree and `.prikk` both) comparison before
+  and after the refusal, and by `verify` reporting zero unreached objects afterward.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

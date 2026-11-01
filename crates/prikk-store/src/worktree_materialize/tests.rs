@@ -16,7 +16,10 @@ use prikk_object::{
     Operation, OperationKind, PatchPayload, PatchPurpose,
 };
 
-use super::{materialize_after_publish, require_clean_and_mark_current_branch_switch};
+use super::{
+    mark_current_branch_switch_pending, materialize_after_publish,
+    require_worktree_clean_and_capture,
+};
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::test_gates::test_support::{
@@ -154,9 +157,9 @@ fn a_clean_worktree_is_materialized_after_the_publish() {
     record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
 
     let active_replay = empty_replay(&layout).expect("replay");
-    let pending =
-        require_clean_and_mark_current_branch_switch(&layout, MAIN, &active_replay, "testing")
-            .expect("clean and marked");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+    mark_current_branch_switch_pending(&layout, &pending).expect("marked");
     assert!(worktree_is_dirty(&layout).expect("dirty check"));
 
     publish_second_generation(&layout, gen1, "b.txt", b"b\n").expect("publish gen2");
@@ -189,9 +192,9 @@ fn a_crash_between_publish_and_materialize_recovers_via_branch_switch() {
     record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
 
     let active_replay = empty_replay(&layout).expect("replay");
-    let pending =
-        require_clean_and_mark_current_branch_switch(&layout, MAIN, &active_replay, "testing")
-            .expect("clean and marked");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+    mark_current_branch_switch_pending(&layout, &pending).expect("marked");
 
     // Step 3: the producer's own publish -- `heads/main` now names a new tip the worktree has not
     // been written from yet.
@@ -261,9 +264,9 @@ fn clean_worktree_materialization_asserts_the_new_file_is_actually_written() {
     record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
 
     let active_replay = empty_replay(&layout).expect("replay");
-    let pending =
-        require_clean_and_mark_current_branch_switch(&layout, MAIN, &active_replay, "testing")
-            .expect("clean and marked");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+    mark_current_branch_switch_pending(&layout, &pending).expect("marked");
     publish_second_generation(&layout, gen1, "b.txt", b"b\n").expect("publish gen2");
     materialize_after_publish(&layout, pending).expect("materialize gen2");
 
