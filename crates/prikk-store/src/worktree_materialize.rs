@@ -15,12 +15,12 @@
 //!    read-only refusals (its R4 check, any RFC 164 Rule D tail/damage check, and so on -- each of
 //!    those must still refuse before this call ever runs, since it derives and caches lifecycle
 //!    state as a side effect, which a refusal must not leave behind either), but before it builds
-//!    or writes anything of its own.
-//! 2b. Immediately before the producer's own publish (step 3) -- not bundled with steps 1-2 any
-//!    more -- mark the worktree dirty as a `Switch` to the current branch
-//!    ([`mark_current_branch_switch_pending`]), using the `PendingCurrentBranchMaterialization` step
-//!    1-2 already captured. The marker's own recorded way out, `branch switch <current branch>`, is
-//!    exactly what finishes a crash anywhere from this point through [`materialize_after_publish`].
+//!    or writes anything of its own. Separately, immediately before the producer's own publish
+//!    (step 3 below) -- not bundled with steps 1-2 any more -- [`mark_current_branch_switch_pending`]
+//!    marks the worktree dirty as a `Switch` to the current branch, using the
+//!    `PendingCurrentBranchMaterialization` steps 1-2 already captured. The marker's own recorded
+//!    way out, `branch switch <current branch>`, is exactly what finishes a crash anywhere from
+//!    that point through [`materialize_after_publish`].
 //! 3. The producer's own publish call -- unchanged, not this module's concern.
 //! 4. Materialize the now-published tip through the ordinary verified path
 //!    ([`materialize_after_publish`]): `replay_for_verified_worktree_write`, the identical function
@@ -32,7 +32,8 @@
 //! `current_branch`'s own *current* (pre-producer) record and its live worktree files -- confirmed
 //! by their own signatures, neither of which takes anything describing the producer's new content,
 //! Block, RefState, or RefUpdate. This is exactly why they can run this early, with the producer's
-//! own object-building work (e.g. `seal_block_at`) happening entirely in between step 2 and step 2b.
+//! own object-building work (e.g. `seal_block_at`) happening entirely in between the capture and the
+//! marker being set.
 //!
 //! **Shared, not copied**, with `crate::branch_switch`: the dirty-entry classification
 //! ([`dirty_worktree_entries`]), the record-aware "what did this ref's worktree last actually hold"
