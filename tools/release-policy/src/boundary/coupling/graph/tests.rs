@@ -174,7 +174,10 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 0.56.0 step W2d-2 removed `patch_replay::folded_materialize` entirely (zero remaining
     // callers once the self-switch fold-materializing branch it existed for was removed): 173 ->
     // 172.
-    assert_eq!(modules.len(), 172, "modules: {modules:?}");
+    // 0.56.0 step W3b added `worktree_materialize` (the shared "clean, mark dirty, materialize
+    // through the verified path" sequence R3's ruling gives, used by `branch_switch` and by the
+    // producers moving the current branch): 172 -> 173.
+    assert_eq!(modules.len(), 173, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

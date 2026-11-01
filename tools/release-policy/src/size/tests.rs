@@ -380,7 +380,10 @@ fn a_cfg_test_subtree_is_never_walked() {
     // whole-manifest materializer, kept as its own small file for the identical reason): 173 -> 174.
     // 0.56.0 step W2d-2 deleted `patch_replay/folded_materialize.rs` entirely (the self-switch
     // fold-materializing branch it existed for is removed; zero remaining callers): 174 -> 173.
-    assert_eq!(store.production_files, 173);
+    // 0.56.0 step W3b added `worktree_materialize.rs` (its own tests are an inline `#[cfg(test)]
+    // mod tests;` pointing at `worktree_materialize/tests.rs`, `cfg(test)`-invisible, not a
+    // separate production file): 173 -> 174.
+    assert_eq!(store.production_files, 174);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

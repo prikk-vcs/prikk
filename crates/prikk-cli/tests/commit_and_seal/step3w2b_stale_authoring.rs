@@ -99,6 +99,137 @@ fn merge_into_main(repo: &Path, baseline: ObjectId, from_ref: &str) -> Output {
         .unwrap()
 }
 
+/// Change `a.txt`'s content on `repo`'s own `heads/main` to `new_content`, without ever writing
+/// `repo`'s worktree -- `heads/main` stays current throughout. `merge --into` itself is excluded
+/// (0.56.0 step W3b closed that gap for it); `sync seal --claims`, not yet changed this round,
+/// reproduces the identical staleness instead. Mechanism: clone `repo`'s exact `heads/main` genesis
+/// into a disposable `mirror` (`archive export` + `archive import --adopt`), edit `a.txt` **inside
+/// `mirror` only** (so the resulting patch is genuinely new to `repo`'s own object store -- building
+/// it in `repo` first, as `setup_main_and_sibling`'s own sibling does, makes `sync seal` read it as
+/// "already have this," a no-op), then sync the one new block back by
+/// `have`/`build`/`accept --claims-out`/`seal --claims`, the identical shape
+/// `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
+fn make_a_txt_stale_via_sync_seal(repo: &Path, new_content: &[u8]) {
+    let archive_file = std::env::temp_dir().join(format!(
+        "w2b-stale-archive-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(repo)
+            .args(["archive", "export"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive export",
+    );
+
+    let mirror =
+        support::unique_repo(&format!("w2b-stale-mirror-{}", support::unique_suffix()));
+    support::init(&mirror);
+    support::trust_maintainer(&mirror);
+    ok(
+        &support::prikk(&mirror)
+            .args(["archive", "import", "--adopt"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive import --adopt (clone repo's exact genesis objects)",
+    );
+    ok(
+        &switch(&mirror, "heads/main"),
+        "branch switch heads/main in mirror (normalize the adopted ref)",
+    );
+    support::generation(
+        &mirror,
+        "heads/main",
+        "a.txt",
+        new_content,
+        "a.txt change, in mirror only",
+    );
+
+    let have_file =
+        std::env::temp_dir().join(format!("w2b-stale-have-{}.bin", support::unique_suffix()));
+    ok(
+        &support::prikk(repo)
+            .args([
+                "sync",
+                "have",
+                "heads/main",
+                "--output",
+                have_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync have",
+    );
+    let artifact_file = std::env::temp_dir().join(format!(
+        "w2b-stale-artifact-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(&mirror)
+            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+            )
+            .args([
+                "sync",
+                "build",
+                "heads/main",
+                "--have",
+                have_file.to_str().unwrap(),
+                "--output",
+                artifact_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync build",
+    );
+    let claims_file = std::env::temp_dir().join(format!(
+        "w2b-stale-claims-{}.txt",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(repo)
+            .args([
+                "sync",
+                "accept",
+                artifact_file.to_str().unwrap(),
+                "--claims-out",
+                claims_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync accept",
+    );
+    support::trust_maintainer(repo);
+    ok(
+        &support::prikk(repo)
+            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+            )
+            .args([
+                "sync",
+                "seal",
+                "heads/main",
+                "--claims",
+                claims_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync seal --claims",
+    );
+
+    let _ = std::fs::remove_dir_all(&mirror);
+    let _ = std::fs::remove_file(&archive_file);
+    let _ = std::fs::remove_file(&have_file);
+    let _ = std::fs::remove_file(&artifact_file);
+    let _ = std::fs::remove_file(&claims_file);
+}
+
 /// `heads/main` with two sealed files (`a.txt`, `b.txt`), a sealed sibling branch created from the
 /// same tip, and a real `branch switch` round trip there and back -- not a bare `branch create`
 /// plus a worktree write left lying around (see `step3w2_worktree_baseline.rs`'s own
@@ -117,14 +248,13 @@ fn setup_main_and_sibling(repo: &Path, sibling_name: &str) -> ObjectId {
     baseline
 }
 
-/// Test 1 (the ruling's own measured case): a merge changes `a.txt`'s **content** on `heads/main`;
-/// the worktree still physically holds the pre-merge bytes (the merge never touches it, exactly as
-/// W2's own deletion cases prove for a missing path). Before this round, the next unrelated commit
-/// silently authored `edit-text a.txt` that reverted the merge's own change back to the old bytes.
-/// Now it refuses, naming `a.txt`; `branch switch heads/main` resyncs; the following commit is
-/// clean.
+/// Test 1, **closed by 0.56.0 step W3b** for `merge --into` specifically: a merge changing `a.txt`'s
+/// **content** on `heads/main` now materializes that change into the worktree immediately, since
+/// the worktree was clean before the merge -- there is no window left in which an unrelated commit
+/// could silently revert it (the hazard this test used to reproduce for merges; it is still real for
+/// the producers W3b has not yet changed).
 #[test]
-fn case1_merge_changes_content_edit_would_revert_it_refuses_then_resyncs() {
+fn case1_merge_changes_content_is_materialized_so_nothing_is_left_to_revert() {
     let repo = support::unique_repo("w2b-case1-edit-reverted");
     support::init(&repo);
     let baseline = setup_main_and_sibling(&repo, "heads/feature");
@@ -150,51 +280,20 @@ fn case1_merge_changes_content_edit_would_revert_it_refuses_then_resyncs() {
     );
     assert_eq!(
         std::fs::read(repo.join("a.txt")).unwrap(),
-        b"a1\n",
-        "the merge must not touch the worktree -- a.txt stays at its old bytes on disk"
-    );
-
-    // The hazard: before this round, this commit silently authored `edit-text a.txt`, reverting
-    // the merge's own change.
-    let refused = commit_unrelated(&repo, "extra1.txt", "unrelated edit after merge");
-    assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must now refuse: {}",
-        stdout(&refused)
-    );
-    let refused_stderr = stderr(&refused);
-    assert!(
-        refused_stderr.contains("refusing to commit") && refused_stderr.contains("a.txt"),
-        "the refusal must name a.txt: {refused_stderr}"
-    );
-    assert!(
-        !refused_stderr.contains("never were"),
-        "a.txt is present in the worktree, with stale content -- not the deletion-shaped \
-         wording: {refused_stderr}"
-    );
-
-    // The resync.
-    let resync = switch(&repo, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    assert_eq!(
-        std::fs::read(repo.join("a.txt")).unwrap(),
         b"a2-from-feature\n",
-        "the resync must materialize the merge's own real content: {}",
-        stdout(&resync)
+        "0.56.0 step W3b: the merge itself must materialize its own new content into the worktree"
     );
 
-    std::fs::remove_file(repo.join("extra1.txt")).unwrap();
     let status = worktree_status(&repo);
     assert_eq!(
         status.status.code(),
         Some(0),
-        "worktree-status must be clean after the resync: {}",
+        "worktree-status must already be clean right after the merge: {}",
         stdout(&status)
     );
 
-    let clean = commit_unrelated(&repo, "extra1.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
+    let clean = commit_unrelated(&repo, "extra1.txt", "unrelated edit after merge");
+    ok(&clean, "commit after merge");
     let clean_stdout = stdout(&clean);
     assert!(
         !clean_stdout.contains("edit-text a.txt"),
@@ -208,15 +307,13 @@ fn case1_merge_changes_content_edit_would_revert_it_refuses_then_resyncs() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Test 2: the mirror image of W2's own deletion case. There, the worktree was **missing** a file
-/// the live tip had **added**. Here, a merge **removes** `a.txt` from `heads/main`'s live tip, but
-/// the worktree still physically holds it (the merge never touches it). Before this round, the
-/// next unrelated commit treated the still-present file as brand new and silently authored
-/// `create-file a.txt` -- re-materializing stale content under a fresh node id, the "producer's
-/// deletion" shape the ruling names by reasoning. Now it refuses; the resync removes the file from
-/// disk; the following commit is clean.
+/// Test 2, **closed by 0.56.0 step W3b** for `merge --into`: a merge **removing** `a.txt` from
+/// `heads/main`'s tip now removes it from the worktree too, immediately -- there is no window left
+/// in which an unrelated commit could treat the still-present file as brand new and re-create it
+/// under a fresh node id (the hazard this test used to reproduce; still real for the producers
+/// W3b has not yet changed).
 #[test]
-fn case2_merge_deletes_path_worktree_still_holds_it_refuses_then_resyncs() {
+fn case2_merge_deletes_path_is_materialized_so_nothing_is_left_present() {
     let repo = support::unique_repo("w2b-case2-merged-deletion");
     support::init(&repo);
     let baseline = setup_main_and_sibling(&repo, "heads/feature");
@@ -239,43 +336,21 @@ fn case2_merge_deletes_path_worktree_still_holds_it_refuses_then_resyncs() {
         "merge --into heads/main",
     );
     assert!(
-        repo.join("a.txt").exists(),
-        "the merge must not touch the worktree -- a.txt stays present on disk"
-    );
-
-    // The hazard: before this round, this commit silently authored `create-file a.txt`.
-    let refused = commit_unrelated(&repo, "extra2.txt", "unrelated edit after merge");
-    assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must now refuse: {}",
-        stdout(&refused)
-    );
-    assert!(
-        stderr(&refused).contains("refusing to commit") && stderr(&refused).contains("a.txt"),
-        "the refusal must name a.txt: {}",
-        stderr(&refused)
-    );
-
-    let resync = switch(&repo, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    assert!(
         !repo.join("a.txt").exists(),
-        "the resync must remove a.txt, matching the merge's own real deletion: {}",
-        stdout(&resync)
+        "0.56.0 step W3b: the merge itself must delete a.txt from the worktree, matching its own \
+         real deletion"
     );
 
-    std::fs::remove_file(repo.join("extra2.txt")).unwrap();
     let status = worktree_status(&repo);
     assert_eq!(
         status.status.code(),
         Some(0),
-        "worktree-status must be clean after the resync: {}",
+        "worktree-status must already be clean right after the merge: {}",
         stdout(&status)
     );
 
-    let clean = commit_unrelated(&repo, "extra2.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
+    let clean = commit_unrelated(&repo, "extra2.txt", "unrelated edit after merge");
+    ok(&clean, "commit after merge");
     let clean_stdout = stdout(&clean);
     assert!(
         !clean_stdout.contains("create-file a.txt"),
@@ -291,9 +366,15 @@ fn case2_merge_deletes_path_worktree_still_holds_it_refuses_then_resyncs() {
 /// the resync materializes the real mode; the following commit is clean.
 ///
 /// DC-71: Windows has no Unix permission-bit model.
+/// Test 3, **closed by 0.56.0 step W3b** for `merge --into`: a merge changing `a.txt`'s **mode**
+/// (not its content) on `heads/main` now materializes that mode into the worktree immediately --
+/// there is no window left in which an unrelated commit could silently revert it (the hazard this
+/// test used to reproduce; still real for the producers W3b has not yet changed).
+///
+/// DC-71: Windows has no Unix permission-bit model.
 #[cfg(unix)]
 #[test]
-fn case3_merge_changes_mode_change_perm_would_revert_it_refuses_then_resyncs() {
+fn case3_merge_changes_mode_is_materialized_so_nothing_is_left_to_revert() {
     use std::os::unix::fs::PermissionsExt;
 
     let repo = support::unique_repo("w2b-case3-mode-reverted");
@@ -326,55 +407,26 @@ fn case3_merge_changes_mode_change_perm_would_revert_it_refuses_then_resyncs() {
         &merge_into_main(&repo, baseline, "heads/feature"),
         "merge --into heads/main",
     );
-    let mode_still_old = std::fs::symlink_metadata(repo.join("a.txt"))
+    let mode_after_merge = std::fs::symlink_metadata(repo.join("a.txt"))
         .unwrap()
         .permissions()
         .mode();
     assert_eq!(
-        mode_still_old & 0o777,
-        0o644,
-        "the merge must not touch the worktree -- a.txt keeps its old mode on disk"
-    );
-
-    // The hazard: before this round, this commit silently authored `change-perm a.txt`, reverting
-    // the merge's own mode change.
-    let refused = commit_unrelated(&repo, "extra3.txt", "unrelated edit after merge");
-    assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must now refuse: {}",
-        stdout(&refused)
-    );
-    assert!(
-        stderr(&refused).contains("refusing to commit") && stderr(&refused).contains("a.txt"),
-        "the refusal must name a.txt: {}",
-        stderr(&refused)
-    );
-
-    let resync = switch(&repo, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    let mode_after_resync = std::fs::symlink_metadata(repo.join("a.txt"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(
-        mode_after_resync & 0o777,
+        mode_after_merge & 0o777,
         0o755,
-        "the resync must materialize the merge's own real mode: {}",
-        stdout(&resync)
+        "0.56.0 step W3b: the merge itself must materialize its own new mode into the worktree"
     );
 
-    std::fs::remove_file(repo.join("extra3.txt")).unwrap();
     let status = worktree_status(&repo);
     assert_eq!(
         status.status.code(),
         Some(0),
-        "worktree-status must be clean after the resync: {}",
+        "worktree-status must already be clean right after the merge: {}",
         stdout(&status)
     );
 
-    let clean = commit_unrelated(&repo, "extra3.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
+    let clean = commit_unrelated(&repo, "extra3.txt", "unrelated edit after merge");
+    ok(&clean, "commit after merge");
     let clean_stdout = stdout(&clean);
     assert!(
         !clean_stdout.contains("change-perm"),
@@ -391,22 +443,12 @@ fn case3_merge_changes_mode_change_perm_would_revert_it_refuses_then_resyncs() {
 fn case4_user_edit_of_stale_path_refused_as_conflict() {
     let repo = support::unique_repo("w2b-case4-conflict");
     support::init(&repo);
-    let baseline = setup_main_and_sibling(&repo, "heads/feature");
+    support::generation(&repo, "heads/main", "a.txt", b"a1\n", "add a.txt");
+    support::generation(&repo, "heads/main", "b.txt", b"b1\n", "add b.txt");
 
-    ok(&switch(&repo, "heads/feature"), "switch to feature");
-    support::generation(
-        &repo,
-        "heads/feature",
-        "a.txt",
-        b"a2-from-feature\n",
-        "feature changes a.txt",
-    );
-    ok(&switch(&repo, "heads/main"), "switch back to heads/main");
-
-    ok(
-        &merge_into_main(&repo, baseline, "heads/feature"),
-        "merge --into heads/main",
-    );
+    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it): `sync seal
+    // --claims`, not yet changed this round, reproduces the identical staleness instead.
+    make_a_txt_stale_via_sync_seal(&repo, b"a2-from-feature\n");
 
     // The user, not knowing the worktree is already stale, edits a.txt themselves -- a third
     // state, matching neither the record's old bytes ("a1\n") nor the merge's real new ones
@@ -475,26 +517,16 @@ fn case4_user_edit_of_stale_path_refused_as_conflict() {
 fn case5_rename_of_a_stale_node_refuses() {
     let repo = support::unique_repo("w2b-case5-stale-rename");
     support::init(&repo);
-    let baseline = setup_main_and_sibling(&repo, "heads/feature");
+    support::generation(&repo, "heads/main", "a.txt", b"a1\n", "add a.txt");
+    support::generation(&repo, "heads/main", "b.txt", b"b1\n", "add b.txt");
 
-    ok(&switch(&repo, "heads/feature"), "switch to feature");
-    support::generation(
-        &repo,
-        "heads/feature",
-        "a.txt",
-        b"a2-from-feature\n",
-        "feature changes a.txt",
-    );
-    ok(&switch(&repo, "heads/main"), "switch back to heads/main");
-
-    ok(
-        &merge_into_main(&repo, baseline, "heads/feature"),
-        "merge --into heads/main",
-    );
+    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it): `sync seal
+    // --claims`, not yet changed this round, reproduces the identical staleness instead.
+    make_a_txt_stale_via_sync_seal(&repo, b"a2-from-feature\n");
     assert_eq!(
         std::fs::read(repo.join("a.txt")).unwrap(),
         b"a1\n",
-        "the merge must not touch the worktree -- a.txt stays at its old, stale bytes on disk"
+        "sync seal must not touch the worktree -- a.txt stays at its old, stale bytes on disk"
     );
 
     ok(

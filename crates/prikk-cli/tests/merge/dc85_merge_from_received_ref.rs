@@ -139,6 +139,12 @@ fn shared_baseline(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, String
     let target = support::unique_repo(&format!("dc85-{tag}-target"));
     std::fs::create_dir_all(target.join(".prikk")).unwrap();
     support::copy_dir_recursive(&origin.join(".prikk"), &target.join(".prikk"));
+    // 0.56.0 step W3b: the `.prikk` copy above carries `target`'s own worktree-baseline record
+    // (R1), which already claims this worktree matches `origin`'s genesis state -- so the actual
+    // worktree file must be copied too, or the record is a fabricated lie about an empty
+    // directory, and `merge --into heads/main` (now checking cleanliness for a clean-worktree
+    // self-merge) correctly refuses on exactly that mismatch.
+    std::fs::copy(origin.join("genesis.txt"), target.join("genesis.txt")).unwrap();
 
     (origin, target, genesis_block_id)
 }

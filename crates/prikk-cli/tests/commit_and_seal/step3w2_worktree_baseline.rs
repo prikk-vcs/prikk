@@ -99,6 +99,160 @@ fn baseline_record_path(repo: &Path) -> PathBuf {
     repo.join(".prikk").join("worktree.baseline")
 }
 
+/// Move `repo`'s own `heads/main` tip forward with a sibling's real content, without ever writing
+/// `repo`'s worktree -- `heads/main` stays current throughout, and `sync seal`'s own R3 is **not**
+/// landed this round (the W3b report names it deferred), so this reliably reproduces "the current
+/// branch moved without the worktree's knowledge," the exact shape `merge --into` itself reproduced
+/// before 0.56.0 step W3b closed that gap for merges specifically.
+///
+/// Mechanism: clone `repo`'s exact `heads/main` genesis into a disposable `mirror` (`archive
+/// export` + `archive import --adopt`, byte-identical ids), build `sibling_name` **inside `mirror`
+/// only** (so the resulting patch is genuinely new to `repo`'s own object store, not already
+/// present under a different ref -- `sync accept`/`sync seal` otherwise read it as "already have
+/// this," a no-op, confirmed by running this with the sibling built in `repo` instead), merge it
+/// into `mirror`'s own `heads/main` there (a real `BlockKind::Merge` chained onto the shared
+/// genesis -- `mirror`'s own worktree outcome is irrelevant and never inspected), then `sync` the
+/// two new blocks back into `repo` by `have`/`build`/`accept --claims-out`/`seal --claims`, the same
+/// cross-repository shape `case3_sync_seal_claim_refuses_then_resyncs` already uses, just sharing
+/// real lineage instead of an unrelated genesis.
+fn make_main_stale_via_sync_seal(repo: &Path, sibling_name: &str, extra_path: &str) {
+    let archive_file = std::env::temp_dir().join(format!(
+        "w2-section-2-7-archive-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(repo)
+            .args(["archive", "export"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive export",
+    );
+
+    let mirror = support::unique_repo(&format!("w2-section-2-7-mirror-{}", support::unique_suffix()));
+    support::init(&mirror);
+    support::trust_maintainer(&mirror);
+    ok(
+        &support::prikk(&mirror)
+            .args(["archive", "import", "--adopt"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive import --adopt (clone repo's exact genesis objects)",
+    );
+    // Materialize `mirror`'s own `heads/main` through the ordinary path first, so the merge below
+    // judges a genuinely clean, properly recorded worktree -- not an edge case of its own.
+    ok(
+        &switch(&mirror, "heads/main"),
+        "branch switch heads/main in mirror (normalize the adopted ref)",
+    );
+    let baseline = tip_block_id(&mirror, "heads/main");
+    ok(
+        &support::branch_create(&mirror, sibling_name, "heads/main"),
+        "branch create sibling in mirror",
+    );
+    ok(&switch(&mirror, sibling_name), "switch to sibling in mirror");
+    support::generation(
+        &mirror,
+        sibling_name,
+        extra_path,
+        b"sibling content\n",
+        "sibling adds its own file, in mirror only",
+    );
+    ok(
+        &switch(&mirror, "heads/main"),
+        "switch back to heads/main in mirror",
+    );
+    ok(
+        &merge_into_main(&mirror, baseline, sibling_name),
+        "merge --into heads/main in mirror (builds the new blocks to sync back)",
+    );
+
+    let have_file =
+        std::env::temp_dir().join(format!("w2-section-2-7-have-{}.bin", support::unique_suffix()));
+    ok(
+        &support::prikk(repo)
+            .args([
+                "sync",
+                "have",
+                "heads/main",
+                "--output",
+                have_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync have",
+    );
+    let artifact_file = std::env::temp_dir().join(format!(
+        "w2-section-2-7-artifact-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(&mirror)
+            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+            )
+            .args([
+                "sync",
+                "build",
+                "heads/main",
+                "--have",
+                have_file.to_str().unwrap(),
+                "--output",
+                artifact_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync build",
+    );
+    let claims_file = std::env::temp_dir().join(format!(
+        "w2-section-2-7-claims-{}.txt",
+        support::unique_suffix()
+    ));
+    let accept = support::prikk(repo)
+        .args([
+            "sync",
+            "accept",
+            artifact_file.to_str().unwrap(),
+            "--claims-out",
+            claims_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    ok(&accept, "sync accept");
+
+    // Sealing a mirrored sibling's own content, not an unborn ref, carries **two** claims here (the
+    // shared genesis the merge's own mainline parent names, and the merge block itself) -- `--claims
+    // <file>`, not a single `--claim <id>`, seals every claim the file names, ordered parent block
+    // first, exactly as the real `receiver-accept` CI job's own `sync seal <ref> --claims <file>`
+    // does (`.github/workflows/ci.yml`).
+    support::trust_maintainer(repo);
+    let seal = support::prikk(repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args([
+            "sync",
+            "seal",
+            "heads/main",
+            "--claims",
+            claims_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    ok(&seal, "sync seal --claims");
+    let _ = std::fs::remove_file(&claims_file);
+
+    let _ = std::fs::remove_dir_all(&mirror);
+    let _ = std::fs::remove_file(&archive_file);
+    let _ = std::fs::remove_file(&have_file);
+    let _ = std::fs::remove_file(&artifact_file);
+}
+
 /// Set up `heads/main` (one file, sealed), create `sibling_name` from the same tip, switch to it,
 /// write+commit+seal `extra_path` there, then switch back to `heads/main`. Real `branch switch`
 /// round trips, not a bare `branch create` plus a worktree write left lying around -- the latter
@@ -129,12 +283,15 @@ fn setup_main_and_sealed_sibling(repo: &Path, sibling_name: &str, extra_path: &s
     baseline
 }
 
-/// §2.1: `merge --into heads/main` while `heads/main` is current -- the merge never touches the
-/// worktree, so `c.txt` (brought in from `heads/feature`) is on `tree --ref heads/main` but not on
-/// disk. Before this round, an unrelated commit silently authored `delete-file c.txt`; now it
-/// refuses, and `branch switch heads/main` (the current branch) resyncs.
+/// §2.1, **closed by 0.56.0 step W3b**: `merge --into heads/main` while `heads/main` is current and
+/// the worktree is clean now brings the merge along -- `c.txt` (brought in from `heads/feature`) is
+/// materialized into the worktree by the merge itself, so there is no gap left for the next
+/// unrelated commit to read as a spurious deletion. Before W3b, the merge never touched the
+/// worktree at all, and this same unrelated commit silently authored `delete-file c.txt` until R2's
+/// own refusal (and `branch switch heads/main`'s own resync) closed that symptom; W3b closes the
+/// cause instead, for this exact shape (`merge --into` the current, clean branch).
 #[test]
-fn case1_merge_into_refuses_then_resyncs() {
+fn case1_merge_into_materializes_so_nothing_is_left_to_resync() {
     let repo = support::unique_repo("w2-case1-merge");
     support::init(&repo);
     let baseline = setup_main_and_sealed_sibling(&repo, "heads/feature", "c.txt");
@@ -142,54 +299,33 @@ fn case1_merge_into_refuses_then_resyncs() {
     let merge = merge_into_main(&repo, baseline, "heads/feature");
     ok(&merge, "merge --into heads/main");
     assert!(
-        !repo.join("c.txt").exists(),
-        "the merge must not touch the worktree -- c.txt stays absent on disk"
-    );
-
-    // The hazard: before this round, this commit silently authored `delete-file c.txt`.
-    let refused = commit_unrelated(&repo, "extra1.txt", "unrelated edit after merge");
-    assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must now refuse: {}",
-        stdout(&refused)
-    );
-    assert!(
-        stderr(&refused).contains("refusing to commit")
-            && stderr(&refused).contains("c.txt")
-            && stderr(&refused).contains("never were"),
-        "the refusal must name c.txt as never held: {}",
-        stderr(&refused)
-    );
-    // The resync.
-    let resync = switch(&repo, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    assert!(
         repo.join("c.txt").exists(),
-        "the resync must materialize c.txt: {}",
-        stdout(&resync)
+        "0.56.0 step W3b: the merge itself must materialize c.txt into the worktree"
     );
+    assert_eq!(
+        std::fs::read(repo.join("c.txt")).unwrap(),
+        b"sibling content\n"
+    );
+    assert_eq!(std::fs::read(repo.join("a.txt")).unwrap(), b"a\n");
 
-    // `extra1.txt` is a real untracked file at this point (the refused commit above wrote it to
-    // disk before refusing, since a refusal does not undo the worktree edit that preceded it) --
-    // remove it to isolate what the resync itself did: everything else must be clean.
-    std::fs::remove_file(repo.join("extra1.txt")).unwrap();
+    // Nothing is stale: worktree-status reads clean immediately after the merge, with no resync
+    // needed at all.
     let status = worktree_status(&repo);
     assert_eq!(
         status.status.code(),
         Some(0),
-        "worktree-status must be clean after the resync, apart from the refused commit's own \
-         untracked leftover (removed above): {}",
+        "worktree-status must already be clean right after the merge: {}",
         stdout(&status)
     );
 
-    // The following commit is now clean -- no stray `delete-file`.
-    let clean = commit_unrelated(&repo, "extra1.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
+    // An unrelated commit afterward is ordinary -- no stray `delete-file`, because there is no gap
+    // left for it to misread.
+    let clean = commit_unrelated(&repo, "extra1.txt", "unrelated edit after merge");
+    ok(&clean, "commit after merge");
     let clean_stdout = stdout(&clean);
     assert!(
         !clean_stdout.contains("delete-file"),
-        "no stray delete-file after the resync: {clean_stdout}"
+        "no stray delete-file after a materializing merge: {clean_stdout}"
     );
     assert!(
         clean_stdout.contains("create-file extra1.txt"),
@@ -600,11 +736,10 @@ fn a_repository_with_no_record_behaves_as_today() {
 fn section_2_7_deadlock_is_dissolved() {
     let repo = support::unique_repo("w2-section-2-7");
     support::init(&repo);
-    let baseline = setup_main_and_sealed_sibling(&repo, "heads/feature", "c.txt");
-    ok(
-        &merge_into_main(&repo, baseline, "heads/feature"),
-        "merge --into heads/main",
-    );
+    // `merge --into heads/main` itself is excluded (0.56.0 step W3b closed that gap for it):
+    // `sync seal --claims`, not yet changed this round, reproduces the identical staleness instead.
+    support::generation(&repo, "heads/main", "a.txt", b"a\n", "genesis");
+    make_main_stale_via_sync_seal(&repo, "heads/feature", "c.txt");
     assert!(!repo.join("c.txt").exists());
 
     // Half 1: "switch to yourself" -- today (pre-W2) a documented no-op (RFC 147 §2j) that leaves
@@ -629,15 +764,12 @@ fn section_2_7_deadlock_is_dissolved() {
     // succeeds and coming back still leaves a clean worktree.
     let repo2 = support::unique_repo("w2-section-2-7-away");
     support::init(&repo2);
-    let baseline2 = setup_main_and_sealed_sibling(&repo2, "heads/feature", "c.txt");
+    support::generation(&repo2, "heads/main", "a.txt", b"a\n", "genesis");
     ok(
         &support::branch_create(&repo2, "heads/other", "heads/main"),
         "branch create other",
     );
-    ok(
-        &merge_into_main(&repo2, baseline2, "heads/feature"),
-        "merge --into heads/main",
-    );
+    make_main_stale_via_sync_seal(&repo2, "heads/feature", "c.txt");
     assert!(!repo2.join("c.txt").exists());
 
     let away = switch(&repo2, "heads/other");

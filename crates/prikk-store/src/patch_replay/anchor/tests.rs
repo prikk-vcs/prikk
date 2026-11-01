@@ -127,7 +127,12 @@ fn only_worktree_writes_use_the_verified_anchor() {
         [
             Path::new("branch_switch.rs"),
             Path::new("patch_checkout.rs"),
-            Path::new("patch_replay.rs")
+            Path::new("patch_replay.rs"),
+            // 0.56.0 step W3b: `materialize_after_publish` (step 4 of R3's own ruling) is the
+            // shared materialization every current-branch-moving producer calls after its own
+            // publish -- the identical function `branch_switch.rs`'s own ordinary path already
+            // uses, not a second, parallel anchor-trust decision.
+            Path::new("worktree_materialize.rs")
         ],
         "callers of the verified worktree-write replay"
     );

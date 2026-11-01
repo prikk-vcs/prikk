@@ -63,7 +63,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 30] = [
+const UPPER_LAYER: [&str; 31] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
@@ -119,6 +119,12 @@ const UPPER_LAYER: [&str; 30] = [
     "tag_travel",
     "unlock",
     "verify",
+    // 0.56.0 step W3b: the shared "clean against the record, mark dirty, materialize through the
+    // verified path" sequence R3's ruling gives (`branch_switch`'s own ordinary materialization,
+    // and every producer that moves the current branch). Depends on `worktree_status` (upper, for
+    // its own clean-check report), `worktree_baseline`, `worktree_marker` and `patch_replay` (all
+    // lower); reached only by `branch_switch` and `merge`, both upper.
+    "worktree_materialize",
     "worktree_status",
 ];
 

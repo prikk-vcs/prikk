@@ -3,11 +3,18 @@
 //! path_is_stale`'s comparison is now unconditionally symmetric at every per-path authoring site
 //! (the main loop, the rename loop, and the deletion loop, which was already symmetric).
 //!
-//! **The measured hazard this closes.** `feature` adds `c.txt` (`merged-content`); `merge --into
-//! heads/main --from heads/feature` brings it onto `main`'s live tip; the worktree is never told
-//! (today's known, intended-to-be-caught materialization gap -- `branch switch <the current
-//! branch>` is the resync, exactly as W2's own cases prove for every other producer). The user, who
-//! never saw the merge, creates their **own** `c.txt` by hand (different content) and commits.
+//! **The measured hazard this closes.** A producer adds `c.txt` (`merged-content`) to `main`'s
+//! live tip without the worktree's knowledge (today's known, intended-to-be-caught
+//! materialization gap -- `branch switch <the current branch>` is the resync, exactly as W2's own
+//! cases prove). The user, who never saw the change land, creates their **own** `c.txt` by hand
+//! (different content) and commits.
+//!
+//! **0.56.0 step W3b note:** the fixture below reproduces this through `sync seal --claims`
+//! (`make_new_file_appear_on_main_via_sync_seal`), not `merge --into heads/main` as this test
+//! originally did -- W3b closed exactly this gap for a clean-worktree `merge --into` the current
+//! branch, so that specific producer no longer reproduces it; `sync seal` is not yet changed this
+//! round (`.git-exclude/review-request/0.56.0-step-3w3b-report.md`), and reproduces the identical
+//! shape.
 //! Before this round, `require_concrete_record` exempted a path the worktree's own record was
 //! silent about (no concrete entry for `c.txt` at all, since the record predates the merge) from
 //! every "would author" site but the deletion loop -- so the user's hand-made file sailed through,
@@ -42,31 +49,12 @@ use crate::support::ok;
 use std::path::Path;
 use std::process::Output;
 
-use prikk_object::{ObjectId, ObjectType, RefStatePayload};
-use prikk_store::{FileObjectStore, ObjectReader, RefStore, RepositoryLayout};
-
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn tip_block_id(repo: &Path, ref_name: &str) -> ObjectId {
-    let layout = RepositoryLayout::open(repo.to_path_buf()).unwrap();
-    let object_store = FileObjectStore::new(layout.clone());
-    let ref_state_id = RefStore::new(layout)
-        .read_current_ref_state_id(ref_name)
-        .unwrap()
-        .unwrap();
-    let envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)
-        .unwrap()
-        .unwrap();
-    RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
-        .unwrap()
-        .target_object_id
 }
 
 fn switch(repo: &Path, target: &str) -> Output {
@@ -76,26 +64,127 @@ fn switch(repo: &Path, target: &str) -> Output {
         .unwrap()
 }
 
-fn merge_into_main(repo: &Path, baseline: ObjectId, from_ref: &str) -> Output {
+/// Add `path` (with `content`) to `repo`'s own `heads/main` tip, without ever writing `repo`'s
+/// worktree -- `heads/main` stays current throughout. `merge --into` itself is excluded (0.56.0
+/// step W3b closed this exact gap for it, for a clean worktree); `sync seal --claims`, not yet
+/// changed this round, reproduces the identical "the worktree is never told" staleness instead.
+/// Mechanism: clone `repo`'s exact `heads/main` genesis into a disposable `mirror` (`archive
+/// export` + `archive import --adopt`), add `path` **inside `mirror` only** (so the new patch is
+/// genuinely new to `repo`'s own object store), then sync the one new block back by
+/// `have`/`build`/`accept --claims-out`/`seal --claims` -- the identical shape
+/// `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
+fn make_new_file_appear_on_main_via_sync_seal(repo: &Path, path: &str, content: &[u8]) {
+    let archive_file = std::env::temp_dir().join(format!(
+        "w2d-stale-archive-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(repo)
+            .args(["archive", "export"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive export",
+    );
+
+    let mirror = support::unique_repo(&format!("w2d-stale-mirror-{}", support::unique_suffix()));
+    support::init(&mirror);
+    support::trust_maintainer(&mirror);
+    ok(
+        &support::prikk(&mirror)
+            .args(["archive", "import", "--adopt"])
+            .arg(&archive_file)
+            .output()
+            .unwrap(),
+        "archive import --adopt (clone repo's exact genesis objects)",
+    );
+    ok(
+        &switch(&mirror, "heads/main"),
+        "branch switch heads/main in mirror (normalize the adopted ref)",
+    );
+    support::generation(&mirror, "heads/main", path, content, "add path, in mirror only");
+
+    let have_file =
+        std::env::temp_dir().join(format!("w2d-stale-have-{}.bin", support::unique_suffix()));
+    ok(
+        &support::prikk(repo)
+            .args([
+                "sync",
+                "have",
+                "heads/main",
+                "--output",
+                have_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync have",
+    );
+    let artifact_file = std::env::temp_dir().join(format!(
+        "w2d-stale-artifact-{}.bin",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(&mirror)
+            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+            )
+            .args([
+                "sync",
+                "build",
+                "heads/main",
+                "--have",
+                have_file.to_str().unwrap(),
+                "--output",
+                artifact_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync build",
+    );
+    let claims_file = std::env::temp_dir().join(format!(
+        "w2d-stale-claims-{}.txt",
+        support::unique_suffix()
+    ));
+    ok(
+        &support::prikk(repo)
+            .args([
+                "sync",
+                "accept",
+                artifact_file.to_str().unwrap(),
+                "--claims-out",
+                claims_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync accept",
+    );
     support::trust_maintainer(repo);
-    support::prikk(repo)
-        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
-        .env(
-            "PRIKK_MAINTAINER_SEED_FILE",
-            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
-        )
-        .args([
-            "merge",
-            "--allow-no-audit",
-            "--baseline-block",
-            &baseline.to_string(),
-            "--into",
-            "heads/main",
-            "--from",
-            from_ref,
-        ])
-        .output()
-        .unwrap()
+    ok(
+        &support::prikk(repo)
+            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+            .env(
+                "PRIKK_MAINTAINER_SEED_FILE",
+                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+            )
+            .args([
+                "sync",
+                "seal",
+                "heads/main",
+                "--claims",
+                claims_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap(),
+        "sync seal --claims",
+    );
+
+    let _ = std::fs::remove_dir_all(&mirror);
+    let _ = std::fs::remove_file(&archive_file);
+    let _ = std::fs::remove_file(&have_file);
+    let _ = std::fs::remove_file(&artifact_file);
+    let _ = std::fs::remove_file(&claims_file);
 }
 
 fn commit_from_worktree(repo: &Path, message: &str) -> Output {
@@ -130,34 +219,15 @@ fn merge_adds_a_file_the_worktree_never_received_then_a_hand_made_same_path_file
     let repo = support::unique_repo("w2d-case1-merge-introduced-file-overwritten-unseen");
     support::init(&repo);
     support::generation(&repo, "heads/main", "a.txt", b"a1\n", "add a.txt");
-    let baseline = tip_block_id(&repo, "heads/main");
-    ok(
-        &support::branch_create(&repo, "heads/feature", "heads/main"),
-        "branch create feature",
-    );
-
-    ok(&switch(&repo, "heads/feature"), "switch to feature");
-    support::generation(
-        &repo,
-        "heads/feature",
-        "c.txt",
-        b"merged-content\n",
-        "feature adds c.txt",
-    );
-    ok(&switch(&repo, "heads/main"), "switch back to heads/main");
-    assert!(
-        !repo.join("c.txt").exists(),
-        "heads/main's worktree has never held c.txt -- it only exists on feature so far"
-    );
     queued_patch_count_is_zero(&repo);
 
-    ok(
-        &merge_into_main(&repo, baseline, "heads/feature"),
-        "merge --into heads/main --from heads/feature",
-    );
+    // `merge --into` itself is excluded (0.56.0 step W3b closed this exact gap for it, for a clean
+    // worktree): `sync seal --claims`, not yet changed this round, reproduces the identical "the
+    // worktree is never told" staleness instead.
+    make_new_file_appear_on_main_via_sync_seal(&repo, "c.txt", b"merged-content\n");
     assert!(
         !repo.join("c.txt").exists(),
-        "the merge must not touch the worktree -- c.txt stays absent on disk even though \
+        "sync seal must not touch the worktree -- c.txt stays absent on disk even though \
          heads/main's live tip now has it"
     );
     queued_patch_count_is_zero(&repo);
