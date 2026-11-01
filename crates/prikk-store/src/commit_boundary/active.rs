@@ -294,6 +294,43 @@ pub fn active_ref_ownership(
     }
 }
 
+/// R4 (0.56.0 step W3, `0.56.0-step-3w1-design-review-v1.md`): refuse when the active WAL already
+/// holds queued, unsealed work **owned by `ref_name`** -- the exact ref a producer is about to
+/// move. The queued patches were authored against the ref's *old* state; folding them onto a state
+/// the producer is about to move underneath them is not something this check makes safe, so the
+/// producer must not move the ref at all while they are still queued -- `seal` first, which drains
+/// the queue, then the producer may proceed.
+///
+/// Shared by every producer that moves a ref without itself draining the active WAL first
+/// (`execute_merge`, `try_adopt_local_ref`, `branch create --from`) -- not a copy of the same check
+/// at each site. The two other members of W3's five-producer list, `seal_from_accepted_claim` and
+/// `append_rollback_draft`, already refuse on *any* non-empty active WAL regardless of which ref
+/// owns it (`seal_from_accepted.rs`'s own "sealing from an accepted claim requires an empty active
+/// WAL", `rollback/draft.rs`'s own "rollback-draft requires an empty active WAL") -- a strictly
+/// stronger condition that already implies this one, so they do not call this function.
+///
+/// `verb` is the complete present-participle phrase naming the action and its own target ref,
+/// already assembled by the caller (e.g. `"merging heads/feature into heads/main"`, `"adopting
+/// heads/main"`, `"creating heads/main"`) -- never just a bare verb, so this function does not
+/// have to guess how `ref_name` fits into the caller's own sentence a second time.
+pub fn refuse_if_active_queue_owns_ref(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    verb: &str,
+) -> Result<()> {
+    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    if replay.records.is_empty() {
+        return Ok(());
+    }
+    if let ActiveRefOwnership::Owned = active_ref_ownership(layout, ref_name)? {
+        return Err(PrikkError::Precondition(format!(
+            "the active WAL holds unsealed work for {ref_name}; seal it (`prikk seal \
+             --allow-no-audit --ref {ref_name}`) before {verb}"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate active ref metadata for a non-empty active WAL -- the assertion form of
 /// [`active_ref_ownership`], written in terms of it rather than re-deriving the same comparison,
 /// for the two callers (`ActiveSession::append_patch`, `node_authoring::author_inner`) that want a

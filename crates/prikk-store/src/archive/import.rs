@@ -1210,6 +1210,17 @@ fn try_adopt_local_ref(
         });
     }
 
+    // 0.56.0 step W3 (R4): never adopt a ref name the active WAL already holds queued, unsealed
+    // work for -- e.g. `commit --ref heads/main` on a still-unborn `heads/main`, followed by this
+    // adopt landing a real tip at that same name before the queue is sealed. The queue was
+    // authored against an unborn ref with no content at all; adopting now gives that name a tip
+    // the queue never saw. `seal` first.
+    crate::commit_boundary::active::refuse_if_active_queue_owns_ref(
+        layout,
+        &landing.ref_name,
+        &format!("adopting {}", landing.ref_name),
+    )?;
+
     // 0.56.0 step 3c (A3): `try_adopt_local_ref` used to read nothing from the received index at
     // all (2A v2's own measured R1 finding) -- classify the archive's own delivered tip against
     // the received pointer already held at this entry's own destination (`remotes/<ref_name>`,

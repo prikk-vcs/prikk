@@ -98,6 +98,14 @@ pub fn execute_merge(
     }
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
+    // 0.56.0 step W3 (R4): never move a ref the active WAL already holds queued, unsealed work
+    // for — those patches were authored against `into_ref`'s *old* tip; folding them onto a tip
+    // this merge is about to move it to is not something this check makes safe. `seal` first.
+    crate::commit_boundary::active::refuse_if_active_queue_owns_ref(
+        layout,
+        &into_ref,
+        &format!("merging {from_ref} into {into_ref}"),
+    )?;
     // DC-85: `from_ref` may be a local branch or a received ref (`remotes/<name>`) — never widen
     // `validate_local_branch_ref` itself to accept `remotes/`, since it also gates `into_ref` here
     // and `branch create --from` elsewhere; a merge source that happens to be received gets its own

@@ -180,6 +180,16 @@
   but whose queued fold has. A file the user genuinely deleted is unaffected and still reports as
   `missing`; `--format json` carries the same fact as a new, additive `"behind_ref"` field, `null`
   when the worktree is current.
+- **`merge --into`, `archive import --adopt`, and `branch create --from` now refuse to move a ref
+  the active WAL already holds queued, unsealed work for, instead of moving it out from under that
+  queue with no warning.** Before this, none of the three asked whether a locally committed-but-
+  not-yet-sealed patch already targeted the exact ref they were about to advance or publish; the
+  queue was silently left in place, authored against a tip that was no longer current by the time
+  it would eventually be sealed. Each now refuses before any write, naming the ref and `seal` as
+  the way out (`prikk seal --allow-no-audit --ref <ref>`); a queue that targets a *different* ref,
+  or no queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse`
+  already refused on any non-empty active WAL regardless of which ref owned it — a strictly
+  stronger, pre-existing condition that already covered this case for both of them.
 
 ### Added
 

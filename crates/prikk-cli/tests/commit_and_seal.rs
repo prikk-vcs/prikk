@@ -45,5 +45,7 @@ mod step3w2d_symmetric_record_silence;
 mod step3w2f_record_outlives_pointer;
 #[path = "commit_and_seal/step3w3_0_refusal_names_a_way_out_that_works.rs"]
 mod step3w3_0_refusal_names_a_way_out_that_works;
+#[path = "commit_and_seal/step3w3_r4_queue_ownership.rs"]
+mod step3w3_r4_queue_ownership;
 #[path = "support/mod.rs"]
 mod support;

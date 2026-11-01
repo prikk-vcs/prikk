@@ -224,6 +224,15 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   its sealed block, its queued fold, or both — (not when a file was genuinely deleted, which still
   reports as `missing`). `--format json` carries this as an additive `"behind_ref"` field beside
   `"queued_elsewhere"`, `null` when the worktree is current or no record exists.
+- **`merge --into`, `archive import --adopt` and `branch create --from` refuse to move a ref the
+  active WAL already holds queued, unsealed work for (0.56.0 step W3, R4).** Before this, each
+  moved the ref out from under a locally committed-but-not-yet-sealed patch with no refusal and no
+  warning — the patch stayed queued, now authored against a tip that would no longer be current by
+  the time it was eventually sealed. Each now checks before any write and refuses, naming the ref
+  and `prikk seal --allow-no-audit --ref <ref>` as the way out; a queue that targets a *different*
+  ref, or no queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse`
+  already refuse on *any* non-empty active WAL regardless of which ref owns it, a strictly stronger
+  condition that already covered this case for both of them, so neither changed.
 
 **`bundle import` and `bundle preview` classify a delivery against the pointer it would replace,
 in six classes:** `no-local-history` (nothing to compare against), `already-at-tip` (identical to

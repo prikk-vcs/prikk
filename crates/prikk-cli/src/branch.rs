@@ -45,7 +45,8 @@ use prikk_object::{
 use prikk_store::{
     ActiveRefOwnership, DEFAULT_ACTIVE_NAME, FileObjectStore, GatedOperation, MaintainerSigner,
     ObjectReader, ObjectWriteSession, RefPublication, RefStore, Wal, active_ref_ownership,
-    maintainer_signature, resolve_ref_tip_block, validate_local_branch_ref, verify_signer_trusted,
+    maintainer_signature, refuse_if_active_queue_owns_ref, resolve_ref_tip_block,
+    validate_local_branch_ref, verify_signer_trusted,
 };
 
 /// Envelope schema version for a `RefState` carrying no `closed` field (every ordinary
@@ -263,6 +264,13 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         )
         .into());
     }
+
+    // 0.56.0 step W3 (R4): never create (publish) a ref name the active WAL already holds
+    // queued, unsealed work for -- e.g. `commit --ref heads/topic` on a still-unborn
+    // `heads/topic`, followed by this `--from` create giving that same name a real tip before the
+    // queue is sealed. `seal` first.
+    refuse_if_active_queue_owns_ref(&layout, &canonical, &format!("creating {canonical}"))
+        .map_err(|err| err.to_string())?;
 
     // RFC 151 §2.2: a new branch starts from the current branch unless `--from` says otherwise.
     let from_ref = crate::current_branch::resolve_ref(&layout, parsed.from)?;

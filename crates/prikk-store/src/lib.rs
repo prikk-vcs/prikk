@@ -172,8 +172,8 @@ pub use checkout::{
 };
 pub use commit_boundary::active::{
     ActiveCommitResult, ActiveRefMetadata, ActiveRefOwnership, ActiveSession, active_ref_ownership,
-    finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
-    require_active_ref_for_non_empty_wal, write_active_ref_metadata,
+    finish_active_publication_cleanup, read_active_ref_metadata, refuse_if_active_queue_owns_ref,
+    remove_active_ref_metadata, require_active_ref_for_non_empty_wal, write_active_ref_metadata,
 };
 pub use commit_boundary::classification::{
     RestoreRefusalContext, Verdict, classify, write_refusal_reason,
