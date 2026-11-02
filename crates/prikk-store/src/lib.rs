@@ -413,3 +413,13 @@ pub use worktree_status::{
     WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
     worktree_status,
 };
+// 0.56.0 step W3c-2: `branch create --from`'s own publish logic lives in `prikk-cli`
+// (`crate::branch::run_create`), not here -- unlike `merge`/`archive import`/`sync seal` -- so it
+// needs these re-exported narrowly, the exact precedent `switch_branch`/`worktree_status` already
+// set just above, rather than moving `run_create` into this crate (the ruling's own call: a
+// refactor with no behaviour attached, not done this round).
+pub use worktree_materialize::{
+    CurrentBranchMaterializeReport, PendingCurrentBranchMaterialization,
+    mark_current_branch_switch_pending, materialize_after_publish,
+    require_worktree_clean_and_capture,
+};

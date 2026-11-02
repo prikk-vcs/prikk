@@ -158,6 +158,15 @@
   before the publish instead. A refused merge into the current branch now genuinely writes
   nothing at all, confirmed by a whole-repository (worktree and `.prikk` both) comparison before
   and after the refusal, and by `verify` reporting zero unreached objects afterward.
+  **0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now closes this
+  same gap for itself, the identical shape W3c-1 gave `merge`: the clean check and the capture of
+  the current branch's own (empty) baseline files run after every one of `create`'s own read-only
+  refusals and before it builds a single object, the dirty-worktree marker is set immediately
+  before the publish, and the `--from` target's files are materialized into the worktree right
+  after — the created branch is genuinely current and clean afterward, with nothing left for the
+  next commit to resync. A dirty worktree still refuses the create itself, before any write,
+  leaving `.prikk` byte-identical except its own cache. `archive import --adopt` and `sync seal
+  --claim` are unchanged this round and still rely only on the refusal above.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

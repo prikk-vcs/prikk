@@ -53,5 +53,7 @@ mod step3w3b_merge_into_current_branch;
 mod step3w3b_rollback_draft_output_sentence;
 #[path = "commit_and_seal/step3w3c1_merge_refusal_writes_nothing.rs"]
 mod step3w3c1_merge_refusal_writes_nothing;
+#[path = "commit_and_seal/step3w3c2_branch_create_from_current_branch.rs"]
+mod step3w3c2_branch_create_from_current_branch;
 #[path = "support/mod.rs"]
 mod support;

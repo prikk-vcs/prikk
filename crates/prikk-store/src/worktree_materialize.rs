@@ -291,7 +291,14 @@ pub(crate) fn apply_materialization_plan(
 
 /// What step 1-2 capture, for step 4 ([`materialize_after_publish`]) to consume across the
 /// producer's own publish (step 3) in between.
-pub(crate) struct PendingCurrentBranchMaterialization {
+///
+/// 0.56.0 step W3c-2: `pub`, not `pub(crate)` -- `branch create --from`'s own publish logic lives
+/// in `prikk-cli`, not `prikk-store` (unlike `merge`/`archive import`/`sync seal`), so this type and
+/// the two functions that produce/consume it are re-exported narrowly from `lib.rs`, the exact
+/// precedent `switch_branch`/`worktree_status` already set, rather than moving `run_create`'s
+/// publish logic into this crate to avoid the re-export (the ruling's own call: that would be a
+/// refactor with no behaviour attached).
+pub struct PendingCurrentBranchMaterialization {
     current_branch: String,
     old_files: BTreeMap<String, (ObjectId, NodeKind)>,
 }
@@ -303,7 +310,7 @@ pub(crate) struct PendingCurrentBranchMaterialization {
 /// active-WAL lock, **immediately after its own R4 check and before it builds or writes anything of
 /// its own** -- this is what makes a refusal here leave nothing written: there is nothing to undo
 /// yet.
-pub(crate) fn require_worktree_clean_and_capture(
+pub fn require_worktree_clean_and_capture(
     layout: &RepositoryLayout,
     current_branch: &str,
     active_replay: &WalReplay,
@@ -324,7 +331,7 @@ pub(crate) fn require_worktree_clean_and_capture(
 /// bracketing the publish: a crash anywhere from this call through [`materialize_after_publish`]
 /// leaves exactly the state `branch switch <current_branch>` (the marker's own named route)
 /// resolves.
-pub(crate) fn mark_current_branch_switch_pending(
+pub fn mark_current_branch_switch_pending(
     layout: &RepositoryLayout,
     pending: &PendingCurrentBranchMaterialization,
 ) -> Result<()> {
@@ -335,11 +342,22 @@ pub(crate) fn mark_current_branch_switch_pending(
 }
 
 /// What [`materialize_after_publish`] did.
-pub(crate) struct CurrentBranchMaterializeReport {
-    pub(crate) written_files: usize,
-    pub(crate) unchanged_files: usize,
-    pub(crate) deleted_files: usize,
-    pub(crate) anchor_fallback: Option<SnapshotAnchorFallback>,
+///
+/// 0.56.0 step W3c-2: `pub`, with `pub` fields, for the same reason as
+/// [`PendingCurrentBranchMaterialization`] -- `branch create --from`'s own CLI output
+/// (`crates/prikk-cli/src/branch.rs::run_create`) reads these fields directly, the way `execute_merge`
+/// reads them to fill `MergeExecutionReport`'s own five materialization fields.
+pub struct CurrentBranchMaterializeReport {
+    /// Files created or replaced in the worktree.
+    pub written_files: usize,
+    /// Worktree files already present with identical bytes, found while materializing.
+    pub unchanged_files: usize,
+    /// Files the pre-publish worktree held that the newly published tip lacks, deleted while
+    /// materializing.
+    pub deleted_files: usize,
+    /// The replay-verified snapshot the materialization could not anchor at, if any (RFC 136
+    /// increment 2b).
+    pub anchor_fallback: Option<SnapshotAnchorFallback>,
 }
 
 /// Step 4 of the R3 ruling: materialize `current_branch`'s now-published tip through the ordinary
@@ -352,7 +370,7 @@ pub(crate) struct CurrentBranchMaterializeReport {
 /// already durably returned; a crash at any point up to and including the `in_the_way` refusal below
 /// leaves the marker set and the record stale, both of which `branch switch <current_branch>` (run
 /// again) resolves by re-running this exact function.
-pub(crate) fn materialize_after_publish(
+pub fn materialize_after_publish(
     layout: &RepositoryLayout,
     pending: PendingCurrentBranchMaterialization,
 ) -> Result<CurrentBranchMaterializeReport> {

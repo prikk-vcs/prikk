@@ -43,10 +43,12 @@ use prikk_object::{
     RefUpdatePayload,
 };
 use prikk_store::{
-    ActiveRefOwnership, DEFAULT_ACTIVE_NAME, FileObjectStore, GatedOperation, MaintainerSigner,
-    ObjectReader, ObjectWriteSession, RefPublication, RefStore, Wal, active_ref_ownership,
-    maintainer_signature, refuse_if_active_queue_owns_ref, resolve_ref_tip_block,
-    validate_local_branch_ref, verify_signer_trusted,
+    ActiveLock, ActiveRefOwnership, CurrentBranchMaterializeReport, DEFAULT_ACTIVE_NAME,
+    FileObjectStore, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
+    RefPublication, RefStore, Wal, active_ref_ownership, maintainer_signature,
+    mark_current_branch_switch_pending, materialize_after_publish, refuse_if_active_queue_owns_ref,
+    require_worktree_clean_and_capture, resolve_ref_tip_block, validate_local_branch_ref,
+    verify_signer_trusted,
 };
 
 /// Envelope schema version for a `RefState` carrying no `closed` field (every ordinary
@@ -211,6 +213,11 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         .require_current_format()
         .map_err(|err| err.to_string())?;
     let canonical = validate_local_branch_ref(&parsed.name).map_err(|err| err.to_string())?;
+    // 0.56.0 step W3c-2 (R3): serialize with every other writer of the active WAL/worktree for the
+    // whole call, the same discipline `execute_merge` added in W3b -- `run_create` held no lock of
+    // its own before this round because it never wrote the worktree before this round either.
+    let _active_lock = ActiveLock::acquire_for_write(&layout, DEFAULT_ACTIVE_NAME)
+        .map_err(|err| err.to_string())?;
     // RFC 165 R3 (C3) + Addendum 1 §1: refuse while another ref's publication is incomplete, or
     // while the ref log has a lead-free tail (Rule D), before any write -- `canonical` excluded,
     // since this create is the thing that would resolve its own state.
@@ -281,6 +288,33 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     // reused verbatim, before any object or ref write.
     verify_signer_trusted(&layout, &signer, GatedOperation::BranchCreate)
         .map_err(|err| err.to_string())?;
+
+    // 0.56.0 step W3c-2 (R3): when `canonical` is the current branch -- the "unborn current
+    // branch" shape RFC 151 §2.2 names, since this `create` is the thing that would resolve its
+    // own state, not something it could already have a tip for (the "already exists" refusal
+    // above excludes that) -- the clean check and the capture of the old (empty) baseline's files
+    // run here, after every one of the read-only refusals above and before this function builds or
+    // writes a single object of its own. Checked against `canonical` specifically, never the raw
+    // `current_branch` string, so a `create` of some other branch while a different one is current
+    // never trips this.
+    let current_branch = crate::current_branch::displayed_current_branch(&layout);
+    let pending_materialization = if current_branch.as_deref() == Some(canonical.as_str()) {
+        let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+            .replay()
+            .map_err(|err| err.to_string())?;
+        Some(
+            require_worktree_clean_and_capture(
+                &layout,
+                &canonical,
+                &active_replay,
+                &format!("creating {canonical}"),
+            )
+            .map_err(|err| err.to_string())?,
+        )
+    } else {
+        None
+    };
+
     let ref_state_payload = RefStatePayload {
         ref_name: canonical.clone(),
         kind: RefKind::Branch,
@@ -322,14 +356,46 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         ref_state: ref_state_envelope,
         ref_update: ref_update_envelope,
     };
+    // 0.56.0 step W3c-2: the marker is set immediately before the publish below, using the
+    // capture already taken above -- a refusal at any point between there and here (the signer
+    // check, envelope construction) now leaves nothing written at all, the same guarantee
+    // `execute_merge` holds.
+    if let Some(pending) = &pending_materialization {
+        mark_current_branch_switch_pending(&layout, pending).map_err(|err| err.to_string())?;
+    }
+
     let published_ref_state_id = ref_store
         .publish_with_object_store(&mut object_store, &publication)
+        .map_err(|err| err.to_string())?;
+
+    // Step 4: materialize the tip just published, through the ordinary verified path -- a crash
+    // between the publish above and this call leaves the marker set and the record stale, both
+    // recoverable by `prikk branch switch <canonical>` (the marker's own named route).
+    let materialization = pending_materialization
+        .map(|pending| materialize_after_publish(&layout, pending))
+        .transpose()
         .map_err(|err| err.to_string())?;
 
     println!("created branch {canonical}");
     println!("target block: {target_object_id}");
     println!("RefState: {published_ref_state_id}");
     println!("update_seq: 1");
+    if let Some(CurrentBranchMaterializeReport {
+        written_files,
+        unchanged_files,
+        deleted_files,
+        anchor_fallback,
+    }) = materialization
+    {
+        // RFC 136 increment 2b: a replay-verified snapshot the materialization could not anchor
+        // at is named on stderr -- the same helper `branch switch`'s and `merge`'s own output
+        // already use.
+        crate::warn_anchor_fallbacks(anchor_fallback.iter());
+        println!(
+            "materialized into the worktree: files written: {written_files}, unchanged: \
+             {unchanged_files}, deleted: {deleted_files}",
+        );
+    }
     Ok(())
 }
 

@@ -567,8 +567,22 @@ fn case4_commit_ref_other_refuses_before_authoring() {
 /// report transcript for `heads/other` might suggest, is byte-for-byte the same shape
 /// `dc74_merge_execution`'s legitimate sibling-branch commits already prove is safe -- see this
 /// file's module doc and the `node_authoring.rs` deviation it documents.)
+///
+/// **0.56.0 step W3c-2 rewrite** (`.git-exclude/reviewed/0.56.0-step-3w3c-1-review-v1.md`'s own
+/// ruling 2: "rewrite `step3w2_worktree_baseline.rs`'s §2.5 test onto a surviving source of
+/// staleness"): `branch create --from` no longer leaves `heads/main`'s worktree behind -- R3 now
+/// materializes `heads/other`'s content immediately (asserted below, positively, the same shape
+/// `step3w3c2_branch_create_from_current_branch.rs`'s own dedicated test proves). This test's own
+/// distinct value -- a stale worktree refuses an unrelated commit, and `branch switch` resyncs it
+/// -- still needs a staleness source, so it now uses the other surviving one the ruling names:
+/// `rollback-draft --append-inverse`, then plain `seal` (which never materializes, by design,
+/// confirmed every prior round this cycle). Undoing the very content `branch create` just
+/// materialized leaves `o.txt` physically present (the draft never touches the worktree, and
+/// neither does the plain `seal` that publishes it) while the newly sealed tip no longer has it --
+/// the same "ref and worktree disagree" shape this test always existed to demonstrate, now sourced
+/// from a producer this round's own work does not touch.
 #[test]
-fn case5_branch_create_from_onto_unborn_current_refuses_then_resyncs() {
+fn case5_branch_create_from_materializes_then_rollback_leaves_it_stale_until_resync() {
     let src = support::unique_repo("w2-case5-src");
     support::init(&src);
     support::generation(&src, "heads/main", "o.txt", b"o\n", "genesis");
@@ -658,31 +672,76 @@ fn case5_branch_create_from_onto_unborn_current_refuses_then_resyncs() {
         .output()
         .unwrap();
     ok(&create, "branch create heads/main --from heads/other");
+    // 0.56.0 step W3c-2 (R3): `heads/main` is current, so the create materializes `heads/other`'s
+    // content immediately -- `o.txt` is really on disk now, not merely recorded as adopted.
     assert!(
-        !repo.join("o.txt").exists(),
-        "branch create never touches the worktree"
+        stdout(&create).contains("materialized into the worktree"),
+        "the CLI output must say the create materialized the worktree: {}",
+        stdout(&create)
+    );
+    assert!(
+        repo.join("o.txt").exists(),
+        "branch create --from now materializes the current branch's own new tip"
     );
 
-    let refused = commit_unrelated(
-        &repo,
-        "extra5.txt",
-        "unrelated edit after branch create --from",
+    // Undo the content `branch create` just materialized -- `rollback-draft --append-inverse`
+    // appends the inverse to the active WAL without touching the worktree (confirmed by this same
+    // file's own `step3w3b_rollback_draft_output_sentence.rs`), so `o.txt` stays physically present
+    // even though the active WAL now queues its removal.
+    let draft = support::prikk(&repo)
+        .env("PRIKK_AUTHOR_KEY_ID", support::AUTHOR_KEY_ID)
+        .env(
+            "PRIKK_AUTHOR_SEED_FILE",
+            support::seed_file(support::AUTHOR_SEED_HEX),
+        )
+        .args(["rollback-draft", "--append-inverse", "-m", "undo o.txt"])
+        .output()
+        .unwrap();
+    ok(&draft, "rollback-draft --append-inverse (undo o.txt)");
+    assert!(
+        stdout(&draft).contains("the worktree is unchanged by this draft"),
+        "rollback-draft must state plainly that it never touches the worktree: {}",
+        stdout(&draft)
     );
+    assert!(
+        repo.join("o.txt").exists(),
+        "rollback-draft must not have touched the worktree"
+    );
+
+    // Plain `seal` publishes the inverse -- not one of R3's five materializing producers, so it
+    // never touches the worktree either. `heads/main`'s real tip no longer has `o.txt`, but the
+    // worktree still physically does: genuinely stale, the same shape this test always existed to
+    // demonstrate.
+    let seal = support::seal(&repo, "heads/main");
+    ok(&seal, "seal heads/main (publishes the inverse)");
+    assert!(
+        repo.join("o.txt").exists(),
+        "plain seal must not have touched the worktree either"
+    );
+
+    let refused = commit_unrelated(&repo, "extra5.txt", "unrelated edit after the inverse seal");
     assert_eq!(
         refused.status.code(),
         Some(1),
         "commit must refuse: {}",
         stdout(&refused)
     );
-    assert!(stderr(&refused).contains("o.txt") && stderr(&refused).contains("never were"));
+    assert!(
+        stderr(&refused).contains("o.txt"),
+        "the refusal must name o.txt, the file the worktree holds that the newly sealed tip does \
+         not expect: {}",
+        stderr(&refused)
+    );
 
     let resync = switch(&repo, "heads/main");
     ok(&resync, "branch switch heads/main (resync)");
-    assert!(repo.join("o.txt").exists());
+    assert!(
+        !repo.join("o.txt").exists(),
+        "the resync must remove o.txt, which the inverse's own tip no longer holds"
+    );
 
     let clean = commit_unrelated(&repo, "extra5.txt", "unrelated edit after resync");
     ok(&clean, "commit after resync");
-    assert!(!stdout(&clean).contains("delete-file"));
 
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_file(&have_file);

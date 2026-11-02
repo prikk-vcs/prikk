@@ -200,6 +200,17 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   write at all; the dirty-worktree marker (`mark_current_branch_switch_pending`) is set
   immediately before the publish instead. A refused merge into the current branch now genuinely
   writes nothing.
+  **0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now closes this
+  same gap for itself, called directly from `crates/prikk-cli/src/branch.rs::run_create` (the two
+  shared functions and the pending type are re-exported narrowly from `prikk-store`'s `lib.rs`, the
+  precedent `switch_branch`/`worktree_status` already set, since this producer's own publish logic
+  lives in the CLI crate, not `prikk-store`). The clean check and the capture run after every one
+  of `create`'s own read-only refusals and before it builds a single object, the marker is set
+  immediately before the publish, and the `--from` target's files are materialized into the
+  worktree right after (`materialize_after_publish`) — the created branch is genuinely current and
+  clean afterward. A dirty worktree still refuses the create itself, before any write.
+  `archive import --adopt` and `sync seal --claim` are unchanged this round and still rely only on
+  the refusal above.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

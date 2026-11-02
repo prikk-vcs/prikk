@@ -50,6 +50,14 @@ RFC 164 Rule D's own pointer-index check among them), before it builds or writes
 own; the dirty-worktree marker is set immediately before the publish instead. A
 refused merge into the current branch now writes nothing at all, anywhere in the repository.
 
+**0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now writes the
+`--from` target's files into the worktree itself too, the same way `merge` does above, with the
+same "before any write" guarantee W3c-1 gave `merge`: a dirty worktree refuses the create outright,
+before any write, and a clean one ends with the new branch genuinely current, nothing left for a
+later `commit` or `branch switch` to resync. `archive import --adopt` and `sync seal --claim` are
+not yet changed and still leave the worktree exactly as it was, recoverable the same way the
+`commit --ref heads/topic` walkthrough above is.
+
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
 non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`
