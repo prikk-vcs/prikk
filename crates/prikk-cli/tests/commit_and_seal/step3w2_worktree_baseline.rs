@@ -15,7 +15,40 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use prikk_object::{ObjectId, ObjectType, RefStatePayload};
-use prikk_store::{FileObjectStore, ObjectReader, RefStore, RepositoryLayout};
+use prikk_store::{
+    Ed25519MaintainerSigner, FileObjectStore, ObjectReader, RefStore, RepositoryLayout,
+    order_claims_for_sealing, seal_from_accepted_claim,
+};
+
+/// 0.56.0 step W3c-4: seal every claim named in `claims_file` onto `ref_name`, **in process**,
+/// calling `prikk_store::seal_from_accepted_claim` directly rather than shelling out to `prikk
+/// sync seal --claims <file>` -- this round's own ruling places every new behaviour (the clean
+/// check, the pre-write in-the-way check, the marker, the materialize call) in `prikk-cli`'s own
+/// `run_seal`, never in this store function, whose contract (seal one claim's own patches onto a
+/// ref; touch nothing else) is explicitly unchanged by this round. Calling it directly is
+/// therefore not a trick that happens to still work -- it is the one remaining way to reach the
+/// exact pre-round behaviour this fixture needs (the ref moves for real; the worktree is never
+/// touched; no marker is ever set), through the identical function and identical cross-repository
+/// claim material every one of these fixtures already built, with no change to any of their own
+/// assertions.
+fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
+    let content = std::fs::read_to_string(claims_file).unwrap();
+    let claim_ids: Vec<ObjectId> = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.parse::<ObjectId>().unwrap())
+        .collect();
+    let layout = RepositoryLayout::open(repo.to_path_buf()).unwrap();
+    let object_store = FileObjectStore::new(layout.clone());
+    let ordered = order_claims_for_sealing(&object_store, &claim_ids).unwrap();
+    let signer =
+        Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+            .unwrap();
+    for claim_id in ordered {
+        seal_from_accepted_claim(&layout, ref_name, claim_id, &signer).unwrap();
+    }
+}
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -100,10 +133,13 @@ fn baseline_record_path(repo: &Path) -> PathBuf {
 }
 
 /// Move `repo`'s own `heads/main` tip forward with a sibling's real content, without ever writing
-/// `repo`'s worktree -- `heads/main` stays current throughout, and `sync seal`'s own R3 is **not**
-/// landed this round (the W3b report names it deferred), so this reliably reproduces "the current
-/// branch moved without the worktree's knowledge," the exact shape `merge --into` itself reproduced
-/// before 0.56.0 step W3b closed that gap for merges specifically.
+/// `repo`'s worktree -- `heads/main` stays current throughout. **0.56.0 step W3c-4 note:** `sync
+/// seal`'s own R3 landed this round, in `prikk-cli`'s own `run_seal`, but
+/// `prikk_store::seal_from_accepted_claim` itself (called here, in process, by
+/// `seal_claims_in_process`, not through the CLI) is unchanged by that round -- it still only
+/// moves the ref, never the worktree -- so this reliably reproduces "the current branch moved
+/// without the worktree's knowledge," the exact shape `merge --into` itself reproduced before
+/// 0.56.0 step W3b closed that gap for merges specifically.
 ///
 /// Mechanism: clone `repo`'s exact `heads/main` genesis into a disposable `mirror` (`archive
 /// export` + `archive import --adopt`, byte-identical ids), build `sibling_name` **inside `mirror`
@@ -232,27 +268,13 @@ fn make_main_stale_via_sync_seal(repo: &Path, sibling_name: &str, extra_path: &s
     ok(&accept, "sync accept");
 
     // Sealing a mirrored sibling's own content, not an unborn ref, carries **two** claims here (the
-    // shared genesis the merge's own mainline parent names, and the merge block itself) -- `--claims
-    // <file>`, not a single `--claim <id>`, seals every claim the file names, ordered parent block
-    // first, exactly as the real `receiver-accept` CI job's own `sync seal <ref> --claims <file>`
-    // does (`.github/workflows/ci.yml`).
+    // shared genesis the merge's own mainline parent names, and the merge block itself), ordered
+    // parent block first by `order_claims_for_sealing`, exactly as the real `receiver-accept` CI
+    // job's own `sync seal <ref> --claims <file>` does (`.github/workflows/ci.yml`) -- but called
+    // **in process** (see `seal_claims_in_process`'s own doc above), not through the CLI, so this
+    // fixture's own staleness survives 0.56.0 step W3c-4.
     support::trust_maintainer(repo);
-    let seal = support::prikk(repo)
-        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
-        .env(
-            "PRIKK_MAINTAINER_SEED_FILE",
-            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
-        )
-        .args([
-            "sync",
-            "seal",
-            "heads/main",
-            "--claims",
-            claims_file.to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    ok(&seal, "sync seal --claims");
+    seal_claims_in_process(repo, "heads/main", &claims_file);
     let _ = std::fs::remove_file(&claims_file);
 
     let _ = std::fs::remove_dir_all(&mirror);
@@ -400,9 +422,15 @@ fn case2_archive_import_adopt_refuses_then_resyncs() {
     let _ = std::fs::remove_file(&archive_path);
 }
 
-/// §2.3: `sync seal <current> --claim` while `heads/main` is current and unpublished.
+/// §2.3, **closed by 0.56.0 step W3c-4**: `sync seal <current> --claim` while `heads/main` is
+/// current and unpublished now brings the claim's own content along -- `s.txt` is materialized
+/// into the worktree by the seal itself, so there is no gap left for the next unrelated commit to
+/// read as a spurious deletion. Before W3c-4, sealing onto the unborn current branch never
+/// touched the worktree at all, and this same unrelated commit silently authored `delete-file
+/// s.txt` until the R2 refusal (and `branch switch heads/main`'s own resync) closed that symptom;
+/// W3c-4 closes the cause instead, for this exact shape (`sync seal` the current, clean branch).
 #[test]
-fn case3_sync_seal_claim_refuses_then_resyncs() {
+fn case3_sync_seal_claim_materializes_so_nothing_is_left_to_resync() {
     let repo_a = support::unique_repo("w2-case3-a");
     support::init(&repo_a);
     support::generation(&repo_a, "heads/main", "s.txt", b"s\n", "genesis");
@@ -476,25 +504,30 @@ fn case3_sync_seal_claim_refuses_then_resyncs() {
         .unwrap();
     ok(&seal, "sync seal --claim");
     assert!(
-        !repo_b.join("s.txt").exists(),
-        "sync seal never touches the worktree"
+        stdout(&seal).contains("materialized into the worktree"),
+        "0.56.0 step W3c-4: the CLI output must say the seal materialized the worktree: {}",
+        stdout(&seal)
     );
+    assert!(
+        repo_b.join("s.txt").exists(),
+        "0.56.0 step W3c-4: the seal itself must materialize s.txt into the worktree"
+    );
+    assert_eq!(std::fs::read(repo_b.join("s.txt")).unwrap(), b"s\n");
 
-    let refused = commit_unrelated(&repo_b, "extra3.txt", "unrelated edit after sync seal");
+    // Nothing is stale: worktree-status reads clean immediately after the seal, with no resync
+    // needed at all.
+    let status = worktree_status(&repo_b);
     assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must refuse: {}",
-        stdout(&refused)
+        status.status.code(),
+        Some(0),
+        "worktree-status must already be clean right after the seal: {}",
+        stdout(&status)
     );
-    assert!(stderr(&refused).contains("s.txt") && stderr(&refused).contains("never were"));
 
-    let resync = switch(&repo_b, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    assert!(repo_b.join("s.txt").exists());
-
-    let clean = commit_unrelated(&repo_b, "extra3.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
+    // An unrelated commit afterward is ordinary -- no stray `delete-file`, because there is no gap
+    // left for it to misread.
+    let clean = commit_unrelated(&repo_b, "extra3.txt", "unrelated edit after sync seal");
+    ok(&clean, "commit after sync seal");
     assert!(!stdout(&clean).contains("delete-file"));
 
     let _ = std::fs::remove_dir_all(&repo_a);
@@ -804,7 +837,9 @@ fn section_2_7_deadlock_is_dissolved() {
     let repo = support::unique_repo("w2-section-2-7");
     support::init(&repo);
     // `merge --into heads/main` itself is excluded (0.56.0 step W3b closed that gap for it):
-    // `sync seal --claims`, not yet changed this round, reproduces the identical staleness instead.
+    // `seal_claims_in_process` (0.56.0 step W3c-4 note, above) reproduces the identical staleness
+    // instead, since it calls `seal_from_accepted_claim` directly, bypassing the CLI-level `sync
+    // seal` wiring this round adds.
     support::generation(&repo, "heads/main", "a.txt", b"a\n", "genesis");
     make_main_stale_via_sync_seal(&repo, "heads/feature", "c.txt");
     assert!(!repo.join("c.txt").exists());

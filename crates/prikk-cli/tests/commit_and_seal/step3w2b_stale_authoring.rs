@@ -20,7 +20,37 @@ use std::path::Path;
 use std::process::Output;
 
 use prikk_object::{ObjectId, ObjectType, RefStatePayload};
-use prikk_store::{FileObjectStore, ObjectReader, RefStore, RepositoryLayout};
+use prikk_store::{
+    Ed25519MaintainerSigner, FileObjectStore, ObjectReader, RefStore, RepositoryLayout,
+    order_claims_for_sealing, seal_from_accepted_claim,
+};
+
+/// 0.56.0 step W3c-4: seal every claim named in `claims_file` onto `ref_name`, **in process**, by
+/// calling `prikk_store::seal_from_accepted_claim` directly rather than shelling out to `prikk
+/// sync seal --claims <file>` -- see `step3w2_worktree_baseline.rs`'s own, identical helper's doc
+/// comment for the full grounding: this round's new clean/in-the-way/marker/materialize
+/// orchestration lives entirely in `prikk-cli`'s own `run_seal`, never in this store function,
+/// whose own contract (seal one claim's patches onto a ref; touch nothing else) stays unchanged,
+/// so calling it directly is the one remaining way to reach the exact pre-round staleness this
+/// fixture needs.
+fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
+    let content = std::fs::read_to_string(claims_file).unwrap();
+    let claim_ids: Vec<ObjectId> = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.parse::<ObjectId>().unwrap())
+        .collect();
+    let layout = RepositoryLayout::open(repo.to_path_buf()).unwrap();
+    let object_store = FileObjectStore::new(layout.clone());
+    let ordered = order_claims_for_sealing(&object_store, &claim_ids).unwrap();
+    let signer =
+        Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+            .unwrap();
+    for claim_id in ordered {
+        seal_from_accepted_claim(&layout, ref_name, claim_id, &signer).unwrap();
+    }
+}
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -101,14 +131,15 @@ fn merge_into_main(repo: &Path, baseline: ObjectId, from_ref: &str) -> Output {
 
 /// Change `a.txt`'s content on `repo`'s own `heads/main` to `new_content`, without ever writing
 /// `repo`'s worktree -- `heads/main` stays current throughout. `merge --into` itself is excluded
-/// (0.56.0 step W3b closed that gap for it); `sync seal --claims`, not yet changed this round,
-/// reproduces the identical staleness instead. Mechanism: clone `repo`'s exact `heads/main` genesis
-/// into a disposable `mirror` (`archive export` + `archive import --adopt`), edit `a.txt` **inside
-/// `mirror` only** (so the resulting patch is genuinely new to `repo`'s own object store -- building
-/// it in `repo` first, as `setup_main_and_sibling`'s own sibling does, makes `sync seal` read it as
-/// "already have this," a no-op), then sync the one new block back by
-/// `have`/`build`/`accept --claims-out`/`seal --claims`, the identical shape
-/// `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
+/// (0.56.0 step W3b closed that gap for it); `seal_claims_in_process` (0.56.0 step W3c-4 note,
+/// above) reproduces the identical staleness instead, since it calls `seal_from_accepted_claim`
+/// directly, bypassing the CLI-level `sync seal` orchestration this round adds. Mechanism: clone
+/// `repo`'s exact `heads/main` genesis into a disposable `mirror` (`archive export` + `archive
+/// import --adopt`), edit `a.txt` **inside `mirror` only** (so the resulting patch is genuinely
+/// new to `repo`'s own object store -- building it in `repo` first, as `setup_main_and_sibling`'s
+/// own sibling does, makes sealing read it as "already have this," a no-op), then sync the one
+/// new block back by `have`/`build`/`accept --claims-out`/`seal_claims_in_process`, the identical
+/// shape `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
 fn make_a_txt_stale_via_sync_seal(repo: &Path, new_content: &[u8]) {
     let archive_file = std::env::temp_dir().join(format!(
         "w2b-stale-archive-{}.bin",
@@ -201,24 +232,7 @@ fn make_a_txt_stale_via_sync_seal(repo: &Path, new_content: &[u8]) {
         "sync accept",
     );
     support::trust_maintainer(repo);
-    ok(
-        &support::prikk(repo)
-            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
-            .env(
-                "PRIKK_MAINTAINER_SEED_FILE",
-                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
-            )
-            .args([
-                "sync",
-                "seal",
-                "heads/main",
-                "--claims",
-                claims_file.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap(),
-        "sync seal --claims",
-    );
+    seal_claims_in_process(repo, "heads/main", &claims_file);
 
     let _ = std::fs::remove_dir_all(&mirror);
     let _ = std::fs::remove_file(&archive_file);
@@ -443,8 +457,10 @@ fn case4_user_edit_of_stale_path_refused_as_conflict() {
     support::generation(&repo, "heads/main", "a.txt", b"a1\n", "add a.txt");
     support::generation(&repo, "heads/main", "b.txt", b"b1\n", "add b.txt");
 
-    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it): `sync seal
-    // --claims`, not yet changed this round, reproduces the identical staleness instead.
+    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it):
+    // `seal_claims_in_process` (0.56.0 step W3c-4 note, above) reproduces the identical
+    // staleness instead, since it calls `seal_from_accepted_claim` directly, bypassing the
+    // CLI-level `sync seal` orchestration this round adds.
     make_a_txt_stale_via_sync_seal(&repo, b"a2-from-feature\n");
 
     // The user, not knowing the worktree is already stale, edits a.txt themselves -- a third
@@ -517,8 +533,10 @@ fn case5_rename_of_a_stale_node_refuses() {
     support::generation(&repo, "heads/main", "a.txt", b"a1\n", "add a.txt");
     support::generation(&repo, "heads/main", "b.txt", b"b1\n", "add b.txt");
 
-    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it): `sync seal
-    // --claims`, not yet changed this round, reproduces the identical staleness instead.
+    // `merge --into` itself is excluded (0.56.0 step W3b closed that gap for it):
+    // `seal_claims_in_process` (0.56.0 step W3c-4 note, above) reproduces the identical
+    // staleness instead, since it calls `seal_from_accepted_claim` directly, bypassing the
+    // CLI-level `sync seal` orchestration this round adds.
     make_a_txt_stale_via_sync_seal(&repo, b"a2-from-feature\n");
     assert_eq!(
         std::fs::read(repo.join("a.txt")).unwrap(),

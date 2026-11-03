@@ -9,12 +9,15 @@
 //! cases prove). The user, who never saw the change land, creates their **own** `c.txt` by hand
 //! (different content) and commits.
 //!
-//! **0.56.0 step W3b note:** the fixture below reproduces this through `sync seal --claims`
+//! **0.56.0 step W3b note:** the fixture below reproduces this through
+//! `prikk_store::seal_from_accepted_claim`, called **in process**
 //! (`make_new_file_appear_on_main_via_sync_seal`), not `merge --into heads/main` as this test
 //! originally did -- W3b closed exactly this gap for a clean-worktree `merge --into` the current
-//! branch, so that specific producer no longer reproduces it; `sync seal` is not yet changed this
-//! round (`.git-exclude/review-request/0.56.0-step-3w3b-report.md`), and reproduces the identical
-//! shape.
+//! branch, so that specific producer no longer reproduces it. **0.56.0 step W3c-4 note:** `sync
+//! seal` itself (the CLI command) gained this round's own clean/in-the-way/marker/materialize
+//! orchestration in `prikk-cli`'s own `run_seal`, but `seal_from_accepted_claim` (the store
+//! function this fixture calls directly, bypassing that CLI layer) is unchanged by it -- it still
+//! only moves the ref, never the worktree -- so this fixture still reproduces the identical shape.
 //! Before this round, `require_concrete_record` exempted a path the worktree's own record was
 //! silent about (no concrete entry for `c.txt` at all, since the record predates the merge) from
 //! every "would author" site but the deletion loop -- so the user's hand-made file sailed through,
@@ -49,6 +52,39 @@ use crate::support::ok;
 use std::path::Path;
 use std::process::Output;
 
+use prikk_object::ObjectId;
+use prikk_store::{
+    Ed25519MaintainerSigner, FileObjectStore, RepositoryLayout, order_claims_for_sealing,
+    seal_from_accepted_claim,
+};
+
+/// 0.56.0 step W3c-4: seal every claim named in `claims_file` onto `ref_name`, **in process**, by
+/// calling `prikk_store::seal_from_accepted_claim` directly rather than shelling out to `prikk
+/// sync seal --claims <file>` -- see `step3w2_worktree_baseline.rs`'s own, identical helper's doc
+/// comment for the full grounding: this round's new clean/in-the-way/marker/materialize
+/// orchestration lives entirely in `prikk-cli`'s own `run_seal`, never in this store function,
+/// whose own contract (seal one claim's patches onto a ref; touch nothing else) stays unchanged,
+/// so calling it directly is the one remaining way to reach the exact pre-round staleness this
+/// fixture needs.
+fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
+    let content = std::fs::read_to_string(claims_file).unwrap();
+    let claim_ids: Vec<ObjectId> = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| line.parse::<ObjectId>().unwrap())
+        .collect();
+    let layout = RepositoryLayout::open(repo.to_path_buf()).unwrap();
+    let object_store = FileObjectStore::new(layout.clone());
+    let ordered = order_claims_for_sealing(&object_store, &claim_ids).unwrap();
+    let signer =
+        Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
+            .unwrap();
+    for claim_id in ordered {
+        seal_from_accepted_claim(&layout, ref_name, claim_id, &signer).unwrap();
+    }
+}
+
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -66,13 +102,14 @@ fn switch(repo: &Path, target: &str) -> Output {
 
 /// Add `path` (with `content`) to `repo`'s own `heads/main` tip, without ever writing `repo`'s
 /// worktree -- `heads/main` stays current throughout. `merge --into` itself is excluded (0.56.0
-/// step W3b closed this exact gap for it, for a clean worktree); `sync seal --claims`, not yet
-/// changed this round, reproduces the identical "the worktree is never told" staleness instead.
-/// Mechanism: clone `repo`'s exact `heads/main` genesis into a disposable `mirror` (`archive
-/// export` + `archive import --adopt`), add `path` **inside `mirror` only** (so the new patch is
-/// genuinely new to `repo`'s own object store), then sync the one new block back by
-/// `have`/`build`/`accept --claims-out`/`seal --claims` -- the identical shape
-/// `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
+/// step W3b closed this exact gap for it, for a clean worktree); `seal_claims_in_process` (0.56.0
+/// step W3c-4 note, above) reproduces the identical "the worktree is never told" staleness
+/// instead, since it calls `seal_from_accepted_claim` directly, bypassing the CLI-level `sync
+/// seal` orchestration this round adds. Mechanism: clone `repo`'s exact `heads/main` genesis into
+/// a disposable `mirror` (`archive export` + `archive import --adopt`), add `path` **inside
+/// `mirror` only** (so the new patch is genuinely new to `repo`'s own object store), then sync the
+/// one new block back by `have`/`build`/`accept --claims-out`/`seal_claims_in_process` -- the
+/// identical shape `step3w2_worktree_baseline.rs`'s own `make_main_stale_via_sync_seal` uses.
 fn make_new_file_appear_on_main_via_sync_seal(repo: &Path, path: &str, content: &[u8]) {
     let archive_file = std::env::temp_dir().join(format!(
         "w2d-stale-archive-{}.bin",
@@ -165,24 +202,7 @@ fn make_new_file_appear_on_main_via_sync_seal(repo: &Path, path: &str, content: 
         "sync accept",
     );
     support::trust_maintainer(repo);
-    ok(
-        &support::prikk(repo)
-            .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
-            .env(
-                "PRIKK_MAINTAINER_SEED_FILE",
-                support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
-            )
-            .args([
-                "sync",
-                "seal",
-                "heads/main",
-                "--claims",
-                claims_file.to_str().unwrap(),
-            ])
-            .output()
-            .unwrap(),
-        "sync seal --claims",
-    );
+    seal_claims_in_process(repo, "heads/main", &claims_file);
 
     let _ = std::fs::remove_dir_all(&mirror);
     let _ = std::fs::remove_file(&archive_file);
@@ -226,12 +246,13 @@ fn merge_adds_a_file_the_worktree_never_received_then_a_hand_made_same_path_file
     queued_patch_count_is_zero(&repo);
 
     // `merge --into` itself is excluded (0.56.0 step W3b closed this exact gap for it, for a clean
-    // worktree): `sync seal --claims`, not yet changed this round, reproduces the identical "the
-    // worktree is never told" staleness instead.
+    // worktree): `seal_claims_in_process` (0.56.0 step W3c-4 note, above) reproduces the identical
+    // "the worktree is never told" staleness instead, since it calls `seal_from_accepted_claim`
+    // directly, bypassing the CLI-level `sync seal` orchestration this round adds.
     make_new_file_appear_on_main_via_sync_seal(&repo, "c.txt", b"merged-content\n");
     assert!(
         !repo.join("c.txt").exists(),
-        "sync seal must not touch the worktree -- c.txt stays absent on disk even though \
+        "sealing the claim must not touch the worktree -- c.txt stays absent on disk even though \
          heads/main's live tip now has it"
     );
     queued_patch_count_is_zero(&repo);
