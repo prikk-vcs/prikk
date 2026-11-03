@@ -83,6 +83,19 @@ naming the colliding path the same way `branch create --from`'s own refusal does
 --adopt` and `sync seal --claim` are unaffected either way, since neither one yet writes the
 worktree at all.
 
+**0.56.0 step W3c-4:** `sync seal <ref> --claim`/`--claims <file>`, onto the current branch, now
+writes the sealed claim's own content into the worktree itself too, with the complete guarantee
+the paragraphs above build up in parts: a dirty worktree, or a file already in the way of the
+claim's own target files, refuses before any claim is sealed, and the claim (or, for a batch of
+several, every claim up to and including the last one that actually publishes) is materialized
+into the worktree afterward. A single `--claim <id>` is a batch of one claim, not a separate
+behavior. Sealing every claim in a batch in order and keeping an earlier one's seal even when a
+later one fails is unchanged: when that happens, the tip the batch actually produced is still
+materialized into the worktree before the batch's own error is reported, so the worktree never
+disagrees with what the batch really sealed. `archive import --adopt` is the one producer this
+round leaves unaffected, still leaving the worktree exactly as it was, recoverable the same way the
+`commit --ref heads/topic` walkthrough above is.
+
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
 non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`

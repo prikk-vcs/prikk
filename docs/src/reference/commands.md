@@ -246,6 +246,36 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   the truth for a node an `EditText` has touched, DC-65). `require_nothing_in_the_way` then runs
   against it directly: `execute_merge` is in-crate, so it never needs the narrower, re-exported
   `require_nothing_in_the_way_for_published_ref` `branch create --from` uses.
+  **0.56.0 step W3c-4:** `sync seal <ref> --claim <id>`/`--claims <file>`, onto the current branch,
+  now closes this same gap for itself, with the full R3 shape (the clean check, the pre-write
+  in-the-way check, the marker, and the materialize call) added in one round, since it had none of
+  it before — unlike the other three producers, which each got it in smaller steps. A single
+  `--claim` is treated as a batch of exactly one claim throughout
+  (`crates/prikk-cli/src/sync.rs::run_seal`). The clean check and the capture run once, before the
+  first claim in the batch is sealed; the pre-write in-the-way check
+  (`require_nothing_in_the_way_for_seal_batch`,
+  `crates/prikk-store/src/seal_from_accepted.rs`) runs against the whole batch's own simulated
+  final state — every claim's own still-unsealed patches, concatenated in `order_claims_for_sealing`'s
+  own order, replayed through `derive_candidate` in one call, since one claim's own patches alone
+  may collide with nothing while the batch as a whole does — not against any one claim's own
+  `block_id` (which names a block on the *sender's* repository that `sync accept`'s own admission
+  never writes here, and so cannot be replayed by id at all). The marker is set once, immediately
+  before the batch's first claim seals, and the batch's own content is materialized into the
+  worktree once, after the last claim, from the ref's own real, final tip. A dirty worktree, or a
+  file in the way, refuses before any claim seals, leaving `.prikk` byte-identical except its own
+  cache. The batch's own "stop at the first failure, no rollback" rule (RFC 116 stage 5 §3) is
+  unchanged: the pre-write in-the-way check only ever *defers* (skips itself) when its own
+  simulation cannot derive a combined state at all — a claim that does not exist, or patches that
+  do not fold together between claims — rather than refusing the whole batch over a failure the
+  real, per-claim loop would have reported against only the one claim that actually fails, with
+  every earlier claim's own valid seal already landed and kept; a genuine file-in-the-way collision
+  is unaffected, since the worktree is not party to any claim's own ordering. When a later claim in
+  an otherwise-valid batch fails after an earlier one has already published, the earlier claim's
+  seal stays sealed, and the tip it actually produced is still materialized into the worktree before
+  the batch's own error is returned. If that materialize call itself then fails too, the marker
+  stays set and the error names `branch switch <the current branch>`, the same route every other
+  producer's own marker already promises. Sealing onto a ref that is not the current branch, or a
+  `--claims <file>` naming no claims at all, is unaffected by any of this.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish
