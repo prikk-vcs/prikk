@@ -424,11 +424,13 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
 /// [`crate::require_worktree_clean_and_capture`] and before the batch's first claim is sealed --
 /// the same placement `execute_merge`'s own pre-write check has (0.56.0 step W3c-3b), and the same
 /// narrow-`pub`-function shape [`crate::require_nothing_in_the_way_for_published_ref`] already set
-/// for `branch create --from`, since [`crate::worktree_materialize`]'s own `ReplayManifest`
-/// parameter type stays `pub(crate)`.
+/// for `branch create --from`, since `worktree_materialize`'s own `ReplayManifest`
+/// parameter type stays `pub(crate)` (so that module name stays plain text here, not a link --
+/// `rustdoc::private_intra_doc_links` denies a `pub` item's doc linking to a private one, and this
+/// function is `pub`).
 ///
 /// **Why this replays the whole batch's own patches by id, concatenated, through one
-/// [`derive_candidate`] call, rather than replaying the claimed blocks by the block ids the
+/// `derive_candidate` call, rather than replaying the claimed blocks by the block ids the
 /// claims themselves name:** a `RecognitionClaimPayload`'s `block_id` names a block on the
 /// *sender's* repository, which `sync accept`'s own admission (`patch_exchange::accept`) never
 /// writes here -- confirmed by reading that module: it decodes and admits `Patch`, `Blob`, author
@@ -438,15 +440,15 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
 /// end for this producer specifically -- unlike `merge --into`/`branch create --from`, whose own
 /// targets (`from_ref`'s tip, the merge's own candidate) are always blocks this repository already
 /// holds. What *is* available, before any claim seals, is exactly what
-/// [`seal_from_accepted_claim_impl`] itself computes per claim:
+/// `seal_from_accepted_claim_impl` itself computes per claim:
 /// [`accepted_but_unsealed_patch_ids`] (the patches still eligible to be sealed) filtered against
 /// each claim's own `patch_ids`, in the batch's own already-established order
 /// (`order_claims_for_sealing`'s result, passed in as `ordered_claim_ids`). Concatenating every
 /// claim's own filtered selection, removing each selection from the pool before considering the
 /// next claim (mirroring what sealing the batch for real would do: a patch selected by claim N is
-/// no longer "unsealed" when claim N+1 is considered), and calling [`derive_candidate`] once from
+/// no longer "unsealed" when claim N+1 is considered), and calling `derive_candidate` once from
 /// the pre-batch parent produces the identical final state N chained single-claim seals would --
-/// confirmed by reading [`crate::lifecycle_cache::replay::apply_candidate_patches`], which folds a
+/// confirmed by reading `crate::lifecycle_cache::replay::apply_candidate_patches`, which folds a
 /// flat patch-id slice onto a state with no dependency on block boundaries at all.
 ///
 /// **This check only ever *skips itself*, never refuses on its own simulation's own behalf.**
