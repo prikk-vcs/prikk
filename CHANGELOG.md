@@ -193,23 +193,32 @@
   producers needed: it had no worktree-write behavior of any kind before this round, so it gets the
   clean check, the pre-write in-the-way check, the marker, and the materialize call all together.
   The clean check and the capture of the current branch's own baseline run once, before the first
-  claim in the batch is sealed; the pre-write in-the-way check runs against the whole batch's own
-  simulated final state (every claim's own unsealed patches, concatenated in the order
-  `order_claims_for_sealing` already sorts them), not any single claim's, since a later claim in the
-  same batch can be the one that collides; the marker is set once, immediately before the batch's
-  first claim seals; and the batch's own content is materialized into the worktree once, after the
-  last claim, from the ref's own real, final tip. A dirty worktree, or a file in the way of the
-  batch's own target files, refuses before any claim seals, leaving `.prikk` byte-identical except
-  its own cache and no claim sealed at all. Sealing every claim in order and stopping at the first
-  failure, with no rollback, is unchanged (§3 of the sync module's own doc): when a later claim in
-  an otherwise-valid batch fails after an earlier one has already published, the earlier claim's own
-  seal stays in place, and the tip it actually produced is still materialized into the worktree
-  before the batch's own error is returned, so the worktree never disagrees with what the batch
-  really did — even though the batch as a whole failed. If that materialize call itself then fails,
-  the marker stays set and the error names `branch switch <the current branch>` as the way out, the
-  same route every other producer's own marker already promises. `--claim`/`--claims` onto a ref
-  that is not the current branch, or a `--claims <file>` that names no claims at all, are unaffected:
-  no clean check, no marker, no materialize call, the ordinary pre-round behavior.
+  claim in the batch is sealed; the pre-write in-the-way check runs against the batch's own
+  simulated final state, folded claim by claim in the order `order_claims_for_sealing` already
+  sorts them and stopping at the first claim whose own fold fails, checked against the state after
+  the last claim that folded successfully — the exact tip the loop below will actually publish
+  and then materialize (0.56.0 step W3c-4b fixed an all-or-nothing first cut of this fold, which
+  gave no opinion at all whenever any later claim in the batch failed to fold, even though an
+  earlier claim would still really publish); the marker is set once, immediately before the
+  batch's first claim seals; and the batch's own content is materialized into the worktree once,
+  after the last claim, from the ref's own real, final tip — unless the batch published nothing at
+  all (every claim either refused outright or was already fully sealed), in which case nothing is
+  materialized, no "materialized into the worktree" line is printed, and the marker is cleared
+  directly instead (0.56.0 step W3c-4b; before that fix, this case still ran the materialize call
+  unconditionally, which could print a confusing no-op line, or find no tip at all to replay on a
+  still-unborn current branch). A dirty worktree, or a file in the way of the batch's own target
+  files, refuses before any claim seals, leaving `.prikk` byte-identical except its own cache and
+  no claim sealed at all. Sealing every claim in order and stopping at the first failure, with no
+  rollback, is unchanged (§3 of the sync module's own doc): when a later claim in an otherwise-valid
+  batch fails after an earlier one has already published, the earlier claim's own seal stays in
+  place, and the tip it actually produced is still materialized into the worktree before the
+  batch's own error is returned, so the worktree never disagrees with what the batch really did —
+  even though the batch as a whole failed. If that materialize call itself then fails, the marker
+  stays set and the combined error names `branch switch <the current branch>` as the way out, the
+  same route every other producer's own marker already promises (0.56.0 step W3c-4b: dropped a
+  second, redundant copy of that same sentence from the combined message). `--claim`/`--claims`
+  onto a ref that is not the current branch, or a `--claims <file>` that names no claims at all,
+  are unaffected: no clean check, no marker, no materialize call, the ordinary pre-round behavior.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and
