@@ -50,13 +50,13 @@ use prikk_store::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
     DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
     ReceivedTagResolution, RefStore, SealFromAcceptedOutcome, SyncArtifactOutcome,
-    TagSignatureVerification, Wal, accept_exchange_artifact, adopt_tag, build_have_list,
-    build_sync_artifact, build_sync_summary, compare_sync_summary, decode_sync_summary,
-    ensure_worktree_replay_verified, list_received_tags, mark_current_branch_switch_pending,
-    materialize_after_publish, order_claims_for_sealing, patch_ids_pending_excluding_received,
-    pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
-    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
-    validate_local_branch_ref,
+    TagSignatureVerification, Wal, abandon_unpublished_materialization, accept_exchange_artifact,
+    adopt_tag, build_have_list, build_sync_artifact, build_sync_summary, compare_sync_summary,
+    decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
+    mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
+    patch_ids_pending_excluding_received, pending_patches_with_claims,
+    require_nothing_in_the_way_for_seal_batch, require_worktree_clean_and_capture,
+    seal_from_accepted_claim_in_batch, validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -492,10 +492,10 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
                 &format!("sealing onto {canonical_ref}"),
             )
             .map_err(|err| err.to_string())?;
-            // The pre-write in-the-way check, against the whole batch's own simulated final state (not
-            // any one claim's) -- see `require_nothing_in_the_way_for_seal_batch`'s own doc for why this
-            // replays by patch id, concatenated across the batch, rather than by any claim's own
-            // (foreign, unresolvable here) block id.
+            // The pre-write in-the-way check, against the batch's own simulated state as far as it
+            // can be folded claim by claim -- see `require_nothing_in_the_way_for_seal_batch`'s own
+            // doc (0.56.0 step W3c-4b) for why this replays by patch id, folded one claim at a
+            // time, rather than by any claim's own (foreign, unresolvable here) block id.
             require_nothing_in_the_way_for_seal_batch(
                 &layout,
                 &pending,
@@ -504,9 +504,11 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
                 &format!("sealing onto {canonical_ref}"),
             )
             .map_err(|err| err.to_string())?;
-            // Step 2b: the marker, before the batch's first claim is sealed -- the earliest point that
-            // can be this batch's first write (an `AlreadySealed` claim writes nothing, but it costs
-            // nothing for the marker to be cleared again, unused, by the materialize call below).
+            // Step 2b: the marker, before the batch's first claim is sealed -- the earliest point
+            // that can be this batch's first write (an `AlreadySealed` claim writes nothing, but it
+            // costs nothing for the marker to be cleared again below, whether by the materialize
+            // call, once something really publishes, or directly by
+            // `abandon_unpublished_materialization` (0.56.0 step W3c-4b) when nothing ever does).
             mark_current_branch_switch_pending(&layout, &pending).map_err(|err| err.to_string())?;
             Some(pending)
         } else {
@@ -515,7 +517,11 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
 
     // Step 3 (unconditional, exactly as before this round): seal every claim in order, stopping at
     // the first failure and leaving every already-sealed claim sealed -- no rollback (§3).
+    // `published_count` (0.56.0 step W3c-4b) counts only `Sealed` outcomes, not `AlreadySealed`
+    // ones: an `AlreadySealed` claim moves the ref's tip nowhere, so it contributes nothing to
+    // materialize either -- see Step 4 below.
     let mut batch_error: Option<String> = None;
+    let mut published_count: usize = 0;
     for &claim_id in &ordered {
         match seal_from_accepted_claim_in_batch(
             &layout,
@@ -525,6 +531,9 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             &signer,
         ) {
             Ok(outcome) => {
+                if matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }) {
+                    published_count += 1;
+                }
                 print_seal_outcome(&outcome, claim_id);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
@@ -541,31 +550,52 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // `batch_error` is set, this still runs on whatever tip was really published, so the worktree
     // matches what is there -- and if this call itself fails too, the marker stays set, and the
     // combined message below names `branch switch <canonical_ref>` as the way out.
+    //
+    // 0.56.0 step W3c-4b: if the batch published nothing at all (the loop above never reached a
+    // `Sealed` outcome -- every claim either refused outright or was `AlreadySealed`), there is no
+    // new tip to replay and nothing to write: the worktree, already confirmed clean against the
+    // pre-batch tip, is still exactly as correct as it was. Clear the marker directly, under the
+    // still-held lock, print no "materialized into the worktree" line, and return the claim's own
+    // error unchanged -- rather than calling `materialize_after_publish`, which on a genuinely
+    // unborn current branch would have no tip at all to replay.
     if let Some(pending) = pending_materialization {
-        match materialize_after_publish(&layout, pending) {
-            Ok(CurrentBranchMaterializeReport {
-                written_files,
-                unchanged_files,
-                deleted_files,
-                anchor_fallback,
-            }) => {
-                crate::warn_anchor_fallbacks(anchor_fallback.iter());
-                println!(
-                    "materialized into the worktree: files written: {written_files}, unchanged: \
-                     {unchanged_files}, deleted: {deleted_files}",
-                );
-            }
-            Err(materialize_err) => {
+        if published_count == 0 {
+            if let Err(abandon_err) = abandon_unpublished_materialization(&layout, pending) {
                 return Err(match batch_error {
                     Some(claim_err) => format!(
-                        "{claim_err}; additionally, materializing the published tip into the \
-                         worktree failed: {materialize_err}; run `prikk branch switch \
-                         {canonical_ref}` to finish (nothing more was sealed, and the marker is \
-                         still set)"
+                        "{claim_err}; additionally, clearing the worktree marker failed: \
+                         {abandon_err} (nothing was ever sealed; run `prikk branch switch \
+                         {canonical_ref}` to finish if the marker is still set)"
                     ),
-                    None => materialize_err.to_string(),
+                    None => abandon_err.to_string(),
                 }
                 .into());
+            }
+        } else {
+            match materialize_after_publish(&layout, pending) {
+                Ok(CurrentBranchMaterializeReport {
+                    written_files,
+                    unchanged_files,
+                    deleted_files,
+                    anchor_fallback,
+                }) => {
+                    crate::warn_anchor_fallbacks(anchor_fallback.iter());
+                    println!(
+                        "materialized into the worktree: files written: {written_files}, \
+                         unchanged: {unchanged_files}, deleted: {deleted_files}",
+                    );
+                }
+                Err(materialize_err) => {
+                    return Err(match batch_error {
+                        Some(claim_err) => format!(
+                            "{claim_err}; additionally, materializing the published tip into the \
+                             worktree failed: {materialize_err} (nothing more was sealed; the \
+                             marker is still set)"
+                        ),
+                        None => materialize_err.to_string(),
+                    }
+                    .into());
+                }
             }
         }
     }

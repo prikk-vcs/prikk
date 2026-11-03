@@ -387,47 +387,27 @@ fn sync_seal_onto_current_branch_a_file_in_the_way_refuses_before_publish_then_r
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// Test 4 (the ruling's own list): a mid-batch failure -- after at least one claim has already
-/// published, the batch's own error is still returned, but the published tip is materialized into
-/// the worktree anyway, so the worktree matches what is really there.
-///
-/// **Construction, not contrived** (the handoff's own ask): two senders, `a1` and `a2`, each
-/// independently seal their own genesis `collide.txt` (different content) from the *same* empty
-/// starting state. `repo`'s own `heads/main` is itself unborn/empty, so both claims target the
-/// same new path from the same (absent) parent -- an ordinary divergence between two histories
-/// that moved differently, not a broken repository. The pre-write in-the-way check defers to the
-/// real per-claim loop whenever its own simulation cannot derive a combined state at all (see
-/// `require_nothing_in_the_way_for_seal_batch`'s own doc in `seal_from_accepted.rs`), so whichever
-/// claim `order_claims_for_sealing` tries first genuinely seals and publishes, and only the second
-/// one fails -- this is the identical fixture shape
-/// `rfc116_sync_cli.rs::row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intact`
-/// already uses (that test predates this round and keeps holding unchanged); this test adds the
-/// one assertion that round's own test never needed: that the published tip is also materialized.
-#[test]
-fn sync_seal_mid_batch_failure_materializes_the_published_tip() {
-    let repo_a1 = support::unique_repo("w3c4-mid-batch-a1");
-    support::init(&repo_a1);
-    support::generation(&repo_a1, "heads/main", "collide.txt", b"from a1\n", "a1");
-
-    let repo_a2 = support::unique_repo("w3c4-mid-batch-a2");
-    support::init(&repo_a2);
-    support::generation(&repo_a2, "heads/main", "collide.txt", b"from a2\n", "a2");
-
-    let repo = support::unique_repo("w3c4-mid-batch-b");
-    support::init(&repo);
-
+/// Build two claims, both accepted into `repo`, each independently sealing a genesis
+/// `collide.txt` (different content) from the *same* empty starting state -- `repo`'s own
+/// `heads/main` stays whatever it was (unborn, in the mid-batch tests below). Both claims target
+/// the same new path from the same (absent) parent -- an ordinary divergence between two
+/// histories that moved differently, not a broken repository -- so whichever claim
+/// `order_claims_for_sealing` tries first genuinely seals, and only the second one fails. Writes
+/// the two claim ids, in acceptance order, to a fresh file and returns its path (the caller's own
+/// responsibility to remove).
+fn build_colliding_claims_file(repo_a1: &Path, repo_a2: &Path, repo: &Path) -> PathBuf {
     let claims_file = std::env::temp_dir().join(format!(
         "w3c4-mid-batch-claims-{}.txt",
         support::unique_suffix()
     ));
     let mut combined = String::new();
-    for sender in [&repo_a1, &repo_a2] {
+    for sender in [repo_a1, repo_a2] {
         let have_file = std::env::temp_dir().join(format!(
             "w3c4-mid-batch-have-{}.bin",
             support::unique_suffix()
         ));
         ok(
-            &support::prikk(&repo)
+            &support::prikk(repo)
                 .args([
                     "sync",
                     "have",
@@ -468,7 +448,7 @@ fn sync_seal_mid_batch_failure_materializes_the_published_tip() {
             support::unique_suffix()
         ));
         ok(
-            &support::prikk(&repo)
+            &support::prikk(repo)
                 .args([
                     "sync",
                     "accept",
@@ -486,6 +466,33 @@ fn sync_seal_mid_batch_failure_materializes_the_published_tip() {
         let _ = std::fs::remove_file(claims_out);
     }
     std::fs::write(&claims_file, &combined).unwrap();
+    claims_file
+}
+
+/// Test 4 (the ruling's own list): a mid-batch failure -- after at least one claim has already
+/// published, the batch's own error is still returned, but the published tip is materialized into
+/// the worktree anyway, so the worktree matches what is really there.
+///
+/// **Construction, not contrived** (the handoff's own ask): see
+/// [`build_colliding_claims_file`]'s own doc for the two-sender shape -- this is the identical
+/// fixture shape
+/// `rfc116_sync_cli.rs::row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intact`
+/// already uses (that test predates this round and keeps holding unchanged); this test adds the
+/// one assertion that round's own test never needed: that the published tip is also materialized.
+#[test]
+fn sync_seal_mid_batch_failure_materializes_the_published_tip() {
+    let repo_a1 = support::unique_repo("w3c4-mid-batch-a1");
+    support::init(&repo_a1);
+    support::generation(&repo_a1, "heads/main", "collide.txt", b"from a1\n", "a1");
+
+    let repo_a2 = support::unique_repo("w3c4-mid-batch-a2");
+    support::init(&repo_a2);
+    support::generation(&repo_a2, "heads/main", "collide.txt", b"from a2\n", "a2");
+
+    let repo = support::unique_repo("w3c4-mid-batch-b");
+    support::init(&repo);
+
+    let claims_file = build_colliding_claims_file(&repo_a1, &repo_a2, &repo);
 
     support::trust_maintainer(&repo);
     let seal = support::prikk(&repo)
@@ -545,6 +552,225 @@ fn sync_seal_mid_batch_failure_materializes_the_published_tip() {
     let _ = std::fs::remove_dir_all(&repo_a2);
     let _ = std::fs::remove_dir_all(&repo);
     let _ = std::fs::remove_file(&claims_file);
+}
+
+/// Test 1 of 0.56.0 step W3c-4b's defect 1 (the architect's own S1): the exact mid-batch collision
+/// from [`sync_seal_mid_batch_failure_materializes_the_published_tip`] above, but with an
+/// **untracked `collide.txt` (content `zzz`) already in the worktree before the batch runs.**
+/// Before this round's fix, the pre-write in-the-way check folded every claim's own patches into
+/// one combined derivation and gave up entirely when that failed (which it always does here,
+/// since the two claims genuinely collide) -- so the check never ran at all, claim 1 published for
+/// real, and only the *post-publish* backstop in `materialize_after_publish` caught the collision,
+/// after `heads/main` had already moved. Folding claim by claim (the fix) checks claim 1's own
+/// target state -- the one the real loop below will actually publish -- *before* either claim is
+/// attempted, so this must now refuse before any write at all, with the pre-write sentence, not
+/// the post-publish one.
+#[test]
+fn sync_seal_mid_batch_collision_with_a_file_already_in_the_way_refuses_before_any_write() {
+    let repo_a1 = support::unique_repo("w3c4b-mid-batch-collision-a1");
+    support::init(&repo_a1);
+    support::generation(&repo_a1, "heads/main", "collide.txt", b"from a1\n", "a1");
+
+    let repo_a2 = support::unique_repo("w3c4b-mid-batch-collision-a2");
+    support::init(&repo_a2);
+    support::generation(&repo_a2, "heads/main", "collide.txt", b"from a2\n", "a2");
+
+    let repo = support::unique_repo("w3c4b-mid-batch-collision-b");
+    support::init(&repo);
+
+    let claims_file = build_colliding_claims_file(&repo_a1, &repo_a2, &repo);
+
+    // The untracked file already in the way, at the exact path claim 1's own content would land
+    // at -- different content than either claim brings, so the collision is real.
+    std::fs::write(repo.join("collide.txt"), b"zzz\n").unwrap();
+
+    // Trust the maintainer, and capture `before`, the same way
+    // `sync_seal_onto_current_branch_a_file_in_the_way_refuses_before_publish_then_resyncs` does,
+    // for the identical reason: fixture setup that must not itself count against "writes nothing".
+    support::trust_maintainer(&repo);
+    assert!(
+        verify_text(&repo).contains("unreached objects: 0"),
+        "fixture sanity: no unreached objects before the refusal"
+    );
+    let before = whole_repo(&repo);
+
+    let seal = support::prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args([
+            "sync",
+            "seal",
+            "heads/main",
+            "--claims",
+            claims_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !seal.status.success(),
+        "the batch must refuse before any claim seals, while collide.txt is in the way: \
+         stdout={} stderr={}",
+        stdout(&seal),
+        stderr(&seal)
+    );
+    let message = stderr(&seal);
+    assert!(
+        message.contains("are in the way of heads/main's files")
+            && message.contains("collide.txt")
+            && message.contains("move them aside before sealing onto heads/main")
+            && message.contains("nothing was written"),
+        "the pre-write refusal must name the action, heads/main, collide.txt, and say nothing was \
+         written: {message}"
+    );
+    assert!(
+        !message.contains("was published"),
+        "the old post-publish backstop's own sentence ('... was published, but ...') must not be \
+         the one that fires here -- the batch fold must catch claim 1's own target state before \
+         either claim is attempted: {message}"
+    );
+    assert!(
+        !stdout(&seal).contains("sealed"),
+        "no claim must have been attempted at all, let alone sealed: {}",
+        stdout(&seal)
+    );
+
+    assert!(
+        read_current_ref_state_id(&repo, "heads/main").is_none(),
+        "a refused batch must not publish heads/main"
+    );
+    assert_eq!(
+        whole_repo(&repo),
+        before,
+        "a refused batch must leave every file -- worktree AND .prikk -- byte-identical; this \
+         also proves no marker was set"
+    );
+    assert!(
+        verify_text(&repo).contains("unreached objects: 0"),
+        "a refused batch must not leave an orphaned, unreferenced object behind: {}",
+        verify_text(&repo)
+    );
+    assert_eq!(
+        std::fs::read(repo.join("collide.txt")).unwrap(),
+        b"zzz\n",
+        "the untracked file in the way must never be overwritten by a refused batch"
+    );
+
+    // After the offending file is moved aside, the same batch now seals claim 1 for real, reports
+    // claim 2 FAILED (an ordinary divergence, unrelated to the collision just fixed), and
+    // materializes claim 1's own tip -- the batch's overall exit code is still non-zero.
+    std::fs::rename(repo.join("collide.txt"), repo.join("collide.txt.aside")).unwrap();
+    let retry = support::prikk(&repo)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args([
+            "sync",
+            "seal",
+            "heads/main",
+            "--claims",
+            claims_file.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !retry.status.success(),
+        "the retried batch must still exit non-zero -- claim 2 genuinely diverges, independent \
+         of the collision just fixed"
+    );
+    let retry_stdout = stdout(&retry);
+    assert!(
+        retry_stdout.contains("sealed 1 patch(es)"),
+        "claim 1 must now seal for real: {retry_stdout}"
+    );
+    assert!(
+        retry_stdout.contains("FAILED"),
+        "claim 2 must still be reported FAILED: {retry_stdout}"
+    );
+    assert!(
+        retry_stdout.contains("materialized into the worktree"),
+        "claim 1's own published tip must be materialized: {retry_stdout}"
+    );
+    let collide = std::fs::read(repo.join("collide.txt")).unwrap();
+    assert!(
+        collide == b"from a1\n" || collide == b"from a2\n",
+        "collide.txt must be materialized with whichever claim's content actually sealed first: \
+         {collide:?}"
+    );
+    std::fs::remove_file(repo.join("collide.txt.aside")).unwrap();
+
+    let status = worktree_status(&repo);
+    ok(&status, "worktree-status after the retried batch");
+    assert!(
+        stdout(&status).contains("worktree: clean against baseline"),
+        "the worktree must read clean against the real, published tip: {}",
+        stdout(&status)
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_a1);
+    let _ = std::fs::remove_dir_all(&repo_a2);
+    let _ = std::fs::remove_dir_all(&repo);
+    let _ = std::fs::remove_file(&claims_file);
+}
+
+/// Test 2 of 0.56.0 step W3c-4b's defect 2 (the architect's own S4): a claim that genuinely
+/// diverges from the already-published current branch's own tip must refuse outright and
+/// materialize nothing -- before this round's fix, the Step 4 materialize call ran unconditionally
+/// even though the loop above published zero claims, printing a confusing "materialized into the
+/// worktree: files written: 0, unchanged: 1, deleted: 0" line on a seal that wrote nothing.
+///
+/// **Construction:** `repo`'s own `heads/main` is already published with `collide.txt` =
+/// `"local\n"` (via [`support::generation`], the ordinary DC-13 genesis path, so `heads/main` is
+/// both published and current throughout). The one claim accepted names a patch that creates
+/// `collide.txt` from an *independent* sender's own empty genesis -- applying a "create" onto a
+/// tip that already has that exact path is a genuine divergence, the same create-over-existing-path
+/// conflict [`sync_seal_mid_batch_failure_materializes_the_published_tip`]'s own second claim hits
+/// against the first claim's just-published `collide.txt`, here constructed directly against the
+/// receiver's own pre-existing content instead.
+#[test]
+fn sync_seal_claim_that_refuses_outright_prints_no_materialize_line() {
+    let repo = support::unique_repo("w3c4b-seal-nothing-published");
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "collide.txt", b"local\n", "genesis");
+
+    let claim_id = accept_one_claim(&repo, "collide.txt", b"from-sender\n");
+
+    assert!(
+        verify_text(&repo).contains("unreached objects: 0"),
+        "fixture sanity: no unreached objects before the refusal"
+    );
+    let before = whole_repo(&repo);
+
+    let seal = seal_claim(&repo, "heads/main", claim_id);
+    assert!(
+        !seal.status.success(),
+        "a claim that diverges from the already-published tip must refuse outright: stdout={} \
+         stderr={}",
+        stdout(&seal),
+        stderr(&seal)
+    );
+    assert!(
+        !stdout(&seal).contains("materialized into the worktree"),
+        "0.56.0 step W3c-4b: a seal that published nothing must print no materialize line: {}",
+        stdout(&seal)
+    );
+    assert_eq!(
+        whole_repo(&repo),
+        before,
+        "a seal that publishes nothing must leave the whole repository byte-identical -- the \
+         marker must also end cleared, which this equality also proves"
+    );
+    assert!(
+        verify_text(&repo).contains("unreached objects: 0"),
+        "a refused seal must not leave an orphaned, unreferenced object behind: {}",
+        verify_text(&repo)
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
 }
 
 /// `sync seal` of a ref that is **not** the current branch is entirely unaffected by R3: no
