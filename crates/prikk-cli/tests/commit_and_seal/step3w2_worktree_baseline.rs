@@ -31,6 +31,13 @@ use prikk_store::{
 /// touched; no marker is ever set), through the identical function and identical cross-repository
 /// claim material every one of these fixtures already built, with no change to any of their own
 /// assertions.
+///
+/// **0.56.0 step W3c-4b's correction: this is not just a test trick that happens to reach old
+/// behaviour -- it stands in for a real, surviving source of exactly this staleness.** An older
+/// `prikk` (0.55.0 or earlier) running `sync seal` on the same repository moves the ref without
+/// ever materializing the worktree; so does `archive import --adopt`, until W3c-5 lands its own R3
+/// for it. The stale-path guards these fixtures exist to test still protect against exactly that
+/// real scenario, not merely against a round of `prikk` this project no longer ships.
 fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
     let content = std::fs::read_to_string(claims_file).unwrap();
     let claim_ids: Vec<ObjectId> = content

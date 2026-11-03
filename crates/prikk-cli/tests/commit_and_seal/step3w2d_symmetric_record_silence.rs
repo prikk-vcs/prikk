@@ -66,6 +66,11 @@ use prikk_store::{
 /// whose own contract (seal one claim's patches onto a ref; touch nothing else) stays unchanged,
 /// so calling it directly is the one remaining way to reach the exact pre-round staleness this
 /// fixture needs.
+///
+/// **0.56.0 step W3c-4b's correction (same doc, same source):** this stands in for a real,
+/// surviving source of exactly this staleness -- an older `prikk` (0.55.0 or earlier) running
+/// `sync seal` on the same repository moves the ref without ever materializing the worktree, and
+/// so does `archive import --adopt`, until W3c-5 lands its own R3 for it.
 fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
     let content = std::fs::read_to_string(claims_file).unwrap();
     let claim_ids: Vec<ObjectId> = content
