@@ -67,9 +67,21 @@ leaving the dirty marker set and a later `commit` or `branch switch heads/<branc
 exactly the state a reader of W3c-1/W3c-2 above would not expect from "before any write." For
 `branch create --from`, this is fixed: the same in-the-way collision now refuses before the create
 publishes anything, naming the colliding path and saying nothing was written, so moving it aside
-and running the create again is all a caller needs to do. `merge --into` still has only the
-pre-existing, post-move refusal; `archive import --adopt` and `sync seal --claim` are unaffected
-either way, since neither one yet writes the worktree at all.
+and running the create again is all a caller needs to do.
+
+**0.56.0 step W3c-3b:** `merge --into` is fixed the same way. Its own target was not available to
+check this way directly: the confluence proof computes the merged state but discards it behind its
+own, differently-shaped representation (`OracleState`, a proof device), and widening that proof's
+own evidence API to expose it would have coupled the worktree write to the proof's own internals.
+Instead, `merge` now derives its own merge Block's candidate state directly — the identical
+`derive_candidate` call `seal_block_at` itself makes again moments later, from the same mainline
+parent, the same adopted patch ids, and the same merge anchor site — before `seal_block_at` ever
+runs, and turns the derived state into a file list the same way `extract --claim` already builds
+one from a derivation no Block holds (resident bytes from the text cache first, the Blob only when
+absent). The identical `require_nothing_in_the_way` planner then runs against it, before any write,
+naming the colliding path the same way `branch create --from`'s own refusal does. `archive import
+--adopt` and `sync seal --claim` are unaffected either way, since neither one yet writes the
+worktree at all.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is

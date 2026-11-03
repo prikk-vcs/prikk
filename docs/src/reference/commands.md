@@ -216,21 +216,36 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   untracked file is never a reason to refuse) but still collides with what
   `materialize_after_publish` is about to write -- before this round, that collision was caught
   only by `plan_materialization`'s own `in_the_way` check inside `materialize_after_publish`, which
-  by construction runs *after* the producer's own publish, so `branch create --from` (and, unfixed
-  this round, `merge --into`) could publish (or move) the ref and only then refuse. A new shared
-  check, `require_nothing_in_the_way` (`crates/prikk-store/src/worktree_materialize.rs`), runs the
-  identical `plan_materialization` planner one step earlier -- after the clean check and capture,
-  before the producer's own publish -- re-exported for `branch create --from` as
-  `require_nothing_in_the_way_for_published_ref`, which derives the `--from` ref's own manifest
-  through the same verified-anchor replay `materialize_after_publish` uses, since that ref must
-  already be published to be nameable by `--from` at all. The sentence follows `branch switch`'s
-  own in-the-way wording and ends "nothing was written". `materialize_after_publish`'s own
-  post-publish check is unchanged, as the backstop for the one window this earlier check cannot
-  see into: a file created by a process outside prikk, under the same lock, between the two checks.
-  `merge --into` is not changed this round: its own target is an unpublished, in-memory fold
-  computed before `seal_block_at`, and the confluence-proof machinery that computes it
-  (`patch_algebra::commutation::check_confluence`) never returns that folded state to any caller --
-  surfacing it would be a separate design question, not landed here.
+  by construction runs *after* the producer's own publish, so `branch create --from` could publish
+  (or move) the ref and only then refuse. A new shared check, `require_nothing_in_the_way`
+  (`crates/prikk-store/src/worktree_materialize.rs`), runs the identical `plan_materialization`
+  planner one step earlier -- after the clean check and capture, before the producer's own publish
+  -- re-exported for `branch create --from` as `require_nothing_in_the_way_for_published_ref`,
+  which derives the `--from` ref's own manifest through the same verified-anchor replay
+  `materialize_after_publish` uses, since that ref must already be published to be nameable by
+  `--from` at all. The sentence follows `branch switch`'s own in-the-way wording and ends "nothing
+  was written". `materialize_after_publish`'s own post-publish check is unchanged, as the backstop
+  for the one window this earlier check cannot see into: a file created by a process outside
+  prikk, under the same lock, between the two checks.
+  **0.56.0 step W3c-3b:** two items. First, the sentence above read "refusing to creating
+  heads/main" as landed in W3c-3 — ungrammatical, since `action` is a gerund phrase and the
+  template prefixed it with another verb. It now follows the clean check's own shape instead:
+  "`<n>` file(s) are in the way of `<ref>`'s files: `<path>` (…); move them aside before `<action>`
+  (nothing was written)". Second, `merge --into` is fixed too: unlike `branch create --from`, its
+  own target was not a published ref to replay, and the confluence proof's own folded state
+  (`OracleState`) is a proof device with its own representation, not the state the merge Block will
+  actually commit to, so widening that proof's evidence API to expose it was rejected as the wrong
+  source. Instead `execute_merge` derives the merge Block's own candidate state directly with
+  `derive_candidate` (`crates/prikk-store/src/block_state.rs`) — the identical call
+  `seal_block_at` itself makes again moments later, from the same mainline parent, the same adopted
+  patch ids, and the same merge anchor site — before `seal_block_at` ever runs (derived twice, by
+  design, rather than changing `seal_block_at`'s own signature to share it). The derived `entries`
+  plus `text_cache` are turned into a `ReplayManifest` the way `patch_replay::extract`'s own claim
+  path already builds its file list from a derivation no Block holds (resident bytes from the text
+  cache first, the Blob only when absent — the text cache, not a node's own tracked blob id, holds
+  the truth for a node an `EditText` has touched, DC-65). `require_nothing_in_the_way` then runs
+  against it directly: `execute_merge` is in-crate, so it never needs the narrower, re-exported
+  `require_nothing_in_the_way_for_published_ref` `branch create --from` uses.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

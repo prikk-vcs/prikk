@@ -244,10 +244,9 @@ fn branch_create_from_an_untracked_file_in_the_way_refuses_before_publish_then_r
     );
     let message = stderr(&create);
     assert!(
-        message.contains("refusing to creating heads/main")
-            && message.contains("in the way")
+        message.contains("are in the way of heads/main's files")
             && message.contains("p.txt")
-            && message.contains("heads/main's files")
+            && message.contains("move them aside before creating heads/main")
             && message.contains("nothing was written"),
         "the new pre-write refusal must name the action, heads/main, p.txt, and say nothing was \
          written: {message}"

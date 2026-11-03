@@ -349,8 +349,9 @@ pub fn require_worktree_clean_and_capture(
 /// whose publish logic lives outside this crate (`branch create --from`) cannot name it, so it
 /// goes through the narrower, `pub` [`require_nothing_in_the_way_for_published_ref`] instead,
 /// which never requires naming that type across the crate boundary. `execute_merge` (inside this
-/// crate) could call this directly once it has a target manifest of its own to pass -- see that
-/// module's own W3c-3 notes for why it does not yet.
+/// crate, 0.56.0 step W3c-3b) calls this directly: its own target manifest comes from
+/// `derive_candidate`'s `entries` plus `text_cache`, converted the way `patch_replay::extract`'s
+/// claim path builds its own file list -- see that module's own W3c-3b notes.
 pub(crate) fn require_nothing_in_the_way(
     layout: &RepositoryLayout,
     pending: &PendingCurrentBranchMaterialization,
@@ -363,8 +364,8 @@ pub(crate) fn require_nothing_in_the_way(
         return Ok(());
     }
     Err(PrikkError::Precondition(format!(
-        "refusing to {action}: {} file(s) in the way of {}'s files: {}; move them aside and run it \
-         again (nothing was written)",
+        "{} file(s) are in the way of {}'s files: {}; move them aside before {action} (nothing \
+         was written)",
         plan.in_the_way.len(),
         pending.current_branch,
         plan.in_the_way.join(", "),

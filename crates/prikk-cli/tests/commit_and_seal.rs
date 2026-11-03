@@ -57,5 +57,7 @@ mod step3w3c1_merge_refusal_writes_nothing;
 mod step3w3c2_branch_create_from_current_branch;
 #[path = "commit_and_seal/step3w3c3_in_the_way_before_publish.rs"]
 mod step3w3c3_in_the_way_before_publish;
+#[path = "commit_and_seal/step3w3c3b_merge_in_the_way_before_publish.rs"]
+mod step3w3c3b_merge_in_the_way_before_publish;
 #[path = "support/mod.rs"]
 mod support;

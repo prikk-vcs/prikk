@@ -5,6 +5,108 @@ use prikk_object::ObjectId;
 
 use super::ensure_into_ref_unmoved;
 
+/// 0.56.0 step W3c-3b, ruling point 2: `candidate_replay_manifest` must resolve a `TextCache` hit
+/// before ever reading a Blob -- the precedence `patch_replay::extract`'s own claim path uses, and
+/// the one that makes an `EditText`-edited, never-stored node resolvable at all (DC-65). Separately,
+/// a stored node (no `TextCache` entry) falls back to reading its Blob, and a symlink entry is
+/// refused outright, the same way `patch_replay::extract`'s claim path and
+/// `snapshot::snapshot_files_from_manifest` both already refuse one.
+mod candidate_replay_manifest_tests {
+    #![allow(clippy::indexing_slicing, clippy::unwrap_used)]
+
+    use std::collections::BTreeMap;
+
+    use prikk_error::PrikkError;
+    use prikk_object::{NodeId, NodeKind, ObjectId};
+
+    use super::super::candidate_replay_manifest;
+    use crate::state_root::{StateRootContent, StateRootEntry};
+    use crate::test_gates::test_support::{unique_temp_dir, write_blob};
+    use crate::{FileObjectStore, RepoPath, RepositoryLayout};
+
+    fn entry(path: &str, node_id: [u8; 32], content: StateRootContent) -> StateRootEntry {
+        StateRootEntry {
+            path: RepoPath::parse(path).unwrap(),
+            node_id: NodeId::from_bytes(node_id),
+            kind: NodeKind::TextFile,
+            mode: 0o100644,
+            content,
+        }
+    }
+
+    /// A node the `TextCache` holds resident bytes for is resolved from the cache, never from its
+    /// own `content` blob id -- which here does not even exist in the store, so a fallback read
+    /// would fail. This is exactly the DC-65 shape: an `EditText`-edited node's tracked blob id is
+    /// stale, and the cache, not that id, holds the truth.
+    #[test]
+    fn a_text_cache_hit_is_used_without_reading_any_blob() {
+        let root = unique_temp_dir("w3c3b-candidate-manifest-cache-hit");
+        let layout = RepositoryLayout::init(root).unwrap();
+        let store = FileObjectStore::new(layout);
+
+        let never_stored = ObjectId::from_bytes([0xEE; 32]);
+        let entries = vec![entry(
+            "resident.txt",
+            [0x01; 32],
+            StateRootContent::Blob(never_stored),
+        )];
+        let mut text_cache = BTreeMap::new();
+        text_cache.insert(NodeId::from_bytes([0x01; 32]), b"resident text\n".to_vec());
+
+        let manifest = candidate_replay_manifest(&store, entries, &text_cache).unwrap();
+        assert_eq!(manifest.files.len(), 1);
+        assert_eq!(manifest.files[0].path.as_str(), "resident.txt");
+        assert_eq!(manifest.files[0].bytes, b"resident text\n");
+    }
+
+    /// A node the `TextCache` holds nothing for falls back to reading its Blob -- the ordinary,
+    /// already-stored case (every adopted patch's own `CreateFile`/`ReplaceBinary` target).
+    #[test]
+    fn a_text_cache_miss_falls_back_to_the_stored_blob() {
+        let root = unique_temp_dir("w3c3b-candidate-manifest-blob-fallback");
+        let layout = RepositoryLayout::init(root).unwrap();
+        let mut store = FileObjectStore::new(layout);
+        let blob_id = write_blob(&mut store, b"stored text\n").unwrap();
+
+        let entries = vec![entry(
+            "stored.txt",
+            [0x02; 32],
+            StateRootContent::Blob(blob_id),
+        )];
+        let text_cache = BTreeMap::new();
+
+        let manifest = candidate_replay_manifest(&store, entries, &text_cache).unwrap();
+        assert_eq!(manifest.files.len(), 1);
+        assert_eq!(manifest.files[0].path.as_str(), "stored.txt");
+        assert_eq!(manifest.files[0].bytes, b"stored text\n");
+    }
+
+    /// A symlink entry is refused outright -- the format admits no symlink into replay state at
+    /// all today (`ReplayManifestEntry::kind`'s own doc), the same refusal
+    /// `patch_replay::extract`'s claim path and `snapshot::snapshot_files_from_manifest` both
+    /// already give one.
+    #[test]
+    fn a_symlink_entry_is_refused() {
+        let root = unique_temp_dir("w3c3b-candidate-manifest-symlink");
+        let layout = RepositoryLayout::init(root).unwrap();
+        let store = FileObjectStore::new(layout);
+
+        let entries = vec![entry(
+            "link",
+            [0x03; 32],
+            StateRootContent::Symlink("target".to_string()),
+        )];
+        let text_cache = BTreeMap::new();
+
+        match candidate_replay_manifest(&store, entries, &text_cache) {
+            Err(PrikkError::UnsupportedObjectType(message)) => {
+                assert!(message.contains("link"), "{message}");
+            }
+            other => panic!("expected UnsupportedObjectType, got {other:?}"),
+        }
+    }
+}
+
 /// DC-75 two-edits handoff §6: a ref another writer advanced between evidence and seal is a lock
 /// conflict to retry, not damage and not a precondition.
 #[test]

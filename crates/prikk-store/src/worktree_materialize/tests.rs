@@ -322,10 +322,10 @@ fn require_nothing_in_the_way_refuses_an_untracked_file_where_the_target_adds_on
         .expect_err("a file in the way of the target's own files must refuse");
     let message = error.to_string();
     assert!(
-        message.contains("refusing to testing")
-            && message.contains("in the way")
+        message.contains("are in the way")
             && message.contains("p.txt (a file that is not part of the prior state)")
             && message.contains(&format!("in the way of {MAIN}'s files"))
+            && message.contains("move them aside before testing")
             && message.contains("nothing was written"),
         "unexpected message: {message}"
     );
@@ -386,9 +386,10 @@ fn require_nothing_in_the_way_refuses_a_file_changed_since_the_prior_state_at_a_
         );
     let message = error.to_string();
     assert!(
-        message.contains("refusing to testing")
+        message.contains("are in the way")
             && message.contains("c.txt (changed since the prior state)")
             && message.contains(&format!("in the way of {MAIN}'s files"))
+            && message.contains("move them aside before testing")
             && message.contains("nothing was written"),
         "unexpected message: {message}"
     );

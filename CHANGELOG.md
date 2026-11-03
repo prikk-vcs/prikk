@@ -176,9 +176,18 @@
   the identical in-the-way collision now refuses before the create publishes anything, naming the
   colliding path and leaving `.prikk` byte-identical, the same way the dirty-worktree refusal
   already does; moving the path aside and running the create again is all a caller needs to do.
-  `merge --into` keeps only the pre-existing, post-move refusal this round; `archive import
-  --adopt` and `sync seal --claim` are unaffected either way, since neither yet writes the worktree
-  at all.
+  **0.56.0 step W3c-3b:** the refusal sentence above read "refusing to creating heads/main" as
+  landed — ungrammatical, since `action` is a gerund and the template prefixed it with another
+  verb — and now follows the clean check's own shape instead, ending "move them aside before
+  `<action>` (nothing was written)". `merge --into` is fixed the same way `branch create --from`
+  was: it derives its own merge Block's candidate state (the identical `derive_candidate` call
+  `seal_block_at` itself will make moments later, from the same mainline parent, adopted patch ids,
+  and merge anchor site) before `seal_block_at` ever runs, turns the derived `entries` plus
+  `text_cache` into a `ReplayManifest` the way `patch_replay::extract`'s claim path already builds
+  its own file list, and runs the identical `require_nothing_in_the_way` against it, directly,
+  before any write — including the DC-65 case of an adopted-side deletion of a file edited by
+  `EditText`, whose content was never stored as a Blob. `archive import --adopt` and `sync seal
+  --claim` are unaffected either way, since neither yet writes the worktree at all.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

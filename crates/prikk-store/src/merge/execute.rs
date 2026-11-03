@@ -14,6 +14,8 @@
 //! verified independently by the ordinary full-object-store scan. DC-74 sealed merges as
 //! indistinguishable `BlockKind::Normal` blocks; this is what discharges its release condition.
 
+use std::collections::BTreeMap;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     CanonicalEncode, ObjectEnvelope, ObjectId, ObjectType, RefKind, RefStatePayload,
@@ -21,18 +23,25 @@ use prikk_object::{
 };
 
 use crate::anchor_trust::AnchorSite;
-use crate::block_state::{StateAnchoring, seal_block_at};
+use crate::block_state::{
+    CandidateStateDerivationError, StateAnchoring, derive_candidate, seal_block_at,
+};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
+use crate::lifecycle_cache::replay::TextCache;
 use crate::lock::ActiveLock;
 use crate::merge::evidence::{
     MergeEvidenceTarget, candidate_patch_ids, prepare_merge_evidence,
     verify_candidate_blocks_trusted,
 };
+use crate::patch_replay::ReplayManifest;
+use crate::patch_replay::apply::ReplayLiveNode;
+use crate::patch_replay::read::{files_to_replay_manifest, read_blob_bytes_with_kind};
 use crate::received::validate_received_ref;
+use crate::state_root::{StateRootContent, StateRootEntry};
 use crate::wal::Wal;
 use crate::worktree_materialize::{
     CurrentBranchMaterializeReport, mark_current_branch_switch_pending, materialize_after_publish,
-    require_worktree_clean_and_capture,
+    require_nothing_in_the_way, require_worktree_clean_and_capture,
 };
 use crate::{
     BlockLineage, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
@@ -254,14 +263,57 @@ pub fn execute_merge(
     // what let a refused merge leave an orphaned Block behind (measured on `c9659ece`, `verify`: 1
     // unreached object). Checked against `into_ref` specifically, never the raw `current_branch`
     // string, so a caller that resolved the pointer for an unrelated ref never trips this.
+    //
+    // 0.56.0 step W3c-3b: a file in the way of the merge's own candidate state must refuse here
+    // too, before any write -- the same "before any write" guarantee `branch create --from`
+    // already has (0.56.0 step W3c-3). The confluence proof's own `OracleState` is the wrong
+    // source for that candidate state (it is a proof device with its own representation, and a
+    // derived check must classify the state the Block will actually commit to, not a different
+    // one computed for a different purpose); instead this derives the merge Block's own candidate
+    // state directly, with `derive_candidate` (`block_state.rs`) -- the identical call
+    // `seal_block_at` just below will make again moments later, from the same mainline parent
+    // (`parent_block_id`), the same adopted patch ids, and the same merge anchor site. Deriving it
+    // twice is acceptable here (it is only for a merge into the current branch, and it is
+    // anchored): changing `seal_block_at`'s own signature to share the derivation was not
+    // attempted, since doing so without changing anything it writes was not obviously trivial.
     let pending_materialization = if current_branch == Some(into_ref.as_str()) {
         let active_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
-        Some(require_worktree_clean_and_capture(
+        let pending = require_worktree_clean_and_capture(
             layout,
             &into_ref,
             &active_replay,
             &format!("merging {from_ref} into {into_ref}"),
-        )?)
+        )?;
+        // Read-only: `derive_candidate` takes an `ObjectReader`, and performs no write of its own
+        // (unlike `seal_block_classified`'s own internal derivation, which runs
+        // `store_derived_content_for_candidate` -- a write -- first). This is exactly why it is
+        // safe to call here, before any write this merge makes. The DC-65 case (an adopted-side
+        // deletion of a file edited by `EditText` on the other side, so its content was never
+        // stored as a Blob) is covered by a dedicated test: adopted patches were already sealed on
+        // the source ref, so every Blob a `CreateFile`/`ReplaceBinary` among them needs is already
+        // present, and a `DeleteNode`'s own preimage check never reads a Blob at all (it compares
+        // against the in-memory replayed state) -- confirmed by running that case, not only by this
+        // reasoning.
+        let candidate = derive_candidate(
+            layout,
+            &object_store,
+            Some(parent_block_id),
+            &adopted_patch_ids,
+            StateAnchoring::Anchored(AnchorSite::Merge),
+        )
+        .map_err(|err| match err {
+            CandidateStateDerivationError::Lineage(err) => err,
+            CandidateStateDerivationError::Patch(err) => err.into(),
+        })?;
+        let target_manifest =
+            candidate_replay_manifest(&object_store, candidate.entries, &candidate.text_cache)?;
+        require_nothing_in_the_way(
+            layout,
+            &pending,
+            &target_manifest,
+            &format!("merging {from_ref} into {into_ref}"),
+        )?;
+        Some(pending)
     } else {
         None
     };
@@ -382,6 +434,54 @@ pub fn execute_merge(
         materialized_deleted_files,
         materialization_anchor_fallback,
     })
+}
+
+/// Build the `ReplayManifest` [`require_nothing_in_the_way`] needs from a [`derive_candidate`]
+/// result's own `entries` plus `text_cache` (0.56.0 step W3c-3b) -- the same per-entry resolution
+/// `patch_replay::extract`'s own claim path already uses (resident bytes from the text cache
+/// first, the Blob only when absent -- never the other way around, since the text cache, not the
+/// node's tracked blob id, holds the truth for a node an `EditText` has touched since its tracked
+/// id was last current, DC-65), then `files_to_replay_manifest`, the one existing builder for a
+/// `ReplayManifest`, reused rather than copied a third time.
+///
+/// A symlink entry is refused exactly as `patch_replay::extract`'s claim path and
+/// `snapshot::snapshot_files_from_manifest` both already refuse one for the identical reason: the
+/// format does not admit a symlink into replay state at all today (`ReplayManifestEntry::kind`'s
+/// own doc records why -- both `DeleteNode(symlink)` and `CreateSymlink` are refused by
+/// `ensure_apply_supported` before application), so this is unreachable with today's format, not a
+/// narrowing of real merge behaviour.
+fn candidate_replay_manifest(
+    reader: &impl ObjectReader,
+    entries: Vec<StateRootEntry>,
+    text_cache: &TextCache,
+) -> Result<ReplayManifest> {
+    let mut files = BTreeMap::new();
+    let mut live_nodes = BTreeMap::new();
+    for entry in entries {
+        let StateRootContent::Blob(blob_id) = entry.content else {
+            return Err(PrikkError::UnsupportedObjectType(format!(
+                "merge candidate state holds symlink {}; the pre-write in-the-way check supports \
+                 the file-level subset only",
+                entry.path.as_str()
+            )));
+        };
+        let bytes = match text_cache.get(&entry.node_id) {
+            Some(bytes) => bytes.clone(),
+            None => read_blob_bytes_with_kind(reader, blob_id)?.1,
+        };
+        let path = entry.path.as_str().to_string();
+        live_nodes.insert(
+            entry.node_id,
+            ReplayLiveNode {
+                path: path.clone(),
+                kind: entry.kind,
+                mode: entry.mode,
+                blob_id,
+            },
+        );
+        files.insert(path, bytes);
+    }
+    files_to_replay_manifest(files, &live_nodes)
 }
 
 /// `into_ref` must still point where the evidence read it. If another writer advanced it in between,
