@@ -429,50 +429,60 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
 /// `rustdoc::private_intra_doc_links` denies a `pub` item's doc linking to a private one, and this
 /// function is `pub`).
 ///
-/// **Why this replays the whole batch's own patches by id, concatenated, through one
-/// `derive_candidate` call, rather than replaying the claimed blocks by the block ids the
-/// claims themselves name:** a `RecognitionClaimPayload`'s `block_id` names a block on the
-/// *sender's* repository, which `sync accept`'s own admission (`patch_exchange::accept`) never
-/// writes here -- confirmed by reading that module: it decodes and admits `Patch`, `Blob`, author
-/// key material, `RecognitionClaim` and `Tag` objects, never a `Block`. So there is no local
-/// object that id could resolve to, and a block-id-addressed replay (a twin of
-/// `replay_for_verified_worktree_write`, or `patch_replay::replay_block_chain` directly) is a dead
-/// end for this producer specifically -- unlike `merge --into`/`branch create --from`, whose own
-/// targets (`from_ref`'s tip, the merge's own candidate) are always blocks this repository already
-/// holds. What *is* available, before any claim seals, is exactly what
+/// **Why this replays the whole batch's own patches by id, rather than replaying the claimed
+/// blocks by the block ids the claims themselves name:** a `RecognitionClaimPayload`'s `block_id`
+/// names a block on the *sender's* repository, which `sync accept`'s own admission
+/// (`patch_exchange::accept`) never writes here -- confirmed by reading that module: it decodes
+/// and admits `Patch`, `Blob`, author key material, `RecognitionClaim` and `Tag` objects, never a
+/// `Block`. So there is no local object that id could resolve to, and a block-id-addressed replay
+/// (a twin of `replay_for_verified_worktree_write`, or `patch_replay::replay_block_chain`
+/// directly) is a dead end for this producer specifically -- unlike `merge --into`/`branch create
+/// --from`, whose own targets (`from_ref`'s tip, the merge's own candidate) are always blocks this
+/// repository already holds. What *is* available, before any claim seals, is exactly what
 /// `seal_from_accepted_claim_impl` itself computes per claim:
 /// [`accepted_but_unsealed_patch_ids`] (the patches still eligible to be sealed) filtered against
 /// each claim's own `patch_ids`, in the batch's own already-established order
-/// (`order_claims_for_sealing`'s result, passed in as `ordered_claim_ids`). Concatenating every
-/// claim's own filtered selection, removing each selection from the pool before considering the
-/// next claim (mirroring what sealing the batch for real would do: a patch selected by claim N is
-/// no longer "unsealed" when claim N+1 is considered), and calling `derive_candidate` once from
-/// the pre-batch parent produces the identical final state N chained single-claim seals would --
-/// confirmed by reading `crate::lifecycle_cache::replay::apply_candidate_patches`, which folds a
-/// flat patch-id slice onto a state with no dependency on block boundaries at all.
+/// (`order_claims_for_sealing`'s result, passed in as `ordered_claim_ids`).
 ///
 /// **This check only ever *skips itself*, never refuses on its own simulation's own behalf.**
 /// `sync.rs`'s own module doc states §3 as a firm policy, not merely today's behaviour: "stop at
 /// the first failure... no rollback -- each seal is an independent, legitimate act under the
 /// receiver's own key," so an *earlier* claim's own valid seal must never be pre-empted by a
 /// *later* claim's own failure, including a later claim whose patches would not apply cleanly
-/// once an earlier one has. Combining every claim's own patches into one simulated derivation (as
-/// this function does, for the file-collision check alone) would otherwise surface exactly that
-/// kind of claim-vs-claim divergence *before* the batch even starts -- measured directly: two
-/// senders independently creating the same new path from the same (absent) parent, sealed in one
-/// batch onto an unborn current branch, used to refuse the whole batch here, reporting neither
-/// claim sealed, where the real per-claim loop below would seal the first and fail only the
-/// second (`rfc116_sync_cli.rs::row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intact`,
-/// predates this round and must keep holding). So: if this function's own simulation cannot even
-/// derive a combined state at all -- a claim that does not exist or does not decode, or patches
-/// that do not fold together -- there is no manifest to check a file collision against, and this
-/// returns `Ok(())` rather than propagating that failure as a refusal: the real, authoritative
-/// per-claim loop (`seal_from_accepted_claim_in_batch`, called once per claim regardless of what
-/// this function decided) re-derives the identical state per claim and reports the identical
-/// failure at the exact claim and in the exact words it always has, with every earlier claim's
-/// own seal already landed and kept. A genuine file-in-the-way collision, by contrast, is
-/// orthogonal to claim-vs-claim ordering (the worktree is not party to any claim), so refusing on
-/// *that* basis never pre-empts a legitimate earlier seal.
+/// once an earlier one has.
+///
+/// **0.56.0 step W3c-4b corrected the scope of that deferral.** The first shape of this function
+/// folded *every* claim's own selection into one combined list and called `derive_candidate` once
+/// on the whole thing; if any claim's selection failed to fold -- including an ordinary, expected
+/// divergence on a *later* claim -- the whole combined derivation failed and this returned `None`,
+/// skipping the in-the-way check for the *entire* batch, even for an earlier claim that will
+/// actually seal and publish for real in the loop below. Measured directly: two senders
+/// independently creating the same new path from the same (absent) parent, sealed in one batch
+/// onto an unborn current branch with an untracked file already at that path, used to publish the
+/// first claim -- with no in-the-way check ever run against it -- and only fail the second, with
+/// the collision caught (if at all) by the *post-publish* backstop in
+/// [`materialize_after_publish`](crate::materialize_after_publish)
+/// -- exactly the "refuse after a write" shape this R3 series exists to eliminate, reopened in the
+/// batch shape. `simulate_seal_batch_target_manifest` (below, private to this module, so not
+/// linked here -- `rustdoc::private_intra_doc_links` denies a `pub` item's doc linking to one) now
+/// folds claim by claim instead, in
+/// `ordered_claim_ids`' own order, and stops at the first claim whose fold fails, checking the
+/// in-the-way collision against the state *after the last claim that folded successfully* -- the
+/// exact tip the real loop below will actually publish and then materialize. If the very first
+/// claim fails to fold, nothing will ever publish, so (as before) there is no state to check and
+/// this skips itself. See that function's own doc for the two residual, *not* fold-shaped reasons
+/// the real loop can still stop earlier than this simulation does, and why the post-publish
+/// backstop remains the correct, truthful fallback for those.
+///
+/// Either way, this never turns a claim's own ordinary failure into a refusal of the whole batch:
+/// the real, authoritative per-claim loop (`seal_from_accepted_claim_in_batch`, called once per
+/// claim regardless of what this function decided) re-derives the identical state per claim and
+/// reports the identical failure at the exact claim and in the exact words it always has, with
+/// every earlier claim's own seal already landed and kept
+/// (`rfc116_sync_cli.rs::row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intact`,
+/// predates this round and must keep holding). A genuine file-in-the-way collision, by contrast,
+/// is orthogonal to claim-vs-claim ordering (the worktree is not party to any claim), so refusing
+/// on *that* basis never pre-empts a legitimate earlier seal.
 pub fn require_nothing_in_the_way_for_seal_batch(
     layout: &RepositoryLayout,
     pending: &PendingCurrentBranchMaterialization,
@@ -490,8 +500,51 @@ pub fn require_nothing_in_the_way_for_seal_batch(
 
 /// The simulation [`require_nothing_in_the_way_for_seal_batch`] needs, isolated so every failure
 /// inside it can be turned into "no opinion" (`None`) rather than a hard error -- see that
-/// function's own doc for why. Returns `None` on any `ObjectReadSnapshot`, claim-lookup,
-/// claim-decode, or [`derive_candidate`]/[`candidate_replay_manifest`] failure; the real
+/// function's own doc for why.
+///
+/// **Folds claim by claim, from the pre-batch parent, stopping at the first claim whose fold
+/// fails** (0.56.0 step W3c-4b; see the caller's own doc for the defect this replaced). For each
+/// claim in turn: filter its own `patch_ids` against the pool of still-unsealed patches (removing
+/// a claim's own selection from the pool before the next claim is considered, mirroring what
+/// sealing the batch for real would do), extend the running combined patch-id list with that
+/// selection, and call [`derive_candidate`] *again, from scratch, on the whole grown list* --
+/// reusing only machinery this module already calls elsewhere, at the cost of O(n²) re-derivation
+/// in the number of claims in the batch, which for an ordinary batch (a handful of claims) is very
+/// unlikely to matter. (The alternative -- deriving the pre-batch state once and folding each
+/// claim's patches incrementally onto one running `NodeLifecycleState` via
+/// `crate::lifecycle_cache::replay::apply_candidate_patches` directly -- would be more efficient,
+/// but needs that raw state outside `block_state.rs`, whose own doc on
+/// `CandidateDerivation::state` says plainly that it is read only by a `cfg(test)`/`test-support`
+/// control and that this adapter needs `entries`/`text_cache`/`anchored` only; using it here, in
+/// production, would go against that documented intent, so this takes the simpler shape instead.)
+/// If a claim's own fold fails, the loop stops and the *previous* claim's own successfully-folded
+/// candidate (if any) is what gets checked; if the very first claim fails to fold, there is no
+/// prior candidate at all, and this returns `None` exactly as before this round.
+///
+/// Also mirrors one of `seal_from_accepted_claim_impl`'s own early, read-only, per-claim checks
+/// that runs *before* that function ever calls `derive_candidate` for a claim:
+/// [`refuse_if_order_ambiguous`], run here under the identical condition the real loop runs it
+/// under (only once the claim's own selection is non-empty -- an empty selection is `AlreadySealed`
+/// there, and skips the check entirely). This one is cheap (no signer, no write, already callable
+/// in this module) and, left unmodeled, could make this simulation check a state *past* a claim the
+/// real loop would never even attempt to fold. **Two further early, read-only per-claim checks are
+/// deliberately left unmodeled, as a residual:** `verify_signer_trusted` (claim-invariant --
+/// whether it passes or fails does not depend on anything about the claim's own content, only on
+/// the signer and policy, so modeling it here would mean threading a signer into this read-only
+/// simulation for a result that is the same for every claim in the batch) and the distinction
+/// between "this claim names a patch that is already sealed" (skip it, keep going) and "this claim
+/// names a patch that does not exist at all" (refuse the whole claim, seal nothing for it) -- this
+/// simulation's own `available` pool cannot tell those two apart, and silently treats a genuinely
+/// missing patch the same as an already-sealed one. In either residual case, if the real loop stops
+/// at a claim for one of these reasons where this simulation would have kept folding, this
+/// simulation ends up checking a *later* state than what actually gets published -- but the
+/// post-publish backstop in [`materialize_after_publish`](crate::materialize_after_publish) still covers that gap truthfully (its own
+/// refusal, if any, is an accurate description of what was actually published), so this remains a
+/// usability gap (a possibly less specific refusal reason), never a safety one (nothing is ever
+/// written before a refusal either way).
+///
+/// Returns `None` on any `ObjectReadSnapshot`, claim-lookup, claim-decode, order-ambiguity, or
+/// [`derive_candidate`]/[`candidate_replay_manifest`] failure for the very first claim; the real
 /// per-claim loop re-reads and re-derives everything this touches anyway, moments later, so
 /// nothing is silently lost -- it is reported there instead, correctly scoped to the one claim
 /// that actually fails.
@@ -510,32 +563,54 @@ fn simulate_seal_batch_target_manifest(
         .into_iter()
         .collect();
     let mut combined_patch_ids: Vec<ObjectId> = Vec::new();
+    let mut last_folded: Option<crate::block_state::CandidateDerivation> = None;
+
     for &claim_id in ordered_claim_ids {
-        let claim_envelope = read_snapshot
+        let Some(Some(claim_envelope)) = read_snapshot
             .read_typed(claim_id, ObjectType::RecognitionClaim)
-            .ok()??;
-        let claim =
-            RecognitionClaimPayload::decode_canonical(&claim_envelope.canonical_payload).ok()?;
+            .ok()
+        else {
+            break;
+        };
+        let Ok(claim) =
+            RecognitionClaimPayload::decode_canonical(&claim_envelope.canonical_payload)
+        else {
+            break;
+        };
         let selected: Vec<ObjectId> = claim
             .patch_ids
             .iter()
             .copied()
             .filter(|patch_id| available.contains(patch_id))
             .collect();
+
+        // Mirror `seal_from_accepted_claim_impl`'s own early order-ambiguity check, under the
+        // identical condition the real loop runs it under -- see this function's own doc.
+        if !selected.is_empty() && refuse_if_order_ambiguous(layout, claim_id, &claim).is_err() {
+            break;
+        }
+
+        let mut candidate_prefix = combined_patch_ids.clone();
+        candidate_prefix.extend(selected.iter().copied());
+
+        let Ok(candidate) = derive_candidate(
+            layout,
+            &read_snapshot,
+            parent,
+            &candidate_prefix,
+            StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
+        ) else {
+            break;
+        };
+
         for patch_id in &selected {
             available.remove(patch_id);
         }
-        combined_patch_ids.extend(selected);
+        combined_patch_ids = candidate_prefix;
+        last_folded = Some(candidate);
     }
 
-    let candidate = derive_candidate(
-        layout,
-        &read_snapshot,
-        parent,
-        &combined_patch_ids,
-        StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
-    )
-    .ok()?;
+    let candidate = last_folded?;
     candidate_replay_manifest(&read_snapshot, candidate.entries, &candidate.text_cache).ok()
 }
 
