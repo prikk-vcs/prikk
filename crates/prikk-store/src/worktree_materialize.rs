@@ -477,6 +477,28 @@ pub fn materialize_after_publish(
     })
 }
 
+/// 0.56.0 step W3c-4b: when the batch that captured `pending` published nothing at all (every
+/// claim either refused outright or was `AlreadySealed` -- see `prikk-cli`'s own `run_seal`, whose
+/// `published_count` this answers for), there is no new tip for [`materialize_after_publish`] to
+/// replay and nothing to write: the worktree, already confirmed clean against the pre-batch tip by
+/// [`require_worktree_clean_and_capture`], is still exactly as correct as it was. Consumes
+/// `pending` by value -- so it can never be passed to [`materialize_after_publish`], or anything
+/// else, afterward -- and clears the dirty marker the producer's own
+/// [`mark_current_branch_switch_pending`] set, the one write this still needs to undo. Does not
+/// widen `worktree_marker`'s own module boundary: `clear_worktree_dirty` itself stays
+/// `pub(crate)` there; this is simply the one `pub` caller outside that module allowed to ask for
+/// it, in the same module [`PendingCurrentBranchMaterialization`] itself already lives in. Must be
+/// called under the same held lock the producer's own batch holds, once the loop has confirmed it
+/// published zero claims -- the repository is byte-identical before and after, by construction
+/// (nothing is read here beyond the marker file itself, and nothing is written but its removal).
+pub fn abandon_unpublished_materialization(
+    layout: &RepositoryLayout,
+    pending: PendingCurrentBranchMaterialization,
+) -> Result<()> {
+    drop(pending);
+    clear_worktree_dirty(layout)
+}
+
 // Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
 // need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
 #[cfg(test)]

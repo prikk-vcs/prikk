@@ -434,8 +434,14 @@ pub use worktree_status::{
 // `pub(crate)`, not re-exported: its own `target_manifest` parameter is a `ReplayManifest`, which
 // stays `pub(crate)` too, so only an in-crate caller (`execute_merge`, once it has one) could name
 // it anyway.
+//
+// 0.56.0 step W3c-4b: `abandon_unpublished_materialization` joins this same group -- `run_seal`'s
+// own batch loop (`prikk-cli`) is the one caller that needs to consume a `PendingCurrentBranch
+// Materialization` without ever publishing anything, when every claim in a batch refuses or is
+// already sealed.
 pub use worktree_materialize::{
     CurrentBranchMaterializeReport, PendingCurrentBranchMaterialization,
-    mark_current_branch_switch_pending, materialize_after_publish,
-    require_nothing_in_the_way_for_published_ref, require_worktree_clean_and_capture,
+    abandon_unpublished_materialization, mark_current_branch_switch_pending,
+    materialize_after_publish, require_nothing_in_the_way_for_published_ref,
+    require_worktree_clean_and_capture,
 };

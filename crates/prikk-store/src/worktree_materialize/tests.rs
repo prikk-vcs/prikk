@@ -17,8 +17,8 @@ use prikk_object::{
 };
 
 use super::{
-    mark_current_branch_switch_pending, materialize_after_publish, require_nothing_in_the_way,
-    require_worktree_clean_and_capture,
+    abandon_unpublished_materialization, mark_current_branch_switch_pending,
+    materialize_after_publish, require_nothing_in_the_way, require_worktree_clean_and_capture,
 };
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
@@ -246,6 +246,45 @@ fn a_crash_between_publish_and_materialize_recovers_via_branch_switch() {
     assert!(
         matches!(comparison, WorktreeBaselineComparison::Current),
         "{comparison:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.56.0 step W3c-4b: when a producer's own batch publishes nothing at all, there is no new tip
+/// to replay -- on a genuinely **unborn** current branch (never published, not even once), there
+/// is no tip to replay *at all*, not even the pre-batch one. `prikk-cli`'s own `run_seal` could not
+/// reach this exact shape through the CLI (an `Unverifiable` claim signature still proceeds, so it
+/// never itself produces a first-claim refusal with nothing published), but the code path exists
+/// and must not need a tip that does not exist: construct the pending capture and the marker
+/// directly, the same way [`a_clean_worktree_is_materialized_after_the_publish`] does except that
+/// `heads/main` is never published here, then confirm `abandon_unpublished_materialization` clears
+/// the marker without erroring, consuming `pending` without ever needing a real tip.
+#[test]
+fn abandon_unpublished_materialization_clears_the_marker_on_an_unborn_ref() {
+    let root = unique_temp_dir("w3c4b-abandon-unborn");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    // `heads/main` is never published -- genuinely unborn throughout.
+
+    let active_replay = empty_replay(&layout).expect("replay");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured on an unborn ref");
+    mark_current_branch_switch_pending(&layout, &pending).expect("marked");
+    assert!(worktree_is_dirty(&layout).expect("dirty check"));
+
+    abandon_unpublished_materialization(&layout, pending)
+        .expect("abandoning an unpublished materialization must not error on an unborn ref");
+
+    assert!(
+        !worktree_is_dirty(&layout).expect("dirty check"),
+        "the marker must be cleared, even though no tip was ever published"
+    );
+    let comparison =
+        compare_worktree_baseline(&layout, MAIN, &empty_replay(&layout).unwrap()).unwrap();
+    assert!(
+        matches!(comparison, WorktreeBaselineComparison::NoRecord),
+        "an unborn, never-materialized worktree must still read with no record (treated exactly \
+         like Current by every caller -- R1's migration-safety rule), never Behind: {comparison:?}"
     );
 
     let _ = std::fs::remove_dir_all(root);
