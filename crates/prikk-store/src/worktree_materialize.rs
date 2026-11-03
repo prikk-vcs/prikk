@@ -371,14 +371,16 @@ pub(crate) fn require_nothing_in_the_way(
     )))
 }
 
-/// [`require_nothing_in_the_way`], for a producer whose target is an **already-published ref**
-/// that is not `pending`'s own `current_branch` -- `branch create --from`'s own shape (0.56.0 step
-/// W3c-3): the target is the `--from` ref's tip, since `current_branch` itself is not yet
-/// published at this point in that producer's own call (that is exactly what this create would
-/// resolve). Re-derives the target's manifest through [`replay_for_verified_worktree_write`], the
-/// identical verified-anchor replay [`materialize_after_publish`] already uses on `current_branch`
-/// once it is published -- safe to use on `target_ref` here instead, because `target_ref` must
-/// already be published to be nameable by `--from` at all (confirmed at the one call site:
+/// `require_nothing_in_the_way` (above; not linked by name -- it is `pub(crate)`, and
+/// `rustdoc::private_intra_doc_links` denies a public item's doc linking to one), for a producer
+/// whose target is an **already-published ref** that is not `pending`'s own `current_branch` --
+/// `branch create --from`'s own shape (0.56.0 step W3c-3): the target is the `--from` ref's tip,
+/// since `current_branch` itself is not yet published at this point in that producer's own call
+/// (that is exactly what this create would resolve). Re-derives the target's manifest through
+/// `replay_for_verified_worktree_write` (also `pub(crate)`, same reason, not linked), the identical
+/// verified-anchor replay [`materialize_after_publish`] already uses on `current_branch` once it is
+/// published -- safe to use on `target_ref` here instead, because `target_ref` must already be
+/// published to be nameable by `--from` at all (confirmed at the one call site:
 /// `resolve_published_target` already refuses otherwise, before this is ever reached). `pub`,
 /// re-exported narrowly from `lib.rs` -- the same precedent [`PendingCurrentBranchMaterialization`]
 /// itself already set.
