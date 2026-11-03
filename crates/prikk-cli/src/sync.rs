@@ -45,13 +45,18 @@ use std::path::PathBuf;
 
 use prikk_object::ObjectId;
 use prikk_store::{
-    AcceptOptions, ClaimSignatureVerification, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
+    AcceptOptions, ActiveLock, ClaimSignatureVerification, CurrentBranchMaterializeReport,
+    DEFAULT_ACTIVE_NAME, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
     DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
-    ReceivedTagResolution, SealFromAcceptedOutcome, SyncArtifactOutcome, TagSignatureVerification,
-    accept_exchange_artifact, adopt_tag, build_have_list, build_sync_artifact, build_sync_summary,
-    compare_sync_summary, decode_sync_summary, list_received_tags, order_claims_for_sealing,
-    patch_ids_pending_excluding_received, pending_patches_with_claims, seal_from_accepted_claim,
+    ReceivedTagResolution, RefStore, SealFromAcceptedOutcome, SyncArtifactOutcome,
+    TagSignatureVerification, Wal, accept_exchange_artifact, adopt_tag, build_have_list,
+    build_sync_artifact, build_sync_summary, compare_sync_summary, decode_sync_summary,
+    ensure_worktree_replay_verified, list_received_tags, mark_current_branch_switch_pending,
+    materialize_after_publish, order_claims_for_sealing, patch_ids_pending_excluding_received,
+    pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
+    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
+    validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -404,16 +409,19 @@ fn run_adopt_tag(root: PathBuf, args: Vec<String>) -> std::result::Result<(), Cl
     Ok(())
 }
 
+/// 0.56.0 step W3c-4 (R3 for `sync seal`): a `--claim <id>` call is treated as a batch of exactly
+/// one claim, not a separate code path from `--claims <file>` -- the clean-worktree guarantee this
+/// round adds belongs to the producer ("sealing onto the current branch"), not to one of its two
+/// argument shapes, and `ordered.len() == 1` is simply the degenerate case of the same orchestration.
 fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_seal_args(args)?;
     let layout = crate::open_repository(root)?;
     let signer = maintainer_signer_from_env()?;
-    match parsed.claims {
-        SealClaims::Single(claim_id) => {
-            let outcome = seal_from_accepted_claim(&layout, &parsed.ref_name, claim_id, &signer)
-                .map_err(|err| err.to_string())?;
-            print_seal_outcome(&outcome, claim_id);
-        }
+    let canonical_ref =
+        validate_local_branch_ref(&parsed.ref_name).map_err(|err| err.to_string())?;
+
+    let ordered: Vec<ObjectId> = match parsed.claims {
+        SealClaims::Single(claim_id) => vec![claim_id],
         SealClaims::Batch(claims_file) => {
             let content = std::fs::read_to_string(&claims_file).map_err(|err| {
                 format!(
@@ -437,23 +445,133 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             // §1: order by parent_block_ids, derived from signed data -- never by the file's own
             // input order or by id.
             let object_store = ObjectReadSnapshot::open(&layout).map_err(|err| err.to_string())?;
-            let ordered = order_claims_for_sealing(&object_store, &claim_ids)
+            order_claims_for_sealing(&object_store, &claim_ids).map_err(|err| err.to_string())?
+        }
+    };
+
+    // W3c-4: one `ActiveLock`, held for every claim in `ordered` -- not re-acquired per claim, the
+    // way the pre-round `seal_from_accepted_claim` call did it, since the clean check (below) must
+    // run under this same lock before any claim's first write, and nothing else may write the
+    // active WAL or worktree until this whole batch (including its materialize step) is done.
+    let _active_lock = ActiveLock::acquire_for_write(&layout, DEFAULT_ACTIVE_NAME)
+        .map_err(|err| err.to_string())?;
+    // RFC 136 §10.3b.3: the derivation gate, before any write -- unconditionally, the same
+    // placement `execute_merge`/`branch_switch.rs` already give it, and the same placement
+    // `seal_from_accepted_claim` itself gave it before this round. This must run *before* the R3
+    // clean check just below: that check's own refusal (an ordinary "not clean against
+    // <ref>") is a different, less specific diagnosis than "the worktree was never
+    // replay-verified after an interrupted materialization," and this round's own batch
+    // orchestration must not let the newer, narrower check mask the older, more fundamental one
+    // (confirmed by `rfc136_derivation_gate.rs`'s own "every gated command" sweep).
+    ensure_worktree_replay_verified(&layout).map_err(|err| err.to_string())?;
+    // RFC 164 Rule D: `canonical_ref`'s own pointer-index tail check, unconditionally and before
+    // the R3 clean check and marker below -- `seal_from_accepted_claim_impl`'s own per-claim call
+    // re-checks this too (unchanged from before this round), but that call happens only *inside*
+    // the loop, after this function would otherwise already have set the marker; measured
+    // (`rfc164_rule_d_refuse_before_first_write.rs::sync_seal_refuses_on_every_pointer_index_fault_before_any_write`):
+    // a damaged pointer index left the marker set after a refusal that promises nothing under
+    // `.prikk/` changes. One check here, for the whole batch, since the pointer index cannot
+    // change between claims until the first publish, under this same held lock.
+    RefStore::new(layout.clone())
+        .ensure_pointer_index_has_no_tail(&canonical_ref)
+        .map_err(|err| err.to_string())?;
+
+    // Steps 1-2: the clean check and the pre-write in-the-way check, once, before the first
+    // claim's first write -- only when `canonical_ref` is the current branch, and only when there
+    // is at least one claim to seal (an empty `--claims <file>` writes nothing regardless).
+    let current_branch = crate::current_branch::displayed_current_branch(&layout);
+    let pending_materialization =
+        if !ordered.is_empty() && current_branch.as_deref() == Some(canonical_ref.as_str()) {
+            let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+                .replay()
                 .map_err(|err| err.to_string())?;
-            // §3: stop at the first failure, report it, and leave the successful seals in place --
-            // no rollback. Each `?` below exits before attempting the next claim, and every claim
-            // already printed stays sealed regardless of what happens after it.
-            for claim_id in ordered {
-                let outcome =
-                    seal_from_accepted_claim(&layout, &parsed.ref_name, claim_id, &signer)
-                        .map_err(|err| {
-                            println!("claim {claim_id}: FAILED: {err}");
-                            let _ = std::io::Write::flush(&mut std::io::stdout());
-                            err.to_string()
-                        })?;
+            let pending = require_worktree_clean_and_capture(
+                &layout,
+                &canonical_ref,
+                &active_replay,
+                &format!("sealing onto {canonical_ref}"),
+            )
+            .map_err(|err| err.to_string())?;
+            // The pre-write in-the-way check, against the whole batch's own simulated final state (not
+            // any one claim's) -- see `require_nothing_in_the_way_for_seal_batch`'s own doc for why this
+            // replays by patch id, concatenated across the batch, rather than by any claim's own
+            // (foreign, unresolvable here) block id.
+            require_nothing_in_the_way_for_seal_batch(
+                &layout,
+                &pending,
+                &canonical_ref,
+                &ordered,
+                &format!("sealing onto {canonical_ref}"),
+            )
+            .map_err(|err| err.to_string())?;
+            // Step 2b: the marker, before the batch's first claim is sealed -- the earliest point that
+            // can be this batch's first write (an `AlreadySealed` claim writes nothing, but it costs
+            // nothing for the marker to be cleared again, unused, by the materialize call below).
+            mark_current_branch_switch_pending(&layout, &pending).map_err(|err| err.to_string())?;
+            Some(pending)
+        } else {
+            None
+        };
+
+    // Step 3 (unconditional, exactly as before this round): seal every claim in order, stopping at
+    // the first failure and leaving every already-sealed claim sealed -- no rollback (§3).
+    let mut batch_error: Option<String> = None;
+    for &claim_id in &ordered {
+        match seal_from_accepted_claim_in_batch(
+            &layout,
+            &_active_lock,
+            &parsed.ref_name,
+            claim_id,
+            &signer,
+        ) {
+            Ok(outcome) => {
                 print_seal_outcome(&outcome, claim_id);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
+            Err(err) => {
+                println!("claim {claim_id}: FAILED: {err}");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                batch_error = Some(err.to_string());
+                break;
+            }
         }
+    }
+
+    // Step 4 (materialize once, after the last claim) and the mid-batch-failure rule: even when
+    // `batch_error` is set, this still runs on whatever tip was really published, so the worktree
+    // matches what is there -- and if this call itself fails too, the marker stays set, and the
+    // combined message below names `branch switch <canonical_ref>` as the way out.
+    if let Some(pending) = pending_materialization {
+        match materialize_after_publish(&layout, pending) {
+            Ok(CurrentBranchMaterializeReport {
+                written_files,
+                unchanged_files,
+                deleted_files,
+                anchor_fallback,
+            }) => {
+                crate::warn_anchor_fallbacks(anchor_fallback.iter());
+                println!(
+                    "materialized into the worktree: files written: {written_files}, unchanged: \
+                     {unchanged_files}, deleted: {deleted_files}",
+                );
+            }
+            Err(materialize_err) => {
+                return Err(match batch_error {
+                    Some(claim_err) => format!(
+                        "{claim_err}; additionally, materializing the published tip into the \
+                         worktree failed: {materialize_err}; run `prikk branch switch \
+                         {canonical_ref}` to finish (nothing more was sealed, and the marker is \
+                         still set)"
+                    ),
+                    None => materialize_err.to_string(),
+                }
+                .into());
+            }
+        }
+    }
+
+    if let Some(claim_err) = batch_error {
+        return Err(claim_err.into());
     }
     Ok(())
 }

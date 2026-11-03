@@ -149,10 +149,17 @@ const GATED: &[(&str, &str, &str, &str)] = &[
         "ensure_worktree_replay_verified(layout)",
     ),
     (
+        // 0.56.0 step W3c-4: the gate call moved to `prikk-cli`'s own `run_seal`, called
+        // unconditionally right after the batch's `ActiveLock` is acquired and before this
+        // round's own R3 clean check -- `seal_from_accepted_claim_impl` (the store function both
+        // `seal_from_accepted_claim` and `seal_from_accepted_claim_in_batch` now call) still calls
+        // it too, per claim, unchanged from before this round, but `run_seal` is the one entry
+        // point this table needs to name, the same way `seal`'s own row names its CLI function,
+        // not a store one.
         "sync seal",
-        "crates/prikk-store/src/seal_from_accepted.rs",
-        "pub fn seal_from_accepted_claim(",
-        "ensure_worktree_replay_verified(layout)",
+        "crates/prikk-cli/src/sync.rs",
+        "fn run_seal(",
+        "ensure_worktree_replay_verified(&layout)",
     ),
     (
         "rollback-draft --append-inverse",
