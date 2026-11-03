@@ -450,7 +450,13 @@ pub fn execute_merge(
 /// own doc records why -- both `DeleteNode(symlink)` and `CreateSymlink` are refused by
 /// `ensure_apply_supported` before application), so this is unreachable with today's format, not a
 /// narrowing of real merge behaviour.
-fn candidate_replay_manifest(
+///
+/// `pub(crate)` (0.56.0 step W3c-4): reused verbatim by `seal_from_accepted`'s own pre-write
+/// in-the-way check for a `sync seal` batch -- the function has no merge-specific logic in it at
+/// all (confirmed by reading it: it takes only a reader, a `derive_candidate` result's `entries`
+/// and `text_cache`, and returns a `ReplayManifest`), so it is reused directly rather than copied a
+/// third time.
+pub(crate) fn candidate_replay_manifest(
     reader: &impl ObjectReader,
     entries: Vec<StateRootEntry>,
     text_cache: &TextCache,

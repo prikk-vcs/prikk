@@ -52,7 +52,8 @@ use prikk_object::{
 
 use crate::anchor_trust::AnchorSite;
 use crate::block_state::{
-    BlockLineage, CandidateStateDerivationError, StateAnchoring, seal_block_classified,
+    BlockLineage, CandidateStateDerivationError, StateAnchoring, derive_candidate,
+    seal_block_classified,
 };
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
@@ -62,12 +63,16 @@ use crate::foundation::layout::{
 use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
+use crate::merge::execute::candidate_replay_manifest;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::patch_exchange::accepted_but_unsealed_patch_ids;
 use crate::recognition_claim::{ClaimSignatureVerification, verify_claim_signature};
 use crate::refs::{RefPublication, RefStore, validate_local_branch_ref};
 use crate::trust::{GatedOperation, load_maintainer_trust_policy_or_empty, verify_signer_trusted};
 use crate::wal::Wal;
+use crate::worktree_materialize::{
+    PendingCurrentBranchMaterialization, require_nothing_in_the_way,
+};
 
 /// The result of [`seal_from_accepted_claim`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,9 +105,46 @@ pub enum SealFromAcceptedOutcome {
 }
 
 /// Seal the patches named by the `RecognitionClaim` at `claim_id` into `ref_name`, under `signer`.
-/// See the module doc for the shape of what this does and does not guarantee.
+/// See the module doc for the shape of what this does and does not guarantee. Acquires its own
+/// `ActiveLock` for the one claim, held only for this call -- see
+/// [`seal_from_accepted_claim_in_batch`] for the batch shape that holds one lock across several
+/// calls instead.
 pub fn seal_from_accepted_claim(
     layout: &RepositoryLayout,
+    ref_name: &str,
+    claim_id: ObjectId,
+    signer: &impl MaintainerSigner,
+) -> Result<SealFromAcceptedOutcome> {
+    seal_from_accepted_claim_impl(layout, None, ref_name, claim_id, signer)
+}
+
+/// 0.56.0 step W3c-4: as [`seal_from_accepted_claim`], but for one claim inside a `sync seal`
+/// batch that already holds `active_lock` for the *whole* batch (`prikk-cli`'s
+/// `run_seal`'s `SealClaims::Batch` arm) -- `ActiveLock::acquire_for_write` is not reentrant (an
+/// exclusive-file-creation lock), so a batch cannot call the single-claim function once per claim
+/// the way it did before this round without releasing and re-acquiring the lock between every
+/// claim, which is exactly the window the batch's own clean-check-once/marker-once/
+/// materialize-once R3 shape must not have. `active_lock` is a witness only -- this function reads
+/// nothing from it and does not drop it; the caller's own guard keeps the lock held across the
+/// whole batch, including this call.
+pub fn seal_from_accepted_claim_in_batch(
+    layout: &RepositoryLayout,
+    active_lock: &ActiveLock,
+    ref_name: &str,
+    claim_id: ObjectId,
+    signer: &impl MaintainerSigner,
+) -> Result<SealFromAcceptedOutcome> {
+    seal_from_accepted_claim_impl(layout, Some(active_lock), ref_name, claim_id, signer)
+}
+
+/// Shared body for [`seal_from_accepted_claim`] and [`seal_from_accepted_claim_in_batch`]: every
+/// check and the seal itself, unchanged from before this round, except that the `ActiveLock` is
+/// either acquired here (`held_lock` is `None`, the single-claim entry point's own shape) or
+/// supplied by the caller (`held_lock` is `Some`, the batch shape) -- the one thing this round
+/// needed to change about this function's own lock scope.
+fn seal_from_accepted_claim_impl(
+    layout: &RepositoryLayout,
+    held_lock: Option<&ActiveLock>,
     ref_name: &str,
     claim_id: ObjectId,
     signer: &impl MaintainerSigner,
@@ -176,7 +218,10 @@ pub fn seal_from_accepted_claim(
     let trust_policy = load_maintainer_trust_policy_or_empty(layout)?;
     let claim_signature_outcome = verify_claim_signature(&claim_envelope, &trust_policy)?;
 
-    let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
+    let owned_lock = match held_lock {
+        Some(_) => None,
+        None => Some(ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?),
+    };
     crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
         // 019 §5.2: name `ref complete` only when the refusal is a genuine N3 lead.
         if matches!(&error, PrikkError::IncompletePublication(_)) {
@@ -333,7 +378,7 @@ pub fn seal_from_accepted_claim(
             ref_update: ref_update_envelope,
         },
     )?;
-    drop(active_lock);
+    drop(owned_lock);
 
     Ok(SealFromAcceptedOutcome::Sealed {
         ref_name: canonical_ref,
@@ -372,6 +417,124 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
             format!("seal refused: integrity -- this repository's own state is broken ({error})"),
         ),
     }
+}
+
+/// 0.56.0 step W3c-4: the pre-write in-the-way check for a whole `sync seal` batch onto the
+/// current branch, called once from `prikk-cli`'s `run_seal` after
+/// [`crate::require_worktree_clean_and_capture`] and before the batch's first claim is sealed --
+/// the same placement `execute_merge`'s own pre-write check has (0.56.0 step W3c-3b), and the same
+/// narrow-`pub`-function shape [`crate::require_nothing_in_the_way_for_published_ref`] already set
+/// for `branch create --from`, since [`crate::worktree_materialize`]'s own `ReplayManifest`
+/// parameter type stays `pub(crate)`.
+///
+/// **Why this replays the whole batch's own patches by id, concatenated, through one
+/// [`derive_candidate`] call, rather than replaying the claimed blocks by the block ids the
+/// claims themselves name:** a `RecognitionClaimPayload`'s `block_id` names a block on the
+/// *sender's* repository, which `sync accept`'s own admission (`patch_exchange::accept`) never
+/// writes here -- confirmed by reading that module: it decodes and admits `Patch`, `Blob`, author
+/// key material, `RecognitionClaim` and `Tag` objects, never a `Block`. So there is no local
+/// object that id could resolve to, and a block-id-addressed replay (a twin of
+/// `replay_for_verified_worktree_write`, or `patch_replay::replay_block_chain` directly) is a dead
+/// end for this producer specifically -- unlike `merge --into`/`branch create --from`, whose own
+/// targets (`from_ref`'s tip, the merge's own candidate) are always blocks this repository already
+/// holds. What *is* available, before any claim seals, is exactly what
+/// [`seal_from_accepted_claim_impl`] itself computes per claim:
+/// [`accepted_but_unsealed_patch_ids`] (the patches still eligible to be sealed) filtered against
+/// each claim's own `patch_ids`, in the batch's own already-established order
+/// (`order_claims_for_sealing`'s result, passed in as `ordered_claim_ids`). Concatenating every
+/// claim's own filtered selection, removing each selection from the pool before considering the
+/// next claim (mirroring what sealing the batch for real would do: a patch selected by claim N is
+/// no longer "unsealed" when claim N+1 is considered), and calling [`derive_candidate`] once from
+/// the pre-batch parent produces the identical final state N chained single-claim seals would --
+/// confirmed by reading [`crate::lifecycle_cache::replay::apply_candidate_patches`], which folds a
+/// flat patch-id slice onto a state with no dependency on block boundaries at all.
+///
+/// **This check only ever *skips itself*, never refuses on its own simulation's own behalf.**
+/// `sync.rs`'s own module doc states §3 as a firm policy, not merely today's behaviour: "stop at
+/// the first failure... no rollback -- each seal is an independent, legitimate act under the
+/// receiver's own key," so an *earlier* claim's own valid seal must never be pre-empted by a
+/// *later* claim's own failure, including a later claim whose patches would not apply cleanly
+/// once an earlier one has. Combining every claim's own patches into one simulated derivation (as
+/// this function does, for the file-collision check alone) would otherwise surface exactly that
+/// kind of claim-vs-claim divergence *before* the batch even starts -- measured directly: two
+/// senders independently creating the same new path from the same (absent) parent, sealed in one
+/// batch onto an unborn current branch, used to refuse the whole batch here, reporting neither
+/// claim sealed, where the real per-claim loop below would seal the first and fail only the
+/// second (`rfc116_sync_cli.rs::row6_a_mid_batch_seal_failure_stops_reports_and_leaves_the_earlier_seal_intact`,
+/// predates this round and must keep holding). So: if this function's own simulation cannot even
+/// derive a combined state at all -- a claim that does not exist or does not decode, or patches
+/// that do not fold together -- there is no manifest to check a file collision against, and this
+/// returns `Ok(())` rather than propagating that failure as a refusal: the real, authoritative
+/// per-claim loop (`seal_from_accepted_claim_in_batch`, called once per claim regardless of what
+/// this function decided) re-derives the identical state per claim and reports the identical
+/// failure at the exact claim and in the exact words it always has, with every earlier claim's
+/// own seal already landed and kept. A genuine file-in-the-way collision, by contrast, is
+/// orthogonal to claim-vs-claim ordering (the worktree is not party to any claim), so refusing on
+/// *that* basis never pre-empts a legitimate earlier seal.
+pub fn require_nothing_in_the_way_for_seal_batch(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    ref_name: &str,
+    ordered_claim_ids: &[ObjectId],
+    action: &str,
+) -> Result<()> {
+    let Some(target_manifest) =
+        simulate_seal_batch_target_manifest(layout, ref_name, ordered_claim_ids)
+    else {
+        return Ok(());
+    };
+    require_nothing_in_the_way(layout, pending, &target_manifest, action)
+}
+
+/// The simulation [`require_nothing_in_the_way_for_seal_batch`] needs, isolated so every failure
+/// inside it can be turned into "no opinion" (`None`) rather than a hard error -- see that
+/// function's own doc for why. Returns `None` on any `ObjectReadSnapshot`, claim-lookup,
+/// claim-decode, or [`derive_candidate`]/[`candidate_replay_manifest`] failure; the real
+/// per-claim loop re-reads and re-derives everything this touches anyway, moments later, so
+/// nothing is silently lost -- it is reported there instead, correctly scoped to the one claim
+/// that actually fails.
+fn simulate_seal_batch_target_manifest(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    ordered_claim_ids: &[ObjectId],
+) -> Option<crate::patch_replay::ReplayManifest> {
+    let read_snapshot = ObjectReadSnapshot::open(layout).ok()?;
+    let ref_store = RefStore::new(layout.clone());
+    let current = read_current_tip(&read_snapshot, &ref_store, ref_name).ok()?;
+    let parent = current.as_ref().map(|tip| tip.target_block_id);
+
+    let mut available: BTreeSet<ObjectId> = accepted_but_unsealed_patch_ids(layout)
+        .ok()?
+        .into_iter()
+        .collect();
+    let mut combined_patch_ids: Vec<ObjectId> = Vec::new();
+    for &claim_id in ordered_claim_ids {
+        let claim_envelope = read_snapshot
+            .read_typed(claim_id, ObjectType::RecognitionClaim)
+            .ok()??;
+        let claim =
+            RecognitionClaimPayload::decode_canonical(&claim_envelope.canonical_payload).ok()?;
+        let selected: Vec<ObjectId> = claim
+            .patch_ids
+            .iter()
+            .copied()
+            .filter(|patch_id| available.contains(patch_id))
+            .collect();
+        for patch_id in &selected {
+            available.remove(patch_id);
+        }
+        combined_patch_ids.extend(selected);
+    }
+
+    let candidate = derive_candidate(
+        layout,
+        &read_snapshot,
+        parent,
+        &combined_patch_ids,
+        StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
+    )
+    .ok()?;
+    candidate_replay_manifest(&read_snapshot, candidate.entries, &candidate.text_cache).ok()
 }
 
 struct CurrentTip {

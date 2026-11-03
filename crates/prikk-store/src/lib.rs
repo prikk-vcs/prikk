@@ -353,7 +353,16 @@ pub use rollback::preview::{
     RollbackPreviewChange, RollbackPreviewChangeKind, RollbackPreviewPlan, prepare_rollback_preview,
 };
 pub use rollback::verify::{RollbackDraftVerification, verify_active_rollback_draft};
-pub use seal_from_accepted::{SealFromAcceptedOutcome, seal_from_accepted_claim};
+// 0.56.0 step W3c-4: `seal_from_accepted_claim_in_batch` and
+// `require_nothing_in_the_way_for_seal_batch` join this export for the same reason
+// `require_nothing_in_the_way_for_published_ref` joins `worktree_materialize`'s own group below --
+// `sync seal`'s own batch orchestration (the clean check, the in-the-way check, the marker, the
+// materialize call) lives in `prikk-cli`'s `run_seal`, per this round's own ruling, so the CLI
+// needs both named here.
+pub use seal_from_accepted::{
+    SealFromAcceptedOutcome, require_nothing_in_the_way_for_seal_batch, seal_from_accepted_claim,
+    seal_from_accepted_claim_in_batch,
+};
 pub use show::{
     PatchState, ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent,
     ShowPatch, ShowPathResolution, show,
