@@ -240,9 +240,10 @@ pub(crate) struct CandidateDerivation {
     /// Every block whose root this derivation confirmed by replay: the whole lineage for the full walk, the blocks
     /// folded after the anchor for an anchored one.
     pub(crate) verified: Vec<ObjectId>,
-    /// Read only by a `cfg(test)`/`test-support` control; the extract-claim adapter (production)
-    /// needs `entries`/`text_cache`/`anchored` only.
-    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
+    /// Read by a `cfg(test)`/`test-support` control, and also by production code: the
+    /// extract-claim chain fold (`patch_replay::extract::replay_for_extract_chain`) reads this
+    /// field to seed `apply_candidate_patches` for every link past the first, in an ordinary
+    /// (non-test, non-`test-support`) build.
     pub(crate) state: NodeLifecycleState,
     /// The anchored derivation was used (otherwise the full walk ran).
     pub(crate) anchored: bool,

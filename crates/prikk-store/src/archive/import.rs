@@ -116,6 +116,7 @@ use crate::lock::{
     ActiveLock, ContainerLockGuard, acquire_container_locks_allowing_import_journal,
 };
 use crate::object_store::{ObjectReader, ObjectWriteSession};
+use crate::patch_replay::SnapshotAnchorFallback;
 use crate::received::received_index::{
     decode_received_index_entries_for_resolver, reduce_received_index_entries,
 };
@@ -125,6 +126,11 @@ use crate::refs::{
 };
 use crate::signature_admission::DroppedSignature;
 use crate::trust::{load_maintainer_trust_policy_or_empty, verify_trusted_publication_envelope};
+use crate::wal::Wal;
+use crate::worktree_materialize::{
+    CurrentBranchMaterializeReport, mark_current_branch_switch_pending, materialize_after_publish,
+    require_nothing_in_the_way_for_block, require_worktree_clean_and_capture,
+};
 
 use super::ArchiveSectionKind;
 use super::verify::{
@@ -271,7 +277,7 @@ fn journal_short_id(archive_identity: &[u8; 32]) -> String {
 /// `prikk archive import <file> [--adopt] [--allow-non-fast-forward]` (§9.8; the second flag,
 /// 0.56.0 step 3c, design review v2 ruling A3, extending 3a's own `bundle import` flag of the
 /// same name to this importer).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct ArchiveImportOptions {
     /// §9.6's narrowed `--adopt`: land a [`LandingOrigin::Local`] ref as a real local ref when it
@@ -285,6 +291,20 @@ pub struct ArchiveImportOptions {
     /// already held at the destination this entry would otherwise land at. `false` by default,
     /// matching `bundle import`'s own flag of the same name (0.56.0 step 3a).
     pub allow_non_fast_forward: bool,
+    /// 0.56.0 step W3c-5 (R3): RFC 151 §2.1 -- this crate never reads the current-branch pointer
+    /// itself, so the CLI resolves it (`crate::current_branch::displayed_current_branch`) and
+    /// passes it down here, the same `Option<&str>`-sourced value `execute_merge` and `run_create`
+    /// take as a plain parameter; a struct field is used here instead (the handoff's other option)
+    /// because `import_archive` already has dozens of call sites across this module's own tests
+    /// that construct `ArchiveImportOptions::default()` positionally -- widening the function's own
+    /// parameter list would have touched every one of them, while this field defaults to `None`
+    /// and only a handful of literal-constructed test fixtures needed a new field at all. Owned
+    /// (`String`, not `&str`), so this struct keeps deriving `Default` without a lifetime
+    /// parameter threading through every caller's own type annotations -- the cost is one
+    /// `.to_string()` at the one real call site (`prikk-cli`'s `run_import`). `None` when this
+    /// import is not running on behalf of a repository with a current branch at all, or when the
+    /// caller simply has not resolved one (every existing caller before this round).
+    pub current_branch: Option<String>,
 }
 
 /// How one planned landing actually resolved at stage 3.
@@ -400,6 +420,22 @@ pub struct ArchiveImportReport {
     /// separately, so it can never disagree with them. See this module's own doc note on why no
     /// new persistent "already imported" ledger exists.
     pub already_imported: bool,
+    /// 0.56.0 step W3c-5 (R3): `true` only when a `Local` landing adopted under `--adopt` was
+    /// also `current_branch`, which this import therefore materialized into the worktree -- the
+    /// same flattened shape [`crate::MergeExecutionReport`]'s own five materialization fields
+    /// already use (`CurrentBranchMaterializeReport` itself carries no `Eq`, so its fields are
+    /// copied out rather than embedded).
+    pub materialized_into_worktree: bool,
+    /// Files created or replaced in the worktree. `0` when `materialized_into_worktree` is `false`.
+    pub materialized_written_files: usize,
+    /// Worktree files already present with identical bytes, found while materializing.
+    pub materialized_unchanged_files: usize,
+    /// Files the pre-publish worktree held that the newly adopted tip lacks, deleted while
+    /// materializing.
+    pub materialized_deleted_files: usize,
+    /// The replay-verified snapshot the materialization could not anchor at, if any (RFC 136
+    /// increment 2b).
+    pub materialization_anchor_fallback: Option<SnapshotAnchorFallback>,
 }
 
 /// `doctor`'s own `PRIKK-DOCTOR-INTERRUPTED-IMPORT` issue reads this: `Some(id)` when a journal is
@@ -521,6 +557,53 @@ pub fn import_archive<R: Read + Seek>(
                 options,
                 &object_store,
             )?;
+            // 0.56.0 step W3c-5 (R3, the fail-fast gate): when this plan has a `Local` landing
+            // destined for `current_branch`, and `--adopt` was requested, refuse here for an
+            // unclean worktree -- a pure courtesy refusal, before stage 1 ever writes a single
+            // object, the journal included. Whether adoption will actually *succeed* is not
+            // decided until stage 3 (the four §9.6 conditions, chain trust, CAS) -- this runs on
+            // the optimistic/possible case regardless, the same way `execute_merge`'s own clean
+            // check runs whenever `current_branch == Some(into_ref)`, independent of whether the
+            // merge later proves confluent.
+            //
+            // Captures nothing durable: `require_worktree_clean_and_capture`'s own returned
+            // `PendingCurrentBranchMaterialization` is dropped immediately below, never carried
+            // into the journal -- a resume is a brand-new process invocation with no access to an
+            // earlier run's in-memory capture, and the journal records only the landing *plan*,
+            // never a worktree-baseline capture. The authoritative capture/check/marker/
+            // materialize sequence runs again, from scratch, inside `try_adopt_local_ref` at
+            // stage 3, on both a fresh run and a resumed one alike -- see that function's own doc
+            // comment.
+            //
+            // No in-the-way check here. Building one at this point would need a full,
+            // archive-native, random-access `ObjectReader` over this archive's own Patch/Blob
+            // container sections (to replay the delivered tip's file-level content before stage 1
+            // ever admits a single object) -- a real, separate piece of machinery, not a small
+            // extension of `ArchiveRefGraph` just above, which decodes only connectivity fields
+            // (`parent_block_ids`, `previous_ref_state_id`, `target_object_id`) in one streaming
+            // pass with no random-access decode at all, and never touches a Patch's own operations
+            // or a Blob's own bytes. Such a reader would also find no locally-trusted anchor
+            // snapshot for a block chain this repository has never admitted, so every check would
+            // pay a full-genesis replay, read entirely from the archive's own container sections --
+            // not attempted this round; the stage-3 check below is where the in-the-way check
+            // genuinely runs, against objects stage 1 has by then made real and local.
+            if options.adopt {
+                if let Some(branch) = options.current_branch.as_deref() {
+                    if landing.iter().any(|entry| {
+                        entry.origin == LandingOrigin::Local && entry.ref_name == branch
+                    }) {
+                        let active_replay =
+                            Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME)
+                                .replay()?;
+                        let _ = require_worktree_clean_and_capture(
+                            layout,
+                            branch,
+                            &active_replay,
+                            &format!("adopting {branch}"),
+                        )?;
+                    }
+                }
+            }
             let containers = compute_container_starting_lengths(layout)?;
             let journal = ImportJournal {
                 archive_identity,
@@ -785,11 +868,16 @@ pub fn import_archive<R: Read + Seek>(
     let mut any_landing_changed = false;
     let mut local_destinations: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // 0.56.0 step W3c-5 (R3): at most one planned landing can ever be a `Local` entry adopted
+    // onto `current_branch` in one import (a given ref name is the destination of at most one
+    // `Local` landing at all -- the collision rule just below enforces that), so at most one of
+    // these calls will ever return `Some` here.
+    let mut current_branch_materialization: Option<CurrentBranchMaterializeReport> = None;
     for (index, landing) in journal.landing.iter().enumerate() {
         if landing.origin != LandingOrigin::Local {
             continue;
         }
-        let (outcome, changed) = land_one_ref(
+        let (outcome, changed, materialization) = land_one_ref(
             layout,
             &ref_store,
             &adopted_policy,
@@ -800,6 +888,9 @@ pub fn import_archive<R: Read + Seek>(
             &_container_locks,
         )?;
         any_landing_changed = any_landing_changed || changed;
+        if materialization.is_some() {
+            current_branch_materialization = materialization;
+        }
         local_destinations.insert(outcome.landed_as.clone());
         if let Some(slot) = landing_outcomes.get_mut(index) {
             *slot = Some(outcome);
@@ -868,7 +959,7 @@ pub fn import_archive<R: Read + Seek>(
             }
             continue;
         }
-        let (outcome, changed) = land_one_ref(
+        let (outcome, changed, _materialization) = land_one_ref(
             layout,
             &ref_store,
             &adopted_policy,
@@ -907,6 +998,28 @@ pub fn import_archive<R: Read + Seek>(
         || merged_object_counts.iter().any(|(_, count)| *count > 0);
     let already_imported = !any_object_changed && !any_new_author_key && !any_landing_changed;
 
+    let (
+        materialized_into_worktree,
+        materialized_written_files,
+        materialized_unchanged_files,
+        materialized_deleted_files,
+        materialization_anchor_fallback,
+    ) = match current_branch_materialization {
+        Some(CurrentBranchMaterializeReport {
+            written_files,
+            unchanged_files,
+            deleted_files,
+            anchor_fallback,
+        }) => (
+            true,
+            written_files,
+            unchanged_files,
+            deleted_files,
+            anchor_fallback,
+        ),
+        None => (false, 0, 0, 0, None),
+    };
+
     Ok(ArchiveImportReport {
         resumed,
         written_object_counts,
@@ -915,6 +1028,11 @@ pub fn import_archive<R: Read + Seek>(
         recorded_author_key_count,
         landing_outcomes,
         already_imported,
+        materialized_into_worktree,
+        materialized_written_files,
+        materialized_unchanged_files,
+        materialized_deleted_files,
+        materialization_anchor_fallback,
     })
 }
 
@@ -930,7 +1048,7 @@ fn land_one_ref(
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
     container_locks: &ContainerLockGuard,
-) -> Result<(LandingOutcome, bool)> {
+) -> Result<(LandingOutcome, bool, Option<CurrentBranchMaterializeReport>)> {
     // I-E item 4: whether this landing's own tip carries a maintainer signature the *destination*
     // already trusts -- independent of whether `--adopt` applied, computed once and reused for
     // every branch below, through the exact same `verify_trusted_publication_envelope` check
@@ -975,6 +1093,7 @@ fn land_one_ref(
                     ref_state_chain,
                 },
                 changed,
+                None,
             ))
         }
         LandingOrigin::Local if options.adopt => {
@@ -992,6 +1111,7 @@ fn land_one_ref(
                     remote_reason,
                     class,
                     chain,
+                    materialization,
                 } => Ok((
                     LandingOutcome {
                         ref_name: landing.ref_name.clone(),
@@ -1007,6 +1127,7 @@ fn land_one_ref(
                         ref_state_chain: chain,
                     },
                     true,
+                    materialization,
                 )),
                 AdoptOutcome::FellThrough { reason } => {
                     let (changed, class, ref_state_chain) = land_as_received_pointer(
@@ -1032,6 +1153,7 @@ fn land_one_ref(
                             ref_state_chain,
                         },
                         changed,
+                        None,
                     ))
                 }
             }
@@ -1060,6 +1182,7 @@ fn land_one_ref(
                     signing_key_ids,
                 },
                 changed,
+                None,
             ))
         }
     }
@@ -1162,6 +1285,11 @@ enum AdoptOutcome {
         remote_reason: Option<String>,
         class: BundleConnectivityClass,
         chain: Option<RefStateChainRelation>,
+        /// 0.56.0 step W3c-5 (R3): `Some` only when `landing.ref_name` was `options.current_branch`
+        /// -- this adoption's own publish loop therefore moved the current branch, and this is
+        /// what `materialize_after_publish` did immediately afterward. `None` for every other
+        /// landing (the ordinary case).
+        materialization: Option<CurrentBranchMaterializeReport>,
     },
     FellThrough {
         reason: String,
@@ -1306,6 +1434,64 @@ fn try_adopt_local_ref(
         }
     }
 
+    // 0.56.0 step W3c-5 (stage 3, R3): when this landing's own bare name is `current_branch`, the
+    // publish loop just below is the one write that moves it. This runs identically whether this
+    // call is a fresh import's only pass through stage 3 or a resumed import's only pass through
+    // it -- `try_adopt_local_ref` has no "resumed" branch of its own at all (confirmed by reading
+    // it start to end: nothing above this point, or below it, reads `resumed`), so there is
+    // nothing to special-case for a resume; the fail-fast gate above (fresh runs only, before the
+    // journal) cannot carry its own capture across a crash-and-resume at all -- a resume is a new
+    // process invocation -- which is exactly why the real guarantee lives here instead.
+    let pending_materialization = match options.current_branch.as_deref() {
+        Some(branch) if branch == landing.ref_name => {
+            let active_replay =
+                Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME).replay()?;
+            let pending = require_worktree_clean_and_capture(
+                layout,
+                branch,
+                &active_replay,
+                &format!("adopting {branch}"),
+            )?;
+            // The chain's own last entry (sorted by `update_seq` above) names the exact, final
+            // tip this adoption will publish -- already a real local `Block` (stage 1 wrote every
+            // carried block unconditionally, regardless of this landing's own eventual adoption
+            // outcome), so this is a genuine replay of an already-admitted target, not a
+            // simulation of one that might not publish (contrast `sync seal`'s own batch, whose
+            // claimed blocks are never locally admitted by `sync accept` at all).
+            let (last_update, _) = chain.last().ok_or_else(|| {
+                PrikkError::Integrity(
+                    "archive import --adopt: empty ref-update chain after its own non-empty \
+                     check just above"
+                        .to_string(),
+                )
+            })?;
+            let target_envelope = object_store
+                .read_object(last_update.new_ref_state_id)?
+                .ok_or_else(|| {
+                    PrikkError::Integrity(format!(
+                        "archive's carried ref log names RefState {} for {}, but stage 1 never \
+                         wrote it -- refusing to adopt",
+                        last_update.new_ref_state_id, landing.ref_name
+                    ))
+                })?;
+            let target_state = RefStatePayload::decode_canonical(
+                &target_envelope.canonical_payload,
+                target_envelope.schema_version,
+            )?;
+            require_nothing_in_the_way_for_block(
+                layout,
+                &pending,
+                &*object_store,
+                branch,
+                target_state.target_object_id,
+                &format!("adopting {branch}"),
+            )?;
+            mark_current_branch_switch_pending(layout, &pending)?;
+            Some(pending)
+        }
+        _ => None,
+    };
+
     // Condition 4 (CAS against absent) for the first step, and the chain's own internal CAS for
     // every step after it -- both enforced by `publish_with_object_store_under_held_lock` itself,
     // never re-implemented here.
@@ -1332,8 +1518,34 @@ fn try_adopt_local_ref(
         )?;
         expected_previous = Some(update.new_ref_state_id);
     }
+
+    // Test seam, unreachable from production: a kill right here, after this landing's own publish
+    // loop and before `materialize_after_publish` -- the case table's own new row for this round.
+    // Only consumed when this landing actually set a marker (`pending_materialization.is_some()`),
+    // so a call that never matches `options.current_branch` cannot trip it by accident.
+    #[cfg(test)]
+    if pending_materialization.is_some()
+        && STOP_AFTER_CURRENT_BRANCH_PUBLISH_FOR_TEST.with(std::cell::Cell::take)
+    {
+        return Err(PrikkError::Integrity(
+            "import stopped for test: simulated kill right after the current-branch adoption's \
+             own publish, before it materialized"
+                .to_string(),
+        ));
+    }
+
+    // Step 4: materialize the tip just published, through the ordinary verified path -- a crash
+    // between the publish above and this call leaves the marker set and the record stale, both
+    // recoverable by `prikk branch switch <current branch>` (the marker's own named route, from
+    // `require_worktree_clean_and_capture`'s own refusal text and `mark_current_branch_switch_
+    // pending`'s own marker).
+    let materialization = pending_materialization
+        .map(|pending| materialize_after_publish(layout, pending))
+        .transpose()?;
+
     Ok(AdoptOutcome::Adopted {
         remote_reason: adopt_remote_reason,
+        materialization,
         class: adopt_class,
         chain: adopt_chain,
     })
@@ -2116,6 +2328,9 @@ thread_local! {
     static RUN_BEFORE_STAGE_3_FOR_TEST: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static DISABLE_LANDING_COLLISION_RULE_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // 0.56.0 step W3c-5: the case table's own new row -- a kill between the current-branch
+    // adoption's own publish and its materialize call.
+    static STOP_AFTER_CURRENT_BRANCH_PUBLISH_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
@@ -2192,6 +2407,17 @@ pub(crate) fn run_after_first_object_write_for_test(callback: impl FnOnce() + 's
 #[cfg(test)]
 pub(crate) fn run_before_stage_3_for_test(callback: impl FnOnce() + 'static) {
     RUN_BEFORE_STAGE_3_FOR_TEST.with(|cell| *cell.borrow_mut() = Some(Box::new(callback)));
+}
+
+/// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
+/// stops right after a `--adopt` landing onto `options.current_branch` finishes its own publish
+/// loop, before [`materialize_after_publish`] ever runs -- the case table's own new row for 0.56.0
+/// step W3c-5: a crash in the one window between this landing's own ref-pointer write and its
+/// worktree materialization. Fires at most once (consumed on the one landing that matches
+/// `options.current_branch`, if any); every other landing is unaffected.
+#[cfg(test)]
+pub(crate) fn stop_after_current_branch_publish_for_test() {
+    STOP_AFTER_CURRENT_BRANCH_PUBLISH_FOR_TEST.with(|cell| cell.set(true));
 }
 
 /// RFC 155 Part I-B2, review finding IB2: the one seam reachable from a real, separately

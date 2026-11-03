@@ -94,7 +94,22 @@ later one fails is unchanged: when that happens, the tip the batch actually prod
 materialized into the worktree before the batch's own error is reported, so the worktree never
 disagrees with what the batch really sealed. `archive import --adopt` is the one producer this
 round leaves unaffected, still leaving the worktree exactly as it was, recoverable the same way the
-`commit --ref heads/topic` walkthrough above is.
+`commit --ref heads/topic` walkthrough above is -- until the next paragraph closes it too.
+
+**0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
+writes the adopted content into the worktree too. A courtesy clean check runs before anything from
+the archive is written at all, so an unclean worktree refuses as early as possible; it is purely a
+courtesy, since it cannot survive a crash and resume (a resumed import is a new process invocation
+with no memory of an earlier attempt). The real guarantee runs again, from scratch, at the one
+point immediately before the adoption's own publish, on both a fresh import and a resumed one
+alike: the worktree must be clean, nothing may be in the way of the adopted tip's own files, and
+only then does the publish move the current branch and the adopted content get materialized into
+the worktree afterward. Unlike every other producer in this series, `archive import --adopt` also
+admits the archive's own carried objects unconditionally, before any of this runs -- so a file in
+the way is only ever caught at that one later point, after those objects already exist locally,
+unreached by any ref until a later import lands them for real; this is not new to this round, and
+is not something this round changes. A landing not destined for the current branch, or one that
+cannot be adopted as a real local ref at all, is unaffected.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is

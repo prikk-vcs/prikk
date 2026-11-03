@@ -219,6 +219,25 @@
   second, redundant copy of that same sentence from the combined message). `--claim`/`--claims`
   onto a ref that is not the current branch, or a `--claims <file>` that names no claims at all,
   are unaffected: no clean check, no marker, no materialize call, the ordinary pre-round behavior.
+  **0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
+  closes this last remaining gap. A courtesy clean check runs before the journal (and before stage
+  1 ever admits an object) whenever the plan has such a landing, so an unclean worktree is refused
+  as early as possible; it captures nothing durable, since a crash-and-resume is a brand-new
+  process invocation with no access to an earlier attempt's own in-memory capture. The
+  authoritative capture, pre-write in-the-way check, marker, and materialize call all run again,
+  from scratch, inside the adoption itself, at stage 3, on both a fresh import and a resumed one
+  alike — immediately before the one publish that actually moves the current branch. The in-the-way
+  check replays the adopted chain's own final tip directly by block id (already a real, local
+  object: stage 1 admits every carried block unconditionally, regardless of this landing's own
+  eventual adoption outcome), not by a ref name, since no ref names this content until the adoption's
+  own publish a moment later. A dirty worktree refuses before any object is written at all; a file
+  in the way of the adopted tip's own files is caught only at stage 3, after stage 1 has already
+  admitted the archive's carried objects as it always has (unaffected by this round) — so that
+  refusal leaves those objects locally present but unreached by any ref until a later import lands
+  them for real, the same shape every other mid-stage-3 refusal in this importer already has. A
+  landing that is not destined for the current branch, or that `--adopt` cannot land as a real
+  local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no marker, no
+  materialize call, the ordinary pre-round behavior.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

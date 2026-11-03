@@ -70,11 +70,11 @@ use crate::foundation::fsutil::{
 };
 use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
-use crate::object_store::ObjectReadSnapshot;
+use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::{
     ReplayManifest, ReplayManifestEntry, SnapshotAnchorFallback,
-    replay_for_verified_worktree_write, resolve_folded_worktree_baseline_with_own_cache,
-    resolve_state_at_recorded_baseline,
+    replay_for_verified_worktree_write, replay_for_verified_worktree_write_by_block_id,
+    resolve_folded_worktree_baseline_with_own_cache, resolve_state_at_recorded_baseline,
 };
 use crate::wal::WalReplay;
 use crate::worktree_baseline::{
@@ -392,6 +392,35 @@ pub fn require_nothing_in_the_way_for_published_ref(
     action: &str,
 ) -> Result<()> {
     let (target_replay, _anchor_fallback) = replay_for_verified_worktree_write(layout, target_ref)?;
+    require_nothing_in_the_way(layout, pending, &target_replay.manifest, action)
+}
+
+/// As [`require_nothing_in_the_way_for_published_ref`], but for a target addressed by a bare
+/// block id rather than an already-published ref name (0.56.0 step W3c-5): `archive import
+/// --adopt`'s own shape. The chain of `RefUpdate`s this adoption is about to publish names its own
+/// final tip as a real local `Block` (stage 1 already wrote every carried block unconditionally),
+/// but nothing publishes it under any ref name -- least of all `pending`'s own `current_branch` --
+/// until the caller's own publish loop runs, moments after this call returns. `reader` is the
+/// caller's own already-open [`ObjectReader`] (an `ObjectWriteSession`, typically), not a fresh
+/// [`ObjectReadSnapshot`], for the same reason
+/// [`replay_for_verified_worktree_write_by_block_id`]'s own doc comment gives. `pub(crate)`, the
+/// same reason [`require_nothing_in_the_way`] itself is: this producer's own publish logic lives
+/// inside `prikk-store` (`archive::import`), unlike `branch create --from`'s, so no cross-crate
+/// re-export is needed.
+pub(crate) fn require_nothing_in_the_way_for_block(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    reader: &impl ObjectReader,
+    point_name: &str,
+    target_block_id: ObjectId,
+    action: &str,
+) -> Result<()> {
+    let (target_replay, _anchor_fallback) = replay_for_verified_worktree_write_by_block_id(
+        layout,
+        reader,
+        point_name,
+        target_block_id,
+    )?;
     require_nothing_in_the_way(layout, pending, &target_replay.manifest, action)
 }
 

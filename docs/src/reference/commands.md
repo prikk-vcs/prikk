@@ -276,6 +276,28 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   stays set and the error names `branch switch <the current branch>`, the same route every other
   producer's own marker already promises. Sealing onto a ref that is not the current branch, or a
   `--claims <file>` naming no claims at all, is unaffected by any of this.
+  **0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
+  closes this last gap too. A courtesy clean check (`require_worktree_clean_and_capture`) runs
+  before the import journal exists at all, for an unclean worktree to refuse as early as possible
+  -- it captures nothing durable, since a crash-and-resume is a new process invocation with no
+  access to an earlier attempt's own in-memory capture. The authoritative capture, pre-write
+  in-the-way check, marker, and materialize call (the same `require_worktree_clean_and_capture`/
+  `require_nothing_in_the_way_for_block`/`mark_current_branch_switch_pending`/
+  `materialize_after_publish` calls every other producer uses) all run again, from scratch, inside
+  `try_adopt_local_ref` (`crates/prikk-store/src/archive/import.rs`) at stage 3, on both a fresh
+  import and a resumed one alike, immediately before the one publish that actually moves the
+  current branch. The in-the-way check replays the adopted chain's own final `RefState`'s target
+  block directly by block id (`replay_for_verified_worktree_write_by_block_id`), not by a ref name
+  -- the block is already a real, local object (stage 1 admits every carried block
+  unconditionally, regardless of this landing's own eventual adoption outcome), but no ref names
+  it until the adoption's own publish moments later. A dirty worktree refuses before any object is
+  written at all; a file in the way of the adopted tip's own files is caught only at stage 3, after
+  stage 1 has already admitted the archive's own carried objects as it always has (unaffected by
+  this round) -- so that refusal leaves those objects locally present but unreached by any ref, the
+  same shape every other mid-stage-3 refusal in this importer already has, until a later import
+  lands them for real. A landing not destined for the current branch, or one `--adopt` cannot land
+  as a real local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no
+  marker, no materialize call, the ordinary pre-round behavior.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

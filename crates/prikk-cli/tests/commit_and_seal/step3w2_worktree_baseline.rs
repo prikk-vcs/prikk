@@ -35,9 +35,10 @@ use prikk_store::{
 /// **0.56.0 step W3c-4b's correction: this is not just a test trick that happens to reach old
 /// behaviour -- it stands in for a real, surviving source of exactly this staleness.** An older
 /// `prikk` (0.55.0 or earlier) running `sync seal` on the same repository moves the ref without
-/// ever materializing the worktree; so does `archive import --adopt`, until W3c-5 lands its own R3
-/// for it. The stale-path guards these fixtures exist to test still protect against exactly that
-/// real scenario, not merely against a round of `prikk` this project no longer ships.
+/// ever materializing the worktree -- and, before 0.56.0 step W3c-5, so did `archive import
+/// --adopt`, which now has its own R3 and its own, no-longer-stale case (`case2` below). The
+/// stale-path guards these fixtures exist to test still protect against exactly that real,
+/// older-`prikk` scenario, not merely against a round of `prikk` this project no longer ships.
 fn seal_claims_in_process(repo: &Path, ref_name: &str, claims_file: &Path) {
     let content = std::fs::read_to_string(claims_file).unwrap();
     let claim_ids: Vec<ObjectId> = content
@@ -372,9 +373,17 @@ fn case1_merge_into_materializes_so_nothing_is_left_to_resync() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// §2.2: `archive import --adopt` onto the unpublished current branch.
+/// §2.2, **closed by 0.56.0 step W3c-5**: `archive import --adopt` onto the unpublished current
+/// branch now brings the adopted tip along -- `n.txt` is materialized into the worktree by the
+/// import itself, so there is no gap left for the next unrelated commit to read as a spurious
+/// deletion. Before W3c-5, adopt never touched the worktree at all, and this same unrelated commit
+/// silently authored `delete-file n.txt` until the R2 refusal (and `branch switch heads/main`'s
+/// own resync) closed that symptom; W3c-5 closes the cause instead, for this exact shape (`archive
+/// import --adopt` onto the current, clean, unborn branch). See this file's own module doc for why
+/// `seal_claims_in_process` still reproduces the *old* gap deliberately, for a different ref, as a
+/// hazard helper.
 #[test]
-fn case2_archive_import_adopt_refuses_then_resyncs() {
+fn case2_archive_import_adopt_materializes_so_nothing_is_left_to_resync() {
     let src = support::unique_repo("w2-case2-src");
     support::init(&src);
     support::generation(&src, "heads/main", "n.txt", b"n\n", "genesis");
@@ -399,30 +408,34 @@ fn case2_archive_import_adopt_refuses_then_resyncs() {
         .unwrap();
     ok(&import, "archive import --adopt");
     assert!(
-        !dest.join("n.txt").exists(),
-        "adopt never touches the worktree"
+        dest.join("n.txt").exists(),
+        "0.56.0 step W3c-5: the import itself must materialize n.txt into the worktree"
+    );
+    assert_eq!(std::fs::read(dest.join("n.txt")).unwrap(), b"n\n");
+
+    // Nothing is stale: worktree-status reads clean immediately after the import, with no resync
+    // needed at all.
+    let status = worktree_status(&dest);
+    assert_eq!(
+        status.status.code(),
+        Some(0),
+        "worktree-status must already be clean right after the import: {}",
+        stdout(&status)
     );
 
-    let refused = commit_unrelated(&dest, "extra2.txt", "unrelated edit after adopt");
-    assert_eq!(
-        refused.status.code(),
-        Some(1),
-        "commit must refuse: {}",
-        stdout(&refused)
+    // An unrelated commit afterward is ordinary -- no stray `delete-file`, because there is no gap
+    // left for it to misread.
+    let clean = commit_unrelated(&dest, "extra2.txt", "unrelated edit after adopt");
+    ok(&clean, "commit after adopt");
+    let clean_stdout = stdout(&clean);
+    assert!(
+        !clean_stdout.contains("delete-file"),
+        "no stray delete-file after a materializing adopt: {clean_stdout}"
     );
     assert!(
-        stderr(&refused).contains("n.txt") && stderr(&refused).contains("never were"),
-        "refusal names n.txt: {}",
-        stderr(&refused)
+        clean_stdout.contains("create-file extra2.txt"),
+        "the only authored operation is the real edit: {clean_stdout}"
     );
-
-    let resync = switch(&dest, "heads/main");
-    ok(&resync, "branch switch heads/main (resync)");
-    assert!(dest.join("n.txt").exists(), "resync materializes n.txt");
-
-    let clean = commit_unrelated(&dest, "extra2.txt", "unrelated edit after resync");
-    ok(&clean, "commit after resync");
-    assert!(!stdout(&clean).contains("delete-file"));
 
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dest);

@@ -627,6 +627,32 @@ pub(crate) fn replay_for_verified_worktree_write(
     )
 }
 
+/// As [`replay_for_verified_worktree_write`], but addressed by a bare block id instead of a ref
+/// name (0.56.0 step W3c-5): `archive import --adopt`'s own target, immediately before the one
+/// publish that will name it, is a real local `Block` (stage 1 already wrote every carried block
+/// unconditionally) with no ref naming it yet at all -- the ref this adoption is about to publish
+/// is exactly what would resolve that name, so `replay_ref_chain`'s own ref-tip lookup is a dead
+/// end here, unlike `branch create --from`'s own target (`--from`'s tip, already published under a
+/// different, existing name) or `merge --into`'s own target (not a sealed block at all yet, a
+/// candidate still being derived -- `derive_candidate`'s own job, not this one). Takes `reader`
+/// directly, rather than opening a fresh [`ObjectReadSnapshot`] the way [`replay_ref_chain`] does,
+/// so a caller already holding an open [`crate::object_store::ObjectWriteSession`] (which also
+/// implements [`ObjectReader`]) sees its own in-process writes, not a snapshot that predates them.
+pub(crate) fn replay_for_verified_worktree_write_by_block_id(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    point_name: &str,
+    target_block_id: ObjectId,
+) -> Result<(PatchReplaySnapshot, Option<SnapshotAnchorFallback>)> {
+    let trust = crate::anchor_trust::AnchorTrust::load(layout);
+    replay_block_chain(
+        reader,
+        point_name,
+        target_block_id,
+        anchor::Anchoring::VerifiedWorktreeWrite(&trust),
+    )
+}
+
 fn replay_ref_chain(
     layout: &RepositoryLayout,
     ref_name: &str,

@@ -437,6 +437,10 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     let mut options = ArchiveImportOptions::default();
     options.adopt = parsed.adopt;
     options.allow_non_fast_forward = parsed.allow_non_fast_forward;
+    // 0.56.0 step W3c-5 (R3, RFC 151 §2.1): this is the one place that reads the current-branch
+    // pointer at all -- `prikk-store` never does -- and threads it down as a field on `options`
+    // (see that field's own doc comment for why a field, not a plain parameter, here).
+    options.current_branch = crate::current_branch::displayed_current_branch(&layout);
     let format_json = parsed.format_json;
     let report = prikk_store::import_archive(&layout, &mut reader, &options).map_err(|err| {
         // 0.56.0 step 3c2 (R2): a `refusal-v1` document on exactly the three connectivity-based
@@ -537,6 +541,18 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
         println!("note: {note}");
     }
     println!("already imported: {}", report.already_imported);
+    // 0.56.0 step W3c-5 (R3): an adopted landing onto the current branch materializes it into the
+    // worktree too -- the same shape `branch create --from`'s and `merge --into`'s own output
+    // already use for their own written/unchanged/deleted counts.
+    if report.materialized_into_worktree {
+        crate::warn_anchor_fallbacks(report.materialization_anchor_fallback.iter());
+        println!(
+            "materialized into the worktree: files written: {}, unchanged: {}, deleted: {}",
+            report.materialized_written_files,
+            report.materialized_unchanged_files,
+            report.materialized_deleted_files,
+        );
+    }
 }
 
 /// I-F item 1: names every **planned** entry (landed or not) whose own tip carries no maintainer
@@ -707,8 +723,27 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
         }
     ));
     json.push_str(&format!(
-        "  \"already_imported\": {}\n",
+        "  \"already_imported\": {},\n",
         report.already_imported
+    ));
+    // 0.56.0 step W3c-5 (R3): additive, never read by a prior consumer -- an adopted landing onto
+    // the current branch also materializes it into the worktree.
+    crate::warn_anchor_fallbacks(report.materialization_anchor_fallback.iter());
+    json.push_str(&format!(
+        "  \"materialized_into_worktree\": {},\n",
+        report.materialized_into_worktree
+    ));
+    json.push_str(&format!(
+        "  \"materialized_written_files\": {},\n",
+        report.materialized_written_files
+    ));
+    json.push_str(&format!(
+        "  \"materialized_unchanged_files\": {},\n",
+        report.materialized_unchanged_files
+    ));
+    json.push_str(&format!(
+        "  \"materialized_deleted_files\": {}\n",
+        report.materialized_deleted_files
     ));
     json.push_str("}\n");
     print!("{json}");
