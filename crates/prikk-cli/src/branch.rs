@@ -47,8 +47,8 @@ use prikk_store::{
     FileObjectStore, GatedOperation, MaintainerSigner, ObjectReader, ObjectWriteSession,
     RefPublication, RefStore, Wal, active_ref_ownership, maintainer_signature,
     mark_current_branch_switch_pending, materialize_after_publish, refuse_if_active_queue_owns_ref,
-    require_worktree_clean_and_capture, resolve_ref_tip_block, validate_local_branch_ref,
-    verify_signer_trusted,
+    require_nothing_in_the_way_for_published_ref, require_worktree_clean_and_capture,
+    resolve_ref_tip_block, validate_local_branch_ref, verify_signer_trusted,
 };
 
 /// Envelope schema version for a `RefState` carrying no `closed` field (every ordinary
@@ -302,15 +302,29 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
             .replay()
             .map_err(|err| err.to_string())?;
-        Some(
-            require_worktree_clean_and_capture(
-                &layout,
-                &canonical,
-                &active_replay,
-                &format!("creating {canonical}"),
-            )
-            .map_err(|err| err.to_string())?,
+        let pending = require_worktree_clean_and_capture(
+            &layout,
+            &canonical,
+            &active_replay,
+            &format!("creating {canonical}"),
         )
+        .map_err(|err| err.to_string())?;
+        // 0.56.0 step W3c-3: a file in the way of `from_ref`'s own tip must refuse *here* -- before
+        // this create's own publish, not only at step 4's post-publish backstop
+        // (`materialize_after_publish`'s own `in_the_way` check), which by the time it runs has
+        // already published `canonical` (measured on `959c290d`: `heads/main` published, the
+        // marker set, naming the way out, before ever telling the caller nothing happened).
+        // `from_ref` is already published -- `resolve_published_target` above already refuses
+        // otherwise -- so its tip's manifest is available now, through the same verified-anchor
+        // replay step 4 uses on `canonical` itself once this create has published it.
+        require_nothing_in_the_way_for_published_ref(
+            &layout,
+            &pending,
+            &from_ref,
+            &format!("creating {canonical}"),
+        )
+        .map_err(|err| err.to_string())?;
+        Some(pending)
     } else {
         None
     };

@@ -418,8 +418,15 @@ pub use worktree_status::{
 // needs these re-exported narrowly, the exact precedent `switch_branch`/`worktree_status` already
 // set just above, rather than moving `run_create` into this crate (the ruling's own call: a
 // refactor with no behaviour attached, not done this round).
+//
+// 0.56.0 step W3c-3: `require_nothing_in_the_way_for_published_ref` joins this same group, for the
+// identical reason -- `run_create` is the one caller of the new pre-write in-the-way check that
+// lives outside this crate. `require_nothing_in_the_way` itself (the check's shared core) stays
+// `pub(crate)`, not re-exported: its own `target_manifest` parameter is a `ReplayManifest`, which
+// stays `pub(crate)` too, so only an in-crate caller (`execute_merge`, once it has one) could name
+// it anyway.
 pub use worktree_materialize::{
     CurrentBranchMaterializeReport, PendingCurrentBranchMaterialization,
     mark_current_branch_switch_pending, materialize_after_publish,
-    require_worktree_clean_and_capture,
+    require_nothing_in_the_way_for_published_ref, require_worktree_clean_and_capture,
 };

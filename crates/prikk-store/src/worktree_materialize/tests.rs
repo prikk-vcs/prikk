@@ -12,16 +12,17 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
 use prikk_object::{
-    BlockKind, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectId, ObjectType,
+    BlockKind, CanonicalEncode, CreateFile, NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType,
     Operation, OperationKind, PatchPayload, PatchPurpose,
 };
 
 use super::{
-    mark_current_branch_switch_pending, materialize_after_publish,
+    mark_current_branch_switch_pending, materialize_after_publish, require_nothing_in_the_way,
     require_worktree_clean_and_capture,
 };
 use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
+use crate::patch_replay::{ReplayManifest, ReplayManifestEntry};
 use crate::test_gates::test_support::{
     dummy_signature, signed_block_with_state_root, signed_ref_state_envelope,
     signed_ref_update_envelope, unique_temp_dir, write_blob,
@@ -276,5 +277,153 @@ fn clean_worktree_materialization_asserts_the_new_file_is_actually_written() {
         root.join("b.txt").is_file(),
         "a producer's own materialization must actually write the new tip's files"
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A one-entry replay manifest built the identical way the 0.56.0-step-W3b-era
+/// `test_gates::test_support::text_replay_manifest` helper does (not reused directly: that helper
+/// is `#[cfg(not(target_os = "windows"))]`, gated for an unrelated fsutil reason these tests have
+/// no part of), carrying `bytes` under `path` at the ordinary text-file mode.
+fn one_file_manifest(path: &str, bytes: &[u8]) -> ReplayManifest {
+    ReplayManifest {
+        files: vec![ReplayManifestEntry {
+            node_id: Some(NodeId::from_bytes([0x01; 32])),
+            path: crate::RepoPath::parse(path).expect("repo path"),
+            bytes: bytes.to_vec(),
+            mode: 0o100644,
+            kind: Some(NodeKind::TextFile),
+            blob_id: None,
+        }],
+    }
+}
+
+/// Test (0.56.0 step W3c-3, the ruling's own list, item 1): an untracked file at a path the target
+/// *adds* refuses -- [`plan_materialization`](super::plan_materialization)'s first `in_the_way`
+/// source ("a file that is not part of the prior state"), and the sentence follows
+/// `branch_switch.rs`'s own wording, ending "nothing was written".
+#[test]
+fn require_nothing_in_the_way_refuses_an_untracked_file_where_the_target_adds_one() {
+    let root = unique_temp_dir("w3c3-in-the-way-add");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    let gen1 = publish_genesis(&layout, &[("a.txt", b"a\n")]).expect("publish genesis");
+    materialize_patch_checkout(&layout, MAIN).expect("materialize gen1");
+    record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
+
+    let active_replay = empty_replay(&layout).expect("replay");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+
+    // `p.txt` is already on disk, untracked -- not part of `pending`'s own captured `old_files`
+    // (only `a.txt` is) -- with content the target's own manifest does not share.
+    std::fs::write(root.join("p.txt"), b"zzz\n").unwrap();
+    let target_manifest = one_file_manifest("p.txt", b"target-p\n");
+
+    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+        .expect_err("a file in the way of the target's own files must refuse");
+    let message = error.to_string();
+    assert!(
+        message.contains("refusing to testing")
+            && message.contains("in the way")
+            && message.contains("p.txt (a file that is not part of the prior state)")
+            && message.contains(&format!("in the way of {MAIN}'s files"))
+            && message.contains("nothing was written"),
+        "unexpected message: {message}"
+    );
+
+    // Nothing was written: the untracked file is exactly as it was, and the marker (never set by
+    // this call at all) stays unset.
+    assert_eq!(std::fs::read(root.join("p.txt")).unwrap(), b"zzz\n");
+    assert!(!worktree_is_dirty(&layout).expect("dirty check"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Test (0.56.0 step W3c-3, the ruling's own list, item 6):
+/// [`plan_materialization`](super::plan_materialization)'s **second** `in_the_way` source --
+/// "changed since the prior state" -- in its own deletion loop, distinct from the other tests'
+/// "not part of the prior state" (first-loop, add) source.
+///
+/// **Why this needs a hand-built window, not an ordinary CLI fixture:** the ordinary clean check
+/// ([`require_worktree_clean_for_current_branch`](super::require_worktree_clean_for_current_branch))
+/// already refuses, at step 1, on exactly this same mismatch for every path it reports as a
+/// change -- a file that no longer matches its own recorded content is "dirty" and refused before
+/// ever reaching this check, for every path the clean check's own `worktree_status` compares. The
+/// only way this second window opens at all is the one the ruling's own item 3 names: "under the
+/// lock, only a process outside prikk" can create or rewrite a file *between* the capture
+/// ([`require_worktree_clean_and_capture`]'s own already-completed step 1-2) and this call -- a
+/// real, if narrow, exposure under the same lock this producer already holds, not a fabricated
+/// one. This test drives that exact window directly, the same way
+/// `a_crash_between_publish_and_materialize_recovers_via_branch_switch` above drives a different
+/// one, rather than trying (and failing) to reach it through the clean check, which cannot let it
+/// through.
+#[test]
+fn require_nothing_in_the_way_refuses_a_file_changed_since_the_prior_state_at_a_deleted_path() {
+    let root = unique_temp_dir("w3c3-in-the-way-delete");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    let gen1 =
+        publish_genesis(&layout, &[("a.txt", b"a\n"), ("c.txt", b"c\n")]).expect("publish genesis");
+    materialize_patch_checkout(&layout, MAIN).expect("materialize gen1");
+    record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
+
+    let active_replay = empty_replay(&layout).expect("replay");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+    // `pending`'s own captured `old_files` now holds `c.txt`'s real recorded content (`c\n`),
+    // read before the line below ever runs.
+
+    // The window the ruling's own item 3 names: a process outside prikk rewrites `c.txt` on disk,
+    // after the capture above but before this round's new check runs -- the only way a path can
+    // disagree with `old_files` without the clean check having already refused it.
+    std::fs::write(root.join("c.txt"), b"tampered-outside-prikk\n").unwrap();
+
+    // The target: `a.txt` only -- `c.txt` is not part of it, so the plan's second (deletion) loop
+    // is the one that inspects it.
+    let target_manifest = one_file_manifest("a.txt", b"a\n");
+
+    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+        .expect_err(
+            "a file changed since the prior state at a path the target deletes must refuse",
+        );
+    let message = error.to_string();
+    assert!(
+        message.contains("refusing to testing")
+            && message.contains("c.txt (changed since the prior state)")
+            && message.contains(&format!("in the way of {MAIN}'s files"))
+            && message.contains("nothing was written"),
+        "unexpected message: {message}"
+    );
+
+    // Nothing was written: the tampered file is untouched by this read-only check, and the marker
+    // stays unset.
+    assert_eq!(
+        std::fs::read(root.join("c.txt")).unwrap(),
+        b"tampered-outside-prikk\n"
+    );
+    assert!(!worktree_is_dirty(&layout).expect("dirty check"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Test: nothing in the way succeeds -- the positive case [`materialize_after_publish`]'s own
+/// later, redundant call to the same planner also exercises, checked here directly against the
+/// new, earlier check itself.
+#[test]
+fn require_nothing_in_the_way_succeeds_when_nothing_collides() {
+    let root = unique_temp_dir("w3c3-in-the-way-clean");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    let gen1 = publish_genesis(&layout, &[("a.txt", b"a\n")]).expect("publish genesis");
+    materialize_patch_checkout(&layout, MAIN).expect("materialize gen1");
+    record_worktree_baseline(&layout, MAIN, Some(gen1), 0, &[]).expect("record gen1");
+
+    let active_replay = empty_replay(&layout).expect("replay");
+    let pending = require_worktree_clean_and_capture(&layout, MAIN, &active_replay, "testing")
+        .expect("clean and captured");
+
+    // A target manifest adding a brand-new path nothing on disk occupies at all.
+    let target_manifest = one_file_manifest("b.txt", b"b\n");
+    require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+        .expect("nothing is in the way of an unoccupied path");
+    assert!(!worktree_is_dirty(&layout).expect("dirty check"));
+
     let _ = std::fs::remove_dir_all(root);
 }

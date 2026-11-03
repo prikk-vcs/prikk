@@ -163,10 +163,22 @@
   the current branch's own (empty) baseline files run after every one of `create`'s own read-only
   refusals and before it builds a single object, the dirty-worktree marker is set immediately
   before the publish, and the `--from` target's files are materialized into the worktree right
-  after — the created branch is genuinely current and clean afterward, with nothing left for the
-  next commit to resync. A dirty worktree still refuses the create itself, before any write,
-  leaving `.prikk` byte-identical except its own cache. `archive import --adopt` and `sync seal
-  --claim` are unchanged this round and still rely only on the refusal above.
+  after. A dirty worktree still refuses the create itself, before any write, leaving `.prikk`
+  byte-identical except its own cache. `archive import --adopt` and `sync seal --claim` are
+  unchanged this round and still rely only on the refusal above.
+  **0.56.0 step W3c-3:** a clean worktree did not always end current either — a file already on
+  disk, untracked, at a path the `--from` target's own files occupy passes the clean check (an
+  untracked file is never a reason to refuse) but still collides. Before this round, `branch create
+  --from` discovered that collision only *after* publishing the new branch (and, for `merge
+  --into`, only after moving the current branch's own tip): the command still exited 1, but the ref
+  had already moved, leaving the dirty marker set and a `branch switch heads/<branch>` to resync —
+  not the "before any write" this round's own entries above promise. For `branch create --from`,
+  the identical in-the-way collision now refuses before the create publishes anything, naming the
+  colliding path and leaving `.prikk` byte-identical, the same way the dirty-worktree refusal
+  already does; moving the path aside and running the create again is all a caller needs to do.
+  `merge --into` keeps only the pre-existing, post-move refusal this round; `archive import
+  --adopt` and `sync seal --claim` are unaffected either way, since neither yet writes the worktree
+  at all.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
   branch you were already on did nothing, even when the worktree had fallen behind that branch's
   own current tip (the exact situation the point above now refuses to commit through) — and

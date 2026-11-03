@@ -211,6 +211,26 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   clean afterward. A dirty worktree still refuses the create itself, before any write.
   `archive import --adopt` and `sync seal --claim` are unchanged this round and still rely only on
   the refusal above.
+  **0.56.0 step W3c-3:** a clean worktree did not always end current either. An untracked file
+  already on disk at a path the `--from` target's own files occupy passes the clean check (an
+  untracked file is never a reason to refuse) but still collides with what
+  `materialize_after_publish` is about to write -- before this round, that collision was caught
+  only by `plan_materialization`'s own `in_the_way` check inside `materialize_after_publish`, which
+  by construction runs *after* the producer's own publish, so `branch create --from` (and, unfixed
+  this round, `merge --into`) could publish (or move) the ref and only then refuse. A new shared
+  check, `require_nothing_in_the_way` (`crates/prikk-store/src/worktree_materialize.rs`), runs the
+  identical `plan_materialization` planner one step earlier -- after the clean check and capture,
+  before the producer's own publish -- re-exported for `branch create --from` as
+  `require_nothing_in_the_way_for_published_ref`, which derives the `--from` ref's own manifest
+  through the same verified-anchor replay `materialize_after_publish` uses, since that ref must
+  already be published to be nameable by `--from` at all. The sentence follows `branch switch`'s
+  own in-the-way wording and ends "nothing was written". `materialize_after_publish`'s own
+  post-publish check is unchanged, as the backstop for the one window this earlier check cannot
+  see into: a file created by a process outside prikk, under the same lock, between the two checks.
+  `merge --into` is not changed this round: its own target is an unpublished, in-memory fold
+  computed before `seal_block_at`, and the confluence-proof machinery that computes it
+  (`patch_algebra::commutation::check_confluence`) never returns that folded state to any caller --
+  surfacing it would be a separate design question, not landed here.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
   materializes the branch's current files and clears the staleness — the same write-then-publish

@@ -42,6 +42,19 @@
 //! logic `branch_switch.rs`'s own `require_clean` and its ordinary materialization loop use -- moved
 //! here so both files call one copy, confirmed by `branch_switch.rs` now calling every one of these
 //! instead of its own former inline versions.
+//!
+//! **A file in the way must refuse before the first write too** (0.56.0 step W3c-3,
+//! `.git-exclude/reviewed/0.56.0-step-3w3c-2-review-v1.md`'s own "W3c-3" correction): before this
+//! round, [`plan_materialization`]'s own `in_the_way` check only ran inside
+//! [`materialize_after_publish`] -- step 4, *after* the producer's own publish (step 3) -- so a
+//! collision published the ref (or moved the tip), then refused, exactly what `branch_switch.rs`'s
+//! own pre-write refusal (`branch_switch.rs:303-310`) has never done. [`require_nothing_in_the_way`]
+//! runs the identical planner one step earlier, between steps 1-2 and step 3, against the target's
+//! own manifest -- not `pending`'s `old_files` (step 2's own capture, unaffected) -- so a collision
+//! refuses while nothing has been written or published yet. [`materialize_after_publish`]'s own
+//! `in_the_way` check stays exactly as it is: the backstop for the one window this earlier check
+//! cannot see into (a file created by a process outside prikk, between the two checks, under the
+//! same lock).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -322,6 +335,61 @@ pub fn require_worktree_clean_and_capture(
         current_branch: current_branch.to_string(),
         old_files,
     })
+}
+
+/// The new pre-write check (0.56.0 step W3c-3): runs [`plan_materialization`]'s own planner --
+/// the exact function [`materialize_after_publish`] already uses as its own backstop, no second
+/// copy -- against `target_manifest` and `pending`'s own captured `old_files`, and refuses when
+/// anything is in the way, before the producer's own first write. Must be called after
+/// [`require_worktree_clean_and_capture`] (step 1-2) and before the producer's own publish (step
+/// 3) -- the same placement [`mark_current_branch_switch_pending`] (step 2b) has, and indeed
+/// before it too, so a refusal here never sets the dirty marker at all.
+///
+/// `pub(crate)`: `target_manifest`'s own type (`ReplayManifest`) stays `pub(crate)` -- a producer
+/// whose publish logic lives outside this crate (`branch create --from`) cannot name it, so it
+/// goes through the narrower, `pub` [`require_nothing_in_the_way_for_published_ref`] instead,
+/// which never requires naming that type across the crate boundary. `execute_merge` (inside this
+/// crate) could call this directly once it has a target manifest of its own to pass -- see that
+/// module's own W3c-3 notes for why it does not yet.
+pub(crate) fn require_nothing_in_the_way(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    target_manifest: &ReplayManifest,
+    action: &str,
+) -> Result<()> {
+    let root = layout.worktree_mutation_root();
+    let plan = plan_materialization(root, target_manifest, &pending.old_files)?;
+    if plan.in_the_way.is_empty() {
+        return Ok(());
+    }
+    Err(PrikkError::Precondition(format!(
+        "refusing to {action}: {} file(s) in the way of {}'s files: {}; move them aside and run it \
+         again (nothing was written)",
+        plan.in_the_way.len(),
+        pending.current_branch,
+        plan.in_the_way.join(", "),
+    )))
+}
+
+/// [`require_nothing_in_the_way`], for a producer whose target is an **already-published ref**
+/// that is not `pending`'s own `current_branch` -- `branch create --from`'s own shape (0.56.0 step
+/// W3c-3): the target is the `--from` ref's tip, since `current_branch` itself is not yet
+/// published at this point in that producer's own call (that is exactly what this create would
+/// resolve). Re-derives the target's manifest through [`replay_for_verified_worktree_write`], the
+/// identical verified-anchor replay [`materialize_after_publish`] already uses on `current_branch`
+/// once it is published -- safe to use on `target_ref` here instead, because `target_ref` must
+/// already be published to be nameable by `--from` at all (confirmed at the one call site:
+/// `resolve_published_target` already refuses otherwise, before this is ever reached). `pub`,
+/// re-exported narrowly from `lib.rs` -- the same precedent [`PendingCurrentBranchMaterialization`]
+/// itself already set.
+pub fn require_nothing_in_the_way_for_published_ref(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    target_ref: &str,
+    action: &str,
+) -> Result<()> {
+    let (target_replay, _anchor_fallback) = replay_for_verified_worktree_write(layout, target_ref)?;
+    require_nothing_in_the_way(layout, pending, &target_replay.manifest, action)
 }
 
 /// Step 2b of the R3 ruling (0.56.0 step W3c-1): mark the worktree dirty as a `Switch` to the

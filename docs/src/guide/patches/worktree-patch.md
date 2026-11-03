@@ -53,10 +53,23 @@ refused merge into the current branch now writes nothing at all, anywhere in the
 **0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now writes the
 `--from` target's files into the worktree itself too, the same way `merge` does above, with the
 same "before any write" guarantee W3c-1 gave `merge`: a dirty worktree refuses the create outright,
-before any write, and a clean one ends with the new branch genuinely current, nothing left for a
-later `commit` or `branch switch` to resync. `archive import --adopt` and `sync seal --claim` are
-not yet changed and still leave the worktree exactly as it was, recoverable the same way the
-`commit --ref heads/topic` walkthrough above is.
+before any write. `archive import --adopt` and `sync seal --claim` are not yet changed and still
+leave the worktree exactly as it was, recoverable the same way the `commit --ref heads/topic`
+walkthrough above is.
+
+**0.56.0 step W3c-3:** a clean worktree does not always end current, either. A file already on
+disk at a path the `--from` target's own files occupy — present but untracked, so the clean check
+above does not refuse it — is also "in the way," the same reason `branch switch` can already
+refuse on. Before this round, that collision was only discovered *after* `branch create --from`
+had already published the new branch (or, for `merge --into`, after the merge had already moved
+the current branch's tip): the command still exited with an error, but the ref had already moved,
+leaving the dirty marker set and a later `commit` or `branch switch heads/<branch>` to resync —
+exactly the state a reader of W3c-1/W3c-2 above would not expect from "before any write." For
+`branch create --from`, this is fixed: the same in-the-way collision now refuses before the create
+publishes anything, naming the colliding path and saying nothing was written, so moving it aside
+and running the create again is all a caller needs to do. `merge --into` still has only the
+pre-existing, post-move refusal; `archive import --adopt` and `sync seal --claim` are unaffected
+either way, since neither one yet writes the worktree at all.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
