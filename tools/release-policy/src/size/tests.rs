@@ -157,7 +157,10 @@ fn removing_a_declaration_names_its_file() {
         // 0.54.0 step 3 Part 1, B1: `UnreachedObject`, `ReachabilityClassifier`'s new third field
         // (`unreached`), and the `unreached_objects` field threaded from `ObjectSummary` through to
         // `RepositoryVerification`, 2,794 -> 2,831.
-        detail.contains("2831"),
+        // 0.56.0 step 3h (#9): `UnreachedObject`'s own doc comment widened to document `Patch`/
+        // `Blob` joining `Block`/`RefState` in `unreached_objects`, and its `object_type` field doc
+        // corrected to match, 2,831 -> 2,837.
+        detail.contains("2837"),
         "the line count is in the message: {detail}"
     );
     assert!(

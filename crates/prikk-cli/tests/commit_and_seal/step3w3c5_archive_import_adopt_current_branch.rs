@@ -52,6 +52,17 @@ fn verify_text(repo: &Path) -> String {
     format!("{}{}", stdout(&output), stderr(&output))
 }
 
+/// Extract `verify`'s own `"checked objects: <n>"` line (0.56.0 step 3h: used below to assert
+/// every object this fixture's stage 1 admitted is unreached, not a hardcoded count that would go
+/// stale the moment the fixture's own object shape changes).
+fn checked_objects(text: &str) -> usize {
+    text.lines()
+        .find_map(|line| line.strip_prefix("checked objects: "))
+        .expect("verify's own output names \"checked objects: <n>\"")
+        .parse()
+        .expect("checked objects is a plain integer")
+}
+
 fn read_current_ref_state_id(repo: &Path, ref_name: &str) -> Option<ObjectId> {
     let layout = RepositoryLayout::open(repo.to_path_buf()).unwrap();
     RefStore::new(layout)
@@ -405,6 +416,14 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refusal_does_not_b
 /// "already admitted ... already written" text, not "nothing was written" -- proving the
 /// byte-identical, zero-unreached-objects assertions in the test above genuinely depend on the new
 /// early check running, not on some other, vacuous reason.
+///
+/// **0.56.0 step 3h (#9) widens `unreached objects` from `Block`/`RefState` only to `Patch` and
+/// `Blob` too.** Before 3h, this assertion read `unreached objects: 2` (the Block and the
+/// RefState this admission wrote, locally present but pointed to by no local branch -- the
+/// Patch and both Blobs this same admission wrote were already just as unreached, simply
+/// invisible to the pre-3h count). Nothing about what stage 1 admits changed in this round; only
+/// what `verify` now counts did -- so the expected count below is every object this fixture's
+/// stage 1 wrote, not a number specific to Block/RefState.
 #[test]
 fn archive_import_adopt_onto_current_branch_a_file_in_the_way_with_the_early_check_disabled_writes_stage_1()
  {
@@ -447,12 +466,19 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_with_the_early_che
          actually written, not claim nothing was: {message}"
     );
 
+    let after_refusal = verify_text(&dest);
+    let admitted_object_count = checked_objects(&after_refusal);
     assert!(
-        verify_text(&dest).contains("unreached objects: 2"),
-        "with the early check disabled, stage 1 admits this archive's own objects (the block and \
-         the blob) before the stage-3 backstop ever refuses, leaving them locally present but \
-         unreached: {}",
-        verify_text(&dest)
+        admitted_object_count > 0,
+        "fixture bug: stage 1 must have admitted at least one object, or the assertion below \
+         proves nothing: {after_refusal}"
+    );
+    assert!(
+        after_refusal.contains(&format!("unreached objects: {admitted_object_count}")),
+        "with the early check disabled, stage 1 admits this archive's own objects (the patch, the \
+         block, the ref-state, and the blobs it names) before the stage-3 backstop ever refuses, \
+         leaving every one of them locally present but unreached, matching checked objects \
+         exactly: {after_refusal}"
     );
     let doctor = support::prikk(&dest).arg("doctor").output().unwrap();
     assert!(

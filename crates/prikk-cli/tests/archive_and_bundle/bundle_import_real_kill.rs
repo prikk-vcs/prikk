@@ -123,12 +123,12 @@ fn a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until
     child.kill().expect("send SIGKILL");
     let _ = child.wait();
 
-    // `verify`: clean. The architect's own 3,000-object experiment found zero interrupted
-    // appends, zero unreferenced remnants and zero unreached objects after a real kill mid-write-
-    // loop, reasoned from `objects_in_dependency_order`'s own guarantee (every object's
-    // dependencies are written before it, so any prefix of an honestly-ordered import's write
-    // order cannot produce a dangling reference). Confirmed here on this run's own numbers, not
-    // merely cited from the architect's.
+    // `verify`: clean on the two rows `objects_in_dependency_order`'s own guarantee reasons about
+    // directly (every object's dependencies are written before it, so any prefix of an
+    // honestly-ordered import's write order cannot produce a dangling reference) -- the
+    // architect's own 3,000-object experiment found zero interrupted appends and zero
+    // unreferenced remnants after a real kill mid-write-loop. Confirmed here on this run's own
+    // numbers, not merely cited from the architect's.
     // A plain `verify` here reports "publication trust issues" (no maintainer key adopted --
     // unrelated to this test), so this checks only the integrity rows import itself owns, not the
     // trust-policy exit status.
@@ -142,15 +142,26 @@ fn a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until
         verify_text.contains("unreferenced remnants: 0"),
         "an honestly-ordered import's write prefix cannot dangle a reference: {verify_text}"
     );
-    assert!(
-        verify_text.contains("unreached objects: 0"),
-        "the received pointer is written last and never reached by this kill, so no object the \
-         kill did write should be reported unreached either: {verify_text}"
-    );
     // The positive half of the control: confirm the kill genuinely interrupted the write loop
     // (a strict prefix durable), not that the import simply finished before the kill landed --
     // without this, every assertion above could pass vacuously on a fully-completed import.
     let dest_object_count_after_kill = checked_objects(&verify_text);
+    // 0.56.0 step 3h (#9): `unreached_objects` now also counts `Patch`/`Blob`, not only
+    // `Block`/`RefState` -- the exact external-review-037-§1.3 shape, now reproduced live rather
+    // than by a crafted fixture. The received pointer is written last and never reached by this
+    // kill, so *nothing* this partial write loop wrote is reached by anything yet (no tip, no
+    // WAL record, no held claim) -- every one of this prefix's own objects, Block included had
+    // one been written this far, is unreached, not zero of them as the pre-3h round's own
+    // assertion here used to read. `objects_in_dependency_order`'s guarantee still holds (no
+    // *dangling reference*, confirmed above); it was never a guarantee against a prefix being
+    // reached by nothing at all, which is the separate thing this round makes `verify` say.
+    assert!(
+        verify_text.contains(&format!(
+            "unreached objects: {dest_object_count_after_kill}"
+        )),
+        "a real kill's own un-pointed-to prefix must be counted unreached in full, matching \
+         checked objects exactly: {verify_text}"
+    );
     assert!(
         dest_object_count_after_kill < reference_object_count,
         "the kill must leave a strict prefix of the full {reference_object_count}-object import, \
@@ -344,9 +355,17 @@ fn doctor_names_a_lock_held_by_a_live_process_as_informational_only() {
         "a lock held by the still-live child must report liveness as appears running: \
          {doctor_text}"
     );
+    // The held lock itself is still informational only, never an error -- confirmed by
+    // `errors=0`. `warnings=0` no longer holds as of 0.56.0 step 3h: the still-live import has
+    // already durably written its first two objects (a Patch and the Blob it names), which
+    // nothing in committed state reaches yet (the pointer lands last, same as the real-kill test
+    // above) -- now correctly a `PRIKK-DOCTOR-UNREACHED-OBJECT` warning in its own right, wholly
+    // unrelated to the lock this test is actually about. That the lock issue itself never
+    // escalates past informational is confirmed directly above (`held_lock_issue_count`,
+    // `appears running`), not by the report's total warning count.
     assert!(
-        doctor_text.contains("errors=0") && doctor_text.contains("warnings=0"),
-        "a live-process lock is informational only, never a warning or error: {doctor_text}"
+        doctor_text.contains("errors=0"),
+        "a live-process lock must never be reported as an error-severity issue: {doctor_text}"
     );
 
     child.kill().expect("send SIGKILL");
