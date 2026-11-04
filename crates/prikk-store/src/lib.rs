@@ -390,8 +390,9 @@ pub use tag_travel::{
     adopt_tag, create_local_tag, list_received_tags, received_tag_ids,
 };
 pub use trust::{
-    AdoptedMaintainerKey, GatedOperation, MaintainerTrustPolicy, PublicationSignatureOutcome,
-    PublicationTrustIssue, add_trusted_maintainer, classify_publication_signatures,
+    AdoptedMaintainerKey, CarriedKeyRepositoryStatus, GatedOperation, MaintainerTrustPolicy,
+    PublicationSignatureOutcome, PublicationTrustIssue, add_trusted_maintainer,
+    classify_carried_key_against_repository, classify_publication_signatures,
     load_maintainer_trust_policy, load_maintainer_trust_policy_or_empty,
     refuse_forged_publication_signature, remove_trusted_maintainer, verify_signer_trusted,
     verify_trusted_publication_envelope,

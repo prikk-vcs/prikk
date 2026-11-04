@@ -14,7 +14,7 @@ pub fn run_archive(root: PathBuf, args: Vec<String>) -> std::result::Result<(), 
     let mut iter = args.into_iter();
     match iter.next().as_deref() {
         Some("export") => run_export(root, iter.collect()),
-        Some("verify") => run_verify(iter.collect()),
+        Some("verify") => run_verify(root, iter.collect()),
         Some("import") => run_import(root, iter.collect()),
         Some(other) => Err(CliError::Usage(format!(
             "unknown archive subcommand: {other} (expected export, verify, or import)"
@@ -171,9 +171,11 @@ fn parse_verify_args(args: Vec<String>) -> std::result::Result<VerifyArgs, CliEr
     Ok(VerifyArgs { input, format_json })
 }
 
-/// Never opens a repository, and never writes anything, on any exit path (§9.4) -- this command
-/// only ever reads `parsed.input`.
-fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
+/// Never writes anything, on any exit path (§9.4) -- this command only ever reads `parsed.input`,
+/// plus, since 0.56.0 step 3i, the receiving repository's own adopted trust policy, read-only,
+/// to classify each carried maintainer key's real status there (`classify_maintainer_key_statuses`'s
+/// own doc comment). Opening that repository is new as of 3i; it was never opened at all before.
+fn run_verify(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let parsed = parse_verify_args(args)?;
     let file = std::fs::File::open(&parsed.input).map_err(|err| {
         format!(
@@ -183,11 +185,12 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     })?;
     let mut reader = std::io::BufReader::new(file);
     let report = prikk_store::verify_archive(&mut reader).map_err(|err| err.to_string())?;
+    let key_statuses = classify_maintainer_key_statuses(root, &report.maintainer_keys)?;
 
     if parsed.format_json {
-        print_verify_report_json(&report);
+        print_verify_report_json(&report, &key_statuses);
     } else {
-        print_verify_report(&report);
+        print_verify_report(&report, &key_statuses);
     }
 
     if report.is_internally_consistent() {
@@ -201,7 +204,49 @@ fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     }
 }
 
-fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
+/// 0.56.0 step 3i (#6): the planeter letter's one field, `status`, for each carried maintainer
+/// key -- classified against the *receiving* repository's own adopted trust policy, never the
+/// archive's own carried policy (`prikk_store::verify_archive`'s own doc comment: that module
+/// reports "internally consistent", never "trusted" -- trust is always the receiver's). One of
+/// four fixed strings per key, in `report.maintainer_keys`'s own order:
+/// - `"carried, not checked against a repository"` when `root` names no repository at all --
+///   **and, by this round's own explicit call (stated in its report for the architect to confirm
+///   or override), for *any* `open_repository` failure, not only a missing `.prikk`:** no error
+///   variant distinguishes "not a repository" from another open failure, and this codebase's
+///   standing discipline is to classify by variant, never by matching message text, so adding a
+///   new structural variant for this one informational field would be new mechanism out of
+///   proportion to what it reports;
+/// - `"carried, not adopted"`, `"adopted"`, or `"carried, conflicts with an adopted key"` --
+///   `prikk_store::classify_carried_key_against_repository`'s own three outcomes -- once a
+///   repository does open.
+fn classify_maintainer_key_statuses(
+    root: PathBuf,
+    maintainer_keys: &[prikk_store::CarriedMaintainerKeySummary],
+) -> std::result::Result<Vec<&'static str>, CliError> {
+    match crate::open_repository(root) {
+        Err(_) => Ok(maintainer_keys
+            .iter()
+            .map(|_| "carried, not checked against a repository")
+            .collect()),
+        Ok(layout) => {
+            let policy = prikk_store::load_maintainer_trust_policy_or_empty(&layout)
+                .map_err(|err| err.to_string())?;
+            Ok(maintainer_keys
+                .iter()
+                .map(|key| {
+                    prikk_store::classify_carried_key_against_repository(
+                        &policy,
+                        &key.key_id,
+                        &key.public_key_hex,
+                    )
+                    .as_str()
+                })
+                .collect())
+        }
+    }
+}
+
+fn print_verify_report(report: &prikk_store::ArchiveVerifyReport, key_statuses: &[&'static str]) {
     println!("repository format: {}", report.repository_format);
     println!("tool version: {}", display_bounded(&report.tool_version));
     println!("structurally sound: {}", report.structurally_sound);
@@ -214,9 +259,9 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport) {
         "signatures checked: {}, not checked: {not_checked_count}",
         report.signatures_checked
     );
-    for key in &report.maintainer_keys {
+    for (key, status) in report.maintainer_keys.iter().zip(key_statuses) {
         println!(
-            "maintainer key {} (carried, not adopted): {}",
+            "maintainer key {} ({status}): {}",
             key.key_id, key.public_key_hex
         );
     }
@@ -270,7 +315,10 @@ fn signature_not_checked_note(checked: usize, not_checked: usize) -> Option<Stri
     ))
 }
 
-fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
+fn print_verify_report_json(
+    report: &prikk_store::ArchiveVerifyReport,
+    key_statuses: &[&'static str],
+) {
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"schema_version\": \"prepo-verify-report-v1\",\n");
@@ -351,11 +399,13 @@ fn print_verify_report_json(report: &prikk_store::ArchiveVerifyReport) {
     let maintainer_keys: Vec<String> = report
         .maintainer_keys
         .iter()
-        .map(|key| {
+        .zip(key_statuses)
+        .map(|(key, status)| {
             format!(
-                "{{ \"key_id\": {}, \"public_key\": {}, \"status\": \"carried, not adopted\" }}",
+                "{{ \"key_id\": {}, \"public_key\": {}, \"status\": {} }}",
                 escape_json_string(&key.key_id),
-                escape_json_string(&key.public_key_hex)
+                escape_json_string(&key.public_key_hex),
+                escape_json_string(status)
             )
         })
         .collect();

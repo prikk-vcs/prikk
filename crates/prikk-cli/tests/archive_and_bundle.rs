@@ -43,5 +43,7 @@ mod step3c2_archive_import_json;
 mod step3f2_outside_version_rule_import;
 #[path = "archive_and_bundle/step3f_forged_publication_signature.rs"]
 mod step3f_forged_publication_signature;
+#[path = "archive_and_bundle/step3i_archive_verify_carried_key_status.rs"]
+mod step3i_archive_verify_carried_key_status;
 #[path = "support/mod.rs"]
 mod support;

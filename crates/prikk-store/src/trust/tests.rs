@@ -20,8 +20,10 @@ use prikk_crypto::Ed25519KeyPair;
 use prikk_error::PrikkError;
 
 use crate::{
-    GatedOperation, RepositoryLayout, acquire_container_locks, add_trusted_maintainer,
-    load_maintainer_trust_policy, remove_trusted_maintainer, verify_signer_trusted,
+    AdoptedMaintainerKey, CarriedKeyRepositoryStatus, GatedOperation, MaintainerTrustPolicy,
+    RepositoryLayout, acquire_container_locks, add_trusted_maintainer,
+    classify_carried_key_against_repository, load_maintainer_trust_policy,
+    remove_trusted_maintainer, verify_signer_trusted,
 };
 
 use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
@@ -581,4 +583,110 @@ fn a_changed_key_under_a_removed_and_readded_id_is_still_refused() {
         }
     }
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.56.0 step 3i: the three in-repository outcomes `classify_carried_key_against_repository`
+/// returns, directly against a constructed `MaintainerTrustPolicy` -- no CLI, archive file, or
+/// repository on disk involved. The fourth planeter status ("carried, not checked against a
+/// repository") has no policy to classify against at all and is decided at the CLI layer, so it
+/// has no counterpart here.
+mod classify_carried_key_against_repository_tests {
+    use super::{
+        AdoptedMaintainerKey, CarriedKeyRepositoryStatus, MaintainerTrustPolicy,
+        classify_carried_key_against_repository, public_key_hex,
+    };
+
+    #[test]
+    fn a_key_id_with_no_entry_is_not_adopted() {
+        let policy = MaintainerTrustPolicy {
+            keys: vec![AdoptedMaintainerKey {
+                key_id: "someone-else".to_string(),
+                public_key: [9_u8; 32],
+            }],
+        };
+        let status = classify_carried_key_against_repository(
+            &policy,
+            "maintainer",
+            &public_key_hex(&[1_u8; 32]),
+        );
+        assert_eq!(status, CarriedKeyRepositoryStatus::NotAdopted);
+        assert_eq!(status.as_str(), "carried, not adopted");
+    }
+
+    #[test]
+    fn a_key_id_with_the_identical_public_key_is_adopted() {
+        let seed = [2_u8; 32];
+        let policy = MaintainerTrustPolicy {
+            keys: vec![AdoptedMaintainerKey {
+                key_id: "maintainer".to_string(),
+                public_key: prikk_crypto::Ed25519KeyPair::from_seed(&seed).public_key_bytes(),
+            }],
+        };
+        let status =
+            classify_carried_key_against_repository(&policy, "maintainer", &public_key_hex(&seed));
+        assert_eq!(status, CarriedKeyRepositoryStatus::Adopted);
+        assert_eq!(status.as_str(), "adopted");
+    }
+
+    #[test]
+    fn a_key_id_with_a_different_public_key_conflicts() {
+        let adopted_seed = [3_u8; 32];
+        let carried_seed = [4_u8; 32];
+        let policy = MaintainerTrustPolicy {
+            keys: vec![AdoptedMaintainerKey {
+                key_id: "maintainer".to_string(),
+                public_key: prikk_crypto::Ed25519KeyPair::from_seed(&adopted_seed)
+                    .public_key_bytes(),
+            }],
+        };
+        let status = classify_carried_key_against_repository(
+            &policy,
+            "maintainer",
+            &public_key_hex(&carried_seed),
+        );
+        assert_eq!(status, CarriedKeyRepositoryStatus::Conflicts);
+        assert_eq!(status.as_str(), "carried, conflicts with an adopted key");
+    }
+
+    /// Red control: with the classification forced to the old hardcoded fallback (never
+    /// distinguishing adopted/conflicting from not-adopted), the adopted and conflicting cases
+    /// above both read wrong -- confirming the three tests above actually exercise the real
+    /// comparison rather than passing on a function that always returns the same answer.
+    #[test]
+    fn red_control_a_constant_not_adopted_classification_fails_the_adopted_and_conflict_cases() {
+        fn always_not_adopted(
+            _policy: &MaintainerTrustPolicy,
+            _key_id: &str,
+            _public_key_hex: &str,
+        ) -> CarriedKeyRepositoryStatus {
+            CarriedKeyRepositoryStatus::NotAdopted
+        }
+
+        let seed = [5_u8; 32];
+        let policy = MaintainerTrustPolicy {
+            keys: vec![AdoptedMaintainerKey {
+                key_id: "maintainer".to_string(),
+                public_key: prikk_crypto::Ed25519KeyPair::from_seed(&seed).public_key_bytes(),
+            }],
+        };
+        let adopted_hex = public_key_hex(&seed);
+        let conflicting_hex = public_key_hex(&[6_u8; 32]);
+
+        assert_eq!(
+            always_not_adopted(&policy, "maintainer", &adopted_hex),
+            CarriedKeyRepositoryStatus::NotAdopted,
+            "the red control must disagree with the real adopted case"
+        );
+        assert_ne!(
+            always_not_adopted(&policy, "maintainer", &adopted_hex).as_str(),
+            classify_carried_key_against_repository(&policy, "maintainer", &adopted_hex).as_str(),
+            "the real function must disagree with the forced-wrong fallback for the adopted case"
+        );
+        assert_ne!(
+            always_not_adopted(&policy, "maintainer", &conflicting_hex).as_str(),
+            classify_carried_key_against_repository(&policy, "maintainer", &conflicting_hex)
+                .as_str(),
+            "the real function must disagree with the forced-wrong fallback for the conflict case"
+        );
+    }
 }

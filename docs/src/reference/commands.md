@@ -460,6 +460,19 @@ before anything is written** — the identical check `bundle import`'s own admis
 commands apply the same check, so a change `bundle import` would refuse is refused by
 `archive import`/`archive verify` too, never landed or reported as internally consistent.
 
+**`archive verify` reports each carried maintainer key's real status in the receiving repository
+(0.56.0 step 3i).** Both the text form and `--format json`'s `"status"` field now carry one of
+four fixed strings, computed against the repository `archive verify` runs from, never against the
+archive's own carried trust policy: `"adopted"` (the same key id and the same public key are
+already adopted here); `"carried, not adopted"` (this key id is not adopted here at all);
+`"carried, conflicts with an adopted key"` (this key id is adopted here, but under a *different*
+public key); or `"carried, not checked against a repository"`, when `archive verify` is run
+outside any repository at all. Before this round, both forms printed `"carried, not adopted"`
+unconditionally, even for a key the repository running `verify` had in fact already adopted. This
+is reporting only — the archive's own internal-consistency check, and its exit code, are
+unaffected either way, exactly as for the existing carried-key listing this refines; trust remains
+the receiver's own adopted set, never the archive's.
+
 **`bundle import` and `archive import` refuse a forged MAINTAINER signature on a delivered tip,
 before anything is written.** Both already compute whether a delivered `RefState`/`Block`'s own
 MAINTAINER signature verifies against this repository's adopted trust policy

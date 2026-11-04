@@ -566,6 +566,58 @@ pub fn classify_publication_signatures(
         .collect()
 }
 
+/// 0.56.0 step 3i: a carried maintainer key's classification against the *receiving* repository's
+/// own adopted trust policy -- never the archive's own carried policy
+/// (`archive::verify::verify_archive` keeps reporting *"internally consistent"*, never
+/// *"trusted"*; this is the receiver-side join that module's own doc comment says belongs outside
+/// it). The planeter letter's fourth case ("carried, not checked against a repository" -- outside
+/// any repository, so there is no policy at all) has no counterpart here and is decided at the CLI
+/// layer before this is ever called.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CarriedKeyRepositoryStatus {
+    /// No entry under this key id in the receiving repository's adopted policy.
+    NotAdopted,
+    /// An entry under this key id, with the identical public key.
+    Adopted,
+    /// An entry under this key id, with a *different* public key -- the same key id adopted here
+    /// under different key material.
+    Conflicts,
+}
+
+impl CarriedKeyRepositoryStatus {
+    /// Stable, lowercase label -- the planeter letter's own fixed `status` string.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAdopted => "carried, not adopted",
+            Self::Adopted => "adopted",
+            Self::Conflicts => "carried, conflicts with an adopted key",
+        }
+    }
+}
+
+/// Classify one carried key id/public key (as `archive::verify::CarriedMaintainerKeySummary`
+/// already holds them, lowercase hex) against `policy`. Reuses the identical `policy.find` +
+/// public-key comparison shape `add_trusted_maintainer`'s own TOFU-collision check already uses
+/// (this function's own doc, "already adopted with a different public key") -- not a new
+/// comparison mechanism. Re-encodes the adopted key's raw bytes with the same `prikk_hash::to_hex`
+/// archive verification already uses, rather than decoding `public_key_hex` back to bytes, so the
+/// one comparison this function makes stays in one representation.
+#[must_use]
+pub fn classify_carried_key_against_repository(
+    policy: &MaintainerTrustPolicy,
+    key_id: &str,
+    public_key_hex: &str,
+) -> CarriedKeyRepositoryStatus {
+    match policy.find(key_id) {
+        None => CarriedKeyRepositoryStatus::NotAdopted,
+        Some(existing) if prikk_hash::to_hex(&existing.public_key) == public_key_hex => {
+            CarriedKeyRepositoryStatus::Adopted
+        }
+        Some(_) => CarriedKeyRepositoryStatus::Conflicts,
+    }
+}
+
 pub(crate) fn verify_trusted_signature(
     policy: &MaintainerTrustPolicy,
     envelope: &ObjectEnvelope,
