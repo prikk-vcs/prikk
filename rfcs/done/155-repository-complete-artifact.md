@@ -6,6 +6,7 @@ V/V2, I-A/I-A2, I-B/I-B2, then I-C to I-G after external reviews 023 and 024; th
 **Amended 2026-10-13, after the release: §9.4's closure follows the store's own existence rules** (finding
 `archive-closure-finding-v1`). This is for the owner's reading. It is implemented in 0.52.0 step 0
 (`handoffs/155-…/0.52.0-step-0-closure-handoff-v1.md`).
+**Amended 2026-11-05: `archive verify` no longer says "carried, not adopted" for every key.** Since 0.56.0 step 3i (`968e5a15`), each carried maintainer key reports its real status in the receiving repository, in one field, `status`, with four fixed strings: `"adopted"`, `"carried, not adopted"`, `"carried, conflicts with an adopted key"`, `"carried, not checked against a repository"`. The command summary below (§ the CLI listing) predates this.
 **ACCEPTED by the project owner 2026-09-16** (*"RFC 155 is accepted."*); proposed the same
 day by the architect. This is the "own RFC" that RFC 114 §5.2 (format carry-forward), RFC 115 §6.2 and
 RFC 116 §7 left open, and RFC 154 §6.2 needs it. planeter's requirements letter
