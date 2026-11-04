@@ -307,6 +307,29 @@
   or no queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse`
   already refused on any non-empty active WAL regardless of which ref owned it — a strictly
   stronger, pre-existing condition that already covered this case for both of them.
+- **`bundle import` and `archive import` now refuse a forged MAINTAINER signature on a delivered
+  tip, before anything is written.** When the tip's own `Block` or `RefState` carries a MAINTAINER
+  signature naming a key id this repository has adopted, but the signature does not verify against
+  that key's own public key — a forgery, or another maintainer who happens to use the same key id —
+  the import now refuses by name (`refusal-v1`'s own new `"forged-publication-signature"` id under
+  `--format json`) rather than admitting the object silently. Before this, neither importer checked
+  publication trust at admission time at all; only a later `prikk verify` caught it, by which point
+  the forged object was already durably admitted (and, for `archive import --adopt`, possibly
+  already a real local branch). A signature naming a key this repository has simply never adopted
+  is unaffected and still imports exactly as before — only a signature that names an adopted key and
+  fails to verify against it refuses.
+- **Both importers' `--format json` output now also prints a `refusal-v1` document when admission
+  refuses a path outside this version's own rule** (the same non-ASCII-path refusal `extract
+  --format json` already names `"outside-version-rule"`). Before this, both printed nothing at all
+  to stdout for this cause under `--format json`, leaving a scripted caller with only the generic
+  stderr text.
+- **`bundle preview` now also reports each sealer's own publication-trust outcome**, additively,
+  as a new `"sealed_by_signatures"` field: one entry per signature already listed in `"sealed_by"`
+  (which is unchanged), each naming its own key id and an `"outcome"` of `"sound"` (adopted and
+  verifies), `"unverifiable"` (not adopted by this repository at all), or `"invalid"` (adopted, but
+  does not verify — the same condition `bundle import` now refuses on). Reported, not trusted, the
+  same disclaimer `"sealed_by"` itself already carries: `bundle import` is still the only thing that
+  acts on this.
 
 ### Added
 

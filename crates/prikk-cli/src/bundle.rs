@@ -123,6 +123,17 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         if format_json {
             if let prikk_error::PrikkError::BundleNonFastForward { class, .. } = &err {
                 print_bundle_import_refusal_json(class, &err.to_string());
+            } else if let prikk_error::PrikkError::ForgedPublicationSignature { .. } = &err {
+                // 0.56.0 step F: the new forged-publication-signature refusal, classified the
+                // identical way -- by variant, never by message text.
+                print_bundle_import_refusal_json("forged-publication-signature", &err.to_string());
+            } else if err.decode_failure_kind()
+                == prikk_error::DecodeFailureKind::OutsideVersionRule
+            {
+                // 0.56.0 step F (from the 3f2 report): `bundle import --format json` used to
+                // print nothing at all for this cause -- `extract`'s own precedent
+                // (`classify_prikk_error_fallback`) is what names the id.
+                print_bundle_import_refusal_json("outside-version-rule", &err.to_string());
             }
         }
         render_incoming_error(err, &object_bound)
@@ -190,12 +201,14 @@ fn print_bundle_import_plain(report: &prikk_store::BundleImportReport) {
 /// `refusal-v1`'s own document for `bundle import` (0.56.0 step 3b, A4) -- this project's reusable
 /// refusal shape (`docs/src/reference/commands.md`'s own "This is this project's own, reusable
 /// form for a JSON refusal"), its second adopter after `extract`. `id` is one of `bundle import`'s
-/// own three connectivity-based refusal ids (`"rollback"`, `"diverged"`, `"does-not-connect"` --
-/// `BundleConnectivityClass::as_str()`'s own values), and `reason` is always `null`: unlike
-/// `extract`'s own `no-checkpoint-in-reach`, none of these three carries a further sub-reason.
-/// `message` is `err.to_string()` -- the same text `render_incoming_error` would otherwise turn
-/// into `CliError::Failure`'s own message, without the generic `error: ` prefix the top-level
-/// stderr printer adds, the same convention `extract`'s own `print_refusal_json` uses.
+/// own connectivity-based refusal ids (`"rollback"`, `"diverged"`, `"does-not-connect"` --
+/// `BundleConnectivityClass::as_str()`'s own values), `"forged-publication-signature"` (0.56.0
+/// step F), or `"outside-version-rule"` (0.56.0 step F, from the 3f2 report) -- and `reason` is
+/// always `null`: unlike `extract`'s own `no-checkpoint-in-reach`, none of these carries a
+/// further sub-reason. `message` is `err.to_string()` -- the same text `render_incoming_error`
+/// would otherwise turn into `CliError::Failure`'s own message, without the generic `error: `
+/// prefix the top-level stderr printer adds, the same convention `extract`'s own
+/// `print_refusal_json` uses.
 fn print_bundle_import_refusal_json(id: &str, message: &str) {
     let mut json = String::new();
     json.push_str(

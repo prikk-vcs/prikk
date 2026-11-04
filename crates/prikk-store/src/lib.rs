@@ -160,10 +160,10 @@ pub use branch_switch::{BranchSwitchReport, switch_branch};
 pub use bundle::{
     BundleConnectivityClass, BundleExportReport, BundleImportOptions, BundleImportReport,
     BundleManifest, BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffect,
-    BundlePreviewEffectKind, BundlePreviewReport, BundleScope, BundleSource, BundleVerifyReport,
-    DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, RefStateChainRelation, export_bundle, import_bundle,
-    preview_bundle, preview_bundle_reporting_anchor, verify_bundle,
+    BundlePreviewEffectKind, BundlePreviewReport, BundlePreviewSealerSignature, BundleScope,
+    BundleSource, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, RefStateChainRelation,
+    export_bundle, import_bundle, preview_bundle, preview_bundle_reporting_anchor, verify_bundle,
 };
 #[cfg(feature = "test-support")]
 pub use bundle::{
@@ -388,9 +388,11 @@ pub use tag_travel::{
     adopt_tag, create_local_tag, list_received_tags, received_tag_ids,
 };
 pub use trust::{
-    AdoptedMaintainerKey, GatedOperation, MaintainerTrustPolicy, PublicationTrustIssue,
-    add_trusted_maintainer, load_maintainer_trust_policy, load_maintainer_trust_policy_or_empty,
-    remove_trusted_maintainer, verify_signer_trusted, verify_trusted_publication_envelope,
+    AdoptedMaintainerKey, GatedOperation, MaintainerTrustPolicy, PublicationSignatureOutcome,
+    PublicationTrustIssue, add_trusted_maintainer, classify_publication_signatures,
+    load_maintainer_trust_policy, load_maintainer_trust_policy_or_empty,
+    refuse_forged_publication_signature, remove_trusted_maintainer, verify_signer_trusted,
+    verify_trusted_publication_envelope,
 };
 pub use unlock::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
 pub use verify::{

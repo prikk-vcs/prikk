@@ -145,6 +145,27 @@ pub enum PrikkError {
         /// carried for this refusal.
         message: String,
     },
+    /// 0.56.0 step F: `bundle import`'s and `archive import`'s own refusal of a delivered tip
+    /// whose own `Block` or `RefState` carries a MAINTAINER signature naming an adopted key id
+    /// that does not verify against it -- a forgery, or another maintainer using the same key id
+    /// (stikk 023 part 6). Both importers already compute this exact verdict, through
+    /// `prikk_store::trust::verify_trusted_publication_envelope`, but used to only report it
+    /// (`publication_trusted: bool`) and admit the object regardless; this variant is what turns
+    /// it into a hard refusal, before the first write. Exists apart from [`Self::Precondition`]
+    /// for the same reason [`Self::BundleNonFastForward`] does: `prikk-cli`'s own `refusal-v1`
+    /// document must classify this refusal structurally, never by matching this error's own
+    /// message text.
+    ///
+    /// **One variant for both importers, not two**, for the identical reason
+    /// [`Self::BundleNonFastForward`]'s own doc comment gives: the two call sites differ only in
+    /// which command raised the refusal, already fully absorbed into `command` before this value
+    /// is ever constructed.
+    ForgedPublicationSignature {
+        /// Which command raised this refusal: `"bundle-import"` or `"archive-import"`.
+        command: &'static str,
+        /// The fully rendered message, naming both possible causes.
+        message: String,
+    },
     /// An I/O failure. `kind` is `Some` only when this value was built from a real
     /// `std::io::Error` via [`From`] -- every explicit construction site elsewhere in the workspace
     /// (a caller-precondition violation, a platform-capability refusal, or a validation failure
@@ -183,6 +204,9 @@ impl fmt::Display for PrikkError {
             Self::Precondition(msg) => write!(f, "precondition not met: {msg}"),
             Self::IncompletePublication(msg) => write!(f, "precondition not met: {msg}"),
             Self::BundleNonFastForward { message, .. } => {
+                write!(f, "precondition not met: {message}")
+            }
+            Self::ForgedPublicationSignature { message, .. } => {
                 write!(f, "precondition not met: {message}")
             }
             Self::AmbiguousGenerationLog(msg) => write!(f, "ambiguous generation log: {msg}"),

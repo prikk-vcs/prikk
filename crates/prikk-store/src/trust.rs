@@ -457,6 +457,95 @@ pub fn verify_trusted_publication_envelope(
     })
 }
 
+/// 0.56.0 step F: turn [`verify_trusted_publication_envelope`]'s own verdict into an admission
+/// decision for an importer (stikk 023 part 6). `PRIKK-TRUST-PUBLICATION-UNTRUSTED` (no adopted
+/// key signed at all) is left exactly as every importer already treats it today -- `Ok(())`, so a
+/// sealer this repository has not adopted still imports, unchanged. Only
+/// `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE` -- a signature naming an adopted key id that does
+/// not verify against it -- becomes a hard refusal: a forgery, or another maintainer using the
+/// same key id. Classified by `PublicationTrustIssue::code`, never by matching its own message
+/// text, the same discipline `check_signatures` (`archive/verify.rs`) already follows for the
+/// identical two codes.
+///
+/// **One shared check, not a new copy:** every caller (`bundle::import_bundle`,
+/// `archive::import::land_one_ref`, `archive::import`'s own fail-fast gate) calls this directly,
+/// rather than re-deriving the `issue.code` match at its own call site.
+pub fn refuse_forged_publication_signature(
+    command: &'static str,
+    policy: &MaintainerTrustPolicy,
+    envelope: &ObjectEnvelope,
+) -> Result<()> {
+    match verify_trusted_publication_envelope(policy, envelope) {
+        Ok(_) => Ok(()),
+        Err(issue) if issue.code == "PRIKK-TRUST-PUBLICATION-UNTRUSTED" => Ok(()),
+        Err(issue) => Err(PrikkError::ForgedPublicationSignature {
+            command,
+            message: format!(
+                "{} -- a forgery, or another maintainer using the same key id; refusing before \
+                 admitting it",
+                issue.message
+            ),
+        }),
+    }
+}
+
+/// 0.56.0 step F: this envelope's own per-MAINTAINER-signature publication-trust classification,
+/// one entry per signature, in the envelope's own signature order -- `sound` (adopted, verifies),
+/// `unverifiable` (not adopted by this repository at all), or `invalid` (adopted, but does not
+/// verify -- a forgery, or another maintainer using the same key id). `bundle preview`'s own
+/// `sealed_by_signatures` needs each signature's own outcome; `verify_trusted_publication_envelope`'s
+/// own aggregate answer only ever says whether *some* signature is trusted, or names the first
+/// failure, which collapses several sealers into one verdict. Reuses `verify_trusted_signature`,
+/// the identical per-signature Ed25519 check `verify_trusted_publication_envelope` and
+/// `crate::recognition_claim::verify_claim_signature` already call, rather than a third copy of
+/// that logic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicationSignatureOutcome {
+    /// Adopted, and verifies.
+    Sound,
+    /// Adopted, but does not verify -- a forgery, or another maintainer using the same key id.
+    Invalid,
+    /// Not adopted by this repository at all; not checked.
+    Unverifiable,
+}
+
+impl PublicationSignatureOutcome {
+    /// Stable, lowercase label -- `bundle preview --format json`'s own wire value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sound => "sound",
+            Self::Invalid => "invalid",
+            Self::Unverifiable => "unverifiable",
+        }
+    }
+}
+
+/// Every MAINTAINER signature on `envelope`, classified by [`PublicationSignatureOutcome`].
+#[must_use]
+pub fn classify_publication_signatures(
+    policy: &MaintainerTrustPolicy,
+    envelope: &ObjectEnvelope,
+) -> Vec<(String, PublicationSignatureOutcome)> {
+    let object_id = envelope.object_id();
+    envelope
+        .signatures
+        .iter()
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| {
+            let outcome = if policy.find(&signature.key_id).is_none() {
+                PublicationSignatureOutcome::Unverifiable
+            } else {
+                match verify_trusted_signature(policy, envelope, signature, object_id) {
+                    Ok(()) => PublicationSignatureOutcome::Sound,
+                    Err(_) => PublicationSignatureOutcome::Invalid,
+                }
+            };
+            (signature.key_id.clone(), outcome)
+        })
+        .collect()
+}
+
 pub(crate) fn verify_trusted_signature(
     policy: &MaintainerTrustPolicy,
     envelope: &ObjectEnvelope,

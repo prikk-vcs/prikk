@@ -589,6 +589,12 @@ pub fn import_archive<R: Read + Seek>(
     // uses this as the local-side reader for its own early classification, under the same locks
     // just acquired -- one open, reused for both purposes, not two.
     let mut object_store = ObjectWriteSession::open(layout)?;
+    // Moved up from immediately before stage 3 (0.56.0 step F): the fresh branch below also
+    // needs this repository's adopted policy for its own early forged-publication-signature
+    // check, under the same locks just acquired -- loaded once, reused for both purposes, not
+    // twice. A resume reloads nothing new here: this is the identical call `load_maintainer_
+    // trust_policy_or_empty`'s own cheap, idempotent read already was at the old call site.
+    let adopted_policy = load_maintainer_trust_policy_or_empty(layout)?;
 
     let (journal, resumed) = match existing_journal {
         Some(journal) => (journal, true),
@@ -609,6 +615,16 @@ pub fn import_archive<R: Read + Seek>(
                 &landing,
                 options,
                 &object_store,
+            )?;
+            // 0.56.0 step F (stikk 023 part 6): refuse a forged MAINTAINER signature on any
+            // planned landing's own delivered tip before stage 1 ever writes a single object --
+            // same "no object, no journal" window as the check just above. Every planned landing,
+            // `Local` and `Received` alike (see this function's own doc comment for why).
+            refuse_forged_publication_signatures_before_admission(
+                source,
+                &manifest,
+                &landing,
+                &adopted_policy,
             )?;
             // 0.56.0 step W3c-5 (R3, the fail-fast gate): when this plan has a `Local` landing
             // destined for `current_branch`, and `--adopt` was requested, refuse here for an
@@ -941,7 +957,8 @@ pub fn import_archive<R: Read + Seek>(
         Vec::new()
     };
     let ref_store = RefStore::new(layout.clone());
-    let adopted_policy = load_maintainer_trust_policy_or_empty(layout)?;
+    // `adopted_policy` is loaded once, early (0.56.0 step F, moved up from here) -- see that call
+    // site's own doc comment.
     // Test seam, unreachable from production: run once, right before stage 3's own first landing,
     // while the four container locks above are genuinely held -- IB1(a)'s own test (a concurrent,
     // ordinary `publish` must refuse with `LockConflict`).
@@ -1020,6 +1037,20 @@ pub fn import_archive<R: Read + Seek>(
                 }
                 None => false,
             };
+            // 0.56.0 step F: the backstop for a resumed run -- see `refuse_forged_publication_
+            // signatures_before_admission`'s own doc comment for why a fresh run can never reach
+            // here with a forged tip at all (the fail-fast gate above already refused it, for
+            // every planned landing, collided or not). Stage 1 already admitted this object
+            // unconditionally by the time this runs (the comment just above), so this cannot give
+            // "nothing written" the way the fail-fast gate does -- but it still refuses before any
+            // ref is ever made to point at it.
+            if let Some(envelope) = &ref_state_envelope {
+                crate::trust::refuse_forged_publication_signature(
+                    "archive-import",
+                    &adopted_policy,
+                    envelope,
+                )?;
+            }
             let signing_key_ids = ref_state_envelope
                 .as_ref()
                 .map(maintainer_signer_key_ids)
@@ -1164,6 +1195,18 @@ fn land_one_ref(
         Some(envelope) => verify_trusted_publication_envelope(adopted_policy, envelope).is_ok(),
         None => false,
     };
+    // 0.56.0 step F: the backstop for a resumed run -- see `refuse_forged_publication_signatures_
+    // before_admission`'s own doc comment for why a fresh run can never reach here with a forged
+    // tip at all. Stage 1 has already admitted this landing's own object unconditionally by the
+    // time this runs, so this cannot give "nothing written" the way the fail-fast gate does -- but
+    // it still refuses before this landing's own pointer write, for every origin alike.
+    if let Some(envelope) = &ref_state_envelope {
+        crate::trust::refuse_forged_publication_signature(
+            "archive-import",
+            adopted_policy,
+            envelope,
+        )?;
+    }
     // I-F item 1: the CLI's own trust note names a concrete signing key, not just "untrusted" --
     // `verify`'s own lines name only object ids, never a key id.
     let signing_key_ids = ref_state_envelope
@@ -1902,19 +1945,32 @@ fn archive_resolve_tip_block(graph: &ArchiveRefGraph, ref_state_id: ObjectId) ->
 /// reader this module needs that can serve full `Patch`/`Blob` content before stage 1 has
 /// admitted anything locally. `replay_for_verified_worktree_write_by_block_id`'s own replay never
 /// reads anything but `Block`/`Patch`/`Blob` (confirmed from `patch_replay/read.rs`'s own three
-/// `read_typed` call sites), so those are the only three types this reader ever needs to serve.
+/// `read_typed` call sites), so those were the only three types this reader needed to serve.
 ///
-/// `blocks` is eager -- a `Block`'s own payload is small and structural (parent/patch/blob *ids*,
-/// never a blob's own bytes), the identical bound `ArchiveObjectReader` (verify.rs) already keeps
-/// for the same type. `patch`/`blob` are seeking indices instead, each built once by
-/// [`index_object_offsets`] (id -> absolute offset, frame length) and read on demand by
-/// [`decode_object_record_at`] -- mirroring [`crate::bundle::BundleAndLocalReader`]'s own pattern,
-/// sourced from the archive's own container format instead of a bundle's. `source` is a
-/// [`RefCell`] for the same reason `BundleAndLocalReader`'s own field is: [`ObjectReader::
-/// read_object`] takes `&self`, but a seek-and-decode needs `&mut`.
+/// 0.56.0 step F: also extended to hold `RefState`, eagerly, the same way as `blocks` below --
+/// the fresh-run branch's own new forged-publication-signature check (`refuse_forged_publication_
+/// signatures_before_admission`, below) needs a delivered `RefState`'s own full envelope (its
+/// signatures), and this is the one reader already built at that exact call site that can serve
+/// `Block` before stage 1 ever admits anything locally. Reused rather than building
+/// `ArchiveObjectReader` (`verify.rs`) a second time for this: that reader's own `id_to_envelope`
+/// map is a side effect of `verify_archive`'s own pass 2, already finished and discarded by the
+/// time `import_archive` runs -- rebuilding it here would be a second, redundant full scan this
+/// reader's own existing `build` call already pays for Block, and a third reader type, which the
+/// ruling's own live note says not to add.
+///
+/// `blocks`/`ref_states` are eager -- a `Block`'s or a `RefState`'s own payload is small and
+/// structural (ids and signatures, never a blob's own bytes), the identical bound
+/// `ArchiveObjectReader` (verify.rs) already keeps for both types. `patch`/`blob` are seeking
+/// indices instead, each built once by [`index_object_offsets`] (id -> absolute offset, frame
+/// length) and read on demand by [`decode_object_record_at`] -- mirroring
+/// [`crate::bundle::BundleAndLocalReader`]'s own pattern, sourced from the archive's own container
+/// format instead of a bundle's. `source` is a [`RefCell`] for the same reason
+/// `BundleAndLocalReader`'s own field is: [`ObjectReader::read_object`] takes `&self`, but a
+/// seek-and-decode needs `&mut`.
 struct ArchiveEarlyCheckReader<'a, R: Read + Seek> {
     source: RefCell<&'a mut R>,
     blocks: HashMap<ObjectId, ObjectEnvelope>,
+    ref_states: HashMap<ObjectId, ObjectEnvelope>,
     patch_index: BTreeMap<ObjectId, (u64, usize)>,
     blob_index: BTreeMap<ObjectId, (u64, usize)>,
 }
@@ -1928,6 +1984,16 @@ impl<'a, R: Read + Seek> ArchiveEarlyCheckReader<'a, R> {
         let mut blocks = HashMap::new();
         for_each_object_record(source, block_entry, ObjectType::Block, |envelope| {
             blocks.insert(envelope.object_id(), envelope.clone());
+            Ok(())
+        })?;
+        // 0.56.0 step F: eager, same reasoning as `blocks` just above.
+        let ref_state_entry = find_entry(
+            manifest,
+            ArchiveSectionKind::ObjectContainer(ObjectType::RefState),
+        )?;
+        let mut ref_states = HashMap::new();
+        for_each_object_record(source, ref_state_entry, ObjectType::RefState, |envelope| {
+            ref_states.insert(envelope.object_id(), envelope.clone());
             Ok(())
         })?;
         let patch_entry = find_entry(
@@ -1949,6 +2015,7 @@ impl<'a, R: Read + Seek> ArchiveEarlyCheckReader<'a, R> {
         Ok(Self {
             source: RefCell::new(source),
             blocks,
+            ref_states,
             patch_index,
             blob_index,
         })
@@ -1958,6 +2025,9 @@ impl<'a, R: Read + Seek> ArchiveEarlyCheckReader<'a, R> {
 impl<R: Read + Seek> ObjectReader for ArchiveEarlyCheckReader<'_, R> {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
         if let Some(envelope) = self.blocks.get(&id) {
+            return Ok(Some(envelope.clone()));
+        }
+        if let Some(envelope) = self.ref_states.get(&id) {
             return Ok(Some(envelope.clone()));
         }
         if let Some(&(offset, frame_len)) = self.patch_index.get(&id) {
@@ -2080,6 +2150,77 @@ fn classify_archive_landing_against_local(
         delivered_chain_contains_local,
         local_chain_contains_delivered,
     ))
+}
+
+/// 0.56.0 step F (stikk 023 part 6): refuse a forged MAINTAINER signature -- a signature naming
+/// an adopted key id that does not verify against it, a forgery or another maintainer using the
+/// same key id -- on any planned landing's own delivered tip, before stage 1 ever writes a
+/// single object and before the journal is ever created. Runs for *every* planned landing,
+/// `Local` and `Received` alike: the vulnerability is independent of `--adopt` (today, even a
+/// plain, un-adopted `bundle import`-equivalent received pointer lands with no trust check at
+/// all -- this closes that for `archive import` too, not only the `--adopt` path W3c-5's own
+/// narrower, current-branch-only scope covered).
+///
+/// Checked against each landing's own final delivered tip only -- its `RefState` and the `Block`
+/// it targets -- not every historical `RefState` along its own `previous_ref_state_id` chain.
+/// This matches stikk's own measured case exactly ("the delivered tip's Block and RefState"),
+/// and the scope `verify`'s own `PublicationTrustVerifier` answers for any one persisted object:
+/// a published tip, not its ancestry. A forgery buried deeper in a landing's own history, never
+/// itself the delivered tip of *any* landing, is not reached here -- the same residual gap
+/// `verify` itself already has after import, since `verify`'s own `Objects` stage checks every
+/// *persisted* object, and a deliberately-buried forged ancestor stays exactly as unreached by
+/// either check. Out of scope for this round, named here rather than silently assumed covered.
+///
+/// This is a different question from `try_adopt_local_ref`'s own stage-3 chain check (below, R2
+/// pre-dating this round): that one verifies every `RefUpdate` envelope in a `--adopt` landing's
+/// own signed ref-log chain (a distinct object type) to decide whether the chain's own signed
+/// history justifies *adopting* it as a local branch at all -- a judgment this function's own
+/// refusal does not touch, and is not touched by.
+///
+/// Reuses [`ArchiveEarlyCheckReader`] (W3c-5b), extended by this round to also hold `RefState`
+/// eagerly -- the ruling's own live note: "reuse what fits, don't add a third reader." Built
+/// fresh here (a second build within the same fresh-start branch, alongside the one
+/// `require_nothing_in_the_way_for_block`'s own call builds further below for `current_branch`
+/// only) rather than threaded through from this function's own caller, since not every import
+/// has a `--adopt`-eligible landing to trigger that other build at all, while this function's own
+/// check always runs.
+fn refuse_forged_publication_signatures_before_admission<R: Read + Seek>(
+    source: &mut R,
+    manifest: &super::verify::ManifestView,
+    landings: &[PlannedRefLanding],
+    adopted_policy: &crate::trust::MaintainerTrustPolicy,
+) -> Result<()> {
+    if landings.is_empty() {
+        return Ok(());
+    }
+    let graph = build_archive_ref_graph(source, manifest)?;
+    let reader = ArchiveEarlyCheckReader::build(source, manifest)?;
+    for landing in landings {
+        let ref_state_envelope = reader.read_object(landing.ref_state_id)?.ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: RefState {} is not among this archive's own carried objects",
+                landing.ref_state_id
+            ))
+        })?;
+        crate::trust::refuse_forged_publication_signature(
+            "archive-import",
+            adopted_policy,
+            &ref_state_envelope,
+        )?;
+        let target_block_id = archive_resolve_tip_block(&graph, landing.ref_state_id)?;
+        let block_envelope = reader.read_object(target_block_id)?.ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "archive import: Block {target_block_id} is not among this archive's own carried \
+                 objects"
+            ))
+        })?;
+        crate::trust::refuse_forged_publication_signature(
+            "archive-import",
+            adopted_policy,
+            &block_envelope,
+        )?;
+    }
+    Ok(())
 }
 
 /// 0.56.0 step 3c2 (R1): classify every planned landing against the local store, before stage 1

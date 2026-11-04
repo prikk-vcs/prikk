@@ -453,6 +453,23 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
                 if *command == "archive-import" {
                     print_archive_import_refusal_json(class, &err.to_string());
                 }
+            } else if let prikk_error::PrikkError::ForgedPublicationSignature { command, .. } = &err
+            {
+                // 0.56.0 step F: the new forged-publication-signature refusal, classified the
+                // identical way -- by variant, never by message text.
+                if *command == "archive-import" {
+                    print_archive_import_refusal_json(
+                        "forged-publication-signature",
+                        &err.to_string(),
+                    );
+                }
+            } else if err.decode_failure_kind()
+                == prikk_error::DecodeFailureKind::OutsideVersionRule
+            {
+                // 0.56.0 step F (from the 3f2 report): `archive import --format json` used to
+                // print nothing at all for this cause -- `extract`'s own precedent
+                // (`classify_prikk_error_fallback`) is what names the id.
+                print_archive_import_refusal_json("outside-version-rule", &err.to_string());
             }
         }
         err.to_string()
@@ -468,7 +485,8 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 
 /// 0.56.0 step 3c2 (R2): `archive import --format json`'s own `refusal-v1`, mirroring `bundle
 /// import`'s own `print_bundle_import_refusal_json` (3b) exactly, with `"command":
-/// "archive-import"` in place of `"bundle-import"`.
+/// "archive-import"` in place of `"bundle-import"`. `id` also carries
+/// `"forged-publication-signature"` and `"outside-version-rule"` since 0.56.0 step F.
 fn print_archive_import_refusal_json(id: &str, message: &str) {
     let mut json = String::new();
     json.push_str(

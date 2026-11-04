@@ -507,6 +507,18 @@ impl BundlePreviewEffectKind {
     }
 }
 
+/// 0.56.0 step F: one MAINTAINER signature on the bundle's own exported `RefState`, and its
+/// publication-trust outcome -- the per-signature detail `sealed_by` (alongside it on
+/// [`BundlePreviewReport`]) deliberately does not carry, since `sealed_by` stays unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundlePreviewSealerSignature {
+    /// The MAINTAINER key id this signature names (`sealed_by`'s own entries, in the same order).
+    pub key_id: String,
+    /// `"sound"`, `"unverifiable"`, or `"invalid"` -- see
+    /// [`crate::trust::PublicationSignatureOutcome`] for what each means.
+    pub outcome: crate::trust::PublicationSignatureOutcome,
+}
+
 /// Full report of previewing a bundle's impact on a local ref (RFC 144 §4m), never mutating
 /// anything -- see [`preview_bundle`]'s own doc comment for the write-nothing guarantee and its
 /// control.
@@ -528,6 +540,12 @@ pub struct BundlePreviewReport {
     /// their own care per the handoff's own instruction. Never independently verified against a
     /// trust policy here; `verify` after import is what decides trust.
     pub sealed_by: Vec<String>,
+    /// 0.56.0 step F: the identical signatures `sealed_by` lists, each with its own
+    /// publication-trust outcome against this repository's adopted policy -- `sealed_by` itself
+    /// stays unchanged (consumers read it), this is additive. **Also reported, not trusted**:
+    /// `sound` only means "verifies against an adopted key", not "this repository has decided to
+    /// act on it" -- `bundle import` is still the only thing that can refuse on `invalid`.
+    pub sealed_by_signatures: Vec<BundlePreviewSealerSignature>,
     /// Node-granularity effects, sorted by path. Empty when connectivity is `DoesNotConnect`,
     /// `AlreadyIncluded`, or the conflict answer is `Conflict`/`Undetermined` (a replay that failed
     /// or was never attempted has no well-defined "after" state to diff).
@@ -630,12 +648,25 @@ pub fn preview_bundle_reporting_anchor(
 
     // 0.55.0 step 3 Part 3b-iv: the exported ref's own RefState envelope, read on demand through
     // the same reader everything else here uses, rather than kept in a full map.
-    let sealed_by: Vec<String> = bundle_only_reader
-        .read_object(ref_state_id)?
-        .into_iter()
-        .flat_map(|envelope| envelope.signatures.into_iter())
+    let ref_state_envelope_for_sealers = bundle_only_reader.read_object(ref_state_id)?;
+    let sealed_by: Vec<String> = ref_state_envelope_for_sealers
+        .iter()
+        .flat_map(|envelope| envelope.signatures.iter())
         .filter(|signature| signature.signer_role == SignerRole::Maintainer)
-        .map(|signature| signature.key_id)
+        .map(|signature| signature.key_id.clone())
+        .collect();
+    // 0.56.0 step F: `sealed_by`'s own per-signature publication-trust outcome, additive beside
+    // it -- see `BundlePreviewReport::sealed_by_signatures`'s own doc comment for why `sealed_by`
+    // itself stays untouched. An absent `adopted_policy` (never today -- `load_maintainer_trust_
+    // policy_or_empty` always returns a value) would simply report every signature
+    // `unverifiable`.
+    let adopted_policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
+    let sealed_by_signatures: Vec<BundlePreviewSealerSignature> = ref_state_envelope_for_sealers
+        .as_ref()
+        .map(|envelope| crate::trust::classify_publication_signatures(&adopted_policy, envelope))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key_id, outcome)| BundlePreviewSealerSignature { key_id, outcome })
         .collect();
 
     // 0.56.0 step 3c2 (R3): a `remotes/…` argument resolves the received pointer of that exact
@@ -794,6 +825,7 @@ pub fn preview_bundle_reporting_anchor(
             connectivity,
             conflict,
             sealed_by,
+            sealed_by_signatures,
             effects,
             manifest: metadata.manifest.map(|raw| BundleManifest {
                 repository_format: raw.repository_format,
@@ -2324,6 +2356,51 @@ pub fn import_bundle(
                 connectivity_class.as_str()
             ),
         });
+    }
+
+    // 0.56.0 step F (stikk 023 part 6): refuse a forged MAINTAINER signature on the delivered
+    // tip's own `RefState` or `Block` -- still before the first object write, the same "all
+    // still before the first object write" zone as the connectivity refusal just above. Pass 1
+    // has already finished, so both envelopes are already resolved in `prepared`/`index_by_id`;
+    // read through a bundle-only `BundleAndLocalReader`, built the same way `preview_bundle`
+    // already builds one (`local: None` -- nothing here is about the local store, only the
+    // bundle's own delivered content). `&mut *source` reborrows rather than moves `source`, so
+    // the outer binding is still usable for the write loop below once this block ends.
+    let adopted_policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
+    {
+        let source_cell: RefCell<&mut BundleSource> = RefCell::new(&mut *source);
+        let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
+        let bundle_only_reader = BundleAndLocalReader {
+            source: &source_cell,
+            prepared: &prepared,
+            index_by_id: &index_by_id,
+            cache: &cache,
+            local: None,
+        };
+        let delivered_ref_state = bundle_only_reader.read_object(ref_state_id)?.ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "bundle import: delivered RefState {ref_state_id} is not among this bundle's own \
+                 carried objects"
+            ))
+        })?;
+        crate::trust::refuse_forged_publication_signature(
+            "bundle-import",
+            &adopted_policy,
+            &delivered_ref_state,
+        )?;
+        let delivered_block = bundle_only_reader
+            .read_object(tip_block_id)?
+            .ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "bundle import: delivered Block {tip_block_id} is not among this bundle's own \
+                 carried objects"
+                ))
+            })?;
+        crate::trust::refuse_forged_publication_signature(
+            "bundle-import",
+            &adopted_policy,
+            &delivered_block,
+        )?;
     }
 
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely

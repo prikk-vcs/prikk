@@ -600,7 +600,56 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
     let (a, repo_a, b, repo_b) = two_legacy("keyids-c6a");
     std::fs::write(repo_a.join("a.txt"), "a\n").unwrap();
     support::ok(&a.run(&repo_a, &["commit", "-m", "a"]), "A commits");
-    let legacy_bundle = b.commit_seal_export(&repo_b, &[], "b.txt");
+    // 0.56.0 step F: B signs this bundle's own maintainer role under a distinct id (the same
+    // underlying key material, a different self-chosen label) rather than the shared legacy
+    // default `"maintainer"` id `two_legacy` already adopted for A under A's own, different key
+    // -- otherwise this import is itself newly refused (`forged-publication-signature`): a
+    // receiver that has already adopted one key under an id correctly refuses a different
+    // delivered signature claiming that same id, which is exactly this coincidence, not the
+    // author-id collision this test is actually about. A adopts B's real key under the distinct
+    // id first, the same route `control6_the_maintainer_refusal_names_a_route_that_runs`'s own
+    // "Route 1" already demonstrates, so the only collision left to exercise below is the
+    // author one.
+    let b_maintainer_public = b.public_key(&repo_b, "maintainer");
+    support::ok(
+        &a.run(
+            &repo_a,
+            &[
+                "trust",
+                "maintainer",
+                "add",
+                "--key-id",
+                "c6a-b-maintainer",
+                "--public-key",
+                &b_maintainer_public,
+            ],
+        ),
+        "A adopts B's real maintainer key under a distinct id",
+    );
+    // `seal` itself also checks that the *signer's own* repository has adopted the id it is
+    // about to sign under (`verify_signer_trusted`) -- B's own repo needs this too, not only A's.
+    // `distinct_history`'s own fresh repositories below each adopt their own maintainer key
+    // under B's installation's own legacy default id automatically (`setup`'s own "trust the
+    // maintainer key" step) -- never under this distinct id, so this one adoption, directly in
+    // `repo_b`, is what lets every one of B's own `commit_seal_export`/`distinct_history` calls
+    // below sign under it too (the same underlying key material B's installation already holds).
+    support::ok(
+        &b.run(
+            &repo_b,
+            &[
+                "trust",
+                "maintainer",
+                "add",
+                "--key-id",
+                "c6a-b-maintainer",
+                "--public-key",
+                &b_maintainer_public,
+            ],
+        ),
+        "B adopts its own real maintainer key under the distinct id too, to seal under it",
+    );
+    let maintainer_env = [("PRIKK_MAINTAINER_KEY_ID", "c6a-b-maintainer")];
+    let legacy_bundle = b.commit_seal_export(&repo_b, &maintainer_env, "b.txt");
     let refused = import(&a, &repo_a, &legacy_bundle);
     assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
     let message = text(&refused);
@@ -618,7 +667,16 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
     }
     assert!(!message.contains("key-rotation attempt"), "{message}");
 
-    let env = [("PRIKK_AUTHOR_KEY_ID", "b-author")];
+    // 0.56.0 step F: every one of B's bundles below also carries B's own real maintainer
+    // signature, so each one also needs the same distinct, already-adopted maintainer id as
+    // `legacy_bundle` above -- `distinct_history`'s own fresh repository still resolves an
+    // unoverridden maintainer role to B's installation-level legacy default `"maintainer"`
+    // (there is still no key-id file for B's installation, regardless of which repository), the
+    // same coincidence just fixed above, for the same reason.
+    let env = [
+        ("PRIKK_AUTHOR_KEY_ID", "b-author"),
+        ("PRIKK_MAINTAINER_KEY_ID", "c6a-b-maintainer"),
+    ];
     let bundle = distinct_history(&b, &env, "keyids-c6a-b2");
     support::ok(
         &import(&a, &repo_a, &bundle),
@@ -636,7 +694,10 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
             ),
             "generate",
         );
-        let env = [("PRIKK_AUTHOR_SEED_FILE", author_seed.to_str().unwrap())];
+        let env = [
+            ("PRIKK_AUTHOR_SEED_FILE", author_seed.to_str().unwrap()),
+            ("PRIKK_MAINTAINER_KEY_ID", "c6a-b-maintainer"),
+        ];
         let bundle = distinct_history(&b, &env, "keyids-c6a-b3");
         support::ok(
             &import_allowing_non_fast_forward(&a, &repo_a, &bundle),
@@ -650,7 +711,46 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
 #[test]
 fn control6_the_author_refusal_at_commit_names_a_route_that_runs() {
     let (a, repo_a, b, repo_b) = two_legacy("keyids-c6c");
-    let legacy_bundle = b.commit_seal_export(&repo_b, &[], "b.txt");
+    // 0.56.0 step F: B signs this bundle's own maintainer role under a distinct id, adopted by A
+    // first -- see `control6_the_author_refusal_at_import_names_a_route_that_runs`'s own, fuller
+    // comment on the identical fix; this test's own import below would otherwise be newly
+    // refused (`forged-publication-signature`) on the maintainer-id coincidence `two_legacy`
+    // already sets up, before ever reaching the author-id collision this test is actually about.
+    let b_maintainer_public = b.public_key(&repo_b, "maintainer");
+    support::ok(
+        &a.run(
+            &repo_a,
+            &[
+                "trust",
+                "maintainer",
+                "add",
+                "--key-id",
+                "c6c-b-maintainer",
+                "--public-key",
+                &b_maintainer_public,
+            ],
+        ),
+        "A adopts B's real maintainer key under a distinct id",
+    );
+    // `seal` itself also checks that the *signer's own* repository has adopted the id it is
+    // about to sign under (`verify_signer_trusted`) -- B's own repo needs this too, not only A's.
+    support::ok(
+        &b.run(
+            &repo_b,
+            &[
+                "trust",
+                "maintainer",
+                "add",
+                "--key-id",
+                "c6c-b-maintainer",
+                "--public-key",
+                &b_maintainer_public,
+            ],
+        ),
+        "B adopts its own real maintainer key under the distinct id too, to seal under it",
+    );
+    let maintainer_env = [("PRIKK_MAINTAINER_KEY_ID", "c6c-b-maintainer")];
+    let legacy_bundle = b.commit_seal_export(&repo_b, &maintainer_env, "b.txt");
     support::ok(
         &import(&a, &repo_a, &legacy_bundle),
         "A imports first, never having committed",

@@ -460,6 +460,28 @@ before anything is written** — the identical check `bundle import`'s own admis
 commands apply the same check, so a change `bundle import` would refuse is refused by
 `archive import`/`archive verify` too, never landed or reported as internally consistent.
 
+**`bundle import` and `archive import` refuse a forged MAINTAINER signature on a delivered tip,
+before anything is written.** Both already compute whether a delivered `RefState`/`Block`'s own
+MAINTAINER signature verifies against this repository's adopted trust policy
+(`verify_trusted_publication_envelope`, the same check `verify` and `seal` already use); until
+now, neither refused on it — a tip whose signature named an adopted key id but did not verify
+against it (a forgery, or another maintainer who happens to use the same key id) was admitted
+silently, and only a later `prikk verify` reported it (`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`).
+Both importers now refuse before the first object is written, naming both possible causes. A
+signature by a key this repository has simply never adopted at all is a different, pre-existing
+condition (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`) and is unaffected — that history still imports,
+untrusted, exactly as before; the way to gain trust in it is still `trust maintainer add` followed
+by an ordinary `verify`. Under `--format json`, the refusal prints the same `refusal-v1` document
+described above, with `"refusal": "forged-publication-signature"`.
+
+**`bundle preview` reports each sealer's own publication-trust outcome, additively.** Alongside
+the existing `"sealed_by"` field (a plain list of signing key ids, reported but never trusted,
+unchanged by this), a new `"sealed_by_signatures"` field lists the same signatures with an
+`"outcome"` for each: `"sound"` (the key is adopted and the signature verifies), `"unverifiable"`
+(the key is not adopted by this repository at all), or `"invalid"` (the key is adopted, but the
+signature does not verify — the same condition `bundle import` now refuses on). This is reporting
+only, exactly like `"sealed_by"` itself — `bundle import` is still the only thing that acts on it.
+
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
 `remotes/…` name answers against the received pointer held under that exact name; if none is held
 there, the command refuses by name rather than reporting a misleading "no local history" answer. A
@@ -483,7 +505,10 @@ operator to preserve the repository and inspect the failing object or block. A w
 with such a name, reached while authoring a commit (including from `diff`'s and `status`'s own
 worktree scans), is told something different instead: that this version of `prikk` does not
 accept non-ASCII repository paths, naming the file. Every one of these commands still refuses;
-only the classification and wording changed.
+only the classification and wording changed. `bundle import --format json` and
+`archive import --format json` now also print a `refusal-v1` document for this cause (`"refusal":
+"outside-version-rule"`, the same id `extract --format json` already uses) — before this, both
+printed nothing at all to stdout for it under `--format json`.
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a

@@ -75,6 +75,24 @@ pub(crate) fn print_bundle_preview_json(report: &BundlePreviewReport) {
         "recorded signer identity, continuity only -- not a trust decision",
     ));
 
+    // 0.56.0 step F: additive, beside `sealed_by` above (unchanged) -- each signature's own
+    // publication-trust outcome against this repository's adopted policy.
+    json.push_str(",\n  \"sealed_by_signatures\": [");
+    for (index, signature) in report.sealed_by_signatures.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"key_id\": ");
+        json.push_str(&escape_json_string(&signature.key_id));
+        json.push_str(", \"outcome\": ");
+        json.push_str(&escape_json_string(signature.outcome.as_str()));
+        json.push('}');
+    }
+    if !report.sealed_by_signatures.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push(']');
+
     json.push_str(",\n  \"effects\": [");
     for (index, effect) in report.effects.iter().enumerate() {
         if index > 0 {
@@ -157,6 +175,15 @@ pub(crate) fn print_bundle_preview_plain(report: &BundlePreviewReport) {
             "sealed by: {} (continuity only, not a trust decision)",
             report.sealed_by.join(", ")
         );
+        // 0.56.0 step F: each signature's own publication-trust outcome, additive beside the
+        // plain list just printed above.
+        for signature in &report.sealed_by_signatures {
+            println!(
+                "  {}: {} (reported, not trusted)",
+                signature.key_id,
+                signature.outcome.as_str()
+            );
+        }
     }
     println!("effects: {}", report.effects.len());
     for effect in &report.effects {
