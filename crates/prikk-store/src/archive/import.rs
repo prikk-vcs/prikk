@@ -1199,9 +1199,17 @@ fn land_one_ref(
     };
     // 0.56.0 step F: the backstop for a resumed run -- see `refuse_forged_publication_signatures_
     // before_admission`'s own doc comment for why a fresh run can never reach here with a forged
-    // tip at all. Stage 1 has already admitted this landing's own object unconditionally by the
-    // time this runs, so this cannot give "nothing written" the way the fail-fast gate does -- but
-    // it still refuses before this landing's own pointer write, for every origin alike.
+    // tip at all; a resumed run skips that fresh-start-only gate entirely (it runs only in the
+    // `None` branch above, before a journal exists), so this is its sole remaining check. **0.56.0
+    // F2 measured, with a real `SIGKILL` mid-import, that this is not because the trust policy
+    // could change in the gap between the original run's crash and this resume: `trust maintainer
+    // add` and `trust maintainer remove` both refuse outright with a lock conflict while an
+    // archive import's own journal is present, so the fresh run's own all-object check stays valid
+    // across any later resume. The genuine, narrower residual is an out-of-band edit of the trust
+    // store file, outside `prikk` entirely -- the same OS boundary external ack 043 already
+    // names.** Stage 1 has already admitted this landing's own object unconditionally by the time
+    // this runs, so this cannot give "nothing written" the way the fail-fast gate does -- but it
+    // still refuses before this landing's own pointer write, for every origin alike.
     //
     // **0.56.0 F2 item 1, investigated and named rather than widened**: unlike the fail-fast gate
     // above (now every `Block`/`RefState` the archive carries), this backstop still checks only
