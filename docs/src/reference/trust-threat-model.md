@@ -235,7 +235,10 @@ E):** a stored `Block` or `RefState` that nothing in committed state reaches (no
 pointer, queued patch, or sealed block descending from them) has its publication trust check skipped
 entirely, rather than checked and potentially failed — reported instead as a counted, non-blocking
 **unreached object** warning. `RefUpdate` and locally-published `Tag` envelopes are unaffected; their
-own publication trust is still checked regardless of reachability.
+own publication trust is still checked regardless of reachability. **0.56.0 step 3h widens the
+unreached-object count itself to `Patch` and `Blob`** (neither type has a publication-trust check
+to skip in the first place -- this is a presence record only for them), but does not change which
+types' publication trust this check skips: still `Block`/`RefState` alone.
 
 `verify` does not prove that a repository is globally trustworthy. **It does check every reachable
 Patch's AUTHOR signatures against recorded key material (DC-53), and fails when one does not verify or

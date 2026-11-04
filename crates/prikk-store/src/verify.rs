@@ -1165,26 +1165,32 @@ pub struct UnreferencedRemnant {
 }
 
 /// 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` computation): a
-/// stored `Block` or `RefState` that nothing in committed state reaches -- the identical "nothing
-/// reaches it" test `UnreferencedRemnant` already uses for a *reference*, now applied to the
-/// object itself. Its own publication-trust check is skipped (nothing is pushed into
-/// `PublicationTrustVerifier::issues`), so it no longer fails `verify`; its bytes stay, and no
-/// command removes them yet.
+/// stored object that nothing in committed state reaches -- the identical "nothing reaches it"
+/// test `UnreferencedRemnant` already uses for a *reference*, now applied to the object itself.
+/// Originally `Block`/`RefState` only; **0.56.0 step 3h (#9) widens it to `Patch` and `Blob`
+/// too** -- a rolled-back or `received remove`d patch (its Block still held), a claimless
+/// accepted patch, or a refused or crashed import's leftover objects are counted here, where
+/// before this round they were invisible to both `verify` and `doctor`. For `Block`/`RefState`,
+/// recording here also means this object's own publication-trust check is skipped (nothing is
+/// pushed into `PublicationTrustVerifier::issues`), so it no longer fails `verify` on that count.
+/// `Patch` and `Blob` have no publication-trust concept to skip in the first place (DC-78 §D2,
+/// `trust.rs`'s own doc) -- for them, this is purely a presence record, with no trust-check side
+/// effect either way; its bytes stay, and no command removes them yet.
 ///
 /// The security property this preserves, in one sentence: trust never becomes "unreachable, so
 /// ignored" through a crafted pointer (`reachable` is built forward from this repository's own
 /// committed roots only -- `verify/reachability.rs`'s own module doc), and never becomes
 /// "reachable" through an object's own claims (expansion only ever follows a field read out of an
-/// object already in `reached`). An object recorded here is reclassified as reachable (and its
-/// trust checked again) on the very next run if something starts naming it, the same as
-/// `UnreferencedRemnant`'s own reachability is recomputed fresh every time.
+/// object already in `reached`). An object recorded here is reclassified as reachable (and, for
+/// `Block`/`RefState`, its trust checked again) on the very next run if something starts naming
+/// it, the same as `UnreferencedRemnant`'s own reachability is recomputed fresh every time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct UnreachedObject {
     /// The unreached object's own id.
     pub object_id: ObjectId,
-    /// The unreached object's own type (always `Block` or `RefState` -- the two types publication
-    /// trust applies to; see `trust.rs`'s own DC-78 §D2 doc).
+    /// The unreached object's own type -- `Block`, `RefState`, `Patch` or `Blob` (0.56.0 step 3h
+    /// widened this from `Block`/`RefState` only).
     pub object_type: ObjectType,
 }
 

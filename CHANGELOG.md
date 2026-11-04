@@ -357,6 +357,20 @@
   reports already has at least one — a claimless patch is `"unclaimed"`, reported only by `show`,
   never by this listing. `sync pending`'s own text form (the count line and one id per line) keeps
   its exact shape; only the membership changed.
+- **`verify`'s own `unreached_objects` and `doctor`'s own `PRIKK-DOCTOR-UNREACHED-OBJECT` issue now
+  count `Patch` and `Blob` too (0.56.0 step 3h, #9), not only `Block`/`RefState`.** A rolled-back or
+  `received remove`d block's own patch (and the blobs its own operations name), a claimless
+  accepted patch with no sealing Block, or a refused or crashed import's leftover patch/blob
+  objects are now reported as unreached — before this round they were invisible to both commands.
+  An object counts when it is reached by no tip, by no WAL record, and by no pending patch (3g's
+  own `pending` predicate, reused unmodified — "with the blobs they name," so a pending patch and
+  every blob its own operations reference stay out of the count too, agreeing with `sync
+  pending`/`show`'s own `"pending"` classification that there is somewhere real for an operator to
+  act on it). `verify`'s own `object_type` values gain `"patch"` and `"blob"`, read generically by
+  the existing JSON printer with no new match arm; `doctor`'s own fixed recommendation ("the bytes
+  stay; no command removes them yet") and its message text are unchanged, since neither type has a
+  publication-trust check to skip in the first place — for `Patch`/`Blob` this is purely a presence
+  record, never a trust-check side effect.
 
 ### Added
 

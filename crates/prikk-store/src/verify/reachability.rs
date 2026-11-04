@@ -6,12 +6,23 @@
 //! across runs.
 //!
 //! **Roots** (RFC 164 §5): every local ref's current RefState, every received ref's current
-//! RefState, and every blob a queued (unsealed) patch in any active WAL session references.
-//! **Expansion**: a RefState reaches its own `target_object_id` (a Block or a Tag) and its own
-//! `previous_ref_state_id` (keeping a ref's whole published lineage reachable, not only its current
-//! tip); a Tag reaches its `target_block_id`; a Block reaches `parent_block_ids`, `patch_ids`,
-//! `snapshot_blob_ref`, `mainline_parent_id`, and `merge_baseline_block_id` -- this is "a sealed
-//! block reached from them" (RFC 164 §5): transitively, through every block's own parents.
+//! RefState, every blob a queued (unsealed) patch in any active WAL session references, and --
+//! 0.56.0 step 3h (#9), widening this set to answer `verify`/`doctor`'s own `Patch`/`Blob`
+//! question, not only `Block`/`RefState`'s -- every patch id [`crate::patch_set_digest::
+//! patch_ids_pending`] names (3g's own `pending` predicate: a held patch a held claim names and
+//! no held Block seals; reused here unmodified, never restated). **Expansion**: a RefState reaches
+//! its own `target_object_id` (a Block or a Tag) and its own `previous_ref_state_id` (keeping a
+//! ref's whole published lineage reachable, not only its current tip); a Tag reaches its
+//! `target_block_id`; a Block reaches `parent_block_ids`, `patch_ids`, `snapshot_blob_ref`,
+//! `mainline_parent_id`, and `merge_baseline_block_id` -- this is "a sealed block reached from
+//! them" (RFC 164 §5): transitively, through every block's own parents; **and, since 0.56.0 step
+//! 3h, a `Patch`** (whether reached as a pending root above, or transitively through a reachable
+//! Block's own `patch_ids`) **reaches every Blob its own operations reference** (`CreateFile`'s
+//! `blob_id`, `ReplaceBinary`'s `old_blob_id`/`new_blob_id`, a file-kind `DeleteNode`'s own
+//! `old_blob_id` -- [`crate::patch_replay::decode::patch_referenced_blob_ids`], the identical
+//! decoder the queued-patch root case below already uses). This is "with the blobs they name" from
+//! the handoff's own wording: a pending patch's blobs are reached through this one new expansion
+//! step, with no separate root needed for them.
 //!
 //! **Scope, narrower than the general principle**: only `Block`'s own existing missing-reference
 //! check (`parent_block_ids`, `patch_ids`, `snapshot_blob_ref` -- `verify_block_payload`) is made
@@ -32,12 +43,15 @@
 //! against the previous record -- so every non-genesis tip's own previous link was itself already
 //! read and decoded, not merely compared by id). No other `RefState`'s own previous link is
 //! checked anywhere: a superseded received tip from before 0.49.0 may genuinely lack its own chain,
-//! and `verify` passes over it, by design. A `Patch`'s own referenced blobs are not re-derived
-//! here either, by the same reasoning: no existing check makes a *sealed* patch's blob references
-//! reachability-aware (only a *queued* one's, via the root case above, matching
-//! `verify_queued_patch_connectivity`'s own narrow walk). `RecognitionClaim`'s own references are
-//! never touched: they are "never trust-conferring and never existence-checked" by standing design
-//! (the `ObjectType` doc), and reachability classification must not contradict that.
+//! and `verify` passes over it, by design. **0.56.0 step 3h adds forward expansion for a sealed or
+//! pending `Patch`'s own referenced blobs (above), but still no missing-reference *existence*
+//! check for them**: `verify_block_payload`'s own `UnreferencedRemnant`-vs-damage classification
+//! stays Block-only (`parent_block_ids`, `patch_ids`, `snapshot_blob_ref`) -- a Patch whose own
+//! `blob_id`/`old_blob_id`/`new_blob_id` names a Blob this repository never wrote is not reported
+//! as damage by anything today, and this round does not change that; it only widens
+//! *reachability*, never *existence checking*. `RecognitionClaim`'s own references are never
+//! touched: they are "never trust-conferring and never existence-checked" by standing design (the
+//! `ObjectType` doc), and reachability classification must not contradict that.
 //!
 //! **A reference this walk cannot read is never expanded past.** A missing or undecodable object is
 //! simply not added to the reachable set and nothing is pushed from it -- the walk only ever trusts
@@ -70,6 +84,40 @@ pub(super) fn compute_reachable_object_ids(
     object_store: &impl ObjectReader,
     default_replay: Option<&WalReplay>,
 ) -> Result<BTreeSet<ObjectId>> {
+    compute_reachable_object_ids_with_pending_roots(layout, object_store, default_replay, true)
+}
+
+/// 0.56.0 step 3h test-support seam for a red control: [`compute_reachable_object_ids`] with the
+/// new pending-patch root case (above) disabled -- reproduces the exact pre-3h gap this round
+/// closes (a pending patch, and the blob it names, wrongly counted `unreached`) without a
+/// process-global toggle. A parameter, not an env var, for the identical reason 3g's own red
+/// control (`patch_ids_pending_disabling_held_block_subtraction_for_test`) gives: `cargo test -p
+/// prikk-store --lib` runs this crate's whole suite in one process, in parallel, and
+/// `std::env::set_var` would race every other test in the same binary that also calls this
+/// function while this one has it set. `#[cfg(test)]`, not `feature = "test-support"`: this
+/// function's own type (`pub(super)`, not `pub`) is already invisible outside this crate, so
+/// nothing in `prikk-cli`'s own cross-crate integration suite could ever call it regardless of
+/// feature gate -- its one real caller is this crate's own `#[cfg(test)] mod tests`, in the same
+/// compilation unit, which is exactly what `#[cfg(test)]` (unlike `feature = "test-support"`)
+/// guarantees always compiles together, with no risk of the lib-only `--features test-support`
+/// build flagging it as dead code (confirmed: `cargo clippy --all-targets --features
+/// test-support` did flag it when this was gated by the feature instead, for exactly that
+/// reason, matching 3g's own report of the identical trap one level up in `patch_set_digest.rs`).
+#[cfg(test)]
+pub(super) fn compute_reachable_object_ids_excluding_pending_roots_for_test(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    default_replay: Option<&WalReplay>,
+) -> Result<BTreeSet<ObjectId>> {
+    compute_reachable_object_ids_with_pending_roots(layout, object_store, default_replay, false)
+}
+
+fn compute_reachable_object_ids_with_pending_roots(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    default_replay: Option<&WalReplay>,
+    include_pending_roots: bool,
+) -> Result<BTreeSet<ObjectId>> {
     let mut reached: BTreeSet<ObjectId> = BTreeSet::new();
     let mut frontier: Vec<ObjectId> = Vec::new();
 
@@ -79,6 +127,17 @@ pub(super) fn compute_reachable_object_ids(
     }
     for pointer in list_received_pointers(layout)? {
         frontier.push(pointer.ref_state_id);
+    }
+    // 0.56.0 step 3h (#9): every pending patch (3g's own predicate, reused unmodified) is a root
+    // too -- "reached by no pending patch" is one of the three disjuncts `verify`/`doctor`'s own
+    // rule now tests. Pushed onto the same frontier as every other root, so the ordinary walk
+    // below both marks the patch itself reached and (via `expand_frontier`'s new `Patch` arm)
+    // reaches every blob its own operations name -- "with the blobs they name," the handoff's own
+    // wording, falls out of this one addition with no separate blob root needed.
+    if include_pending_roots {
+        for patch_id in crate::patch_set_digest::patch_ids_pending(layout)? {
+            frontier.push(patch_id);
+        }
     }
     for name in layout.active_session_names()? {
         let replay_owned;
@@ -165,8 +224,21 @@ pub(crate) fn expand_frontier(envelope: &ObjectEnvelope) -> Vec<ObjectId> {
                 next.push(baseline);
             }
         }
-        ObjectType::Patch
-        | ObjectType::RefUpdate
+        // 0.56.0 step 3h (#9): a reachable Patch (sealed into a reachable Block's own `patch_ids`,
+        // or itself a pending root above) reaches every Blob its own operations name. A decode
+        // failure here returns the frontier built so far, exactly like every arm above: this
+        // Patch stays reached (it was already inserted into `reached` by the caller before
+        // `expand_frontier` runs), the walk simply builds no further past it.
+        ObjectType::Patch => {
+            let Ok(blob_ids) = crate::patch_replay::decode::patch_referenced_blob_ids(
+                &envelope.canonical_payload,
+                envelope.schema_version,
+            ) else {
+                return next;
+            };
+            next.extend(blob_ids);
+        }
+        ObjectType::RefUpdate
         | ObjectType::Blob
         | ObjectType::Attestation
         | ObjectType::BlockSummaryCache

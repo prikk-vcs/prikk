@@ -374,7 +374,13 @@ planned for.
   received remove <remotes/…>` removes the pointer directly, the same consequence as replacing it
   (everything it alone reached becomes an unreached-object warning on the next `verify`), without
   waiting for a later, sound import to happen to supersede it. The objects themselves are still not
-  removed by this or any command.
+  removed by this or any command. **0.56.0 step 3h widens `unreached_objects`/`PRIKK-DOCTOR-
+  UNREACHED-OBJECT` from `Block`/`RefState` only to `Patch` and `Blob` too:** a rolled-back or
+  `received remove`d block's own patch (and the blobs its own operations name), a claimless
+  accepted patch, or a refused or crashed import's leftover patch/blob objects are now counted as
+  unreached, where before this round they were invisible to both `verify` and `doctor`. Neither
+  type has a publication-trust check to skip (DC-78 §D2) -- for them this is purely a presence
+  record, the same "the bytes stay either way" as above.
 
 - **A WAL whose damage exhausts the resynchronisation scan budget has no repair command** (RFC 167). `prikk doctor`
   reports the failed record and recommends preserving the repository and inspecting it; no command in 0.49.0 removes

@@ -27,16 +27,20 @@
 
 use prikk_error::Result;
 use prikk_object::{
-    BlockKind, BlockPayload, CanonicalEncode, MerkleRoot, ObjectEnvelope, ObjectId, ObjectType,
-    RefKind, RefStatePayload, RefUpdatePayload, TagPayload,
+    BlobKind, BlobPayload, BlockKind, BlockPayload, CanonicalEncode, CreateFile, MerkleRoot,
+    NodeId, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload,
+    PatchPurpose, RecognitionClaimPayload, RefKind, RefStatePayload, RefUpdatePayload, TagPayload,
 };
 
-use super::super::reachability::compute_reachable_object_ids;
+use super::super::reachability::{
+    compute_reachable_object_ids, compute_reachable_object_ids_excluding_pending_roots_for_test,
+};
 use super::assert_unreached_object;
 use crate::maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner};
 use crate::patch_set_digest::compute_patch_set_digest_and_count_from_block;
 use crate::test_gates::test_support::{
-    rollback_author_signature, sample_object_id, unique_temp_dir,
+    rollback_author_signature, sample_object_id, signed_block, signed_ref_state_envelope,
+    signed_ref_update_envelope, unique_temp_dir,
 };
 use crate::{
     DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectReader, ObjectWriter, RefPublication, RefStore,
@@ -648,5 +652,472 @@ fn an_independent_walk_agrees_with_compute_reachable_object_ids_on_every_fixture
     }
 
     let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+// --- 0.56.0 step 3h (#9): `Patch` and `Blob` join this same `unreached_objects` list, over the
+// design review v2 A1 ruling's own five objects (`.git-exclude/reviewed/0.56.0-step-2-design-
+// review-v2.md`'s own table). Fixture shapes below are lightly adapted from `patch_exchange::
+// tests` and `show::tests` (objects 1-4) and `bundle::tests`'s own real pass-2-truncation fixture
+// (object 5, external review 037 §1.3's shape) -- not rebuilt from scratch.
+
+/// A `Blob` object, written directly (the AUTHOR/MAINTAINER signing boundary has no concept of a
+/// Blob signature -- `ObjectEnvelope::unsigned` is the real, production shape for every Blob this
+/// codebase ever writes).
+fn write_blob_direct(store: &mut FileObjectStore, content: &[u8]) -> Result<ObjectId> {
+    let payload = BlobPayload {
+        blob_kind: BlobKind::Text,
+        content: content.to_vec(),
+        declared_size: content.len() as u64,
+    };
+    let envelope = ObjectEnvelope::unsigned(ObjectType::Blob, 1, payload.to_canonical_bytes()?);
+    store.write_object(&envelope)
+}
+
+/// A held, AUTHOR-signed `Patch` with one `CreateFile` operation naming `blob_id` -- written
+/// directly to the object store, never through the WAL (so it reads `pending`/`unclaimed`/
+/// `sealed`, never `queued`), matching `show::tests::write_pending_patch`'s own shape.
+fn write_patch_naming_blob(
+    store: &mut FileObjectStore,
+    blob_id: ObjectId,
+    node_byte: u8,
+) -> Result<ObjectId> {
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::CreateFile(CreateFile {
+                path: "a.txt".to_string(),
+                node_id: NodeId::from_bytes([node_byte; 32]),
+                blob_id,
+                mode: 0o100_644,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut envelope =
+        ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes()?);
+    envelope.add_signature(rollback_author_signature())?;
+    store.write_object(&envelope)
+}
+
+/// An unsigned `RecognitionClaim` naming `patch_ids` sealed into `block_id` -- membership only
+/// (`patch_ids_pending`'s own claim scan never checks a claim's signature, matching 3g's own
+/// reasoning: "a claim's own signature outcome is irrelevant to this question"), matching
+/// `show::tests::write_claim`'s own unsigned shape used for the identical purpose there.
+fn write_claim_direct(
+    store: &mut FileObjectStore,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+) -> Result<ObjectId> {
+    let payload = RecognitionClaimPayload {
+        block_id,
+        patch_ids,
+        parent_block_ids: Vec::new(),
+    };
+    let envelope = ObjectEnvelope::unsigned(
+        ObjectType::RecognitionClaim,
+        1,
+        payload.to_canonical_bytes()?,
+    );
+    store.write_object(&envelope)
+}
+
+/// A `Block` naming `patch_ids`, sealed over `parent_block_ids` -- the shape
+/// [`write_root_block`] above does not cover (it always writes an empty-patch root).
+fn write_block_naming_patches(
+    store: &mut FileObjectStore,
+    parent_block_ids: Vec<ObjectId>,
+    patch_ids: Vec<ObjectId>,
+    distinguishing_root: u8,
+) -> Result<ObjectId> {
+    let payload = BlockPayload {
+        parent_block_ids,
+        kind: BlockKind::Normal,
+        patch_ids,
+        state_merkle_root: MerkleRoot([distinguishing_root; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, payload.to_canonical_bytes()?);
+    store.write_object(&envelope)
+}
+
+/// Object 1 ("accepted, with a held claim"): #9's own rule ("reached by no tip, by no WAL record,
+/// and by no pending patch -- with the blobs they name") means a pending patch, and the blob its
+/// own operation names, must both stay out of `unreached_objects` -- `verify` must agree with
+/// `sync pending`/`show`'s own `Pending` classification that this object has somewhere real for an
+/// operator to act on it, not an orphan.
+#[test]
+fn an_accepted_patch_with_a_held_claim_is_not_counted_unreached() -> Result<()> {
+    let root = unique_temp_dir("unreached-3h-object1-pending");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_id = write_blob_direct(&mut store, b"object 1 pending blob\n")?;
+    let patch_id = write_patch_naming_blob(&mut store, blob_id, 0xD1)?;
+    let prospective_block_id = sample_object_id("unreached-3h-object1-prospective-block");
+    write_claim_direct(&mut store, prospective_block_id, vec![patch_id])?;
+
+    let report = verify_repository(&layout)?;
+    assert!(
+        !report
+            .unreached_objects
+            .iter()
+            .any(|unreached| unreached.object_id == patch_id),
+        "a pending patch (held claim, no sealing block) must never be counted unreached: {:?}",
+        report.unreached_objects
+    );
+    assert!(
+        !report
+            .unreached_objects
+            .iter()
+            .any(|unreached| unreached.object_id == blob_id),
+        "a pending patch's own referenced blob must be reached through it, not counted unreached: \
+         {:?}",
+        report.unreached_objects
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Red control (the handoff's own instruction: disable the new addition the round judges most
+/// novel): remove exactly the new pending-patch root, nothing else, and confirm object 1's own
+/// patch and blob regress to the pre-3h gap -- wrongly absent from the reachable set, which is
+/// exactly what would make `verify` count them unreached again, were this addition missing.
+#[test]
+fn disabling_the_pending_patch_root_reproduces_the_pre_3h_gap_for_object_1() -> Result<()> {
+    let root = unique_temp_dir("unreached-3h-red-control");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_id = write_blob_direct(&mut store, b"red control pending blob\n")?;
+    let patch_id = write_patch_naming_blob(&mut store, blob_id, 0xD9)?;
+    let prospective_block_id = sample_object_id("unreached-3h-red-control-prospective-block");
+    write_claim_direct(&mut store, prospective_block_id, vec![patch_id])?;
+
+    // Normal run: both reached, through the new pending-patch root.
+    let reachable = compute_reachable_object_ids(&layout, &store, None)?;
+    assert!(
+        reachable.contains(&patch_id),
+        "the pending patch must be reached normally"
+    );
+    assert!(
+        reachable.contains(&blob_id),
+        "its own referenced blob must be reached normally"
+    );
+
+    // With exactly the pending-patch root disabled: the old, wrong gap -- neither is reached.
+    let without_pending_root =
+        compute_reachable_object_ids_excluding_pending_roots_for_test(&layout, &store, None)?;
+    assert!(
+        !without_pending_root.contains(&patch_id),
+        "disabling the pending-patch root must reproduce the pre-3h gap: the pending patch \
+         wrongly unreached"
+    );
+    assert!(
+        !without_pending_root.contains(&blob_id),
+        "disabling the pending-patch root must reproduce the pre-3h gap: its blob wrongly \
+         unreached too"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Object 2 ("accepted, no claim, hand-made only"): with no held claim at all, nothing makes this
+/// patch (or its blob) reachable, so both must be counted -- the exact gap review 037 §1.3 asked
+/// #9 to close for a claimless accepted patch.
+#[test]
+fn a_claimless_accepted_patch_is_counted_unreached_with_its_blob() -> Result<()> {
+    let root = unique_temp_dir("unreached-3h-object2-unclaimed");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_id = write_blob_direct(&mut store, b"object 2 unclaimed blob\n")?;
+    let patch_id = write_patch_naming_blob(&mut store, blob_id, 0xD2)?;
+
+    let report = verify_repository(&layout)?;
+    assert_unreached_object(&report, patch_id, ObjectType::Patch);
+    assert_unreached_object(&report, blob_id, ObjectType::Blob);
+    // The handoff's own explicit wording: "verify's object_type values 'patch' and 'blob'" --
+    // confirmed here at the value level (`ObjectType`'s own `Display`), which is all the CLI JSON
+    // printer (`output/verification.rs`) ever reads: `escape_json_string(&unreached.object_type.
+    // to_string())`, with no type-specific match arm to add or get wrong.
+    for unreached in &report.unreached_objects {
+        match unreached.object_type {
+            ObjectType::Patch => assert_eq!(unreached.object_type.to_string(), "patch"),
+            ObjectType::Blob => assert_eq!(unreached.object_type.to_string(), "blob"),
+            other => panic!("unexpected unreached object type in this fixture: {other:?}"),
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Object 3 ("rolled back, its Block still held"): a received, non-fast-forward "rollback" import
+/// (A2's own class; built here, as 2A v2's own R5 measurement did, over `received/write_received_
+/// pointer` directly -- the delivered RefState's own `previous_ref_state_id` reflects the
+/// *sender's* history, never a link back to the receiver's superseded tip, which is exactly why
+/// the old tip genuinely stops being reached rather than staying reachable through a continuing
+/// chain; confirmed first in isolation below, matching `a_sound_import_from_a_different_lineage_
+/// replaces_an_untrusted_one_and_verify_passes_with_a_warning`'s own identical write mechanism)
+/// landing an ancestor (`root_block_id`) over a forward tip (`child_block_id`, whose own parent
+/// *is* `root_block_id` -- a genuine rollback, not an unrelated lineage) does not unwrite the block
+/// it moved away from, or the patch (and blob) that block names -- all three must now be counted
+/// unreached, where before this round only the Block was.
+#[test]
+fn a_rolled_back_blocks_patch_and_blob_are_both_counted_unreached_alongside_its_block() -> Result<()>
+{
+    let root = unique_temp_dir("unreached-3h-object3-rollback");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_id = write_blob_direct(&mut store, b"object 3 rollback blob\n")?;
+    let patch_id = write_patch_naming_blob(&mut store, blob_id, 0xD3)?;
+    let root_block_id =
+        store.write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))?;
+    let child_block_id =
+        write_block_naming_patches(&mut store, vec![root_block_id], vec![patch_id], 0xD4)?;
+
+    let forward_ref_state =
+        signed_ref_state_envelope("remotes/origin/heads/main", None, child_block_id, 1);
+    let forward_ref_state_id = store.write_object(&forward_ref_state)?;
+    crate::received::write_received_pointer_for_test(
+        &layout,
+        "remotes/origin/heads/main",
+        forward_ref_state_id,
+    )?;
+
+    let before = verify_repository(&layout)?;
+    assert!(
+        !before
+            .unreached_objects
+            .iter()
+            .any(|unreached| unreached.object_id == patch_id
+                || unreached.object_id == blob_id
+                || unreached.object_id == child_block_id),
+        "before any rollback, the tip's own block, patch and blob must all be reached: {:?}",
+        before.unreached_objects
+    );
+
+    // The rollback landing: a fresh RefState naming the ancestor `root_block_id`, with no
+    // `previous_ref_state_id` link of its own (the sender's own history for this ref name starts
+    // at its own root; it never names the receiver's now-superseded `forward_ref_state_id` at
+    // all). `write_received_pointer` upserts the received-index entry for this ref name in place --
+    // the identical mechanism `a_sound_import_from_a_different_lineage_replaces_an_untrusted_one_
+    // and_verify_passes_with_a_warning` above already relies on.
+    let rollback_ref_state =
+        signed_ref_state_envelope("remotes/origin/heads/main", None, root_block_id, 1);
+    let rollback_ref_state_id = store.write_object(&rollback_ref_state)?;
+    crate::received::write_received_pointer_for_test(
+        &layout,
+        "remotes/origin/heads/main",
+        rollback_ref_state_id,
+    )?;
+
+    let after = verify_repository(&layout)?;
+    assert_unreached_object(&after, child_block_id, ObjectType::Block);
+    assert_unreached_object(&after, patch_id, ObjectType::Patch);
+    assert_unreached_object(&after, blob_id, ObjectType::Blob);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Object 4 ("after `received remove`, its Block still held"): `remove_received_pointer` deletes
+/// only the pointer -- the block it named, and the patch (and blob) that block names, are all
+/// still held. Before removal all three are reached (through the received pointer); after, all
+/// three must be counted unreached together.
+#[test]
+fn a_received_removed_blocks_patch_and_blob_are_both_counted_unreached_alongside_its_block()
+-> Result<()> {
+    let root = unique_temp_dir("unreached-3h-object4-received-remove");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let blob_id = write_blob_direct(&mut store, b"object 4 received-remove blob\n")?;
+    let patch_id = write_patch_naming_blob(&mut store, blob_id, 0xD5)?;
+    let root_block_id =
+        store.write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))?;
+    let block_id =
+        write_block_naming_patches(&mut store, vec![root_block_id], vec![patch_id], 0xD6)?;
+
+    let received_ref_state =
+        signed_ref_state_envelope("remotes/origin/heads/main", None, block_id, 1);
+    let received_ref_state_id = store.write_object(&received_ref_state)?;
+    crate::received::write_received_pointer_for_test(
+        &layout,
+        "remotes/origin/heads/main",
+        received_ref_state_id,
+    )?;
+
+    let before = verify_repository(&layout)?;
+    assert!(
+        !before
+            .unreached_objects
+            .iter()
+            .any(|unreached| unreached.object_id == patch_id
+                || unreached.object_id == blob_id
+                || unreached.object_id == block_id),
+        "before received remove, the received block, patch and blob must all be reached: {:?}",
+        before.unreached_objects
+    );
+
+    crate::remove_received_pointer(&layout, "remotes/origin/heads/main")?;
+
+    let after = verify_repository(&layout)?;
+    assert_unreached_object(&after, block_id, ObjectType::Block);
+    assert_unreached_object(&after, patch_id, ObjectType::Patch);
+    assert_unreached_object(&after, blob_id, ObjectType::Blob);
+
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// Object 5 ("a refused or crashed import's leftover"), external review 037 §1.3's exact shape:
+/// `bundle import`'s own pass 2 (the write pass) already admits some real objects before a file
+/// truncated between the two passes makes it refuse the whole import. Adapted from `bundle::tests
+/// ::a_pass_two_file_truncated_between_passes_refuses_with_rs_message_shape_and_writes_no_pointer`
+/// (the exact, already-measured "file changed between the passes" fixture that test builds) --
+/// this is the same real truncation, the same real refusal, with one addition: `verify` on the
+/// receiver afterward, confirming whatever pass 2 did admit before the cut is now counted.
+///
+/// **Widened from that fixture's own two-block history to a ten-block chain**, each block sealing
+/// its own patch and blob: found empirically that the production fixture's own tiny five-object
+/// history leaves nothing at all written by a half-length truncation (the cut lands inside the
+/// very first object's own frame), which would make this adapted test exercise nothing. A longer
+/// chain guarantees several whole (blob, patch, block) groups land before the cut, with no need to
+/// know or control exactly which ones -- every patch/blob id this fixture wrote is checked below,
+/// and only the ones pass 2 actually admitted are asserted against.
+#[test]
+#[allow(clippy::expect_used)]
+fn a_pass_two_truncated_bundle_import_leaves_already_written_patches_and_blobs_counted_unreached()
+-> Result<()> {
+    const CHAIN_LENGTH: u8 = 10;
+
+    let source_root = unique_temp_dir("unreached-3h-object5-source");
+    let source = RepositoryLayout::init(source_root.clone())?;
+    let mut source_store = FileObjectStore::new(source.clone());
+
+    let mut patch_and_blob_ids: Vec<(ObjectId, ObjectId)> = Vec::new();
+    let root_block_id =
+        source_store.write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))?;
+    let mut tip_block_id = root_block_id;
+    for index in 0..CHAIN_LENGTH {
+        let blob_content = format!("object 5 chain blob {index}\n").into_bytes();
+        let blob_envelope = ObjectEnvelope::unsigned(
+            ObjectType::Blob,
+            1,
+            BlobPayload {
+                blob_kind: BlobKind::Text,
+                declared_size: blob_content.len() as u64,
+                content: blob_content,
+            }
+            .to_canonical_bytes()?,
+        );
+        let blob_id = source_store.write_object(&blob_envelope)?;
+        let mut patch_envelope = ObjectEnvelope::unsigned(
+            ObjectType::Patch,
+            1,
+            PatchPayload {
+                operations: vec![Operation {
+                    op_seq: 1,
+                    op_id: None,
+                    preconditions: Vec::new(),
+                    kind: OperationKind::CreateFile(CreateFile {
+                        path: format!("chain-{index}.txt"),
+                        node_id: NodeId::from_bytes([0xE0 + index; 32]),
+                        blob_id,
+                        mode: 0o100_644,
+                    }),
+                }],
+                intent: None,
+                preconditions: Vec::new(),
+                purpose: PatchPurpose::Normal,
+                message: None,
+            }
+            .to_canonical_bytes()?,
+        );
+        patch_envelope.add_signature(rollback_author_signature())?;
+        let patch_id = source_store.write_object(&patch_envelope)?;
+        tip_block_id = source_store.write_object(&signed_block(
+            BlockKind::Normal,
+            vec![tip_block_id],
+            vec![patch_id],
+            None,
+        ))?;
+        patch_and_blob_ids.push((patch_id, blob_id));
+    }
+
+    let ref_store = RefStore::new(source.clone());
+    let ref_state = signed_ref_state_envelope("heads/main", None, tip_block_id, 1);
+    let ref_state_id = ref_state.object_id();
+    let ref_update = signed_ref_update_envelope("heads/main", None, ref_state_id, tip_block_id, 1);
+    ref_store.publish(&RefPublication {
+        ref_name: "heads/main".to_string(),
+        expected_previous_ref_state_id: None,
+        ref_state,
+        ref_update,
+    })?;
+
+    let (_, bytes) = crate::bundle::export_bundle(&source, "heads/main")?;
+    let mut bundle_path = source_root.clone();
+    bundle_path.push("exported.bundle");
+    std::fs::write(&bundle_path, &bytes)?;
+    let total_len = std::fs::metadata(&bundle_path)?.len();
+
+    let target_root = unique_temp_dir("unreached-3h-object5-target");
+    let target = RepositoryLayout::init(target_root.clone())?;
+
+    let seam_path = bundle_path.clone();
+    crate::bundle::corrupt_file_between_passes_for_test(move || {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&seam_path)
+            .expect("reopen the bundle file to truncate it");
+        file.set_len(total_len / 2)
+            .expect("truncate the bundle file to half its own length");
+    });
+
+    let mut source_handle = crate::bundle::BundleSource::File(std::fs::File::open(&bundle_path)?);
+    let refused = crate::bundle::import_bundle(
+        &target,
+        &mut source_handle,
+        &crate::bundle::BundleImportOptions::default_limits(),
+    );
+    assert!(
+        refused.is_err(),
+        "the truncated pass-2 re-read must refuse the whole import: {refused:?}"
+    );
+
+    let target_store = FileObjectStore::new(target.clone());
+    let mut any_written = false;
+    let report = verify_repository(&target)?;
+    for (patch_id, blob_id) in patch_and_blob_ids {
+        if target_store.read_object(patch_id)?.is_some() {
+            any_written = true;
+            assert_unreached_object(&report, patch_id, ObjectType::Patch);
+        }
+        if target_store.read_object(blob_id)?.is_some() {
+            any_written = true;
+            assert_unreached_object(&report, blob_id, ObjectType::Blob);
+        }
+    }
+    assert!(
+        any_written,
+        "fixture bug: pass 2 must have already written at least one patch or blob before the \
+         truncation point, or this test exercises nothing"
+    );
+
+    let _ = std::fs::remove_dir_all(source_root);
+    let _ = std::fs::remove_dir_all(target_root);
     Ok(())
 }

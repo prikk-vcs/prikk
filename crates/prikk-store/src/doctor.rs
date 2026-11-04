@@ -1432,7 +1432,15 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // 0.54.0 B1 (RFC 164 Rule E, applied to the object itself): a stored Block or RefState
             // that nothing in committed state reaches never has its publication trust checked --
             // never repaired or removed, the bytes stay, mirroring unreferenced_remnants's own
-            // mapping immediately above for the sibling consumption site.
+            // mapping immediately above for the sibling consumption site. 0.56.0 step 3h (#9)
+            // widens `unreached_objects` itself to `Patch` and `Blob` too (a rolled-back or
+            // `received remove`d patch, a claimless accepted patch, or a refused/crashed import's
+            // leftover objects); this loop needed no change at all to pick them up -- it already
+            // formats `object_type`/`object_id` generically, with no type-specific branch. The
+            // message's own "its publication trust was not checked" reads literally true for a
+            // Patch/Blob too (neither type has a publication-trust concept to check in the first
+            // place, so it genuinely never was), so it is left unchanged rather than split into a
+            // second message for two types that would just restate the same fact two ways.
             for unreached in &verification.unreached_objects {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREACHED-OBJECT",

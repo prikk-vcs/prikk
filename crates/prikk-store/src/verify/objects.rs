@@ -512,25 +512,41 @@ fn verify_object_record(
             object_id,
         },
     )?;
-    let sealed_by_key_id = if matches!(object_type, ObjectType::Block | ObjectType::RefState) {
-        // 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` set
-        // `verify_block_payload` already reads below): an object nothing in committed state
-        // reaches never had its publication trust checked by anyone before this object itself was
-        // reached, so a crafted or abandoned signature on it is not this repository's problem to
-        // flag -- it is recorded as an unreached object (a warning) instead of a trust issue. An
-        // object that *is* reached is checked exactly as before this change; nothing here weakens
-        // that.
-        if ctx.classifier.reachable.contains(&object_id) {
-            trust_verifier.verify(envelope)?
-        } else {
-            ctx.classifier.unreached.push(super::UnreachedObject {
-                object_id,
-                object_type,
-            });
+    let sealed_by_key_id = match object_type {
+        ObjectType::Block | ObjectType::RefState => {
+            // 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` set
+            // `verify_block_payload` already reads below): an object nothing in committed state
+            // reaches never had its publication trust checked by anyone before this object itself
+            // was reached, so a crafted or abandoned signature on it is not this repository's
+            // problem to flag -- it is recorded as an unreached object (a warning) instead of a
+            // trust issue. An object that *is* reached is checked exactly as before this change;
+            // nothing here weakens that.
+            if ctx.classifier.reachable.contains(&object_id) {
+                trust_verifier.verify(envelope)?
+            } else {
+                ctx.classifier.unreached.push(super::UnreachedObject {
+                    object_id,
+                    object_type,
+                });
+                None
+            }
+        }
+        // 0.56.0 step 3h (#9): `Patch` and `Blob` join the same `unreached_objects` list when
+        // nothing in committed state reaches them, but never through `trust_verifier.verify` --
+        // `PublicationTrustVerifier` is specifically a `Block`/`RefState` concern (DC-78 §D2,
+        // `trust.rs`'s own doc), and neither type ever had a publication-trust check to skip in
+        // the first place. Only the recording side widens; the trust-check side stays exactly as
+        // narrow as before this round.
+        ObjectType::Patch | ObjectType::Blob => {
+            if !ctx.classifier.reachable.contains(&object_id) {
+                ctx.classifier.unreached.push(super::UnreachedObject {
+                    object_id,
+                    object_type,
+                });
+            }
             None
         }
-    } else {
-        None
+        _ => None,
     };
     // DC-53 Stage 1: a Patch's AUTHOR signature is checked against recorded key material here. A
     // signature that fails to verify against *recorded* material propagates as an `Err` via `?`
