@@ -120,6 +120,16 @@ own materialize never finished either, this resume finishes it directly, so ther
 `branch switch` step left for the operator to run by hand. A landing not destined for the current
 branch, or one that cannot be adopted as a real local ref at all, is unaffected by either fix.
 
+**0.56.0 step W3c-5c** closed one remaining gap in that second fix. A ref this import never
+touched at all could already hold the identical content — not because an earlier attempt of this
+import adopted it, but because some *other*, earlier import already had, and this import's own
+archive happens to carry the same, unchanged tip for that ref. Resuming now also checks what the
+ref held before this import's own plan was first computed, not only whether the content matches on
+resume, so that case reports the ordinary fall-through too — exactly what an uninterrupted run of
+the same import would have reported, rather than a false claim that this import adopted something
+it never touched. An import still in progress from before this fix resumes correctly as well: the
+ordinary fall-through applies there too, never a false adoption.
+
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
 non-empty, so `seal --ref heads/main` cannot publish a patch authored for `heads/topic`

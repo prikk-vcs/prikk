@@ -142,7 +142,15 @@ use super::verify::{
 /// Journal magic -- distinct from every other file this repository writes, so a resync or a
 /// misread never confuses it with anything else.
 const JOURNAL_MAGIC: &[u8; 8] = b"PRIMPJ01";
-const JOURNAL_VERSION: u16 = 1;
+/// 0.56.0 step W3c-5c: bumped from `1` to `2` -- each landing record grew a 5th field
+/// (`PlannedRefLanding::plan_time_local_ref_state`). `encode_journal` only ever writes this,
+/// the current, version-2 shape; `decode_journal` reads both this and the old, version-1 shape
+/// (see its own doc comment), so a resumed, in-progress import written by an older binary still
+/// decodes, rather than refusing outright across an upgrade.
+const JOURNAL_VERSION: u16 = 2;
+/// The one older journal shape `decode_journal` still reads, for exactly the reason
+/// [`JOURNAL_VERSION`]'s own doc comment gives.
+const JOURNAL_VERSION_1_WITHOUT_PLAN_TIME_REF_STATE: u16 = 1;
 /// DC-86 discipline: every length decoded from the journal is checked against one of these before
 /// an allocation or a copy -- the journal is this repository's own write, never adversarial input
 /// the way an archive file is, but a torn write from a real crash (the one case this bounds
@@ -239,6 +247,36 @@ impl LandingOrigin {
     }
 }
 
+/// `landing.ref_name`'s own local `RefState`, read once at **plan time** -- before stage 1 ever
+/// writes a single object, the same point `compute_landing_plan` already runs at (0.56.0 step
+/// W3c-5c; review `.git-exclude/reviewed/0.56.0-step-3w3c-5b-review-v1.md`, "W3c-5c"). This is
+/// what lets `try_adopt_local_ref`'s own resume-honesty check (W3c-5b) tell *this* import's own
+/// completed landing apart from a local ref that already held the identical `RefState` before
+/// this import's own first attempt ever started -- `resumed && existing_ref_state_id ==
+/// Some(landing.ref_state_id)` alone cannot do that, since two independent repositories can reach
+/// the same `RefState` id for a trivial state (an empty genesis ref has no timestamp, no
+/// randomness, nothing to make it distinct).
+///
+/// Three states, kept explicit here rather than folded into `Option<Option<ObjectId>>` (a nested
+/// `Option` reads ambiguously about which layer means "unknown" and which means "absent"):
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PlanTimeRefState {
+    /// This journal predates the field entirely: a version-1 journal, written by an older binary
+    /// before this round, decoded through this module's own version-1 compatibility path. Never
+    /// treated as proof of anything -- the ordinary fall-through applies even when the ref's
+    /// current state happens to match `landing.ref_state_id` exactly.
+    Unknown,
+    /// A positive assertion, written only by a current encoder: the ref did not exist locally at
+    /// plan time. This is the one state that can ever let the exact-match branch fire.
+    Absent,
+    /// The ref existed at plan time, already holding this `RefState` id -- so whatever this
+    /// import later does with `landing.ref_name`, it did not create this ref from nothing, and a
+    /// later exact match against it on resume proves nothing about *this* import's own
+    /// provenance.
+    Present(ObjectId),
+}
+
 /// One ref the archive carries, and where it would land if stage 3 ran today (§9.6's default --
 /// `--adopt` may change this at stage 3 for a [`LandingOrigin::Local`] entry). Recorded in the
 /// journal so a resumed stage 3 has a plan to act on without re-deriving it from the archive a
@@ -260,6 +298,11 @@ pub struct PlannedRefLanding {
     /// archive's own received-index entries land under this name verbatim; the archive's own
     /// local refs land under `remotes/<ref_name>`.
     pub destination: String,
+    /// 0.56.0 step W3c-5c: see [`PlanTimeRefState`]'s own doc comment for why this exists and
+    /// what each of its three states means. Always [`PlanTimeRefState::Unknown`] for a
+    /// [`LandingOrigin::Received`] entry -- not applicable: `try_adopt_local_ref`, the only
+    /// reader of this field, is never called for one.
+    pub plan_time_local_ref_state: PlanTimeRefState,
 }
 
 struct ImportJournal {
@@ -550,7 +593,7 @@ pub fn import_archive<R: Read + Seek>(
     let (journal, resumed) = match existing_journal {
         Some(journal) => (journal, true),
         None => {
-            let landing = compute_landing_plan(source, &manifest)?;
+            let landing = compute_landing_plan(layout, source, &manifest)?;
             // 0.56.0 step 3c2 (R1): classify every planned landing against the local store
             // *before* the journal is ever created and before stage 1 writes a single object --
             // a refusal here leaves the repository exactly as it was found: no object, no
@@ -1452,7 +1495,22 @@ fn try_adopt_local_ref(
     // run and must still fall through to condition 1's ordinary refusal below, unchanged. Checked
     // before that refusal, which still applies unchanged to every other local state at this ref
     // name (a different tip, included, and to any match on a fresh, non-resumed run).
-    if resumed && existing_ref_state_id == Some(landing.ref_state_id) {
+    //
+    // 0.56.0 step W3c-5c: `resumed` alone still is not enough. A ref this import never touched at
+    // all can already hold `landing.ref_state_id` on a resume too -- not because an earlier
+    // attempt of *this* import published it, but because some *other*, earlier import already
+    // adopted it, and this import's own archive happens to carry the same, unchanged tip for that
+    // ref name (the same coincidence the paragraph above names, just reached through a different
+    // route: a resumed run, not a fresh one). An uninterrupted run of this same import would
+    // report the ordinary fall-through for that landing; a crashed-and-resumed run must report the
+    // identical thing, not claim a provenance it does not have. `landing.plan_time_local_ref_state`
+    // (`PlanTimeRefState`'s own doc comment) is what tells the two apart: only when this ref was
+    // genuinely *absent* at plan time -- before this import's own first attempt ever wrote
+    // anything -- does a later exact match prove *this* import created it.
+    if resumed
+        && landing.plan_time_local_ref_state == PlanTimeRefState::Absent
+        && existing_ref_state_id == Some(landing.ref_state_id)
+    {
         return already_completed_by_interrupted_run(layout, landing, options);
     }
     if existing_ref_state_id.is_some() {
@@ -2088,10 +2146,17 @@ fn classify_every_planned_landing_or_refuse<R: Read + Seek>(
 }
 
 fn compute_landing_plan(
+    layout: &RepositoryLayout,
     source: &mut (impl Read + Seek),
     manifest: &super::verify::ManifestView,
 ) -> Result<Vec<PlannedRefLanding>> {
     let mut landings = Vec::new();
+    // 0.56.0 step W3c-5c: the same local `RefStore` `try_adopt_local_ref` itself reads from, at
+    // stage 3, under the identical container locks already held by the time this (the fresh-
+    // start branch's own call) runs -- see `import_archive`'s own call site. Read once, per
+    // `LandingOrigin::Local` entry, before stage 1 ever writes a single object: this is the
+    // "plan time" `PlanTimeRefState`'s own doc comment refers to.
+    let local_ref_store = RefStore::new(layout.clone());
     let pointer_entry = find_entry(manifest, ArchiveSectionKind::RefPointerIndex)?;
     let pointer_bytes = read_section_body_fully(source, pointer_entry)?;
     let decoded_pointers = decode_pointer_index_entries_for_resolver(&pointer_bytes)?;
@@ -2108,11 +2173,17 @@ fn compute_landing_plan(
     // real compactor (last entry per `ref_name_key` survives). Reused verbatim, not re-derived,
     // so a ref is planned once, from its own latest entry (RFC 155 §9.6, amended 2026-10-12).
     for entry in reduce_pointer_index_entries(decoded_pointers.entries) {
+        let plan_time_local_ref_state =
+            match local_ref_store.read_current_ref_state_id(&entry.ref_name)? {
+                Some(id) => PlanTimeRefState::Present(id),
+                None => PlanTimeRefState::Absent,
+            };
         landings.push(PlannedRefLanding {
             origin: LandingOrigin::Local,
             destination: format!("remotes/{}", entry.ref_name),
             ref_state_id: entry.ref_state_id,
             ref_name: entry.ref_name,
+            plan_time_local_ref_state,
         });
     }
 
@@ -2138,6 +2209,10 @@ fn compute_landing_plan(
             destination: entry.ref_name.clone(),
             ref_state_id: entry.ref_state_id,
             ref_name: entry.ref_name,
+            // 0.56.0 step W3c-5c: not applicable to a received landing (see
+            // `PlannedRefLanding::plan_time_local_ref_state`'s own doc comment) -- never read
+            // for one, so left `Unknown` rather than paying for a lookup nothing will ever use.
+            plan_time_local_ref_state: PlanTimeRefState::Unknown,
         });
     }
     Ok(landings)
@@ -2238,6 +2313,19 @@ fn encode_journal(journal: &ImportJournal) -> Result<Vec<u8>> {
         push_string(&mut body, &landing.ref_name)?;
         body.extend_from_slice(landing.ref_state_id.as_bytes());
         push_string(&mut body, &landing.destination)?;
+        // 0.56.0 step W3c-5c: the version-2 shape's own 5th field -- a presence byte, then the
+        // id's own 32 bytes only when present. `PlanTimeRefState::Unknown` (a received entry;
+        // see its own doc comment: never read back) writes the same as `Absent` -- harmless,
+        // since nothing ever reads this field for one.
+        match landing.plan_time_local_ref_state {
+            PlanTimeRefState::Present(id) => {
+                body.push(1);
+                body.extend_from_slice(id.as_bytes());
+            }
+            PlanTimeRefState::Absent | PlanTimeRefState::Unknown => {
+                body.push(0);
+            }
+        }
     }
     let checksum = prikk_hash::sha256(&body);
     body.extend_from_slice(&checksum);
@@ -2347,7 +2435,11 @@ fn decode_journal(bytes: &[u8]) -> Result<ImportJournal> {
         ));
     }
     let version = reader.take_u16()?;
-    if version != JOURNAL_VERSION {
+    // 0.56.0 step W3c-5c: version 1 (no `plan_time_local_ref_state` field) and version 2 (this
+    // build's own, current shape) both decode -- an in-progress import's journal, written by an
+    // older binary before this round, must still resume across the upgrade (`JOURNAL_VERSION`'s
+    // own doc comment), not refuse outright. Anything else still refuses, unchanged.
+    if version != JOURNAL_VERSION_1_WITHOUT_PLAN_TIME_REF_STATE && version != JOURNAL_VERSION {
         return Err(PrikkError::Integrity(format!(
             "import journal version {version} is not one this build knows how to read"
         )));
@@ -2386,11 +2478,34 @@ fn decode_journal(bytes: &[u8]) -> Result<ImportJournal> {
         let ref_name = reader.take_string()?;
         let ref_state_id_bytes: [u8; 32] = reader.take(32)?.try_into().unwrap_or([0u8; 32]);
         let destination = reader.take_string()?;
+        // 0.56.0 step W3c-5c: a version-1 journal has no 5th field at all -- "Unknown is never
+        // treated as proof" (the review's own ruling) is what that absence means, not "absent at
+        // plan time" (`PlanTimeRefState::Absent`, a positive assertion only a current encoder
+        // ever writes). A version-2 journal's own presence byte decides between the other two
+        // states.
+        let plan_time_local_ref_state = if version == JOURNAL_VERSION_1_WITHOUT_PLAN_TIME_REF_STATE
+        {
+            PlanTimeRefState::Unknown
+        } else {
+            match reader.take_u8()? {
+                0 => PlanTimeRefState::Absent,
+                1 => {
+                    let id_bytes: [u8; 32] = reader.take(32)?.try_into().unwrap_or([0u8; 32]);
+                    PlanTimeRefState::Present(ObjectId::from_bytes(id_bytes))
+                }
+                other => {
+                    return Err(PrikkError::Integrity(format!(
+                        "import journal names an unknown plan-time ref state tag {other}"
+                    )));
+                }
+            }
+        };
         landing.push(PlannedRefLanding {
             origin,
             ref_name,
             ref_state_id: ObjectId::from_bytes(ref_state_id_bytes),
             destination,
+            plan_time_local_ref_state,
         });
     }
     Ok(ImportJournal {

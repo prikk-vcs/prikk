@@ -3623,3 +3623,380 @@ fn a_crash_after_a_non_current_branch_adopt_publish_resumes_with_the_truthful_re
         "the resumed import must still reach its own commit point and empty the journal"
     );
 }
+
+/// 0.56.0 step W3c-5c: a version-1 journal (no `plan_time_local_ref_state` field at all --
+/// written by an older binary, from an import still in progress across an upgrade) must still
+/// decode, with every landing's own plan-time state read back as `PlanTimeRefState::Unknown` --
+/// "Unknown is never treated as proof", the review's own ruling, confirmed directly against the
+/// decoder here rather than only through the resumed-import test above. Hand-built in the exact
+/// old (4-field-per-landing), pre-W3c-5c wire shape -- `encode_journal` itself only ever writes
+/// the current, version-2 shape (its own doc comment), so there is no shipped encoder left to
+/// reuse for this.
+#[test]
+fn decode_journal_reads_a_version_1_journal_with_unknown_plan_time_ref_state() {
+    let ref_state_id = ObjectId::from_bytes([0x5A; 32]);
+    let mut body = Vec::new();
+    body.extend_from_slice(super::JOURNAL_MAGIC);
+    body.extend_from_slice(&1u16.to_be_bytes()); // version 1, the old shape
+    body.extend_from_slice(&[0x01; 32]); // archive_identity
+    body.extend_from_slice(&0u16.to_be_bytes()); // container_count
+    body.extend_from_slice(&1u32.to_be_bytes()); // landing_count
+    // One landing, in the old (4-field) shape: origin, ref_name, ref_state_id, destination --
+    // no 5th field at all.
+    body.push(0); // LandingOrigin::Local
+    super::push_string(&mut body, "heads/main").expect("push ref_name");
+    body.extend_from_slice(ref_state_id.as_bytes());
+    super::push_string(&mut body, "remotes/heads/main").expect("push destination");
+    let checksum = prikk_hash::sha256(&body);
+    body.extend_from_slice(&checksum);
+
+    let journal = super::decode_journal(&body).expect("a version-1 journal must still decode");
+    assert_eq!(journal.landing.len(), 1);
+    assert_eq!(
+        journal.landing[0].origin,
+        crate::archive::LandingOrigin::Local
+    );
+    assert_eq!(journal.landing[0].ref_name, "heads/main");
+    assert_eq!(journal.landing[0].ref_state_id, ref_state_id);
+    assert_eq!(journal.landing[0].destination, "remotes/heads/main");
+    assert_eq!(
+        journal.landing[0].plan_time_local_ref_state,
+        super::PlanTimeRefState::Unknown,
+        "a version-1 journal has no field at all -- must decode as Unknown, never Absent"
+    );
+}
+
+/// 0.56.0 step W3c-5c: the same "Unknown is never treated as proof" principle, tested directly
+/// against `try_adopt_local_ref` rather than only against the decoder above -- even when the
+/// `RefState` ids happen to match exactly and this call genuinely is a resume, an `Unknown`
+/// plan-time state (the version-1-journal case) must still take the ordinary fall-through, not
+/// the exact-match branch.
+#[test]
+fn try_adopt_local_ref_never_treats_unknown_plan_time_state_as_proof() {
+    let source_dir = unique_temp_dir("archive-w3c5c-unknown-source");
+    let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-w3c5c-unknown-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    let options = ArchiveImportOptions {
+        adopt: true,
+        allow_non_fast_forward: false,
+        current_branch: None,
+    };
+
+    // Genuinely adopt heads/main once, uninterrupted, so the destination's own ref now holds
+    // exactly this landing's own ref_state_id -- the id match this test needs.
+    let first_report = import_archive(&dest_layout, &mut Cursor::new(bytes.clone()), &options)
+        .expect("the first import must complete");
+    assert!(first_report.landing_outcomes[0].adopted);
+
+    // Recompute the real landing plan against the same archive, over a fresh cursor, the same
+    // way `import_archive`'s own fresh-start branch does.
+    let mut cursor = Cursor::new(bytes.clone());
+    let verify_report =
+        crate::archive::verify_archive(&mut cursor).expect("verify the fixture archive");
+    assert!(verify_report.is_internally_consistent());
+    let (_total_len, manifest_offset, manifest_length, manifest_checksum) =
+        super::read_end_trailer(&mut cursor).expect("read end trailer");
+    let manifest = super::read_manifest(
+        &mut cursor,
+        manifest_offset,
+        manifest_length,
+        manifest_checksum,
+    )
+    .expect("read manifest");
+    let mut landing = super::compute_landing_plan(&dest_layout, &mut cursor, &manifest)
+        .expect("compute the real landing plan");
+    assert_eq!(landing.len(), 1);
+    assert_eq!(landing[0].ref_state_id, ref_state_id);
+    // This plan was computed *after* the first import already adopted heads/main, so the real
+    // plan-time state here is `Present(ref_state_id)`, not `Absent` -- downgrade it by hand to
+    // the one state a real plan computed by this build could never produce on its own (always
+    // `Absent` or `Present`, never `Unknown` -- `PlannedRefLanding::plan_time_local_ref_state`'s
+    // own doc comment), exactly the shape a version-1 journal decodes to.
+    landing[0].plan_time_local_ref_state = super::PlanTimeRefState::Unknown;
+
+    let ref_store = RefStore::new(dest_layout.clone());
+    let adopted_policy =
+        crate::trust::load_maintainer_trust_policy_or_empty(&dest_layout).expect("load policy");
+    let mut object_store =
+        ObjectWriteSession::open(&dest_layout).expect("open object write session");
+    let container_locks = crate::lock::acquire_container_locks_allowing_import_journal(
+        &dest_layout,
+        &[
+            crate::foundation::layout::LockableContainer::ObjectStore,
+            crate::foundation::layout::LockableContainer::RefPointerIndex,
+            crate::foundation::layout::LockableContainer::RefLog,
+            crate::foundation::layout::LockableContainer::ReceivedIndex,
+        ],
+    )
+    .expect("acquire container locks");
+
+    // Direct call, `resumed: true`, a genuine exact id match (heads/main already holds
+    // ref_state_id, from the first import) -- but `plan_time_local_ref_state` is `Unknown`, so
+    // the exact-match branch must not fire.
+    let outcome = super::try_adopt_local_ref(
+        &dest_layout,
+        &ref_store,
+        &adopted_policy,
+        &landing[0],
+        &options,
+        &mut object_store,
+        &[],
+        &container_locks,
+        true,
+    )
+    .expect("try_adopt_local_ref must not refuse outright");
+    assert!(
+        matches!(outcome, super::AdoptOutcome::FellThrough { .. }),
+        "an Unknown plan-time state must never satisfy the exact-match branch, even with a \
+         genuine id match on a genuine resume"
+    );
+}
+
+/// Adds a second, genuine local ref to a [`build_adoptable_source_repository`] fixture -- distinct
+/// content, signed by the same already-adopted maintainer key (so export's own `verify` resolves
+/// it without a second trust call), published as a real `RefState`/`RefUpdate` chain the same way
+/// `build_adoptable_source_repository` publishes its own primary ref. 0.56.0 step W3c-5c's own
+/// test needs a genuinely *different* archive that still converges on the identical `RefState` id
+/// for one ref -- this is what makes the two archives differ (this extra ref, and nothing else)
+/// while that one ref's own tip stays byte-identical between them.
+fn add_extra_local_ref_to_source_repository(layout: &RepositoryLayout, extra_ref_name: &str) {
+    let maintainer_signer =
+        Ed25519MaintainerSigner::from_seed("adopt-test-maintainer", &[0x33; 32])
+            .expect("reconstruct the same maintainer signer");
+
+    let mut store = FileObjectStore::new(layout.clone());
+    let block_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        // Distinct from the primary ref's own root block, which otherwise carries an identical
+        // (empty-genesis) payload.
+        state_merkle_root: MerkleRoot([0xCD; 32]),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block_bytes = block_payload
+        .to_canonical_bytes()
+        .expect("encode the extra block payload");
+    let mut block_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block_bytes);
+    let block_id = block_envelope.object_id();
+    block_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::Block, block_id)
+                .expect("sign the extra block for real"),
+        )
+        .expect("attach the real maintainer signature");
+    store
+        .write_object(&block_envelope)
+        .expect("write the extra block");
+
+    let ref_state_payload = RefStatePayload {
+        ref_name: extra_ref_name.to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state_bytes = ref_state_payload
+        .to_canonical_bytes()
+        .expect("encode the extra ref-state payload");
+    let mut ref_state_envelope = ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state_bytes);
+    let ref_state_id = ref_state_envelope.object_id();
+    ref_state_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefState, ref_state_id)
+                .expect("sign the extra ref state for real"),
+        )
+        .expect("attach the real maintainer signature");
+
+    let ref_update_payload = prikk_object::RefUpdatePayload {
+        ref_name: extra_ref_name.to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: ref_state_id,
+        new_target_object_id: block_id,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: maintainer_signer.key_id().to_string(),
+    };
+    let ref_update_bytes = ref_update_payload
+        .to_canonical_bytes()
+        .expect("encode the extra ref-update payload");
+    let mut ref_update_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, ref_update_bytes);
+    let ref_update_id = ref_update_envelope.object_id();
+    ref_update_envelope
+        .add_signature(
+            maintainer_signature(&maintainer_signer, ObjectType::RefUpdate, ref_update_id)
+                .expect("sign the extra ref update for real"),
+        )
+        .expect("attach the real maintainer signature");
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: extra_ref_name.to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: ref_state_envelope,
+            ref_update: ref_update_envelope,
+        })
+        .expect("publish the extra ref");
+}
+
+/// 0.56.0 step W3c-5c: the review's own named gap. `resumed && existing_ref_state_id ==
+/// Some(landing.ref_state_id)` alone cannot tell *this* import's own completed landing apart from
+/// a local ref that already held the identical `RefState` **before this import's own first
+/// attempt ever started** -- here, because an earlier, unrelated import already adopted it, and
+/// this import's own archive happens to carry the same, unchanged tip for that ref name.
+///
+/// The fixture: `source_a` is adopted first, by an ordinary, uninterrupted import -- a real local
+/// `heads/main` at `ref_state_id`. `source_b` is a second, genuinely different archive (it also
+/// carries an unrelated second ref, `heads/feature`, via [`add_extra_local_ref_to_source_repository`])
+/// that happens to carry the identical, unchanged tip for `heads/main` --
+/// [`build_adoptable_source_repository`] is fully deterministic, so two independent calls
+/// converge on the same id, exactly the coincidence this round's own review named. Its own first
+/// import attempt is killed right after its own journal is written -- before stage 1 ever touches
+/// an object -- so by the time the resume's `try_adopt_local_ref` runs, `heads/main`'s local state
+/// is exactly what `source_a`'s own import left, and the journal's own plan-time record for it
+/// (computed when `source_b`'s plan was built, before this crash) says `Present(ref_state_id)`,
+/// not `Absent`. The resume must therefore report the same fall-through an uninterrupted run of
+/// `source_b`'s own archive would give -- the core proof that the fix works.
+#[test]
+fn a_later_import_whose_own_tip_coincides_with_an_already_adopted_ref_resumes_with_the_ordinary_fall_through()
+ {
+    let source_a_dir = unique_temp_dir("archive-w3c5c-source-a");
+    let (source_a_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_a_dir, "heads/main");
+    let bytes_a = export_bytes(&source_a_layout);
+
+    let dest_dir = unique_temp_dir("archive-w3c5c-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before either import");
+
+    let options = ArchiveImportOptions {
+        adopt: true,
+        allow_non_fast_forward: false,
+        current_branch: None,
+    };
+
+    // The first import: ordinary, uninterrupted, genuinely adopts heads/main.
+    let first_report = import_archive(&dest_layout, &mut Cursor::new(bytes_a), &options)
+        .expect("the first import must complete");
+    assert_eq!(first_report.landing_outcomes.len(), 1);
+    assert!(first_report.landing_outcomes[0].adopted);
+    assert!(!first_report.landing_outcomes[0].completed_by_interrupted_run);
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        Some(ref_state_id),
+        "the first import must have genuinely adopted heads/main locally"
+    );
+
+    // A second, different archive: its own heads/main tip happens to be the identical RefState
+    // (the fixture's own determinism), plus one unrelated, genuinely new ref so the two archives
+    // are not byte-identical.
+    let source_b_dir = unique_temp_dir("archive-w3c5c-source-b");
+    let (source_b_layout, ref_state_id_b, maintainer_key_id_b, maintainer_public_key_hex_b) =
+        build_adoptable_source_repository(&source_b_dir, "heads/main");
+    assert_eq!(
+        ref_state_id_b, ref_state_id,
+        "the fixture's own determinism must converge on the identical RefState id -- the whole \
+         point of this test"
+    );
+    assert_eq!(maintainer_key_id_b, maintainer_key_id);
+    assert_eq!(maintainer_public_key_hex_b, maintainer_public_key_hex);
+    add_extra_local_ref_to_source_repository(&source_b_layout, "heads/feature");
+    let bytes_b = export_bytes(&source_b_layout);
+
+    // Kill the second import's own first attempt right after its journal is written -- before
+    // stage 1 ever touches an object, so heads/main's local state (adopted by the *first*
+    // import) is completely untouched by the time this crashed attempt's own journal is read back
+    // on resume.
+    crate::archive::import::stop_after_journal_for_test();
+    let error = import_archive(&dest_layout, &mut Cursor::new(bytes_b.clone()), &options)
+        .expect_err("the test seam stops the import right after its own journal is written");
+    assert!(
+        error.to_string().contains("simulated kill"),
+        "the seam's own error must fire, not some other refusal: {error}"
+    );
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        Some(ref_state_id),
+        "heads/main must still be exactly what the first import left -- this crash never reached \
+         stage 1"
+    );
+    assert_ne!(
+        interrupted_import_short_id(&dest_layout).expect("read journal presence"),
+        None,
+        "the second import's own journal must survive the simulated crash"
+    );
+
+    // The resume: this is the core proof. The exact RefState match is real (heads/main already
+    // holds ref_state_id), and this call genuinely is a resume -- but the plan-time record says
+    // this ref was already Present before this import's own first attempt ever ran, so the
+    // exact-match branch must not fire. The report must be the identical fall-through an
+    // uninterrupted run of this same archive would give.
+    let report = import_archive(&dest_layout, &mut Cursor::new(bytes_b), &options)
+        .expect("the resumed import must complete");
+    let main_outcome = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.ref_name == "heads/main")
+        .expect("heads/main must be one of this archive's own landings");
+    assert!(
+        !main_outcome.adopted,
+        "heads/main was already adopted by a different, earlier import -- this import must \
+         report the ordinary fall-through, not a false adoption: {main_outcome:?}"
+    );
+    assert!(
+        !main_outcome.completed_by_interrupted_run,
+        "this import never actually adopted heads/main at all, interrupted or not: \
+         {main_outcome:?}"
+    );
+    assert_eq!(main_outcome.landed_as, "remotes/heads/main");
+    assert_eq!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer"),
+        Some(crate::ReceivedPointer {
+            ref_name: "remotes/heads/main".to_string(),
+            ref_state_id,
+        }),
+        "the fall-through must land the ordinary remotes/ pointer, exactly as an uninterrupted \
+         run of this same archive would"
+    );
+    // The unrelated second ref was never a candidate for the gap this test is about -- it did not
+    // exist locally at plan time, so the resume adopts it normally, confirming the fix is scoped
+    // to the one landing that actually coincides, not a blanket refusal of adoption on this
+    // resume.
+    let feature_outcome = report
+        .landing_outcomes
+        .iter()
+        .find(|outcome| outcome.ref_name == "heads/feature")
+        .expect("heads/feature must be one of this archive's own landings");
+    assert!(
+        feature_outcome.adopted,
+        "heads/feature never existed locally before either import -- it must adopt normally: \
+         {feature_outcome:?}"
+    );
+    assert!(!feature_outcome.completed_by_interrupted_run);
+
+    assert!(
+        interrupted_import_short_id(&dest_layout)
+            .expect("read journal presence")
+            .is_none(),
+        "the resumed import must still reach its own commit point and empty the journal"
+    );
+}

@@ -323,6 +323,19 @@ state, like the unclean-shutdown marker beside it — never part of any versione
      `branch switch <the current branch>` step is needed. Any other local state at that ref name
      (a different tip, or none at all), or any match on a fresh, non-resumed run, keeps the prior
      fall-through behavior unchanged.
+  **0.56.0 step W3c-5c** narrowed point 2 once more: a resumed, genuine id match still is not
+     enough by itself. A ref this import never touched at all can already hold that exact id,
+     not because an earlier attempt of *this* import published it, but because some *other*,
+     earlier import already adopted it, and this import's own archive happens to carry the same,
+     unchanged tip for that ref name. `try_adopt_local_ref`'s own exact-match check now also
+     requires that the ref was genuinely *absent* locally when this import's own plan was first
+     computed (before stage 1 ever wrote anything) -- `PlannedRefLanding::plan_time_
+     local_ref_state`, read once at that point and carried in the journal. Only that combination
+     (absent at plan time, and an exact match now) proves *this* import created the ref; any other
+     plan-time state keeps the ordinary fall-through, exactly what an uninterrupted run of the same
+     archive would report. A journal written by an older binary, from an import still in progress
+     across the upgrade, has no such record at all and still resumes correctly: the ordinary
+     fall-through applies there too, never a false adoption.
 
   A landing not destined for the current branch, or one `--adopt` cannot land as a real local ref
   at all (it falls through to `remotes/`), is unaffected by either point above: no clean check, no

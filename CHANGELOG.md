@@ -243,8 +243,17 @@
   match alone, on a fresh run, is not enough — two unrelated repositories can coincidentally reach
   the same id for a trivial state); when that landing is also the current branch and its
   materialize never finished, the resume finishes it directly, so no second `branch switch` step
-  is needed. A
-  landing that is not destined for the current branch, or that `--adopt` cannot land as a real
+  is needed. **0.56.0 step W3c-5c narrowed that same resume-honesty check once more:** an id match
+  on a genuine resume is still not enough by itself, either — a ref this import never touched at
+  all can already hold that exact id because some *other*, earlier import already adopted it, and
+  this import's own archive happens to carry the same, unchanged tip for that ref name. Resuming
+  now checks what the ref held before this import's own plan was first computed, not only whether
+  the resumed id happens to match, so a crash during that later import's own first attempt still
+  reports the ordinary fall-through on resume — exactly what an uninterrupted run of the same
+  import would have reported. An in-progress import whose journal predates this check (written by
+  an older binary) still resumes correctly: the ordinary fall-through applies there too, never a
+  false adoption.
+  A landing that is not destined for the current branch, or that `--adopt` cannot land as a real
   local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no marker, no
   materialize call, the ordinary pre-round behavior.
 - **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
