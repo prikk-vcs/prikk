@@ -30,7 +30,8 @@ mod verify;
 
 pub use import::{
     ArchiveImportOptions, ArchiveImportReport, CancelImportReport, CancelImportStep, LandingOrigin,
-    LandingOutcome, PlannedRefLanding, cancel_import, import_archive, interrupted_import_short_id,
+    LandingOutcome, PlanTimeRefState, PlannedRefLanding, cancel_import, import_archive,
+    interrupted_import_short_id,
 };
 pub use verify::{
     ArchiveUnreferencedRemnant, ArchiveVerifyReport, CarriedMaintainerKeySummary, verify_archive,

@@ -140,8 +140,9 @@ pub use anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_
 pub use archive::{
     ArchiveExportReport, ArchiveImportOptions, ArchiveImportReport, ArchiveSectionKind,
     ArchiveUnreferencedRemnant, ArchiveVerifyReport, CancelImportReport, CancelImportStep,
-    CarriedMaintainerKeySummary, LandingOrigin, LandingOutcome, PlannedRefLanding, cancel_import,
-    export_archive, import_archive, interrupted_import_short_id, verify_archive,
+    CarriedMaintainerKeySummary, LandingOrigin, LandingOutcome, PlanTimeRefState,
+    PlannedRefLanding, cancel_import, export_archive, import_archive, interrupted_import_short_id,
+    verify_archive,
 };
 #[cfg(feature = "test-support")]
 pub use archive::{
