@@ -357,7 +357,7 @@ fn require_nothing_in_the_way_refuses_an_untracked_file_where_the_target_adds_on
     std::fs::write(root.join("p.txt"), b"zzz\n").unwrap();
     let target_manifest = one_file_manifest("p.txt", b"target-p\n");
 
-    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing", None)
         .expect_err("a file in the way of the target's own files must refuse");
     let message = error.to_string();
     assert!(
@@ -419,7 +419,7 @@ fn require_nothing_in_the_way_refuses_a_file_changed_since_the_prior_state_at_a_
     // is the one that inspects it.
     let target_manifest = one_file_manifest("a.txt", b"a\n");
 
-    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+    let error = require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing", None)
         .expect_err(
             "a file changed since the prior state at a path the target deletes must refuse",
         );
@@ -461,7 +461,7 @@ fn require_nothing_in_the_way_succeeds_when_nothing_collides() {
 
     // A target manifest adding a brand-new path nothing on disk occupies at all.
     let target_manifest = one_file_manifest("b.txt", b"b\n");
-    require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing")
+    require_nothing_in_the_way(&layout, &pending, &target_manifest, "testing", None)
         .expect("nothing is in the way of an unoccupied path");
     assert!(!worktree_is_dirty(&layout).expect("dirty check"));
 

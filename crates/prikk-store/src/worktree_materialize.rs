@@ -352,11 +352,19 @@ pub fn require_worktree_clean_and_capture(
 /// crate, 0.56.0 step W3c-3b) calls this directly: its own target manifest comes from
 /// `derive_candidate`'s `entries` plus `text_cache`, converted the way `patch_replay::extract`'s
 /// claim path builds its own file list -- see that module's own W3c-3b notes.
+///
+/// `already_written`: `None` means exactly what the message used to say unconditionally --
+/// "(nothing was written)" -- true for every caller except `archive import --adopt`'s own
+/// stage-3 backstop (0.56.0 step W3c-5b, defect 1): by the time that one call runs, stage 1 has
+/// already admitted the archive's own objects unconditionally and the import journal already
+/// names every container it touched, so the plain "(nothing was written)" claim would be false
+/// there. `Some(text)` names what is actually true instead, verbatim, in place of that clause.
 pub(crate) fn require_nothing_in_the_way(
     layout: &RepositoryLayout,
     pending: &PendingCurrentBranchMaterialization,
     target_manifest: &ReplayManifest,
     action: &str,
+    already_written: Option<&str>,
 ) -> Result<()> {
     let root = layout.worktree_mutation_root();
     let plan = plan_materialization(root, target_manifest, &pending.old_files)?;
@@ -364,11 +372,11 @@ pub(crate) fn require_nothing_in_the_way(
         return Ok(());
     }
     Err(PrikkError::Precondition(format!(
-        "{} file(s) are in the way of {}'s files: {}; move them aside before {action} (nothing \
-         was written)",
+        "{} file(s) are in the way of {}'s files: {}; move them aside before {action} ({})",
         plan.in_the_way.len(),
         pending.current_branch,
         plan.in_the_way.join(", "),
+        already_written.unwrap_or("nothing was written"),
     )))
 }
 
@@ -392,7 +400,7 @@ pub fn require_nothing_in_the_way_for_published_ref(
     action: &str,
 ) -> Result<()> {
     let (target_replay, _anchor_fallback) = replay_for_verified_worktree_write(layout, target_ref)?;
-    require_nothing_in_the_way(layout, pending, &target_replay.manifest, action)
+    require_nothing_in_the_way(layout, pending, &target_replay.manifest, action, None)
 }
 
 /// As [`require_nothing_in_the_way_for_published_ref`], but for a target addressed by a bare
@@ -407,6 +415,12 @@ pub fn require_nothing_in_the_way_for_published_ref(
 /// same reason [`require_nothing_in_the_way`] itself is: this producer's own publish logic lives
 /// inside `prikk-store` (`archive::import`), unlike `branch create --from`'s, so no cross-crate
 /// re-export is needed.
+///
+/// `already_written`: as [`require_nothing_in_the_way`]'s own parameter of the same name --
+/// `archive import --adopt`'s two call sites (0.56.0 step W3c-5b) pass different values: the
+/// early check, before the journal, passes `None` (truthfully nothing has been written yet); the
+/// unchanged stage-3 backstop passes `Some` (stage 1's objects and the journal already exist by
+/// then, every time it runs, not only in the rare race it now exists to catch).
 pub(crate) fn require_nothing_in_the_way_for_block(
     layout: &RepositoryLayout,
     pending: &PendingCurrentBranchMaterialization,
@@ -414,6 +428,7 @@ pub(crate) fn require_nothing_in_the_way_for_block(
     point_name: &str,
     target_block_id: ObjectId,
     action: &str,
+    already_written: Option<&str>,
 ) -> Result<()> {
     let (target_replay, _anchor_fallback) = replay_for_verified_worktree_write_by_block_id(
         layout,
@@ -421,7 +436,13 @@ pub(crate) fn require_nothing_in_the_way_for_block(
         point_name,
         target_block_id,
     )?;
-    require_nothing_in_the_way(layout, pending, &target_replay.manifest, action)
+    require_nothing_in_the_way(
+        layout,
+        pending,
+        &target_replay.manifest,
+        action,
+        already_written,
+    )
 }
 
 /// Step 2b of the R3 ruling (0.56.0 step W3c-1): mark the worktree dirty as a `Switch` to the

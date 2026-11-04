@@ -280,23 +280,52 @@ state, like the unclean-shutdown marker beside it — never part of any versione
   closes this last gap too. A courtesy clean check (`require_worktree_clean_and_capture`) runs
   before the import journal exists at all, for an unclean worktree to refuse as early as possible
   -- it captures nothing durable, since a crash-and-resume is a new process invocation with no
-  access to an earlier attempt's own in-memory capture. The authoritative capture, pre-write
-  in-the-way check, marker, and materialize call (the same `require_worktree_clean_and_capture`/
-  `require_nothing_in_the_way_for_block`/`mark_current_branch_switch_pending`/
-  `materialize_after_publish` calls every other producer uses) all run again, from scratch, inside
-  `try_adopt_local_ref` (`crates/prikk-store/src/archive/import.rs`) at stage 3, on both a fresh
-  import and a resumed one alike, immediately before the one publish that actually moves the
-  current branch. The in-the-way check replays the adopted chain's own final `RefState`'s target
-  block directly by block id (`replay_for_verified_worktree_write_by_block_id`), not by a ref name
-  -- the block is already a real, local object (stage 1 admits every carried block
-  unconditionally, regardless of this landing's own eventual adoption outcome), but no ref names
-  it until the adoption's own publish moments later. A dirty worktree refuses before any object is
-  written at all; a file in the way of the adopted tip's own files is caught only at stage 3, after
-  stage 1 has already admitted the archive's own carried objects as it always has (unaffected by
-  this round) -- so that refusal leaves those objects locally present but unreached by any ref, the
-  same shape every other mid-stage-3 refusal in this importer already has, until a later import
-  lands them for real. A landing not destined for the current branch, or one `--adopt` cannot land
-  as a real local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no
+  access to an earlier attempt's own in-memory capture. The authoritative capture, marker, and
+  materialize call (the same `require_worktree_clean_and_capture`/
+  `mark_current_branch_switch_pending`/`materialize_after_publish` calls every other producer
+  uses) all run again, from scratch, inside `try_adopt_local_ref`
+  (`crates/prikk-store/src/archive/import.rs`) at stage 3, on both a fresh import and a resumed
+  one alike, immediately before the one publish that actually moves the current branch. A dirty
+  worktree refuses before any object is written at all.
+  **0.56.0 step W3c-5b** corrected two defects review found before release:
+  1. **A file in the way of the adopted tip's own files now also refuses before the journal**,
+     before stage 1 ever admits an object -- the identical guarantee the dirty-worktree check
+     already had. `ArchiveEarlyCheckReader` (`archive/import.rs`) is a seeking `ObjectReader` over
+     the archive's own Patch/Blob sections (`verify::index_object_offsets`/
+     `decode_object_record_at`, mirroring `crate::bundle::BundleAndLocalReader`'s own pattern,
+     sourced from the archive's container format instead of a bundle's), built and measured
+     against the import's own total time (about 8.5-10.4% added, at 10,000-20,000 objects,
+     release build) before landing. The unchanged stage-3 check
+     (`require_nothing_in_the_way_for_block`, replaying the adopted chain's own final `RefState`'s
+     target block directly by block id, through `replay_for_verified_worktree_write_by_block_id`)
+     stays as the backstop for the one window the early check cannot see into -- a file created by
+     a process outside prikk, between the two checks, under the same lock -- with its own message
+     corrected to name what stage 1 and the journal already wrote by the time it fires, rather than
+     the shared `require_nothing_in_the_way`/`require_nothing_in_the_way_for_block` wording's
+     default "(nothing was written)", which would be false there every time it runs, not only in
+     that rare race.
+  2. **Resuming an import that crashed between a `--adopt` landing's own publish and its
+     materialize now reports that landing honestly.** `try_adopt_local_ref`'s own condition 1 (`a
+     ref by this name already exists locally`) now checks for an *exact* match against this
+     landing's own final `RefState` id first, **but only when this call is genuinely resuming an
+     earlier run's own journal** (`resumed`) -- a content-addressed id match alone does not prove
+     common origin (two unrelated, independently created repositories can converge on the exact
+     same id for a trivial state, such as an empty genesis ref with no timestamp or randomness to
+     make it distinct), so the match is honored only when the journal itself already correlates
+     this run to the one that published it. On a resumed exact match: this is the import's own
+     completed landing from an earlier, interrupted run, reported as `adopted: true` with
+     `completed_by_interrupted_run: true` (a new `LandingOutcome` field, additive in
+     `--format json` too) rather than a false `adopted: false`/`landed_as: "remotes/<ref>"` fall-
+     through, and no `remotes/` pointer is landed for it. When that landing is also the current
+     branch and its materialize never finished (the dirty marker still names it), the resume
+     finishes the materialize itself, through the same `require_worktree_clean_and_capture`/
+     `materialize_after_publish` pair the ordinary adoption path uses -- no second
+     `branch switch <the current branch>` step is needed. Any other local state at that ref name
+     (a different tip, or none at all), or any match on a fresh, non-resumed run, keeps the prior
+     fall-through behavior unchanged.
+
+  A landing not destined for the current branch, or one `--adopt` cannot land as a real local ref
+  at all (it falls through to `remotes/`), is unaffected by either point above: no clean check, no
   marker, no materialize call, the ordinary pre-round behavior.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
   record shows the worktree behind that branch's live *sealed* tip, naming the current branch now

@@ -516,7 +516,17 @@ fn print_import_report(report: &prikk_store::ArchiveImportReport) {
                     .unwrap_or_default()
             );
         } else if landing.adopted {
-            if let Some(reason) = &landing.remote_reason {
+            // 0.56.0 step W3c-5b (defect 2): named separately from `remote_reason` (a different
+            // situation -- see `LandingOutcome::completed_by_interrupted_run`'s own doc comment)
+            // so a resumed import never reports a genuinely completed adoption as though this
+            // call just performed it.
+            if landing.completed_by_interrupted_run {
+                println!(
+                    "{}: adopted as a local branch (completed by an earlier, interrupted run of \
+                     this import)",
+                    landing.ref_name
+                );
+            } else if let Some(reason) = &landing.remote_reason {
                 println!("{}: adopted as a local branch ({reason})", landing.ref_name);
             } else {
                 println!("{}: adopted as a local branch", landing.ref_name);
@@ -686,7 +696,7 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
             format!(
                 "{{ \"ref_name\": {}, \"landed_as\": {}, \"adopted\": {}, \"remote_reason\": {}, \
                  \"landed\": {}, \"collision_target\": {}, \"publication_trusted\": {}, \
-                 \"class\": {}, \"ref_state_chain\": {} }}",
+                 \"class\": {}, \"ref_state_chain\": {}, \"completed_by_interrupted_run\": {} }}",
                 escape_json_string(&landing.ref_name),
                 escape_json_string(&landing.landed_as),
                 landing.adopted,
@@ -706,7 +716,10 @@ fn print_import_report_json(report: &prikk_store::ArchiveImportReport) {
                 match landing.ref_state_chain {
                     Some(chain) => escape_json_string(chain.as_str()),
                     None => "null".to_string(),
-                }
+                },
+                // 0.56.0 step W3c-5b (defect 2): additive -- see `LandingOutcome::
+                // completed_by_interrupted_run`'s own doc comment.
+                landing.completed_by_interrupted_run,
             )
         })
         .collect();

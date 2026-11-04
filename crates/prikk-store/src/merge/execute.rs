@@ -312,6 +312,7 @@ pub fn execute_merge(
             &pending,
             &target_manifest,
             &format!("merging {from_ref} into {into_ref}"),
+            None,
         )?;
         Some(pending)
     } else {

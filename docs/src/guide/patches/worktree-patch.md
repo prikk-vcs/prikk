@@ -102,14 +102,23 @@ the archive is written at all, so an unclean worktree refuses as early as possib
 courtesy, since it cannot survive a crash and resume (a resumed import is a new process invocation
 with no memory of an earlier attempt). The real guarantee runs again, from scratch, at the one
 point immediately before the adoption's own publish, on both a fresh import and a resumed one
-alike: the worktree must be clean, nothing may be in the way of the adopted tip's own files, and
-only then does the publish move the current branch and the adopted content get materialized into
-the worktree afterward. Unlike every other producer in this series, `archive import --adopt` also
-admits the archive's own carried objects unconditionally, before any of this runs -- so a file in
-the way is only ever caught at that one later point, after those objects already exist locally,
-unreached by any ref until a later import lands them for real; this is not new to this round, and
-is not something this round changes. A landing not destined for the current branch, or one that
-cannot be adopted as a real local ref at all, is unaffected.
+alike: the worktree must be clean, and only then does the publish move the current branch and the
+adopted content get materialized into the worktree afterward.
+
+**0.56.0 step W3c-5b** corrected two defects review found in this shape before release. First, a
+file in the way of the adopted tip's own files now refuses before *anything* is written, the same
+as every other producer in this series: `archive import --adopt` builds a seeking reader over the
+archive's own carried Patch/Blob content and checks for a collision before the journal, before the
+archive's own objects are ever admitted locally, rather than only after. A real backstop still runs
+at the old, later point too, for the one window the early check cannot close (a file appearing
+between the two checks, from outside prikk, under the same lock) — but it is now genuinely a
+backstop, caught only in that rare case, not the normal path. Second, resuming an import that
+crashed between a `--adopt` landing's own publish and its materialize now reports that landing as
+what it actually is: adopted, completed by the earlier run, not a fresh fall-through to a received
+`remotes/` pointer the uninterrupted import would never have written — and if that earlier run's
+own materialize never finished either, this resume finishes it directly, so there is no second
+`branch switch` step left for the operator to run by hand. A landing not destined for the current
+branch, or one that cannot be adopted as a real local ref at all, is unaffected by either fix.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is

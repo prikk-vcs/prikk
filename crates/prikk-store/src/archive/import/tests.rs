@@ -3423,22 +3423,22 @@ fn a_resumed_import_still_refuses_at_stage_3_when_the_pointer_moved_in_the_gap()
 }
 
 /// 0.56.0 step W3c-5: the case table's own new row -- a crash between a `--adopt` landing's own
-/// publish and its materialize call. **Confirms, rather than only argues, that the generic
-/// recovery route this round reuses actually covers this producer's own crash window:**
-/// `try_adopt_local_ref` has no "resumed" branch of its own at all -- condition 1 (`a ref by this
-/// name already exists locally`) fires on *any* call once this landing's own ref-pointer has been
-/// published, resumed or not, so a resumed import can never re-enter the capture/check/marker/
-/// materialize sequence for this exact landing a second time. The only way out is therefore the
-/// same one every other W3c producer's own crash leaves: `branch switch <current branch>`,
-/// through the identical shared primitives (`mark_current_branch_switch_pending`/
-/// `materialize_after_publish`) `worktree_materialize::tests::
-/// a_crash_between_publish_and_materialize_recovers_via_branch_switch` already exercises
-/// generically -- this test is the producer-specific confirmation that archive import's own
-/// resumed stage-3 pass genuinely reaches that same, already-tested recovery shape, not a
-/// different one.
+/// publish and its materialize call.
+///
+/// **0.56.0 step W3c-5b (defect 2), corrected:** the review found the original version of this
+/// test asserted a *false* report -- `adopted: false`, `landed_as: "remotes/heads/main"` -- when
+/// the interrupted run had already adopted `heads/main` for real. `try_adopt_local_ref`'s own
+/// condition 1 (`a ref by this name already exists locally`) now checks for an *exact* match
+/// against this landing's own final `RefState` first (`already_completed_by_interrupted_run`):
+/// found here, since the crash happened after the publish loop, so the resume reports this
+/// landing honestly (`adopted: true`, `completed_by_interrupted_run: true`, no `remotes/` pointer)
+/// instead. Route (a) of that ruling: since the dirty marker still names `heads/main` (the
+/// earlier run crashed *before* its own materialize), this resume finishes the materialize
+/// itself, through the identical `require_worktree_clean_and_capture`/`materialize_after_publish`
+/// pair the ordinary adoption path already uses -- no second `branch switch` step needed.
 #[test]
-fn a_crash_between_the_current_branch_adoption_and_its_materialize_resumes_then_resyncs_via_switch()
-{
+fn a_crash_between_the_current_branch_adoption_and_its_materialize_resumes_and_finishes_the_materialize()
+ {
     let source_dir = unique_temp_dir("archive-w3c5-crash-source");
     let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
         build_adoptable_source_repository(&source_dir, "heads/main");
@@ -3482,32 +3482,44 @@ fn a_crash_between_the_current_branch_adoption_and_its_materialize_resumes_then_
         None,
         "the journal must still be present after the simulated crash"
     );
-    // The marker survives the crash too -- this is the one fact `branch switch` below recovers
-    // from.
+    // The marker survives the crash too -- this is the one fact the resume below finishes from.
     assert!(
         crate::worktree_marker::worktree_materialization_interrupted(&dest_layout)
             .expect("read the marker"),
         "the current-branch-switch marker must still be set after the simulated crash"
     );
 
-    // The resume: `try_adopt_local_ref` has no branch of its own for "resumed" -- condition 1
-    // (the ref now exists locally) fires unconditionally, so this landing falls through to
-    // `remotes/heads/main` instead of being re-adopted, and the marker is left exactly as the
-    // crashed run left it (no second materialize attempt).
+    // The resume: the exact-match check in `try_adopt_local_ref` (ahead of condition 1's own
+    // fall-through) recognizes this landing as already published by the crashed run, reports it
+    // honestly, and finishes the materialize the crashed run never reached.
     let report = import_archive(&dest_layout, &mut Cursor::new(bytes), &options)
-        .expect("the resumed import must complete, even though this landing now falls through");
+        .expect("the resumed import must complete");
     assert_eq!(report.landing_outcomes.len(), 1);
     assert!(
-        !report.landing_outcomes[0].adopted,
-        "a resumed import must not re-adopt a ref that already exists locally: {:?}",
+        report.landing_outcomes[0].adopted,
+        "a resumed import must report this landing as adopted -- it genuinely is: {:?}",
         report.landing_outcomes[0]
     );
-    assert_eq!(report.landing_outcomes[0].landed_as, "remotes/heads/main");
     assert!(
-        !report.materialized_into_worktree,
-        "the resumed import's own stage-3 pass never re-enters the materialize path for this \
-         landing"
+        report.landing_outcomes[0].completed_by_interrupted_run,
+        "the resumed import must say this was completed by the interrupted run, not by this \
+         call: {:?}",
+        report.landing_outcomes[0]
     );
+    assert_eq!(report.landing_outcomes[0].landed_as, "heads/main");
+    assert!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer")
+            .is_none(),
+        "the resume must not land a remotes/ pointer for a landing it adopted locally"
+    );
+    assert!(
+        report.materialized_into_worktree,
+        "the resume must finish the materialize the crashed run never reached"
+    );
+    // The fixture's own genesis block is empty (no patches, no files) -- `materialized_into_
+    // worktree` turning `true` at all is what this test checks; there is nothing to write.
+    assert_eq!(report.materialized_written_files, 0);
     assert!(
         interrupted_import_short_id(&dest_layout)
             .expect("read journal presence")
@@ -3515,18 +3527,99 @@ fn a_crash_between_the_current_branch_adoption_and_its_materialize_resumes_then_
         "the resumed import must still reach its own commit point and empty the journal"
     );
     assert!(
-        crate::worktree_marker::worktree_materialization_interrupted(&dest_layout)
+        !crate::worktree_marker::worktree_materialization_interrupted(&dest_layout)
             .expect("read the marker"),
-        "the marker must still be set after the resumed import -- it never touches it"
+        "the resume's own materialize must clear the marker -- no second `branch switch` step \
+         is needed"
+    );
+}
+
+/// 0.56.0 step W3c-5b (defect 2), the architect's own explicit ask: the fix above is general, not
+/// current-branch-specific -- `try_adopt_local_ref`'s own condition 1 predates W3c entirely, so a
+/// crash right after *any* `--adopt` landing's own publish (not only one destined for
+/// `options.current_branch`) must resume to the same honest report. `options.current_branch` is
+/// `None` here -- this landing was never a candidate for materialization at all, so there is no
+/// marker and nothing to finish; the only thing this test confirms is the report itself.
+#[test]
+fn a_crash_after_a_non_current_branch_adopt_publish_resumes_with_the_truthful_report() {
+    let source_dir = unique_temp_dir("archive-w3c5b-crash-source");
+    let (source_layout, ref_state_id, maintainer_key_id, maintainer_public_key_hex) =
+        build_adoptable_source_repository(&source_dir, "heads/main");
+    let bytes = export_bytes(&source_layout);
+
+    let dest_dir = unique_temp_dir("archive-w3c5b-crash-dest");
+    let dest_layout = RepositoryLayout::init(&dest_dir).expect("init destination");
+    crate::add_trusted_maintainer(&dest_layout, &maintainer_key_id, &maintainer_public_key_hex)
+        .expect("adopt the maintainer key at the destination before import");
+
+    let options = ArchiveImportOptions {
+        adopt: true,
+        allow_non_fast_forward: false,
+        current_branch: None,
+    };
+
+    // Arm the general seam: the next call stops right after this landing's own publish loop --
+    // the seam that fires regardless of `options.current_branch` (unlike the one the test above
+    // uses, which is gated on a marker this landing never sets).
+    crate::archive::import::stop_after_non_current_branch_adopt_publish_for_test();
+    let error = import_archive(&dest_layout, &mut Cursor::new(bytes.clone()), &options)
+        .expect_err("the test seam stops the import right after this landing's own publish");
+    assert!(
+        error.to_string().contains("simulated kill"),
+        "the seam's own error must fire, not some other refusal: {error}"
     );
 
-    // `branch switch <current branch>` (the marker's own named route) is the real recovery --
-    // the identical shared primitive every other W3c producer's own crash leaves to.
-    crate::branch_switch::switch_branch(&dest_layout, Some("heads/main"), "heads/main")
-        .expect("branch switch heads/main must resync the stale worktree");
+    // The publish genuinely happened before the simulated crash, exactly as the current-branch
+    // test above confirms for its own fixture.
+    let dest_ref_store = RefStore::new(dest_layout.clone());
+    assert_eq!(
+        dest_ref_store
+            .read_current_ref_state_id("heads/main")
+            .expect("read current ref state"),
+        Some(ref_state_id),
+        "heads/main must already be a real local branch: the crash is simulated *after* publish"
+    );
+    assert_ne!(
+        interrupted_import_short_id(&dest_layout).expect("read journal presence"),
+        None,
+        "the journal must still be present after the simulated crash"
+    );
     assert!(
         !crate::worktree_marker::worktree_materialization_interrupted(&dest_layout)
             .expect("read the marker"),
-        "branch switch must clear the marker"
+        "no marker was ever set: this landing was never a candidate for materialization"
+    );
+
+    // The resume: the identical exact-match check, with no `current_branch` in the picture at
+    // all -- must still report this landing honestly, not as a fresh fall-through to `remotes/`.
+    let report = import_archive(&dest_layout, &mut Cursor::new(bytes), &options)
+        .expect("the resumed import must complete");
+    assert_eq!(report.landing_outcomes.len(), 1);
+    assert!(
+        report.landing_outcomes[0].adopted,
+        "a resumed import must report this landing as adopted -- it genuinely is: {:?}",
+        report.landing_outcomes[0]
+    );
+    assert!(
+        report.landing_outcomes[0].completed_by_interrupted_run,
+        "the resumed import must say this was completed by the interrupted run: {:?}",
+        report.landing_outcomes[0]
+    );
+    assert_eq!(report.landing_outcomes[0].landed_as, "heads/main");
+    assert!(
+        crate::received::read_received_pointer(&dest_layout, "remotes/heads/main")
+            .expect("read received pointer")
+            .is_none(),
+        "the resume must not land a remotes/ pointer for a landing it adopted locally"
+    );
+    assert!(
+        !report.materialized_into_worktree,
+        "no current branch was ever named, so there is nothing to materialize"
+    );
+    assert!(
+        interrupted_import_short_id(&dest_layout)
+            .expect("read journal presence")
+            .is_none(),
+        "the resumed import must still reach its own commit point and empty the journal"
     );
 }

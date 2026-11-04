@@ -798,6 +798,94 @@ pub(super) fn for_each_object_record<R: Read + Seek>(
     })
 }
 
+/// 0.56.0 step W3c-5b (defect 1, shape (i)): an id -> (absolute byte offset, frame length) index
+/// for one archive section's own sound records -- the seeking design
+/// [`ArchiveObjectReader`]'s own doc comment names as the alternative rejected there (that
+/// rejection was specific to `verify`, which never needs `Patch`/`Blob` content at all; `archive
+/// import --adopt`'s own early in-the-way check does). Built the same way
+/// [`crate::bundle::BundleAndLocalReader`]'s own `index_by_id` is: one streaming pass that records
+/// a seek target per id, never a decoded object past the one callback call `decode_frames_with`
+/// makes for it -- memory proportional to object *count*, never to a `Patch`'s own operations or
+/// a `Blob`'s own bytes.
+///
+/// Correct only when the whole archive has already been confirmed internally consistent by
+/// [`verify_archive`] (every production caller does exactly that, at stage 0, before this ever
+/// runs): unlike [`for_each_object_record`], this never classifies or tolerates a damaged frame --
+/// a `Failed` outcome here means the archive changed underfoot between that check and this one,
+/// refused rather than silently producing an index with gaps.
+pub(super) fn index_object_offsets<R: Read + Seek>(
+    source: &mut R,
+    entry: &ManifestEntry,
+    object_type: ObjectType,
+) -> Result<Vec<(ObjectId, u64, usize)>> {
+    let record_area_start = entry.offset + SECTION_HEADER_LEN as u64;
+    let section_len = usize::try_from(entry.length)
+        .map_err(|_| PrikkError::Integrity("archive section length overflow".to_string()))?;
+    let mut frame_source = SectionFrameSource::new(source, record_area_start, section_len);
+    let mut ids = Vec::new();
+    let summary = decode_frames_with(
+        object_type,
+        &mut frame_source,
+        Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64),
+        |record| {
+            ids.push(record.envelope.object_id());
+            Ok(())
+        },
+    )?;
+    let mut offsets = Vec::with_capacity(ids.len());
+    for outcome in &summary.record_outcomes {
+        if let ContainerRecordStatus::Evaluated { frame_len, .. } = outcome.status {
+            offsets.push((record_area_start + outcome.offset as u64, frame_len));
+        }
+    }
+    if offsets.len() != ids.len() {
+        return Err(PrikkError::Integrity(format!(
+            "archive import: {object_type} section produced {} sound record(s) during its early \
+             offset-index pass but {} id(s) -- the archive changed underfoot after its own \
+             verify; refusing",
+            offsets.len(),
+            ids.len()
+        )));
+    }
+    Ok(ids
+        .into_iter()
+        .zip(offsets)
+        .map(|(id, (offset, frame_len))| (id, offset, frame_len))
+        .collect())
+}
+
+/// Re-decode exactly one container record at an absolute offset and frame length
+/// [`index_object_offsets`] already recorded as sound -- the per-read half of the seeking design
+/// above, mirroring [`crate::bundle::read_prepared_object_at`]'s seek-read-decode-and-resume shape
+/// but against the archive's own checksum-and-magic-framed records instead of a bundle's
+/// length-prefixed ones. Scopes the window to exactly `frame_len` bytes, so this reads nothing
+/// past the one record, and re-verifies its own checksum again through the same
+/// [`decode_frames_with`] every other reader in this module uses -- never trusts
+/// `index_object_offsets`'s own earlier classification blindly.
+pub(super) fn decode_object_record_at<R: Read + Seek>(
+    source: &mut R,
+    object_type: ObjectType,
+    offset: u64,
+    frame_len: usize,
+) -> Result<ObjectEnvelope> {
+    let mut frame_source = SectionFrameSource::new(source, offset, frame_len);
+    let mut found: Option<ObjectEnvelope> = None;
+    decode_frames_with(
+        object_type,
+        &mut frame_source,
+        Some(DEFAULT_BUNDLE_MAX_OBJECT_BYTES as u64),
+        |record| {
+            found = Some(record.envelope.clone());
+            Ok(())
+        },
+    )?;
+    found.ok_or_else(|| {
+        PrikkError::Integrity(format!(
+            "archive import: offset {offset} no longer decodes as a sound {object_type} record"
+        ))
+    })
+}
+
 /// The section's own outer header and checksum, read in one streamed, chunked pass -- `None` when
 /// the header itself (magic, wire code, declared length) does not match `entry`; `Some(matches)`
 /// once it does, where `matches` is whether the trailing 32-byte checksum, computed over the header

@@ -495,7 +495,7 @@ pub fn require_nothing_in_the_way_for_seal_batch(
     else {
         return Ok(());
     };
-    require_nothing_in_the_way(layout, pending, &target_manifest, action)
+    require_nothing_in_the_way(layout, pending, &target_manifest, action, None)
 }
 
 /// The simulation [`require_nothing_in_the_way_for_seal_batch`] needs, isolated so every failure

@@ -224,17 +224,26 @@
   1 ever admits an object) whenever the plan has such a landing, so an unclean worktree is refused
   as early as possible; it captures nothing durable, since a crash-and-resume is a brand-new
   process invocation with no access to an earlier attempt's own in-memory capture. The
-  authoritative capture, pre-write in-the-way check, marker, and materialize call all run again,
-  from scratch, inside the adoption itself, at stage 3, on both a fresh import and a resumed one
-  alike — immediately before the one publish that actually moves the current branch. The in-the-way
-  check replays the adopted chain's own final tip directly by block id (already a real, local
-  object: stage 1 admits every carried block unconditionally, regardless of this landing's own
-  eventual adoption outcome), not by a ref name, since no ref names this content until the adoption's
-  own publish a moment later. A dirty worktree refuses before any object is written at all; a file
-  in the way of the adopted tip's own files is caught only at stage 3, after stage 1 has already
-  admitted the archive's carried objects as it always has (unaffected by this round) — so that
-  refusal leaves those objects locally present but unreached by any ref until a later import lands
-  them for real, the same shape every other mid-stage-3 refusal in this importer already has. A
+  authoritative capture, marker, and materialize call all run again, from scratch, inside the
+  adoption itself, at stage 3, on both a fresh import and a resumed one alike — immediately before
+  the one publish that actually moves the current branch. A dirty worktree refuses before any
+  object is written at all. **0.56.0 step W3c-5b corrected two defects found in review before
+  release, folded in here rather than listed separately:** (1) a file in the way of the adopted
+  tip's own files now also refuses before the journal, before stage 1 ever admits an object — the
+  same guarantee the dirty-worktree check already had — through a seeking reader over the
+  archive's own Patch/Blob sections, built and measured against the import's own total time before
+  landing; the unchanged stage-3 check stays as a backstop for the one window the early check
+  cannot see into (a file created by a process outside prikk, between the two checks, under the
+  same lock), with its own message corrected to say what that backstop actually leaves behind
+  rather than falsely claiming nothing was written; (2) resuming an import that crashed between a
+  `--adopt` landing's own publish and its materialize now reports that landing honestly —
+  `adopted`, with a note that it was completed by the earlier, interrupted run — instead of
+  misreporting it as a fresh fall-through to a `remotes/` pointer the uninterrupted import would
+  never have written, recognized only on a genuine resume of that same import's own journal (an id
+  match alone, on a fresh run, is not enough — two unrelated repositories can coincidentally reach
+  the same id for a trivial state); when that landing is also the current branch and its
+  materialize never finished, the resume finishes it directly, so no second `branch switch` step
+  is needed. A
   landing that is not destined for the current branch, or that `--adopt` cannot land as a real
   local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no marker, no
   materialize call, the ordinary pre-round behavior.

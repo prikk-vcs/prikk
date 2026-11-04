@@ -5,19 +5,20 @@
 //! -- the adopted content is materialized into the worktree -- and a dirty worktree, or a file in
 //! the way of the adopted tip's own files, refuses before any ref-pointer write.
 //!
-//! **No fail-fast in-the-way check exists for this producer** (see `archive::import`'s own doc
-//! comment on `import_archive`'s fresh-start branch): building one would need a full,
-//! archive-native, random-access `ObjectReader` over the archive's own Patch/Blob sections, which
-//! this round does not build. So, unlike `sync seal`'s and `merge --into`'s own in-the-way tests,
-//! the in-the-way case below is caught only at stage 3 -- *after* stage 1 has already admitted the
-//! archive's own carried objects (`Block`/`RefState`/`Patch`/`Blob`) into the local store,
-//! unconditionally, as it always has, independent of this round. A stage-3 refusal therefore
-//! leaves those objects locally present but unreached by any ref -- the exact same shape every
-//! other mid-stage-3 refusal in this file already has (e.g.
-//! `archive::import::tests::received_landing_rollback_refuses_and_leaves_the_pointer_unchanged`,
-//! which asserts only that the pointer is unchanged, never that the whole repository is
-//! byte-identical) -- so the in-the-way test below asserts "no ref-pointer write, and the
-//! colliding file is untouched," not "byte-identical."
+//! **A fail-fast in-the-way check now exists for this producer too** (0.56.0 step W3c-5b, defect
+//! 1, shape (i): `.git-exclude/reviewed/0.56.0-step-3w3c-5-review-v1.md`): `archive::import`'s own
+//! `ArchiveEarlyCheckReader` is the full, archive-native, seeking `ObjectReader` over the
+//! archive's own Patch/Blob sections the original round's own doc comment said it would need --
+//! built this round, measured first against the import's own total time and found to add only
+//! about 8.5% of it (`.git-exclude/review-request/0.56.0-step-3w3c-5b-measurement.md`).
+//! So, like `sync seal`'s and `merge --into`'s own in-the-way tests now, the in-the-way case below
+//! refuses before the journal, before stage 1 ever admits a single object -- the whole repository
+//! stays byte-identical, the same as this file's own dirty-worktree test. The unchanged stage-3
+//! check stays as a backstop for the one window the early check cannot see into (a file created by
+//! a process outside prikk, between the two checks, under the same lock); its own message no
+//! longer claims "nothing was written" (it runs after stage 1's unconditional writes and the
+//! journal, every time, not only in that rare race) -- see `archive::import`'s own doc comments at
+//! both call sites.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -246,17 +247,16 @@ fn archive_import_adopt_onto_current_branch_refuses_a_dirty_worktree_and_writes_
     let _ = std::fs::remove_file(&archive_path);
 }
 
-/// Test 3 (the ruling's own list, narrowed by this file's own module doc): a file in the way of
-/// the adopted tip's own target file must refuse *before* the import publishes `heads/main`'s own
-/// ref-pointer -- caught at stage 3 (the authoritative check), since no fail-fast in-the-way check
-/// exists for this producer. Since `heads/main` is unborn and has no record at all here, an
-/// untracked file at the adopted content's own path is never flagged by the clean check
-/// (untracked is never a reason to refuse) -- it is the new pre-write in-the-way check, run
-/// against the chain's own final block (already a real local object by stage 3), that must catch
-/// it.
+/// Test 3 (the ruling's own list): a file in the way of the adopted tip's own target file must
+/// refuse before any write at all -- 0.56.0 step W3c-5b (defect 1, shape (i))'s own early check,
+/// run from the archive directly, before the journal and before stage 1 ever admits a single
+/// object. Since `heads/main` is unborn and has no record at all here, an untracked file at the
+/// adopted content's own path is never flagged by the clean check (untracked is never a reason to
+/// refuse) -- it is this in-the-way check, run against the archive's own carried tip, that must
+/// catch it, and the whole repository must stay byte-identical, the same as this file's own
+/// dirty-worktree test above.
 #[test]
-fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_before_publish_then_resyncs()
-{
+fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_and_writes_nothing() {
     let archive_path = build_adoptable_archive("in-the-way", "n.txt", b"from-archive\n");
     let dest = support::unique_repo("w3c5-in-the-way-dest");
     support::init(&dest);
@@ -265,6 +265,12 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_before_pub
     // The untracked file already in the way, at the exact path the adopted content adds --
     // different content than the import will bring, so the collision is real.
     std::fs::write(dest.join("n.txt"), b"zzz\n").unwrap();
+
+    assert!(
+        verify_text(&dest).contains("unreached objects: 0"),
+        "fixture sanity: no unreached objects before the refusal"
+    );
+    let before = whole_repo(&dest);
 
     let import = import_adopt(&dest, &archive_path);
     assert!(
@@ -278,8 +284,10 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_before_pub
     assert!(
         message.contains("are in the way of heads/main's files")
             && message.contains("n.txt")
-            && message.contains("before adopting heads/main"),
-        "the pre-write refusal must name the action, heads/main, and n.txt: {message}"
+            && message.contains("before adopting heads/main")
+            && message.contains("nothing was written"),
+        "the pre-write refusal must name the action, heads/main, and n.txt, and truthfully say \
+         nothing was written: {message}"
     );
 
     assert!(
@@ -291,12 +299,32 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_before_pub
         b"zzz\n",
         "the untracked file in the way must never be overwritten by a refused import"
     );
+    assert_eq!(
+        whole_repo(&dest),
+        before,
+        "a refused import must leave every file -- worktree AND .prikk -- byte-identical: the \
+         early in-the-way check runs before the journal, before stage 1 ever writes a single \
+         object"
+    );
+    assert!(
+        verify_text(&dest).contains("unreached objects: 0"),
+        "a refused import must not leave an orphaned, unreferenced object behind: {}",
+        verify_text(&dest)
+    );
+    // The ruling's own "no writer blocked" check: no journal was ever created, so `doctor`
+    // reports no interrupted import (the review's own measured defect left one behind, which an
+    // unrelated writer then refused against -- see the dedicated test below for that half).
+    let doctor = support::prikk(&dest).arg("doctor").output().unwrap();
+    assert!(
+        doctor.status.success(),
+        "doctor must exit 0 after a refused import that wrote nothing: stdout={} stderr={}",
+        stdout(&doctor),
+        stderr(&doctor)
+    );
 
     // After the offending file is moved aside, the same command succeeds and materializes --
-    // stage 1 already admitted every carried object on the first attempt, so this retry resumes
-    // from a fresh journal-less run (the prior attempt's journal was already emptied: the
-    // in-the-way refusal happens inside stage 3, before the commit point, so the journal from the
-    // first attempt is still present) and lands cleanly.
+    // nothing was written on the first attempt (confirmed above), so this retry is a genuinely
+    // fresh run, not a resume: there is no journal to resume from.
     std::fs::rename(dest.join("n.txt"), dest.join("n.txt.aside")).unwrap();
     let retry = import_adopt(&dest, &archive_path);
     assert!(
@@ -323,6 +351,116 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refuses_before_pub
         stdout(&status).contains("worktree: clean against baseline"),
         "the worktree must read clean and current after the retried import: {}",
         stdout(&status)
+    );
+
+    let _ = std::fs::remove_dir_all(&dest);
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// The other half of the ruling's own "no writer blocked" check, isolated in its own repository
+/// so the unrelated commit it authors (on a *different* ref, `heads/other`) cannot affect the
+/// `heads/main`-focused assertions the test above already makes: after a refused import that
+/// wrote nothing (the collision from the test above, reproduced fresh here), an unrelated
+/// `commit` on another ref proceeds normally -- not refused by a lingering journal/lock the way
+/// the review's own measured defect left behind before this round.
+#[test]
+fn archive_import_adopt_onto_current_branch_a_file_in_the_way_refusal_does_not_block_an_unrelated_commit()
+ {
+    let archive_path = build_adoptable_archive("in-the-way-unrelated", "n.txt", b"from-archive\n");
+    let dest = support::unique_repo("w3c5-in-the-way-unrelated-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+
+    std::fs::write(dest.join("n.txt"), b"zzz\n").unwrap();
+    let import = import_adopt(&dest, &archive_path);
+    assert!(
+        !import.status.success(),
+        "fixture sanity: the import must refuse on the collision: stdout={} stderr={}",
+        stdout(&import),
+        stderr(&import)
+    );
+
+    std::fs::remove_file(dest.join("n.txt")).unwrap();
+    std::fs::write(dest.join("unrelated.txt"), b"unrelated\n").unwrap();
+    let unrelated_commit = support::commit(&dest, "heads/other", "unrelated work");
+    assert!(
+        unrelated_commit.status.success(),
+        "an unrelated commit on a different ref must proceed normally after a refused import \
+         that wrote nothing: stdout={} stderr={}",
+        stdout(&unrelated_commit),
+        stderr(&unrelated_commit)
+    );
+    ok(&support::seal(&dest, "heads/other"), "seal heads/other");
+
+    let _ = std::fs::remove_dir_all(&dest);
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// Red control (0.56.0 step W3c-5b, defect 1): with the new early check disabled
+/// (`PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_CHECK_FOR_TEST`, a `test-support`-gated seam --
+/// see `archive::import`'s own doc comment at its one call site), the collision above is caught
+/// only by the unchanged stage-3 backstop: stage 1 has already admitted every carried object and
+/// the journal already exists by the time it fires, so `unreached objects` is no longer `0`, the
+/// whole repository is no longer byte-identical, and the refusal's own sentence is the corrected
+/// "already admitted ... already written" text, not "nothing was written" -- proving the
+/// byte-identical, zero-unreached-objects assertions in the test above genuinely depend on the new
+/// early check running, not on some other, vacuous reason.
+#[test]
+fn archive_import_adopt_onto_current_branch_a_file_in_the_way_with_the_early_check_disabled_writes_stage_1()
+ {
+    let archive_path = build_adoptable_archive("in-the-way-red", "n.txt", b"from-archive\n");
+    let dest = support::unique_repo("w3c5-in-the-way-red-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+
+    std::fs::write(dest.join("n.txt"), b"zzz\n").unwrap();
+
+    assert!(
+        verify_text(&dest).contains("unreached objects: 0"),
+        "fixture sanity: no unreached objects before the refusal"
+    );
+
+    let import = support::prikk(&dest)
+        .env(
+            "PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_CHECK_FOR_TEST",
+            "1",
+        )
+        .args(["archive", "import", "--adopt"])
+        .arg(&archive_path)
+        .output()
+        .unwrap();
+    assert!(
+        !import.status.success(),
+        "the stage-3 backstop must still refuse the collision even with the early check \
+         disabled: stdout={} stderr={}",
+        stdout(&import),
+        stderr(&import)
+    );
+    let message = stderr(&import);
+    assert!(
+        message.contains("are in the way of heads/main's files")
+            && message.contains("n.txt")
+            && message.contains("already admitted")
+            && message.contains("already written")
+            && !message.contains("nothing was written"),
+        "with the early check disabled, the backstop's own corrected sentence must name what was \
+         actually written, not claim nothing was: {message}"
+    );
+
+    assert!(
+        verify_text(&dest).contains("unreached objects: 2"),
+        "with the early check disabled, stage 1 admits this archive's own objects (the block and \
+         the blob) before the stage-3 backstop ever refuses, leaving them locally present but \
+         unreached: {}",
+        verify_text(&dest)
+    );
+    let doctor = support::prikk(&dest).arg("doctor").output().unwrap();
+    assert!(
+        !doctor.status.success(),
+        "with the early check disabled, the journal is left behind, and doctor must report the \
+         interrupted import: stdout={} stderr={}",
+        stdout(&doctor),
+        stderr(&doctor)
     );
 
     let _ = std::fs::remove_dir_all(&dest);

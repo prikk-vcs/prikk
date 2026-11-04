@@ -88,7 +88,8 @@
 //! [`crate::lock::acquire_container_locks`] itself now refuses while a journal is present (see its
 //! own doc comment) -- so every one of those lock-only writers, present and future, is covered too.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Seek};
 use std::path::Path;
 
@@ -134,8 +135,8 @@ use crate::worktree_materialize::{
 
 use super::ArchiveSectionKind;
 use super::verify::{
-    find_entry, for_each_object_record, read_author_material, read_end_trailer, read_manifest,
-    read_section_body_fully,
+    decode_object_record_at, find_entry, for_each_object_record, index_object_offsets,
+    read_author_material, read_end_trailer, read_manifest, read_section_body_fully,
 };
 
 /// Journal magic -- distinct from every other file this repository writes, so a resync or a
@@ -375,6 +376,15 @@ pub struct LandingOutcome {
     /// against -- `None` exactly when `class` is `NoLocalHistory` (there was no prior `RefState`
     /// to chain against).
     pub ref_state_chain: Option<RefStateChainRelation>,
+    /// 0.56.0 step W3c-5b (defect 2): `true` only when `adopted` is `true` because this exact
+    /// landing (its chain's own final `RefState`, matched by id) was already published by an
+    /// **earlier, interrupted run of this same import**, discovered on resume -- not adopted by
+    /// *this* call at all. Distinct from `remote_reason` (which is about a received-pointer
+    /// fallback, a different situation): conflating the two here would read as misleading, since
+    /// this landing genuinely is adopted, just not by this invocation. `false` for every ordinary
+    /// outcome, including a fresh adoption that happens to resume a *different* landing's own
+    /// crash.
+    pub completed_by_interrupted_run: bool,
 }
 
 /// Every distinct MAINTAINER signer key id on `envelope`, sorted and deduplicated (I-F item 1) --
@@ -575,32 +585,80 @@ pub fn import_archive<R: Read + Seek>(
             // stage 3, on both a fresh run and a resumed one alike -- see that function's own doc
             // comment.
             //
-            // No in-the-way check here. Building one at this point would need a full,
-            // archive-native, random-access `ObjectReader` over this archive's own Patch/Blob
-            // container sections (to replay the delivered tip's file-level content before stage 1
-            // ever admits a single object) -- a real, separate piece of machinery, not a small
-            // extension of `ArchiveRefGraph` just above, which decodes only connectivity fields
-            // (`parent_block_ids`, `previous_ref_state_id`, `target_object_id`) in one streaming
-            // pass with no random-access decode at all, and never touches a Patch's own operations
-            // or a Blob's own bytes. Such a reader would also find no locally-trusted anchor
-            // snapshot for a block chain this repository has never admitted, so every check would
-            // pay a full-genesis replay, read entirely from the archive's own container sections --
-            // not attempted this round; the stage-3 check below is where the in-the-way check
-            // genuinely runs, against objects stage 1 has by then made real and local.
+            // 0.56.0 step W3c-5b (defect 1, shape (i)): the in-the-way check itself, now also
+            // run here, before the journal and before stage 1 ever admits a single object --
+            // `.git-exclude/reviewed/0.56.0-step-3w3c-5-review-v1.md`'s own ruling, measured
+            // first (`.git-exclude/review-request/0.56.0-step-3w3c-5b-measurement.md`): on a
+            // 10,001-object archive, release build, the added cost (12ms building the reader +
+            // 29ms for the replay+check, ~41ms) was about 8.5% of the whole import's own wall
+            // time (~478ms), well inside the same order -- not a new, dominant cost. Reading it
+            // instead from the archive itself, before anything local exists to read, still
+            // needs full Patch/Blob content (a Patch's own operations, a Blob's own bytes),
+            // never held by `ArchiveObjectReader` (verify.rs's own `reader_holds_type`, whose
+            // own doc comment names the seeking design this reuses) or by `ArchiveRefGraph` just
+            // above (connectivity fields only, no decode of either type). `ArchiveEarlyCheckReader`
+            // (below) is that seeking reader, mirroring `crate::bundle::BundleAndLocalReader`'s
+            // own pattern -- an eager, small map for `Block` (structural payloads only, the same
+            // bound `ArchiveObjectReader` already keeps), and a seeking `verify::
+            // index_object_offsets`/`decode_object_record_at` index for `Patch`/`Blob`, the one
+            // thing ever large. No locally-trusted anchor snapshot exists yet for a chain this
+            // repository has never admitted, so this always pays a full-genesis replay -- exactly
+            // the cost the measurement above confirmed is affordable.
+            //
+            // The stage-3 check below is kept, unchanged in placement, as the backstop for the
+            // one window this earlier check cannot see into (a file created by a process outside
+            // prikk, between the two checks, under the same lock) -- the same shape
+            // `worktree_materialize.rs`'s own module doc already describes for `branch create
+            // --from`/`merge --into`. Its own message is corrected separately (see
+            // `try_adopt_local_ref`'s own call site) since, for this one producer, that backstop
+            // always runs after stage 1's unconditional writes and the journal -- not only in the
+            // rare race it now mostly exists to catch.
             if options.adopt {
                 if let Some(branch) = options.current_branch.as_deref() {
-                    if landing.iter().any(|entry| {
+                    if let Some(current_branch_landing) = landing.iter().find(|entry| {
                         entry.origin == LandingOrigin::Local && entry.ref_name == branch
                     }) {
                         let active_replay =
                             Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME)
                                 .replay()?;
-                        let _ = require_worktree_clean_and_capture(
+                        let pending = require_worktree_clean_and_capture(
                             layout,
                             branch,
                             &active_replay,
                             &format!("adopting {branch}"),
                         )?;
+                        // 0.56.0 step W3c-5b's own red control: the one seam reachable from a
+                        // real, separately compiled `prikk` process (`feature = "test-support"`,
+                        // the same reason `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` above is
+                        // gated this way rather than `#[cfg(test)]`), so an integration test can
+                        // disable only this new check -- confirming the stage-3 backstop alone
+                        // (unchanged by this round) would let stage 1 and the journal write first,
+                        // the exact regression this check exists to prevent.
+                        #[cfg(feature = "test-support")]
+                        let skip_early_in_the_way_check = std::env::var(
+                            "PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_CHECK_FOR_TEST",
+                        )
+                        .is_ok();
+                        #[cfg(not(feature = "test-support"))]
+                        let skip_early_in_the_way_check = false;
+                        if !skip_early_in_the_way_check {
+                            let graph = build_archive_ref_graph(source, &manifest)?;
+                            let target_block_id = archive_resolve_tip_block(
+                                &graph,
+                                current_branch_landing.ref_state_id,
+                            )?;
+                            let archive_reader = ArchiveEarlyCheckReader::build(source, &manifest)?;
+                            require_nothing_in_the_way_for_block(
+                                layout,
+                                &pending,
+                                &archive_reader,
+                                branch,
+                                target_block_id,
+                                &format!("adopting {branch}"),
+                                None,
+                            )?;
+                        }
+                        drop(pending);
                     }
                 }
             }
@@ -886,6 +944,7 @@ pub fn import_archive<R: Read + Seek>(
             &mut object_store,
             &ref_log_records,
             &_container_locks,
+            resumed,
         )?;
         any_landing_changed = any_landing_changed || changed;
         if materialization.is_some() {
@@ -955,6 +1014,7 @@ pub fn import_archive<R: Read + Seek>(
                     signing_key_ids,
                     class,
                     ref_state_chain,
+                    completed_by_interrupted_run: false,
                 });
             }
             continue;
@@ -968,6 +1028,7 @@ pub fn import_archive<R: Read + Seek>(
             &mut object_store,
             &ref_log_records,
             &_container_locks,
+            resumed,
         )?;
         any_landing_changed = any_landing_changed || changed;
         if let Some(slot) = landing_outcomes.get_mut(index) {
@@ -1048,6 +1109,7 @@ fn land_one_ref(
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
     container_locks: &ContainerLockGuard,
+    resumed: bool,
 ) -> Result<(LandingOutcome, bool, Option<CurrentBranchMaterializeReport>)> {
     // I-E item 4: whether this landing's own tip carries a maintainer signature the *destination*
     // already trusts -- independent of whether `--adopt` applied, computed once and reused for
@@ -1091,6 +1153,7 @@ fn land_one_ref(
                     signing_key_ids: signing_key_ids.clone(),
                     class,
                     ref_state_chain,
+                    completed_by_interrupted_run: false,
                 },
                 changed,
                 None,
@@ -1106,6 +1169,7 @@ fn land_one_ref(
                 object_store,
                 ref_log_records,
                 container_locks,
+                resumed,
             )? {
                 AdoptOutcome::Adopted {
                     remote_reason,
@@ -1125,6 +1189,7 @@ fn land_one_ref(
                         signing_key_ids: signing_key_ids.clone(),
                         class,
                         ref_state_chain: chain,
+                        completed_by_interrupted_run: false,
                     },
                     true,
                     materialization,
@@ -1151,11 +1216,37 @@ fn land_one_ref(
                             signing_key_ids: signing_key_ids.clone(),
                             class,
                             ref_state_chain,
+                            completed_by_interrupted_run: false,
                         },
                         changed,
                         None,
                     ))
                 }
+                AdoptOutcome::AlreadyCompletedByInterruptedRun { materialization } => Ok((
+                    LandingOutcome {
+                        ref_name: landing.ref_name.clone(),
+                        landed_as: landing.ref_name.clone(),
+                        adopted: true,
+                        remote_reason: None,
+                        landed: true,
+                        collision_target: None,
+                        origin: landing.origin,
+                        publication_trusted,
+                        signing_key_ids: signing_key_ids.clone(),
+                        // 0.56.0 step W3c-5b (defect 2): nothing here is a comparison against a
+                        // *different* received pointer at all -- this landing's own exact content
+                        // was already locally adopted by the earlier, interrupted run, so there
+                        // is no connectivity relation to classify.
+                        class: BundleConnectivityClass::NoLocalHistory,
+                        ref_state_chain: None,
+                        completed_by_interrupted_run: true,
+                    },
+                    // Nothing new changed this run (the ref already held exactly this content
+                    // before this call) -- the same "zero-delta" reasoning `already_imported`
+                    // relies on for a landing that needed no action at all.
+                    false,
+                    materialization,
+                )),
             }
         }
         LandingOrigin::Local => {
@@ -1180,6 +1271,7 @@ fn land_one_ref(
                     class,
                     ref_state_chain,
                     signing_key_ids,
+                    completed_by_interrupted_run: false,
                 },
                 changed,
                 None,
@@ -1294,6 +1386,20 @@ enum AdoptOutcome {
     FellThrough {
         reason: String,
     },
+    /// 0.56.0 step W3c-5b (defect 2): this exact landing (its chain's own final `RefState`,
+    /// matched by id against `ref_store`'s own current state for this ref name) was already
+    /// published by an earlier, interrupted run of this same import, discovered on resume --
+    /// distinct from [`Self::Adopted`] (which this call itself just published) so `land_one_ref`
+    /// can report the difference honestly rather than conflating the two.
+    AlreadyCompletedByInterruptedRun {
+        /// `Some` only when the earlier run also materialized nothing before it crashed, and
+        /// this resume finished that materialization just now (route (a) of the ruling: the
+        /// resume itself finishes the materialize, through the same marker-driven route `branch
+        /// switch` uses, rather than merely naming it). `None` when the earlier run either
+        /// completed its own materialize before crashing, or this landing was never
+        /// `options.current_branch` in the first place.
+        materialization: Option<CurrentBranchMaterializeReport>,
+    },
 }
 
 /// §9.6's narrowed `--adopt`: land `landing` (a [`LandingOrigin::Local`] ref) as a real local ref
@@ -1321,16 +1427,35 @@ fn try_adopt_local_ref(
     object_store: &mut ObjectWriteSession,
     ref_log_records: &[crate::refs::RefLogRecord],
     container_locks: &ContainerLockGuard,
+    resumed: bool,
 ) -> Result<AdoptOutcome> {
     // Condition 1, checked first and cheaply (a second, atomic check happens inside `publish`
     // itself, under the ref lock, for the chain's own first step -- this is the lock-free,
     // fail-fast read, not the enforcement). While this import's own journal is present, every
     // other session's writer refuses too (RFC 155 Part I-A2), so nothing else can create this ref
     // between this read and the first `publish` call below.
-    if ref_store
-        .read_current_ref_state_id(&landing.ref_name)?
-        .is_some()
-    {
+    let existing_ref_state_id = ref_store.read_current_ref_state_id(&landing.ref_name)?;
+
+    // 0.56.0 step W3c-5b (defect 2): an *exact* match against this landing's own final RefState
+    // (the same value `landing.ref_state_id` already names -- `PlannedRefLanding::ref_state_id`'s
+    // own doc comment: "this ref's own resolved tip RefState id") is treated as *this import's
+    // own* completed landing, published by an earlier, interrupted run, only when `resumed` is
+    // true -- i.e., only when this call is genuinely resuming a journal an earlier run of *this
+    // same import* already wrote, which is what correlates the match to this import at all. The
+    // review's own ruling says exactly this: "**on a resume**, if the local ref already holds
+    // exactly the RefState this landing would publish." Gating on `resumed` matters because a
+    // content-addressed id match does not, by itself, prove common origin: two independently
+    // created, genuinely unrelated repositories can reach the exact same RefState id for a
+    // trivial state (an empty genesis ref has no timestamp, no randomness, nothing to make it
+    // distinct) -- confirmed by `adopt_over_an_existing_local_ref_falls_through_to_remotes_
+    // instead_of_overwriting_it`'s own fixture, which builds exactly that coincidence on a fresh
+    // run and must still fall through to condition 1's ordinary refusal below, unchanged. Checked
+    // before that refusal, which still applies unchanged to every other local state at this ref
+    // name (a different tip, included, and to any match on a fresh, non-resumed run).
+    if resumed && existing_ref_state_id == Some(landing.ref_state_id) {
+        return already_completed_by_interrupted_run(layout, landing, options);
+    }
+    if existing_ref_state_id.is_some() {
         return Ok(AdoptOutcome::FellThrough {
             reason: "a ref by this name already exists locally; adopting onto an existing ref \
                      is RFC 154's"
@@ -1478,6 +1603,13 @@ fn try_adopt_local_ref(
                 &target_envelope.canonical_payload,
                 target_envelope.schema_version,
             )?;
+            // 0.56.0 step W3c-5b (defect 1): this backstop runs *after* stage 1 has already
+            // admitted this archive's own objects unconditionally and the journal already names
+            // every container it touched (import_archive's own doc comment above) -- every time
+            // it runs, not only in the rare race the new early check (the fresh-run branch,
+            // above) cannot see into (a file created by a process outside prikk, between the two
+            // checks, under the same lock). The shared "(nothing was written)" wording would be
+            // false here, so this names what is actually true instead.
             require_nothing_in_the_way_for_block(
                 layout,
                 &pending,
@@ -1485,6 +1617,11 @@ fn try_adopt_local_ref(
                 branch,
                 target_state.target_object_id,
                 &format!("adopting {branch}"),
+                Some(
+                    "this archive's own objects are already admitted, and its import journal is \
+                     already written -- run the same import again to resume, picking up from \
+                     here",
+                ),
             )?;
             mark_current_branch_switch_pending(layout, &pending)?;
             Some(pending)
@@ -1534,6 +1671,22 @@ fn try_adopt_local_ref(
         ));
     }
 
+    // Test seam, unreachable from production: 0.56.0 step W3c-5b (defect 2)'s own new row -- a
+    // kill right here, after a `--adopt` landing's own publish loop, for a landing that is *not*
+    // `options.current_branch` (so the seam above, gated on `pending_materialization.is_some()`,
+    // can never fire for it). Needed to prove the exact-match fix in `try_adopt_local_ref`'s own
+    // condition 1 is general, not current-branch-specific: without `current_branch` in the
+    // picture at all, there is no marker and nothing to materialize either way, so this seam
+    // fires unconditionally rather than gating on a marker that was never set.
+    #[cfg(test)]
+    if STOP_AFTER_NON_CURRENT_BRANCH_ADOPT_PUBLISH_FOR_TEST.with(std::cell::Cell::take) {
+        return Err(PrikkError::Integrity(
+            "import stopped for test: simulated kill right after a non-current-branch adoption's \
+             own publish"
+                .to_string(),
+        ));
+    }
+
     // Step 4: materialize the tip just published, through the ordinary verified path -- a crash
     // between the publish above and this call leaves the marker set and the record stale, both
     // recoverable by `prikk branch switch <current branch>` (the marker's own named route, from
@@ -1549,6 +1702,51 @@ fn try_adopt_local_ref(
         class: adopt_class,
         chain: adopt_chain,
     })
+}
+
+/// 0.56.0 step W3c-5b (defect 2): `landing` is already published, exactly, by an earlier,
+/// interrupted run of this same import (confirmed by [`try_adopt_local_ref`]'s own exact-match
+/// check before calling this). When `landing.ref_name` is also `options.current_branch` *and* the
+/// worktree-dirty marker still names it (`crate::worktree_marker::MarkedTarget::Switch`), the
+/// earlier run crashed between its own publish and its own materialize -- route (a) of the
+/// ruling: this resume finishes that materialize itself, through the identical
+/// `require_worktree_clean_and_capture`/`materialize_after_publish` pair the ordinary, first-time
+/// adoption path (just above, in `try_adopt_local_ref`) already uses, rather than only naming
+/// `branch switch <current branch>` in the report and leaving a manual step behind. This is the
+/// simpler of the two choices the ruling allows: `try_adopt_local_ref` already has every value
+/// `materialize_after_publish` needs in scope at this exact point (the same `layout`, the same
+/// `branch`), so calling it directly costs nothing a fresh `PendingCurrentBranchMaterialization`
+/// capture wouldn't anyway -- the worktree, untouched since the earlier crash (RFC 155 §9.5: every
+/// other writer refuses while this import's own journal is present), is still clean against its
+/// own pre-adoption record, so the capture below cannot itself refuse. Marker-absent, or
+/// marker-present-for-a-different-ref, both leave `materialization: None`: the first means the
+/// earlier run's own materialize already succeeded before it crashed (nothing to finish); the
+/// second means this landing was never `current_branch` at all.
+fn already_completed_by_interrupted_run(
+    layout: &RepositoryLayout,
+    landing: &PlannedRefLanding,
+    options: &ArchiveImportOptions,
+) -> Result<AdoptOutcome> {
+    let marker_names_this_branch = options.current_branch.as_deref()
+        == Some(landing.ref_name.as_str())
+        && matches!(
+            crate::worktree_marker::interrupted_target(layout)?,
+            Some(crate::worktree_marker::MarkedTarget::Switch(ref name)) if name == &landing.ref_name
+        );
+    let materialization = if marker_names_this_branch {
+        let active_replay =
+            Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME).replay()?;
+        let pending = require_worktree_clean_and_capture(
+            layout,
+            &landing.ref_name,
+            &active_replay,
+            &format!("adopting {}", landing.ref_name),
+        )?;
+        Some(materialize_after_publish(layout, pending)?)
+    } else {
+        None
+    };
+    Ok(AdoptOutcome::AlreadyCompletedByInterruptedRun { materialization })
 }
 
 /// 0.56.0 step 3c2 (R1): the archive's own carried `Block`/`RefState`/`Tag` ancestry and chain
@@ -1638,6 +1836,91 @@ fn archive_resolve_tip_block(graph: &ArchiveRefGraph, ref_state_id: ObjectId) ->
                 "archive import: Tag {target} is not among this archive's own carried objects"
             ))
         }),
+    }
+}
+
+/// 0.56.0 step W3c-5b (defect 1, shape (i)): a seeking, archive-native [`ObjectReader`] for the
+/// one early in-the-way check (the fresh-run branch of [`import_archive`], above) -- the only
+/// reader this module needs that can serve full `Patch`/`Blob` content before stage 1 has
+/// admitted anything locally. `replay_for_verified_worktree_write_by_block_id`'s own replay never
+/// reads anything but `Block`/`Patch`/`Blob` (confirmed from `patch_replay/read.rs`'s own three
+/// `read_typed` call sites), so those are the only three types this reader ever needs to serve.
+///
+/// `blocks` is eager -- a `Block`'s own payload is small and structural (parent/patch/blob *ids*,
+/// never a blob's own bytes), the identical bound `ArchiveObjectReader` (verify.rs) already keeps
+/// for the same type. `patch`/`blob` are seeking indices instead, each built once by
+/// [`index_object_offsets`] (id -> absolute offset, frame length) and read on demand by
+/// [`decode_object_record_at`] -- mirroring [`crate::bundle::BundleAndLocalReader`]'s own pattern,
+/// sourced from the archive's own container format instead of a bundle's. `source` is a
+/// [`RefCell`] for the same reason `BundleAndLocalReader`'s own field is: [`ObjectReader::
+/// read_object`] takes `&self`, but a seek-and-decode needs `&mut`.
+struct ArchiveEarlyCheckReader<'a, R: Read + Seek> {
+    source: RefCell<&'a mut R>,
+    blocks: HashMap<ObjectId, ObjectEnvelope>,
+    patch_index: BTreeMap<ObjectId, (u64, usize)>,
+    blob_index: BTreeMap<ObjectId, (u64, usize)>,
+}
+
+impl<'a, R: Read + Seek> ArchiveEarlyCheckReader<'a, R> {
+    fn build(source: &'a mut R, manifest: &super::verify::ManifestView) -> Result<Self> {
+        let block_entry = find_entry(
+            manifest,
+            ArchiveSectionKind::ObjectContainer(ObjectType::Block),
+        )?;
+        let mut blocks = HashMap::new();
+        for_each_object_record(source, block_entry, ObjectType::Block, |envelope| {
+            blocks.insert(envelope.object_id(), envelope.clone());
+            Ok(())
+        })?;
+        let patch_entry = find_entry(
+            manifest,
+            ArchiveSectionKind::ObjectContainer(ObjectType::Patch),
+        )?;
+        let patch_index = index_object_offsets(source, patch_entry, ObjectType::Patch)?
+            .into_iter()
+            .map(|(id, offset, frame_len)| (id, (offset, frame_len)))
+            .collect();
+        let blob_entry = find_entry(
+            manifest,
+            ArchiveSectionKind::ObjectContainer(ObjectType::Blob),
+        )?;
+        let blob_index = index_object_offsets(source, blob_entry, ObjectType::Blob)?
+            .into_iter()
+            .map(|(id, offset, frame_len)| (id, (offset, frame_len)))
+            .collect();
+        Ok(Self {
+            source: RefCell::new(source),
+            blocks,
+            patch_index,
+            blob_index,
+        })
+    }
+}
+
+impl<R: Read + Seek> ObjectReader for ArchiveEarlyCheckReader<'_, R> {
+    fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
+        if let Some(envelope) = self.blocks.get(&id) {
+            return Ok(Some(envelope.clone()));
+        }
+        if let Some(&(offset, frame_len)) = self.patch_index.get(&id) {
+            let mut source = self.source.borrow_mut();
+            return Ok(Some(decode_object_record_at(
+                &mut **source,
+                ObjectType::Patch,
+                offset,
+                frame_len,
+            )?));
+        }
+        if let Some(&(offset, frame_len)) = self.blob_index.get(&id) {
+            let mut source = self.source.borrow_mut();
+            return Ok(Some(decode_object_record_at(
+                &mut **source,
+                ObjectType::Blob,
+                offset,
+                frame_len,
+            )?));
+        }
+        Ok(None)
     }
 }
 
@@ -2331,6 +2614,9 @@ thread_local! {
     // 0.56.0 step W3c-5: the case table's own new row -- a kill between the current-branch
     // adoption's own publish and its materialize call.
     static STOP_AFTER_CURRENT_BRANCH_PUBLISH_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // 0.56.0 step W3c-5b (defect 2): the case table's own new row -- a kill right after a
+    // non-current-branch `--adopt` landing's own publish loop.
+    static STOP_AFTER_NON_CURRENT_BRANCH_ADOPT_PUBLISH_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
@@ -2418,6 +2704,17 @@ pub(crate) fn run_before_stage_3_for_test(callback: impl FnOnce() + 'static) {
 #[cfg(test)]
 pub(crate) fn stop_after_current_branch_publish_for_test() {
     STOP_AFTER_CURRENT_BRANCH_PUBLISH_FOR_TEST.with(|cell| cell.set(true));
+}
+
+/// Test seam, unreachable from production: the next call to [`import_archive`] on this thread
+/// stops right after a `--adopt` landing's own publish loop finishes, for a landing that is
+/// *not* `options.current_branch` -- 0.56.0 step W3c-5b (defect 2)'s own case-table row,
+/// confirming the exact-match fix in `try_adopt_local_ref`'s own condition 1 is general, not
+/// current-branch-specific. Fires at most once (consumed on the first landing whose own publish
+/// loop reaches this point); every other landing is unaffected.
+#[cfg(test)]
+pub(crate) fn stop_after_non_current_branch_adopt_publish_for_test() {
+    STOP_AFTER_NON_CURRENT_BRANCH_ADOPT_PUBLISH_FOR_TEST.with(|cell| cell.set(true));
 }
 
 /// RFC 155 Part I-B2, review finding IB2: the one seam reachable from a real, separately
