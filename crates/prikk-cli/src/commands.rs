@@ -402,7 +402,7 @@ pub(crate) const COMMANDS: &[Command] = &[
             "  note: a built sync artifact contains repository content in the clear -- prikk does not encrypt it; move it only over a channel you trust",
             "  prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
             "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
-            "  prikk sync pending [--format json]        List patches accepted into this repository and not sealed by any history it holds, its own or received",
+            "  prikk sync pending [--format json]        List held patches named by a held recognition claim and sealed by no held Block",
             "  note: --format json is sync-pending-v1: each pending patch with the recognition claim(s) naming it and each claim's own signature outcome -- \"invalid\" is an alarm, see commands.md",
             "  prikk sync seal <ref> --claim <id>        Seal one accepted claim's patches into a block",
             "  prikk sync seal <ref> --claims <file>     Seal a batch of claims, ordered by parent block first",

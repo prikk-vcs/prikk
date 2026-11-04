@@ -288,10 +288,12 @@ pub use patch_replay::{
     ladder_walk_for_test_support, lifecycle_state_shape_for_test_support,
     replay_time_split_for_test_support, replayed_block_count_at_point_for_test_support,
 };
+#[cfg(feature = "test-support")]
+pub use patch_set_digest::patch_ids_pending_disabling_held_block_subtraction_for_test;
 pub use patch_set_digest::{
     PatchSetDigest, PatchSetResolution, accepted_but_unsealed_patch_ids, compute_patch_set_digest,
     compute_patch_set_digest_and_count_from_block, compute_patch_set_digest_for_ref,
-    compute_patch_set_digest_from_block, patch_ids_pending_excluding_received,
+    compute_patch_set_digest_from_block, patch_ids_named_by_any_held_block, patch_ids_pending,
     patch_ids_reachable_from_block, patch_set_digest_preimage, resolve_patch_set_digest,
 };
 pub use path::{RepoPath, validate_no_path_collisions, validate_repo_path};

@@ -22,8 +22,6 @@
 //! sealed patch id**, with no block or queue to resolve against, reports every node-addressed
 //! operation unresolved.
 
-use std::collections::BTreeSet;
-
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
     BlobKind, BlobPayload, BlockPayload, NodeId, ObjectEnvelope, ObjectId, ObjectType,
@@ -40,38 +38,46 @@ use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
-use crate::patch_set_digest::patch_ids_pending_excluding_received;
-use crate::recognition_claim::{ClaimChainSignatureOutcome, claims_naming_patch};
+use crate::patch_set_digest::patch_ids_named_by_any_held_block;
+use crate::recognition_claim::{ClaimChainSignatureOutcome, ClaimNamingPatch, claims_naming_patch};
 use crate::wal::Wal;
 
-/// `show`'s own classification of one patch (0.56.0 step 1b): `queued` (this repository's own
-/// active WAL), `pending` (accepted via `sync accept`, not reachable from any tip this repository
-/// holds -- the identical membership `patch_ids_pending_excluding_received` already computes for
-/// `sync pending`), or `sealed` (reached from a block, via this repository's own local ref history
-/// or a received pointer's).
+/// `show`'s own classification of one patch (0.56.0 step 1b; redefined 0.56.0 step 3g, design
+/// review v2's A1 ruling, option (iv)): `queued` (this repository's own active WAL), `sealed`
+/// (named by a held Block's own `patch_ids` -- `patch_ids_named_by_any_held_block`'s own
+/// membership, regardless of whether any ref still reaches that Block), `pending` (not sealed, but
+/// named by a held recognition claim -- the identical membership `patch_ids_pending` computes for
+/// `sync pending`), or `unclaimed` (held, but sealed by no Block and named by no held claim --
+/// a new, fourth state, additive to the three above).
 ///
-/// **Precedence, when more than one could apply:** `pending` and `sealed` cannot both hold --
-/// `patch_ids_pending_excluding_received` is defined as "accepted, minus reachable from any tip,"
-/// so membership in it already proves non-membership in the sealed closure. `queued` and `pending`
-/// cannot both hold under ordinary operation either -- a queued patch has no object-store `Patch`
-/// object yet at all (`accept_exchange_artifact` writes one directly, `seal` is what first turns a
-/// WAL record into one), so the two sets are populated from disjoint sources. `queued` and
-/// `sealed` *can* genuinely, transiently overlap, across the real crash window between a block's
-/// own write/publish and the active WAL's later truncation (`finish_active_publication_cleanup`
-/// truncates only after the block and ref are written). `show()`'s own existing structure already
-/// decides this case, for free: it reads the real object first (`object_store.read_object`,
-/// covering both `pending` and `sealed`) and only falls back to the WAL scan when that read finds
-/// nothing -- so `sealed`/`pending` already win over `queued` by construction, with no additional
-/// priority check needed here.
+/// **Precedence, applied in this order: `sealed`, then `pending`, then `unclaimed`.** A patch
+/// cannot be both `sealed` and `pending`/`unclaimed`: `patch_ids_pending`'s own definition already
+/// excludes everything `patch_ids_named_by_any_held_block` names, and `unclaimed` is defined as
+/// "neither." `queued` and the other three cannot both hold under ordinary operation either -- a
+/// queued patch has no object-store `Patch` object yet at all (`accept_exchange_artifact` writes
+/// one directly, `seal` is what first turns a WAL record into one), so the sets are populated from
+/// disjoint sources. `queued` and `sealed` *can* genuinely, transiently overlap, across the real
+/// crash window between a block's own write/publish and the active WAL's later truncation
+/// (`finish_active_publication_cleanup` truncates only after the block and ref are written).
+/// `show()`'s own existing structure already decides this case, for free: it reads the real object
+/// first (`object_store.read_object`, covering `sealed`/`pending`/`unclaimed` alike) and only
+/// falls back to the WAL scan when that read finds nothing -- so the other three already win over
+/// `queued` by construction, with no additional priority check needed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PatchState {
     /// Found only in this repository's own active WAL -- committed but not yet sealed.
     Queued,
-    /// Accepted (`sync accept`) and not reachable from any tip this repository holds, its own or
-    /// received -- the same membership `sync pending` itself reports.
+    /// Not sealed, but named by a held recognition claim -- the same membership `sync pending`
+    /// itself reports.
     Pending,
-    /// Reached from a block, via this repository's own local ref history or a received pointer's.
+    /// Named by a held Block's own `patch_ids`, whether or not any ref still reaches that Block
+    /// (0.56.0 step 3g: a rollback or a `received remove` can leave a Block held but unreached --
+    /// it stays `sealed` regardless).
     Sealed,
+    /// Held, but sealed by no Block and named by no held recognition claim (0.56.0 step 3g, A1
+    /// ruling's new fourth state). A hand-made patch accepted without ever naming a claim, or a
+    /// refused or crashed import's leftover, reads this way.
+    Unclaimed,
 }
 
 /// What `show` resolved a node-addressed operation's path to. RFC 140's "never fatal" rule
@@ -242,9 +248,10 @@ pub struct ShowPatch {
     /// The recognition claim that resolved this pending patch's own node-addressed path, when one
     /// did (0.56.0 step 1b2, R4). `Some(claim_id)` only for a pending patch whose path was
     /// actually resolved through that claim; `None` for every other case -- queued, sealed (via a
-    /// block or via a bare id), and every *unresolved* pending-patch case, including one skipped
-    /// for an invalid signature or a fold failure. A tool can look up that claim id's own
-    /// signature outcome in `sync pending`'s own `sync-pending-v1` listing.
+    /// block or via a bare id), unclaimed (0.56.0 step 3g: there is no claim to resolve through at
+    /// all), and every *unresolved* pending-patch case, including one skipped for an invalid
+    /// signature or a fold failure. A tool can look up that claim id's own signature outcome in
+    /// `sync pending`'s own `sync-pending-v1` listing.
     pub resolved_through_claim_id: Option<ObjectId>,
 }
 
@@ -267,14 +274,6 @@ pub struct ShowPatch {
 /// sealed -- this is deliberate, not a gap the queued case's fix also closes.
 pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     let object_store = ObjectReadSnapshot::open(layout)?;
-    // 0.56.0 step 1b2, R2: computed once per command, shared by every branch below, rather than
-    // once per patch or only in the bare-Patch branch -- `state` is a property of the patch in
-    // this repository, the same whichever id names it. A `BTreeSet` (the same idiom
-    // `patch_exchange.rs`'s own `pending_patches_with_claims` already uses) so repeated membership
-    // checks in the block loop below are not `O(n)` each.
-    let pending_set: BTreeSet<ObjectId> = patch_ids_pending_excluding_received(layout)?
-        .into_iter()
-        .collect();
     let Some(envelope) = object_store.read_object(id)? else {
         return show_queued_patch(layout, &object_store, id);
     };
@@ -300,47 +299,32 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     &mut text_cache,
                     sealed_lineage,
                 )?;
-                // 0.56.0 step 1b2, R2: this patch may be reachable from no tip this repository
-                // holds (its own or received) even though it is sealed into *this* block -- a
-                // `received remove` on the only pointer that ever reached this block leaves the
-                // block itself still readable by its own id (RFC 142 §1's bare-id read has no
-                // reachability check at all), but no longer reachable from any tip. The same
-                // membership the bare-Patch branch already used decides this, not a hardcoded
-                // `Sealed`.
-                let patch_state = if pending_set.contains(patch_id) {
-                    PatchState::Pending
-                } else {
-                    PatchState::Sealed
-                };
+                // 0.56.0 step 3g (A1 ruling): every patch in this held block's own `patch_ids` is,
+                // by the new rule, named by a held Block -- this one -- so it is always `sealed`,
+                // regardless of whether any ref still reaches `id` (0.56.0 step 1b2, R2's own
+                // `received remove` case, and A1's rollback row, both read `sealed` for exactly
+                // this reason). No membership check is needed here at all any more: unlike the
+                // old reachability-based rule, this no longer depends on anything outside `block`
+                // itself.
                 patches.push(show_patch(
                     &object_store,
                     *patch_id,
                     Some(&state),
                     None,
-                    patch_state,
+                    PatchState::Sealed,
                     None,
                 )?);
             }
             Ok(patches)
         }
         ObjectType::Patch => {
-            if pending_set.contains(&id) {
-                let (lifecycle, reason, resolved_through_claim_id) =
-                    match resolve_pending_patch_lifecycle(layout, &object_store, id)? {
-                        PendingPathResolution::Resolved(claim_id, state) => {
-                            (Some(state), None, Some(claim_id))
-                        }
-                        PendingPathResolution::Unresolved(reason) => (None, Some(reason), None),
-                    };
-                Ok(vec![show_patch(
-                    &object_store,
-                    id,
-                    lifecycle.as_ref(),
-                    reason.as_deref(),
-                    PatchState::Pending,
-                    resolved_through_claim_id,
-                )?])
-            } else {
+            // 0.56.0 step 3g: the three-way classification (A1 ruling), computed only here --
+            // the block arm above never needs it (see the comment just above). `sealed_patch_ids`
+            // is a whole-repository scan (`patch_ids_named_by_any_held_block`'s own doc: no
+            // reverse "which blocks name this patch" index exists), the same cost shape the old
+            // pending-set computation already had for this one id.
+            let sealed_patch_ids = patch_ids_named_by_any_held_block(layout)?;
+            if sealed_patch_ids.contains(&id) {
                 Ok(vec![show_patch(
                     &object_store,
                     id,
@@ -352,6 +336,41 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                     PatchState::Sealed,
                     None,
                 )?])
+            } else {
+                // Not sealed: `pending` (a held claim names it) or `unclaimed` (none does). One
+                // scan, sized to this single patch (`claims_naming_patch`, the same tool
+                // `resolve_pending_patch_lifecycle` itself uses first) -- never a whole-repository
+                // claim scan just to classify one id.
+                let claims = claims_naming_patch(layout, id)?;
+                if claims.is_empty() {
+                    Ok(vec![show_patch(
+                        &object_store,
+                        id,
+                        None,
+                        Some(
+                            "this patch is held, but sealed by no Block and named by no held \
+                             recognition claim -- nothing seals or claims it yet",
+                        ),
+                        PatchState::Unclaimed,
+                        None,
+                    )?])
+                } else {
+                    let (lifecycle, reason, resolved_through_claim_id) =
+                        match resolve_pending_patch_lifecycle(layout, &object_store, id, claims)? {
+                            PendingPathResolution::Resolved(claim_id, state) => {
+                                (Some(state), None, Some(claim_id))
+                            }
+                            PendingPathResolution::Unresolved(reason) => (None, Some(reason), None),
+                        };
+                    Ok(vec![show_patch(
+                        &object_store,
+                        id,
+                        lifecycle.as_ref(),
+                        reason.as_deref(),
+                        PatchState::Pending,
+                        resolved_through_claim_id,
+                    )?])
+                }
             }
         }
         other => Err(PrikkError::UnsupportedObjectType(format!(
@@ -842,16 +861,18 @@ fn unresolved_reason_for_walk_error(
 /// recognizes (`target_block_id`, in `extract-report-v1`'s and `sync-pending-v1`'s own naming). It
 /// cannot be what this task means: for a `Consistent` claim (the honest, unmodified kind),
 /// `block_id`'s own `patch_ids` equal the claim's own `patch_ids` verbatim
-/// (`check_recognition_claim_consistency`), so the moment `block_id` is itself reachable from any
-/// tip, those same patch ids are already inside the sealed closure
-/// `patch_ids_pending_excluding_received` excludes -- the patch would already read `sealed`, never
-/// `pending`. "The claim's parent block, sealed or received" has to mean the *pre-existing*
-/// historical anchor the prospective block would attach onto: `parent_block_ids`, the named
-/// block's own parents.
+/// (`check_recognition_claim_consistency`), so the moment `block_id` itself becomes a *held*
+/// Block (0.56.0 step 3g: whether or not any ref reaches it), those same patch ids are already
+/// inside the sealed set `patch_ids_named_by_any_held_block` names -- the patch would already read
+/// `sealed`, never `pending`, and this function would never be reached for it at all (`show()`'s
+/// own `sealed_patch_ids` check comes first). "The claim's parent block, sealed or received" has
+/// to mean the *pre-existing* historical anchor the prospective block would attach onto:
+/// `parent_block_ids`, the named block's own parents.
 ///
-/// Tries every held claim naming this patch (0.56.0 step 1a already proved more than one can), in
-/// claim id order (`claims_naming_patch`'s own order -- the same convention `claims[]` uses
-/// elsewhere), and uses the first that resolves:
+/// **`claims` is the caller's own** (0.56.0 step 3g: `show()`'s `ObjectType::Patch` arm fetches
+/// `claims_naming_patch` itself first, to decide `pending` vs `unclaimed` before ever calling this
+/// function -- never empty here). Tries every one, in claim id order (`claims_naming_patch`'s own
+/// order -- the same convention `claims[]` uses elsewhere), and uses the first that resolves:
 /// - **An invalid signature skips the claim before any fold is attempted** (R4): a claim whose own
 ///   MAINTAINER signature `claims_naming_patch` reports invalid (the same case `sync-pending-v1`
 ///   reports as `"invalid"`, "the one value a tool must treat as an alarm") must not be allowed to
@@ -882,13 +903,20 @@ fn resolve_pending_patch_lifecycle(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     patch_id: ObjectId,
+    claims: Vec<ClaimNamingPatch>,
 ) -> Result<PendingPathResolution> {
-    let claims = claims_naming_patch(layout, patch_id)?;
-    if claims.is_empty() {
-        return Ok(PendingPathResolution::Unresolved(
-            "no held recognition claim names this pending patch yet".to_string(),
-        ));
-    }
+    // 0.56.0 step 3g: `claims` is now the caller's own -- `show()`'s `ObjectType::Patch` arm
+    // already fetched it to decide `pending` vs `unclaimed` before calling this function at all,
+    // so it is never empty here (the `unclaimed` case returns before this is ever reached).
+    // Non-empty is this function's own precondition, not re-checked at runtime: a future caller
+    // that passes an empty `Vec` gets a debug-only signal here instead of a silently wrong
+    // `Unresolved` fallthrough below (`best_reason` would stay `None` and the final
+    // `ok_or_else` would fire as an internal-inconsistency error, not this specific message).
+    debug_assert!(
+        !claims.is_empty(),
+        "resolve_pending_patch_lifecycle's only caller already established at least one held \
+         claim names this patch before calling it"
+    );
 
     let mut best_reason: Option<(UnresolvedReasonPriority, String)> = None;
     for claim in &claims {

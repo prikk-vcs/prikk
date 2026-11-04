@@ -30,8 +30,10 @@ use crate::commit_boundary::worktree_patch::commit_worktree_changes_signed;
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::object_store::{ObjectWriteSession, ObjectWriter};
 use crate::received::write_received_pointer_for_test;
-use crate::refs::RefStore;
-use crate::test_gates::test_support::{signed_block, signed_ref_state_envelope, unique_temp_dir};
+use crate::refs::{RefPublication, RefStore};
+use crate::test_gates::test_support::{
+    signed_block, signed_ref_state_envelope, signed_ref_update_envelope, unique_temp_dir,
+};
 use crate::wal::Wal;
 use crate::{
     Ed25519AuthorSigner, Ed25519MaintainerSigner, MaintainerSigner, RepositoryLayout,
@@ -2085,10 +2087,13 @@ fn show_state_is_sealed_for_a_block_patch_and_its_own_bare_id() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Task 1: a patch written directly (never queued, never sealed) reads `pending`.
+/// 0.56.0 step 3g, design review v2's A1 ruling, object 2 ("accepted, no claim (hand-made
+/// only)") -- and, classification-identical, object 5 ("a refused or crashed import's
+/// leftover"): a patch written directly (never queued, never sealed, named by no held claim)
+/// reads `unclaimed`, not `pending`.
 #[test]
-fn show_state_is_pending_for_an_accepted_unsealed_patch() {
-    let root = unique_temp_dir("show-state-pending");
+fn show_state_is_unclaimed_for_a_held_patch_with_no_claim_and_no_sealing_block() {
+    let root = unique_temp_dir("show-state-unclaimed");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     trust_maintainer(&layout, &maintainer_signer());
     let node_id = NodeId::from_bytes([0xA1; 32]);
@@ -2107,6 +2112,43 @@ fn show_state_is_pending_for_an_accepted_unsealed_patch() {
             }),
         }],
     );
+
+    let patches = show(&layout, pending_id).unwrap();
+    let [patch] = patches.as_slice() else {
+        panic!("expected exactly one patch, got {patches:?}");
+    };
+    assert_eq!(patch.state, PatchState::Unclaimed);
+    assert!(!patch.queued);
+    assert_eq!(patch.resolved_through_claim_id, None);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Design review v2's A1 ruling, object 1 ("accepted, with a held claim"): a patch written
+/// directly, named by a held claim, with no sealing block, reads `pending`.
+#[test]
+fn show_state_is_pending_for_an_accepted_patch_a_held_claim_names() {
+    let root = unique_temp_dir("show-state-pending-claimed");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    trust_maintainer(&layout, &maintainer_signer());
+    let node_id = NodeId::from_bytes([0xA4; 32]);
+    create_raw_file(&layout, node_id, "a.txt", BlobKind::Text, b"content\n");
+
+    let pending_id = write_pending_patch(
+        &layout,
+        vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id,
+                old_mode: 0o100_644,
+                new_mode: 0o100_755,
+            }),
+        }],
+    );
+    let prospective_block_id = ObjectId::from_bytes([0xA5; 32]);
+    write_claim(&layout, prospective_block_id, vec![pending_id], Vec::new());
 
     let patches = show(&layout, pending_id).unwrap();
     let [patch] = patches.as_slice() else {
@@ -2196,12 +2238,13 @@ fn signed_create_file_patch_for_test(
     envelope
 }
 
-/// 0.56.0 step 1b2, R2 (the review's own measured case): one patch, one state. Before `received
-/// remove`, `show <patch>` and `show <block>` agree (`sealed`). After it, the block is still
-/// readable by its own bare id (RFC 142 §1's bare-id read has no reachability check at all), but
-/// no longer reachable from any tip -- the bug was that the block branch hardcoded `Sealed`
-/// unconditionally while the bare-Patch branch correctly asked the pending set, so the two forms
-/// of the identical patch disagreed. Both must now read `Pending`.
+/// 0.56.0 step 1b2, R2 (the review's own measured case), redefined by 0.56.0 step 3g (A1
+/// ruling, design review v2's object 4, "after `received remove` (its Block held)"): one patch,
+/// one state. `remove_received_pointer` deletes only the pointer -- the block it named, and the
+/// patch that block names, are both still held. Before *and* after `received remove`,
+/// `show <patch>` and `show <block>` must agree, and must both read `sealed`: `patch_ids_named_by_
+/// any_held_block`'s own membership does not depend on any ref (local or received) reaching the
+/// block at all, only on the Block object itself still being held.
 #[test]
 fn show_state_agrees_between_a_patch_and_its_block_after_received_remove() {
     let root = unique_temp_dir("show-state-one-patch-one-state");
@@ -2244,16 +2287,18 @@ fn show_state_agrees_between_a_patch_and_its_block_after_received_remove() {
 
     crate::remove_received_pointer(&layout, "remotes/origin/heads/main").unwrap();
 
-    // After removal: the measured bug (review v1, R2) had `show <block>` still say `sealed` while
-    // `show <patch>` correctly flipped to `pending`. Both must now agree.
+    // After removal: before 0.56.0 step 3g, `show <patch>` flipped to `pending` here (R2's own
+    // fix made `show <block>` agree with that). 0.56.0 step 3g redefines `sealed` as "named by a
+    // held Block," independent of reachability, so both ids must now stay `sealed` -- the block
+    // is still held even though no ref (local or received) reaches it any more.
     let from_patch_after = show(&layout, patch_id).unwrap();
     let [patch_after] = from_patch_after.as_slice() else {
         panic!("expected exactly one patch, got {from_patch_after:?}");
     };
     assert_eq!(
         patch_after.state,
-        PatchState::Pending,
-        "show <patch> after received remove must read pending"
+        PatchState::Sealed,
+        "show <patch> after received remove must still read sealed -- its Block is still held"
     );
     let from_block_after = show(&layout, block_id).unwrap();
     let [block_patch_after] = from_block_after.as_slice() else {
@@ -2261,8 +2306,103 @@ fn show_state_agrees_between_a_patch_and_its_block_after_received_remove() {
     };
     assert_eq!(
         block_patch_after.state,
-        PatchState::Pending,
-        "show <block>, the identical patch, must agree with show <patch> -- not stay sealed"
+        PatchState::Sealed,
+        "show <block>, the identical patch, must agree with show <patch>"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Design review v2's A1 ruling, object 3 ("rolled back (its Block held)"): rolling a local ref
+/// back to an earlier block does not unwrite the block it moved away from -- that block, and the
+/// patch it names, are both still held. `show <patch>` and `show <block>` must both read
+/// `sealed`, exactly as if the rollback had never happened, since `patch_ids_named_by_any_held_
+/// block`'s own membership never looks at a ref's own current tip at all.
+#[test]
+fn show_state_stays_sealed_for_a_patch_in_a_rolled_back_block() {
+    let root = unique_temp_dir("show-state-rollback");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut object_store = ObjectWriteSession::open(&layout).unwrap();
+    let blob_id = write_blob(&layout, BlobKind::Text, b"rollback fixture\n".to_vec());
+    let patch_id = object_store
+        .write_object(&signed_create_file_patch_for_test(
+            "a.txt",
+            NodeId::from_bytes([0xA6; 32]),
+            blob_id,
+        ))
+        .unwrap();
+    let root_block_id = object_store
+        .write_object(&signed_block(BlockKind::Root, Vec::new(), Vec::new(), None))
+        .unwrap();
+    let child_block_id = object_store
+        .write_object(&signed_block(
+            BlockKind::Normal,
+            vec![root_block_id],
+            vec![patch_id],
+            None,
+        ))
+        .unwrap();
+    drop(object_store);
+
+    let ref_store = RefStore::new(layout.clone());
+    let forward_ref_state = signed_ref_state_envelope("heads/main", None, child_block_id, 1);
+    let forward_ref_state_id = forward_ref_state.object_id();
+    let forward_ref_update =
+        signed_ref_update_envelope("heads/main", None, forward_ref_state_id, child_block_id, 1);
+    ref_store
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: forward_ref_state,
+            ref_update: forward_ref_update,
+        })
+        .unwrap();
+
+    // Before rollback: both ids agree, sealed.
+    let from_patch_before = show(&layout, patch_id).unwrap();
+    let [patch_before] = from_patch_before.as_slice() else {
+        panic!("expected exactly one patch, got {from_patch_before:?}");
+    };
+    assert_eq!(patch_before.state, PatchState::Sealed);
+
+    // Roll `heads/main` back to the root block -- `child_block_id` (and the patch it names) is
+    // still held, just no longer reachable from any live tip.
+    let rollback_ref_state =
+        signed_ref_state_envelope("heads/main", Some(forward_ref_state_id), root_block_id, 2);
+    let rollback_ref_state_id = rollback_ref_state.object_id();
+    let rollback_ref_update = signed_ref_update_envelope(
+        "heads/main",
+        Some(forward_ref_state_id),
+        rollback_ref_state_id,
+        root_block_id,
+        2,
+    );
+    ref_store
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: Some(forward_ref_state_id),
+            ref_state: rollback_ref_state,
+            ref_update: rollback_ref_update,
+        })
+        .unwrap();
+
+    let from_patch_after = show(&layout, patch_id).unwrap();
+    let [patch_after] = from_patch_after.as_slice() else {
+        panic!("expected exactly one patch, got {from_patch_after:?}");
+    };
+    assert_eq!(
+        patch_after.state,
+        PatchState::Sealed,
+        "show <patch> after a rollback must still read sealed -- its Block is still held"
+    );
+    let from_block_after = show(&layout, child_block_id).unwrap();
+    let [block_patch_after] = from_block_after.as_slice() else {
+        panic!("expected exactly one patch, got {from_block_after:?}");
+    };
+    assert_eq!(
+        block_patch_after.state,
+        PatchState::Sealed,
+        "show <block>, the identical patch, must agree with show <patch>"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -2380,9 +2520,11 @@ fn show_leaves_a_pending_patch_unresolved_when_its_claims_parent_is_itself_only_
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Task 2: a pending patch no held claim names at all stays unresolved, naming that.
+/// Task 2 (superseded by 0.56.0 step 3g, A1 ruling): a patch no held claim names at all is not a
+/// pending patch stuck unresolved any more -- it is `unclaimed`, classified before any
+/// path-resolution attempt is even made, and every node-addressed operation reports that reason.
 #[test]
-fn show_leaves_a_pending_patch_unresolved_when_no_claim_names_it() {
+fn show_leaves_an_unclaimed_patch_unresolved_naming_that() {
     let root = unique_temp_dir("show-pending-no-claim");
     let layout = RepositoryLayout::init(root.clone()).unwrap();
     trust_maintainer(&layout, &maintainer_signer());
@@ -2407,7 +2549,7 @@ fn show_leaves_a_pending_patch_unresolved_when_no_claim_names_it() {
     let [patch] = patches.as_slice() else {
         panic!("expected exactly one patch, got {patches:?}");
     };
-    assert_eq!(patch.state, PatchState::Pending);
+    assert_eq!(patch.state, PatchState::Unclaimed);
     let [operation] = patch.operations.as_slice() else {
         panic!("expected one operation, got {:?}", patch.operations);
     };

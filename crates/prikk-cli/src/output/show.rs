@@ -33,6 +33,8 @@ fn state_label(state: PatchState) -> &'static str {
         PatchState::Queued => "queued",
         PatchState::Pending => "pending",
         PatchState::Sealed => "sealed",
+        // 0.56.0 step 3g, A1 ruling: additive within `show-report-v1`.
+        PatchState::Unclaimed => "unclaimed",
     }
 }
 

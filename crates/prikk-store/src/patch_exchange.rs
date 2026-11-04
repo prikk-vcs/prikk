@@ -23,7 +23,7 @@ use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload, SignerRole};
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
-use crate::patch_set_digest::patch_ids_pending_excluding_received;
+use crate::patch_set_digest::patch_ids_pending;
 use crate::recognition_claim::verify_claim_signature;
 use crate::trust::load_maintainer_trust_policy_or_empty;
 
@@ -38,7 +38,8 @@ pub use artifact::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, export_exchange_artifact,
 };
 // 0.56.0 step 1b (boundary-check, `exchange-subsystem`): `accepted_but_unsealed_patch_ids` and
-// `patch_ids_pending_excluding_received` moved to `patch_set_digest` (not part of the exchange
+// its sibling (renamed `patch_ids_pending` by 0.56.0 step 3g; `patch_ids_pending_excluding_
+// received` at the time of this move) moved to `patch_set_digest` (not part of the exchange
 // subsystem, so `show` may call them directly), re-exported here unchanged so every pre-existing
 // caller inside this subsystem keeps resolving the same two names. Their own doc comments stayed
 // at the new location, not duplicated here.
@@ -145,32 +146,35 @@ fn first_maintainer_key_id(envelope: &prikk_object::ObjectEnvelope) -> Option<St
 pub struct PendingPatchEntry {
     /// The pending patch's own id.
     pub patch_id: ObjectId,
-    /// Every held claim naming `patch_id`, sorted by claim id. Empty when no held claim names
-    /// this patch -- see [`pending_patches_with_claims`]'s own doc for when that happens.
+    /// Every held claim naming `patch_id`, sorted by claim id. **Never empty** (0.56.0 step 3g,
+    /// A1 ruling): [`pending_patches_with_claims`]'s own base membership, `patch_ids_pending`, is
+    /// itself defined as "named by a held claim," so every entry this function returns already
+    /// has at least one. A patch no held claim names is `unclaimed`, not listed here at all --
+    /// see `show::PatchState::Unclaimed`.
     pub claims: Vec<PendingPatchClaim>,
 }
 
-/// `sync pending`'s own join (0.56.0 step 1 part 1a; planeter letter 2026-10-21 §2): every
-/// patch [`patch_ids_pending_excluding_received`] reports, each with the recognition claim(s)
-/// naming it.
+/// `sync pending`'s own join (0.56.0 step 1 part 1a; planeter letter 2026-10-21 §2; membership
+/// redefined 0.56.0 step 3g, A1 ruling): every patch `patch_ids_pending` reports, each with the
+/// recognition claim(s) naming it.
 ///
 /// **One pass over each container, never a pass over claims per pending patch.** Reuses
-/// [`patch_ids_pending_excluding_received`]'s own scan (which itself reuses
-/// [`accepted_but_unsealed_patch_ids`]'s single scan of the `Patch` container plus its ancestry
-/// walks) for the pending set, then makes exactly one further scan of the `RecognitionClaim`
-/// container -- the same container-walk shape [`crate::order_claims_for_sealing`]'s own sibling
-/// listing (`seal_from_accepted.rs`'s private `enumerate_stored_claims`) uses, inlined here rather
-/// than reused because this caller also needs each claim's own `ObjectEnvelope` (for
+/// `patch_ids_pending`'s own three scans (held patches, held-Block-named, held-claim-named) for
+/// the pending set, then makes exactly one further scan of the `RecognitionClaim` container --
+/// the same container-walk shape [`crate::order_claims_for_sealing`]'s own sibling listing
+/// (`seal_from_accepted.rs`'s private `enumerate_stored_claims`) uses, inlined here rather than
+/// reused because this caller also needs each claim's own `ObjectEnvelope` (for
 /// `verify_claim_signature`), which that function drops once it has computed a claim's id. Builds
 /// the patch -> claims map in that single pass (for each claim, for each of its own `patch_ids`
 /// that is in the pending set, append to that patch's own list) -- never re-scanned per patch.
 ///
-/// **A patch no claim names appears with `claims: []`.** This can happen today: an exchange
-/// artifact's patch and recognition-claim sections are independent (`accept_exchange_artifact`
-/// writes whichever of `decoded.patches`/`decoded.claims` an artifact carries, with no requirement
-/// that one names the other, in that same call or ever), so a patch accepted without ever naming
-/// a claim -- or one named only by a claim this repository has not yet received -- is ordinary,
-/// not an error.
+/// **A patch no held claim names does not appear here at all, since 0.56.0 step 3g** (A1 ruling):
+/// `patch_ids_pending`'s own membership already requires a held claim, so `sync-pending-v1`'s own
+/// `"claims": []` can no longer occur -- every listed patch has at least one claim. Before this
+/// round, such a patch appeared with `claims: []` (an exchange artifact's patch and
+/// recognition-claim sections are independent, so a patch accepted without ever naming a claim
+/// was ordinary, not an error); now it is `unclaimed`, reported only by `show`, not by this
+/// listing.
 ///
 /// **A claim's signature outcome is reported, never gated on -- see [`PendingClaimSignatureOutcome`]'s
 /// own doc.** `verify_claim_signature`'s `Err` (a genuine forged signature under an adopted key, a
@@ -183,7 +187,7 @@ pub fn pending_patches_with_claims(layout: &RepositoryLayout) -> Result<Vec<Pend
         "RecognitionClaim must remain a persisted, containerized object type"
     );
 
-    let pending_ids = patch_ids_pending_excluding_received(layout)?;
+    let pending_ids = patch_ids_pending(layout)?;
     let pending_set: BTreeSet<ObjectId> = pending_ids.iter().copied().collect();
 
     #[cfg(test)]

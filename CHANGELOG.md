@@ -340,6 +340,23 @@
   does not verify — the same condition `bundle import` now refuses on). Reported, not trusted, the
   same disclaimer `"sealed_by"` itself already carries: `bundle import` is still the only thing that
   acts on this.
+- **`sync pending` and `show` redefine what "pending" means (0.56.0 step 3g, design review v2's A1
+  ruling): `sync pending` no longer lists a patch with no held recognition claim naming it, nor a
+  patch whose own Block is still held, even when no ref — local or received — reaches that Block
+  any more (a rollback, or a `received remove`).** Before this, both commands decided `pending`
+  versus `sealed` by whether any local or received ref's own tip could still reach the patch; a
+  rolled-back block, or one orphaned by `received remove`, read as unsealed and reappeared as
+  pending, even though the block that sealed it was never unwritten. `show` now classifies such a
+  patch `sealed`, agreeing whether shown by its own id or through the still-held block, and `sync
+  pending` now excludes it from the listing, the same way it already excluded a patch a *received*
+  history sealed. `show`'s own `state` field also gains a new, fourth value, `"unclaimed"`: a held
+  patch sealed by no Block and named by no held recognition claim at all (a hand-made patch
+  accepted without ever naming a claim, or a refused or crashed import's own leftover) — reported
+  additively, never a breaking change to the existing three. `sync-pending-v1`'s own `"claims": []`
+  no longer occurs: this listing's own membership now requires a held claim, so every patch it
+  reports already has at least one — a claimless patch is `"unclaimed"`, reported only by `show`,
+  never by this listing. `sync pending`'s own text form (the count line and one id per line) keeps
+  its exact shape; only the membership changed.
 
 ### Added
 

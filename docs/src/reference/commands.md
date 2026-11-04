@@ -535,16 +535,19 @@ not a block's own ancestry. This closes a prior gap where `log --ref <block id>`
 empty history instead of refusing.
 
 **`show`'s own `state` field, and resolving a pending text edit's path.** Every patch
-`show --format json` reports (`show-report-v1`, additive) carries `"state"`: `"queued"` (found
-only in this repository's own active WAL), `"pending"` (accepted and not sealed by any history
-this repository holds, its own or received — the same membership `sync pending` itself reports),
-or `"sealed"` (reached from a block, through this repository's own local ref history or a received
-pointer's). `state` is the same whichever id names the patch, a block's own bare id included: a
-patch no tip reaches reads `"pending"` — the same membership `sync pending` itself lists — even
-while its own block is still held and readable by its own id directly, since a bare-id read never
-checks reachability. `"pending"` and `"sealed"` cannot both hold for the same patch; `"queued"` and
-`"pending"` cannot either, under ordinary operation, since a queued patch has no written object yet
-at all. `"queued"` and `"sealed"` can briefly overlap across the window between sealing a block and
+`show --format json` reports (`show-report-v1`, additive; redefined 0.56.0 step 3g) carries
+`"state"`: `"queued"` (found only in this repository's own active WAL), `"sealed"` (named by a
+held Block's own `patch_ids` — the same membership `sync pending` subtracts, independent of
+whether any ref, local or received, still reaches that Block), `"pending"` (not sealed, but named
+by a held recognition claim — the same membership `sync pending` itself reports), or `"unclaimed"`
+(held, but sealed by no Block and named by no held claim — a hand-made patch accepted without
+ever naming a claim, or a refused or crashed import's leftover, reads this way). `state` is the
+same whichever id names the patch, a block's own bare id included: a patch a rollback or a
+`received remove` left unreached by any tip still reads `"sealed"`, because its own Block is still
+held — a bare-id read never needed a reachability check at all, and neither does this. `"sealed"`
+and `"pending"`/`"unclaimed"` cannot both hold for the same patch; `"queued"` and the other three
+cannot either, under ordinary operation, since a queued patch has no written object yet at all.
+`"queued"` and `"sealed"` can briefly overlap across the window between sealing a block and
 clearing the queue afterward — `show` resolves this by looking for a real object before ever
 falling back to the queue, so `"sealed"` wins.
 
@@ -563,7 +566,7 @@ is invalid is skipped outright, never used to choose a path — checked at every
 walks through, not only the one named directly; a link whose own patches do not actually fold
 against its own declared parent is skipped the same way, its own fold failure named as the reason
 — in neither case does `show` itself refuse. **The path stays unresolved** when every claim naming
-the patch fails: no held claim names it at all; some link's declared parent is itself only
+the patch fails: some link's declared parent is itself only
 pending, part of a chain of claims that is not yet realized; some link names more than one parent,
 with no mainline to pick; the chain needs to resolve a block that two or more held claims
 recognize, with none or more than one of them signed by an adopted key (a shared-block collision);
@@ -575,17 +578,19 @@ are about the failing claim's or link's own soundness; the collision and the cyc
 nameable facts about the store's state; the last two name only where the walk stopped, with
 nothing more specific to go on). A bare sealed patch id shown directly stays unresolved too, also
 naming why: `show` does not search for the block that sealed a patch shown by its own id; `prikk
-log` or `prikk tree` finds it.
+log` or `prikk tree` finds it. **An `"unclaimed"` patch is classified before any of this is even
+attempted** (0.56.0 step 3g): since no held claim names it, there is nothing to resolve a path
+through at all, and its own operations are reported unresolved with that reason directly.
 
 **`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches
-accepted into this repository (`sync accept`) and not sealed by any history it holds, its own or
-received: patch objects present, minus those reachable from a local ref's own tip block, further
-reduced by every patch also reachable from a **received** pointer's own tip block — a patch the
-sender's own history already sealed, even one this repository has never adopted into a local ref,
-is not something an operator still needs to act on. This is a listing-only reduction: `sync seal`
-still seals a claim's patches into this repository's own history, even when a received history
-already sealed them, since sealing is about this repository's own ref history, not what some other
-repository's received history claims.
+this repository holds that are named by a held recognition claim and named by no held Block
+(0.56.0 step 3g, design review v2's A1 ruling): patch objects present, minus those any held
+Block's own `patch_ids` names, intersected with those a held claim's own `patch_ids` names. A
+patch sealed by a held Block is excluded whether or not any ref — local or received — still
+reaches that Block: a rolled-back block, or one a `received remove` orphaned, still excludes its
+own patches, since the Block object itself, not any ref pointing at it, is what this listing
+subtracts. This is a listing-only membership: `sync seal` is unchanged, still sealing a claim's
+patches into this repository's own history regardless of what this listing shows.
 `--format json`'s one document, `sync-pending-v1`, adds the recognition claim(s) naming each pending
 patch: `patches[]`, each `{"patch_id", "claims"}`; `claims[]`, each `{"claim_id", "target_block_id",
 "parent_block_ids", "signature"}`, where `signature` is `{"outcome": "sound"|"unverifiable"|"invalid", "key_id"}` from
@@ -603,11 +608,12 @@ same meaning as `extract-report-v1`'s own `claim_parent_block_id`, but as a **li
 root claim, one entry ordinarily, two for a claim about a merge. This listing reports a
 merge-shaped claim in full rather than refusing one, unlike `extract --claim`, which has no
 mainline to pick from and refuses such a claim outright — a listing has no such need to pick one.
-**A patch no held claim names appears with `"claims": []`:** ordinary, since one exchange artifact's
-patch and claim sections are independent — a patch can arrive without, or before, any claim naming
-it. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's own
-`claims[]` is ordered by claim id. The text form itself (the count line and one id per line) is
-unchanged in shape, though its own count and list now reflect the same received-history reduction.
+**`"claims": []` no longer occurs, since 0.56.0 step 3g:** this listing's own membership now
+requires a held claim, so every entry it reports already has at least one. A patch no held claim
+names is `"unclaimed"` (`show`'s own `state`), not pending, and does not appear in this listing at
+all. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's
+own `claims[]` is ordered by claim id. **The text form itself (the count line and one id per line)
+keeps its exact shape** — only the membership changed.
 
 ```json
 {"schema_version": "sync-pending-v1", "patches": [{"patch_id": "<id>", "claims": [{"claim_id": "<id>", "target_block_id": "<id>", "parent_block_ids": ["<id>"], "signature": {"outcome": "sound", "key_id": "<key-id>"}}, {"claim_id": "<id>", "target_block_id": "<id>", "parent_block_ids": [], "signature": {"outcome": "invalid", "key_id": "<key-id>", "reason": "<the refusal's own text>"}}]}]}

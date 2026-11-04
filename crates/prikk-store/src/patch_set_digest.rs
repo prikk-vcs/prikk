@@ -31,14 +31,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use prikk_error::{PrikkError, Result};
 use prikk_hash::sha256;
-use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload};
+use prikk_object::{BlockPayload, ObjectId, ObjectType, RecognitionClaimPayload, RefStatePayload};
 
 use crate::foundation::container::decode_container_records;
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout, persisted_object_types};
 use crate::merge::evidence::ancestors_inclusive;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
-use crate::received::list_received_pointers;
 use crate::refs::{RefStore, resolve_ref_tip_block};
 
 /// RFC 117 T1: the newtype itself now lives in `prikk-object` (`TagPayload` carries one, and
@@ -392,9 +391,10 @@ fn take_parent_closure(
 ///
 /// Enumerates stored patches the way `verify/objects.rs:163` enumerates objects
 /// (`persisted_object_types()` → per-type container → `decode_container_records`, narrowed here to
-/// `ObjectType::Patch` alone) and reuses this module's own `patch_ids_reachable_from_block` for the
-/// subtrahend, over every local ref's tip -- the same ancestry walk `export_bundle` and this
-/// module's own digest already share, not a second one.
+/// `ObjectType::Patch` alone, factored into `all_held_patch_ids` since 0.56.0 step 3g so
+/// `patch_ids_pending` can reuse the identical enumeration) and reuses this module's own
+/// `patch_ids_reachable_from_block` for the subtrahend, over every local ref's tip -- the same
+/// ancestry walk `export_bundle` and this module's own digest already share, not a second one.
 ///
 /// **0.56.0 step 1b: lives here, not in `patch_exchange`** (where it was built in step 1a/1a2),
 /// because `show` needs it too and cannot reach into `patch_exchange` -- the boundary-check gate's
@@ -404,6 +404,28 @@ fn take_parent_closure(
 /// `patch_ids_reachable_from_block`, the exact sibling query this one builds on -- re-exported from
 /// `patch_exchange` unchanged, so every existing caller there keeps resolving the same name.
 pub fn accepted_but_unsealed_patch_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
+    let all_patch_ids = all_held_patch_ids(layout)?;
+
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let ref_store = RefStore::new(layout.clone());
+    let mut reachable: BTreeSet<ObjectId> = BTreeSet::new();
+    for pointer in ref_store.list_ref_pointers()? {
+        reachable.extend(reachable_patch_ids_from_ref_state(
+            &object_store,
+            &pointer.ref_name,
+            pointer.ref_state_id,
+        )?);
+    }
+
+    Ok(all_patch_ids.difference(&reachable).copied().collect())
+}
+
+/// Every patch id this repository holds (a `Patch` object present in the `Patch` container),
+/// sorted and deduplicated. Factored out of [`accepted_but_unsealed_patch_ids`] (0.56.0 step 3g)
+/// so [`patch_ids_pending`] can reuse the identical by-type enumeration without a second copy of
+/// the same container-walk shape -- behavior of `accepted_but_unsealed_patch_ids` itself is
+/// unchanged by this split (the same bytes are read, decoded and inserted, in the same order).
+fn all_held_patch_ids(layout: &RepositoryLayout) -> Result<BTreeSet<ObjectId>> {
     debug_assert!(
         persisted_object_types().contains(&ObjectType::Patch),
         "Patch must remain a persisted, containerized object type"
@@ -421,27 +443,16 @@ pub fn accepted_but_unsealed_patch_ids(layout: &RepositoryLayout) -> Result<Vec<
             all_patch_ids.insert(record.envelope.object_id());
         }
     }
-
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
-    let mut reachable: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in ref_store.list_ref_pointers()? {
-        reachable.extend(reachable_patch_ids_from_ref_state(
-            &object_store,
-            &pointer.ref_name,
-            pointer.ref_state_id,
-        )?);
-    }
-
-    Ok(all_patch_ids.difference(&reachable).copied().collect())
+    Ok(all_patch_ids)
 }
 
 /// Resolve one ref pointer's tip block to its own reachable patch ids: `RefState` read -> decode
-/// -> [`resolve_ref_tip_block`] -> [`patch_ids_reachable_from_block`]. Shared by
-/// [`accepted_but_unsealed_patch_ids`]'s own loop over local ref pointers and
-/// [`patch_ids_pending_excluding_received`]'s loop over received pointers -- identical resolution,
-/// differing only in which pointer kind calls it (`pointer_name` is only ever used for the error
-/// message, so a `remotes/...` name reads naturally too).
+/// -> [`resolve_ref_tip_block`] -> [`patch_ids_reachable_from_block`]. [`accepted_but_unsealed_patch_ids`]'s
+/// own loop over local ref pointers calls this (`pointer_name` is only ever used for the error
+/// message, so a `remotes/...` name would read naturally too, though nothing calls it with one
+/// today -- 0.56.0 step 3g removed [`patch_ids_pending`]'s own former received-pointer loop, since
+/// [`patch_ids_named_by_any_held_block`]'s subtraction already covers what it covered, see that
+/// function's own doc).
 fn reachable_patch_ids_from_ref_state(
     object_store: &ObjectReadSnapshot,
     pointer_name: &str,
@@ -462,44 +473,148 @@ fn reachable_patch_ids_from_ref_state(
     patch_ids_reachable_from_block(object_store, tip_block_id)
 }
 
-/// `sync pending`'s own view (0.56.0 step 1a2; owner ruling 2026-10-29, "Exclude received
-/// history"): every patch [`accepted_but_unsealed_patch_ids`] reports, minus every one also
-/// reachable from a **received** pointer's own tip block (`archive import` without a successful
-/// `--adopt`, landing via `land_as_received_pointer` into the received-index -- confirmed in step
-/// 1a's own report, §4). A patch the sender's own history already sealed, even one this repository
-/// has not adopted, is not something an operator still needs to act on.
+/// 0.56.0 step 3g (design review v2's A1 ruling): every patch id named by **any** held Block's
+/// own `patch_ids`, a full scan over every held Block -- not a ref-reachability walk. This is
+/// `sealed` membership under the new rule, and the one genuinely new predicate this round builds
+/// (checked against `patch_set_digest.rs`, `show.rs` and `patch_exchange.rs`: nothing already
+/// answers this exact question).
 ///
-/// **Built as its own subtraction, not a change to [`accepted_but_unsealed_patch_ids`] itself.**
-/// That function has a third caller, `seal_from_accepted_claim` (a gate, not a listing), which
-/// keeps its own exact prior behavior -- see the 0.56.0 step 1a2 report for why sealing does not
-/// get this exclusion too.
+/// **Why reachability is the wrong test, with the two objects that expose it:** a rolled-back
+/// block, or a block a `received remove` orphaned, is still named by its own Block object -- still
+/// held -- even though no ref (local or received) reaches it any more. A.1's own table requires
+/// both to read `sealed`, "specifically *because* their own Block object is still held, even
+/// though no ref reaches that Block any more." Reachability-based membership (the shape
+/// [`accepted_but_unsealed_patch_ids`] and the former `patch_ids_pending_excluding_received` both
+/// used) gets both wrong.
 ///
-/// Set algebra: `(A \ X) \ Y = A \ (X ∪ Y)`. `accepted_but_unsealed_patch_ids` already computed
-/// `A \ X`; this adds exactly one further pass, over received pointers (typically few), never a
-/// second scan of the `Patch` container. Filtering an already-sorted `Vec` by exclusion preserves
-/// its order, so the result stays in the same patch-id order the raw query already returns.
-pub fn patch_ids_pending_excluding_received(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
-    let pending = accepted_but_unsealed_patch_ids(layout)?;
-    if pending.is_empty() {
-        return Ok(pending);
+/// **This also makes a separate received-pointer subtraction unnecessary** (the former
+/// `patch_ids_pending_excluding_received`'s own second loop): a patch sealed into a *received*
+/// history's own Block is, by construction, named by that Block (`archive import`/`bundle import`
+/// write the Block into this repository's own object store even for a `remotes/*` landing, never
+/// only into a side channel the object store itself does not hold), so this subtraction alone
+/// already excludes it, with no separate received-pointer walk needed at all.
+///
+/// Shared by [`patch_ids_pending`] (the `sync pending`/`pending_patches_with_claims` base
+/// membership) and `show.rs` directly (its own bare-Patch classification) -- the design review's
+/// own requirement, "one predicate... it must not be a second copy."
+pub fn patch_ids_named_by_any_held_block(layout: &RepositoryLayout) -> Result<BTreeSet<ObjectId>> {
+    debug_assert!(
+        persisted_object_types().contains(&ObjectType::Block),
+        "Block must remain a persisted, containerized object type"
+    );
+
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
+    let container_path = layout.container_slot_path(ObjectType::Block, ContainerSlot::A);
+    let relative = layout.repository_relative(&container_path)?;
+    let mut named: BTreeSet<ObjectId> = BTreeSet::new();
+    if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
+        let replay = decode_container_records(ObjectType::Block, &bytes)?;
+        for record in replay.records {
+            let block = BlockPayload::decode_canonical(&record.envelope.canonical_payload)?;
+            named.extend(block.patch_ids.iter().copied());
+        }
+    }
+    Ok(named)
+}
+
+/// 0.56.0 step 3g (A1 ruling): every patch id named by **any** held `RecognitionClaim`'s own
+/// `patch_ids`, a full scan over every held claim -- membership alone, never a claim's own
+/// signature outcome: `pending_patches_with_claims` reports the signature separately and never
+/// gates the listing on it (0.56.0 step 1a2's own "a reader reports; it does not refuse" rule),
+/// and this function answers only "does a held claim name this patch at all," the same question
+/// either way.
+///
+/// Private: only [`patch_ids_pending`] needs the whole-repository set. `show`'s own bare-Patch
+/// classification instead checks one patch id at a time, through `recognition_claim::
+/// claims_naming_patch`, which it already calls for the identical reason (the right-sized tool for
+/// "does a claim name this one patch," not a second whole-container scan reused awkwardly).
+fn patch_ids_named_by_any_held_claim(layout: &RepositoryLayout) -> Result<BTreeSet<ObjectId>> {
+    debug_assert!(
+        persisted_object_types().contains(&ObjectType::RecognitionClaim),
+        "RecognitionClaim must remain a persisted, containerized object type"
+    );
+
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("type-enumeration");
+    let container_path = layout.container_slot_path(ObjectType::RecognitionClaim, ContainerSlot::A);
+    let relative = layout.repository_relative(&container_path)?;
+    let mut named: BTreeSet<ObjectId> = BTreeSet::new();
+    if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
+        let replay = decode_container_records(ObjectType::RecognitionClaim, &bytes)?;
+        for record in replay.records {
+            let payload =
+                RecognitionClaimPayload::decode_canonical(&record.envelope.canonical_payload)?;
+            named.extend(payload.patch_ids.iter().copied());
+        }
+    }
+    Ok(named)
+}
+
+/// `sync pending`'s own view, and the predicate `show` shares (0.56.0 step 3g; design review v2's
+/// A1 ruling, option (iv)): every held patch named by a held claim and named by no held Block.
+///
+/// **Renamed from `patch_ids_pending_excluding_received`** (0.56.0 step 1a2). That function's own
+/// received-pointer subtraction is now redundant, not merely renamed away -- see
+/// [`patch_ids_named_by_any_held_block`]'s own doc for why its subtraction alone already covers
+/// what the received-pointer walk covered.
+///
+/// **`sync seal` is unchanged**: [`accepted_but_unsealed_patch_ids`] (`seal_from_accepted_claim`'s
+/// own gate) is a wholly separate function, never widened or touched by this one.
+///
+/// Set algebra over three full-container scans (`all_held_patch_ids`,
+/// [`patch_ids_named_by_any_held_block`], `patch_ids_named_by_any_held_claim`), never a fourth:
+/// `held ∩ claimed \ sealed`. A patch with no held claim naming it is `unclaimed`
+/// ([`crate::PatchState::Unclaimed`]), not `pending` -- so `sync-pending-v1`'s own `"claims": []`
+/// can no longer occur: every patch this function reports is, by this filter's own construction,
+/// named by at least one held claim.
+///
+/// Filtering an already-sorted `BTreeSet`'s own ascending iteration preserves patch-id order, the
+/// same order the prior function returned -- the planeter commitment `sync pending`'s own text
+/// form keeps (`prikk-cli`'s `run_pending` also sorts explicitly before printing, so this ordering
+/// is not the only thing holding that commitment, but it does not fight it either).
+pub fn patch_ids_pending(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
+    patch_ids_pending_with_held_block_subtraction(layout, true)
+}
+
+/// 0.56.0 step 3g test-support seam for a red control: [`patch_ids_pending`] with the exact
+/// held-Block subtraction disabled -- never a process-global toggle (`std::env::set_var` would
+/// race every other test in this same binary that also calls [`patch_ids_pending`]/
+/// [`patch_ids_named_by_any_held_block`], since this crate's own test suite runs in parallel
+/// within one process; a parameter is thread-safe where an env var is not). Reproduces the exact
+/// regression [`patch_ids_named_by_any_held_block`]'s own subtraction exists to prevent --
+/// rolled-back or `received remove`-d history (its Block still held) showing up as `pending`
+/// again, because nothing else in this formula excludes it once that one membership is gone.
+#[cfg(feature = "test-support")]
+pub fn patch_ids_pending_disabling_held_block_subtraction_for_test(
+    layout: &RepositoryLayout,
+) -> Result<Vec<ObjectId>> {
+    patch_ids_pending_with_held_block_subtraction(layout, false)
+}
+
+/// Shared by [`patch_ids_pending`] and its test-support twin above: `held ∩ claimed \ sealed`,
+/// with `sealed` forced empty when `apply_held_block_subtraction` is `false` (the production path
+/// always passes `true`).
+fn patch_ids_pending_with_held_block_subtraction(
+    layout: &RepositoryLayout,
+    apply_held_block_subtraction: bool,
+) -> Result<Vec<ObjectId>> {
+    let all_patch_ids = all_held_patch_ids(layout)?;
+    if all_patch_ids.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let mut received_reachable: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in list_received_pointers(layout)? {
-        received_reachable.extend(reachable_patch_ids_from_ref_state(
-            &object_store,
-            &pointer.ref_name,
-            pointer.ref_state_id,
-        )?);
-    }
-    if received_reachable.is_empty() {
-        return Ok(pending);
-    }
-
-    Ok(pending
+    let sealed = if apply_held_block_subtraction {
+        patch_ids_named_by_any_held_block(layout)?
+    } else {
+        BTreeSet::new()
+    };
+    let claimed = patch_ids_named_by_any_held_claim(layout)?;
+    Ok(all_patch_ids
         .into_iter()
-        .filter(|patch_id| !received_reachable.contains(patch_id))
+        .filter(|patch_id| claimed.contains(patch_id) && !sealed.contains(patch_id))
         .collect())
 }
 

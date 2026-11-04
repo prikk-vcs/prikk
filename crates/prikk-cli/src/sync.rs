@@ -54,9 +54,9 @@ use prikk_store::{
     adopt_tag, build_have_list, build_sync_artifact, build_sync_summary, compare_sync_summary,
     decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
     mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
-    patch_ids_pending_excluding_received, pending_patches_with_claims,
-    require_nothing_in_the_way_for_seal_batch, require_worktree_clean_and_capture,
-    seal_from_accepted_claim_in_batch, validate_local_branch_ref,
+    patch_ids_pending, pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
+    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
+    validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -303,10 +303,16 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     Ok(())
 }
 
-/// `prikk sync pending` -- pending here means accepted into this repository (`sync accept`) and
-/// not sealed by any history this repository holds, its own or received (0.56.0 step 1a2, owner
-/// ruling 2026-10-29, "Exclude received history" -- see `patch_ids_pending_excluding_received`'s
-/// own doc for why this is not the same query `seal_from_accepted_claim` uses).
+/// `prikk sync pending` -- pending here means held, named by a held recognition claim, and named
+/// by no held Block (0.56.0 step 3g, design review v2's A1 ruling, option (iv) -- see
+/// `patch_ids_pending`'s own doc for why this is not the same query `seal_from_accepted_claim`
+/// uses, and for why a claimless patch no longer appears at all).
+///
+/// **The planeter commitment: this text form's own shape never changes** (header, then one id per
+/// line, in patch-id order) -- only the membership does. `patch_ids_pending` already returns
+/// ascending patch-id order (a `BTreeSet`'s own iteration), but this sorts explicitly anyway,
+/// right before printing, so a future change to that function's own internals can never silently
+/// leak a different order into this observable format.
 fn run_pending(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let format_json = parse_pending_args(args)?;
     let layout = crate::open_repository(root)?;
@@ -315,7 +321,8 @@ fn run_pending(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
         crate::output::print_sync_pending_json(&entries);
         return Ok(());
     }
-    let patch_ids = patch_ids_pending_excluding_received(&layout).map_err(|err| err.to_string())?;
+    let mut patch_ids = patch_ids_pending(&layout).map_err(|err| err.to_string())?;
+    patch_ids.sort_unstable();
     println!("pending (accepted, unsealed) patches: {}", patch_ids.len());
     for patch_id in &patch_ids {
         println!("  {patch_id}");
