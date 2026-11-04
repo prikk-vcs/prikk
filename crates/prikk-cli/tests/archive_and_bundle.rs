@@ -39,6 +39,8 @@ mod step0_c1_closure_shapes;
 mod step3b_bundle_import_json;
 #[path = "archive_and_bundle/step3c2_archive_import_json.rs"]
 mod step3c2_archive_import_json;
+#[path = "archive_and_bundle/step3f2_outside_version_rule_import.rs"]
+mod step3f2_outside_version_rule_import;
 #[path = "archive_and_bundle/step3f_forged_publication_signature.rs"]
 mod step3f_forged_publication_signature;
 #[path = "support/mod.rs"]

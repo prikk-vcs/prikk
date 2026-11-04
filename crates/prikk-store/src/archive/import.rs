@@ -1043,7 +1043,9 @@ pub fn import_archive<R: Read + Seek>(
             // every planned landing, collided or not). Stage 1 already admitted this object
             // unconditionally by the time this runs (the comment just above), so this cannot give
             // "nothing written" the way the fail-fast gate does -- but it still refuses before any
-            // ref is ever made to point at it.
+            // ref is ever made to point at it. 0.56.0 F2 item 1: this backstop's own narrower
+            // tip-only scope, and why it was not widened this round, is named once, in full, at
+            // `land_one_ref`'s identical backstop call -- not repeated here.
             if let Some(envelope) = &ref_state_envelope {
                 crate::trust::refuse_forged_publication_signature(
                     "archive-import",
@@ -1200,6 +1202,32 @@ fn land_one_ref(
     // tip at all. Stage 1 has already admitted this landing's own object unconditionally by the
     // time this runs, so this cannot give "nothing written" the way the fail-fast gate does -- but
     // it still refuses before this landing's own pointer write, for every origin alike.
+    //
+    // **0.56.0 F2 item 1, investigated and named rather than widened**: unlike the fail-fast gate
+    // above (now every `Block`/`RefState` the archive carries), this backstop still checks only
+    // this one landing's own tip -- a forged ancestor, never itself any landing's own tip, is not
+    // caught here either. Widening it to "every Block/RefState" would mean a different, much
+    // bigger operation: by the time a *resumed* run reaches this backstop, stage 1 has already
+    // admitted every object **locally**, so "every Block/RefState this import touched" is no
+    // longer a small, self-contained set the way the archive's own carried objects are for the
+    // fail-fast gate -- it would mean scanning the entire local object store's own `Block`/
+    // `RefState` containers (every object this repository has ever admitted, across every import
+    // this repository has ever run), a different-shaped cost entirely.
+    //
+    // A cheaper, narrower idea exists but was not built this round: the journal's own
+    // `JournaledContainer::starting_length`, recorded per object-type container before *this*
+    // import's own stage 1 first wrote to it, could in principle be correlated against
+    // `foundation::index::IndexEntry::offset` (via `index::replay_index`) to recover exactly the
+    // set of index entries *this* import appended, filtered to `Block`/`RefState`, without
+    // scanning objects this repository held before this import ever started. This was not
+    // implemented: `starting_length` is captured per container **slot**
+    // (`foundation::layout::ContainerSlot`) at journal-creation time, and nothing prevents a
+    // `prikk compact` (slot rotation) from running in the gap between a crash and its resume --
+    // across which `starting_length`'s own offset would no longer describe the *current* slot's
+    // layout, silently invalidating the correlation. Making this safe needs either detecting (and
+    // refusing) a rotation across that gap, or a correlation that does not depend on raw byte
+    // offsets at all -- genuinely new machinery, not a small extension of what the fail-fast gate
+    // already has ready-made in `ArchiveEarlyCheckReader`. Named here, not silently left unexamined.
     if let Some(envelope) = &ref_state_envelope {
         crate::trust::refuse_forged_publication_signature(
             "archive-import",
@@ -2152,24 +2180,30 @@ fn classify_archive_landing_against_local(
     ))
 }
 
-/// 0.56.0 step F (stikk 023 part 6): refuse a forged MAINTAINER signature -- a signature naming
-/// an adopted key id that does not verify against it, a forgery or another maintainer using the
-/// same key id -- on any planned landing's own delivered tip, before stage 1 ever writes a
-/// single object and before the journal is ever created. Runs for *every* planned landing,
-/// `Local` and `Received` alike: the vulnerability is independent of `--adopt` (today, even a
-/// plain, un-adopted `bundle import`-equivalent received pointer lands with no trust check at
-/// all -- this closes that for `archive import` too, not only the `--adopt` path W3c-5's own
-/// narrower, current-branch-only scope covered).
+/// 0.56.0 F2 item 1 (stikk's part-6 finding, one block back): refuse a forged MAINTAINER
+/// signature -- a signature naming an adopted key id that does not verify against it, a forgery
+/// or another maintainer using the same key id -- on **every** `Block` and `RefState` this
+/// archive carries, each checked exactly once, before stage 1 ever writes a single object and
+/// before the journal is ever created. Runs regardless of `landings` (every planned landing,
+/// `Local` and `Received` alike, draws only from this same carried set): the vulnerability is
+/// independent of `--adopt` (today, even a plain, un-adopted `bundle import`-equivalent received
+/// pointer lands with no trust check at all -- this closes that for `archive import` too, not
+/// only the `--adopt` path W3c-5's own narrower, current-branch-only scope covered).
 ///
-/// Checked against each landing's own final delivered tip only -- its `RefState` and the `Block`
-/// it targets -- not every historical `RefState` along its own `previous_ref_state_id` chain.
-/// This matches stikk's own measured case exactly ("the delivered tip's Block and RefState"),
-/// and the scope `verify`'s own `PublicationTrustVerifier` answers for any one persisted object:
-/// a published tip, not its ancestry. A forgery buried deeper in a landing's own history, never
-/// itself the delivered tip of *any* landing, is not reached here -- the same residual gap
-/// `verify` itself already has after import, since `verify`'s own `Objects` stage checks every
-/// *persisted* object, and a deliberately-buried forged ancestor stays exactly as unreached by
-/// either check. Out of scope for this round, named here rather than silently assumed covered.
+/// **Widened from the 0.56.0 step F round's own tip-only scope** (review
+/// `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item 1"): that round checked only
+/// each landing's own final delivered tip -- its `RefState` and the `Block` it targets -- not any
+/// historical `RefState`/`Block` along its own ancestry. The architect measured the resulting gap
+/// directly: a bundle whose tip was honestly signed but whose *parent* block carried a forged
+/// signature imported cleanly, and only a later `verify` caught it -- stikk's own part-6 finding,
+/// one block back. `verify`'s own `PublicationTrustVerifier` checks every *persisted* object, so a
+/// gate that checks only the tip classifies a narrower set than the reader it is meant to guard.
+/// This function now classifies the identical set: every `Block` and `RefState` this archive
+/// carries, via [`ArchiveEarlyCheckReader`]'s own `blocks`/`ref_states` maps (already eager,
+/// already deduplicated by construction -- a `HashMap`'s own keys), covering every landing's own
+/// tip for free, so there is no separate per-landing tip resolution left to run (the ruling's own
+/// text: "it isn't 'every ancestor, for every landing': each Block and RefState object in the
+/// delivery is checked once, deduplicated").
 ///
 /// This is a different question from `try_adopt_local_ref`'s own stage-3 chain check (below, R2
 /// pre-dating this round): that one verifies every `RefUpdate` envelope in a `--adopt` landing's
@@ -2177,9 +2211,9 @@ fn classify_archive_landing_against_local(
 /// history justifies *adopting* it as a local branch at all -- a judgment this function's own
 /// refusal does not touch, and is not touched by.
 ///
-/// Reuses [`ArchiveEarlyCheckReader`] (W3c-5b), extended by this round to also hold `RefState`
-/// eagerly -- the ruling's own live note: "reuse what fits, don't add a third reader." Built
-/// fresh here (a second build within the same fresh-start branch, alongside the one
+/// Reuses [`ArchiveEarlyCheckReader`] (W3c-5b), extended by the 0.56.0 step F round to also hold
+/// `RefState` eagerly -- the ruling's own live note: "reuse what fits, don't add a third reader."
+/// Built fresh here (a second build within the same fresh-start branch, alongside the one
 /// `require_nothing_in_the_way_for_block`'s own call builds further below for `current_branch`
 /// only) rather than threaded through from this function's own caller, since not every import
 /// has a `--adopt`-eligible landing to trigger that other build at all, while this function's own
@@ -2193,31 +2227,26 @@ fn refuse_forged_publication_signatures_before_admission<R: Read + Seek>(
     if landings.is_empty() {
         return Ok(());
     }
-    let graph = build_archive_ref_graph(source, manifest)?;
+    // 0.56.0 F2 item 1's own red-control seam (test-support only, gated the same way
+    // `PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_CHECK_FOR_TEST` above is): disables only
+    // this fail-fast gate, leaving `land_one_ref`'s own backstop (further below) as the sole
+    // remaining check -- confirms the backstop alone cannot give "nothing written" for a forged
+    // ancestor, the same regression-demonstration shape W3c-5b's own control already uses.
+    #[cfg(feature = "test-support")]
+    let skip_full_delivery_check =
+        std::env::var("PRIKK_ARCHIVE_IMPORT_DISABLE_FORGED_SIGNATURE_FAIL_FAST_GATE_FOR_TEST")
+            .is_ok();
+    #[cfg(not(feature = "test-support"))]
+    let skip_full_delivery_check = false;
+    if skip_full_delivery_check {
+        return Ok(());
+    }
     let reader = ArchiveEarlyCheckReader::build(source, manifest)?;
-    for landing in landings {
-        let ref_state_envelope = reader.read_object(landing.ref_state_id)?.ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "archive import: RefState {} is not among this archive's own carried objects",
-                landing.ref_state_id
-            ))
-        })?;
+    for envelope in reader.blocks.values().chain(reader.ref_states.values()) {
         crate::trust::refuse_forged_publication_signature(
             "archive-import",
             adopted_policy,
-            &ref_state_envelope,
-        )?;
-        let target_block_id = archive_resolve_tip_block(&graph, landing.ref_state_id)?;
-        let block_envelope = reader.read_object(target_block_id)?.ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "archive import: Block {target_block_id} is not among this archive's own carried \
-                 objects"
-            ))
-        })?;
-        crate::trust::refuse_forged_publication_signature(
-            "archive-import",
-            adopted_policy,
-            &block_envelope,
+            envelope,
         )?;
     }
     Ok(())

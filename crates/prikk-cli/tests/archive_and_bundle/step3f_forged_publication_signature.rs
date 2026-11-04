@@ -22,6 +22,21 @@
 //! (which adopts the *real* key under that same id) is exactly the condition that turns the
 //! forger's signature into the refused case: a signature naming an adopted key id that does not
 //! verify against it.
+//!
+//! **0.56.0 F2 item 1 addendum**: both importers' own fail-fast gate now checks *every* `Block`
+//! and `RefState` the delivery carries, not only the delivered tip -- `build_source_with_two_
+//! generations` builds the fixture for that widened scope (a sound tip over a forged ancestor,
+//! one generation back), reused by `bundle_import_refuses_a_forged_ancestor_not_only_the_tip` and
+//! `archive_import_refuses_a_forged_ancestor_not_only_the_tip`.
+//!
+//! **0.56.0 F2 item 4 addendum**: `archive_import_with_the_fail_fast_gate_disabled_writes_before_
+//! the_backstop_refuses` is the red control the review's own "F2 item 4" asks for -- disables
+//! only `archive import`'s own fail-fast gate
+//! (`PRIKK_ARCHIVE_IMPORT_DISABLE_FORGED_SIGNATURE_FAIL_FAST_GATE_FOR_TEST`, a `test-support`-
+//! gated seam) and confirms `land_one_ref`'s own backstop alone still refuses the whole-chain-
+//! forged fixture, but only *after* stage 1 has already written every object and the journal
+//! already exists -- proving the byte-identical result in `archive_import_refuses_a_forged_
+//! publication_signature_and_writes_nothing` genuinely depends on the fail-fast gate running.
 
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
@@ -335,6 +350,185 @@ const FORGER_SEED: [u8; 32] = [0x99; 32];
 const UNVERIFIABLE_KEY_ID: &str = "step3f-unrelated-maintainer";
 const UNVERIFIABLE_SEED: [u8; 32] = [0x77; 32];
 
+/// Build a fresh, standalone repository (never touched by the CLI) holding two generations: block
+/// 1 (root), signed by `ancestor_seed` under `key_id`, with its own `RefState`, published for
+/// real; then block 2 (its child), signed by `tip_seed` under the identical `key_id`, with a
+/// second `RefState` publishing `heads/main` at block 2 -- whose own `previous_ref_state_id`
+/// names block 1's own `RefState`, so an export of `heads/main` carries both generations in its
+/// closure. 0.56.0 F2 item 1: this is the fixture for "a sound tip over a forged ancestor" --
+/// `ancestor_seed` and `tip_seed` may be two genuinely different keypairs signing under the
+/// identical `key_id` (the architect's own measured case, review `.git-exclude/reviewed/
+/// 0.56.0-step-3-f-review-v1.md`: "B seals block 1 as mx/KB, then block 2 as ma/KA"). Two real,
+/// sequential `RefStore::publish` calls (`validate_coherent_publication`'s own check requires
+/// `RefState.previous_ref_state_id`, `RefUpdate.old_ref_state_id`, and `RefPublication::expected_
+/// previous_ref_state_id` to all agree, so block 1's own generation must be a real CAS-sequenced
+/// publish too, not a direct `write_object` the second publish's own preconditions could never
+/// match).
+fn build_source_with_two_generations(
+    tag: &str,
+    key_id: &str,
+    ancestor_seed: &[u8; 32],
+    tip_seed: &[u8; 32],
+) -> RepositoryLayout {
+    let dir = support::unique_repo(&format!("step3f-{tag}-src"));
+    let layout = RepositoryLayout::init(dir.clone()).expect("init layout");
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let ancestor_signer = Ed25519MaintainerSigner::from_seed(key_id.to_string(), ancestor_seed)
+        .expect("construct a maintainer signer");
+
+    let block1_payload = BlockPayload {
+        parent_block_ids: Vec::new(),
+        kind: BlockKind::Root,
+        patch_ids: Vec::new(),
+        state_merkle_root: prikk_store::compute_state_root(&[]).unwrap_or(MerkleRoot([0u8; 32])),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block1_bytes = block1_payload.to_canonical_bytes().expect("encode block 1");
+    let mut block1_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block1_bytes);
+    let block1_id = block1_envelope.object_id();
+    block1_envelope
+        .add_signature(
+            maintainer_signature(&ancestor_signer, ObjectType::Block, block1_id)
+                .expect("sign block 1, forged or not"),
+        )
+        .expect("attach the maintainer signature");
+    store.write_object(&block1_envelope).expect("write block 1");
+
+    let ref_state1_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block1_id,
+        update_seq: 1,
+        previous_ref_state_id: None,
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state1_bytes = ref_state1_payload
+        .to_canonical_bytes()
+        .expect("encode ref state 1");
+    let mut ref_state1_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state1_bytes);
+    let ref_state1_id = ref_state1_envelope.object_id();
+    ref_state1_envelope
+        .add_signature(
+            maintainer_signature(&ancestor_signer, ObjectType::RefState, ref_state1_id)
+                .expect("sign ref state 1, forged or not"),
+        )
+        .expect("attach the maintainer signature");
+
+    let ref_update1_payload = RefUpdatePayload {
+        ref_name: "heads/main".to_string(),
+        old_ref_state_id: None,
+        new_ref_state_id: ref_state1_id,
+        new_target_object_id: block1_id,
+        update_seq: 1,
+        created_at: 0,
+        author_key_id: key_id.to_string(),
+    };
+    let ref_update1_bytes = ref_update1_payload
+        .to_canonical_bytes()
+        .expect("encode ref update 1");
+    let mut ref_update1_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, ref_update1_bytes);
+    let ref_update1_id = ref_update1_envelope.object_id();
+    ref_update1_envelope
+        .add_signature(
+            maintainer_signature(&ancestor_signer, ObjectType::RefUpdate, ref_update1_id)
+                .expect("sign the ref update, forged or not"),
+        )
+        .expect("attach the maintainer signature");
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: None,
+            ref_state: ref_state1_envelope,
+            ref_update: ref_update1_envelope,
+        })
+        .expect("publish heads/main at block 1");
+
+    let tip_signer = Ed25519MaintainerSigner::from_seed(key_id.to_string(), tip_seed)
+        .expect("construct a maintainer signer");
+
+    let block2_payload = BlockPayload {
+        parent_block_ids: vec![block1_id],
+        kind: BlockKind::Normal,
+        patch_ids: Vec::new(),
+        state_merkle_root: prikk_store::compute_state_root(&[]).unwrap_or(MerkleRoot([0u8; 32])),
+        snapshot_blob_ref: None,
+        mainline_parent_id: None,
+        merge_baseline_block_id: None,
+    };
+    let block2_bytes = block2_payload.to_canonical_bytes().expect("encode block 2");
+    let mut block2_envelope = ObjectEnvelope::unsigned(ObjectType::Block, 2, block2_bytes);
+    let block2_id = block2_envelope.object_id();
+    block2_envelope
+        .add_signature(
+            maintainer_signature(&tip_signer, ObjectType::Block, block2_id)
+                .expect("sign block 2, soundly"),
+        )
+        .expect("attach the maintainer signature");
+    store.write_object(&block2_envelope).expect("write block 2");
+
+    let ref_state2_payload = RefStatePayload {
+        ref_name: "heads/main".to_string(),
+        kind: RefKind::Branch,
+        target_object_id: block2_id,
+        update_seq: 2,
+        previous_ref_state_id: Some(ref_state1_id),
+        required_attestation_ids: Vec::new(),
+        closed: false,
+    };
+    let ref_state2_bytes = ref_state2_payload
+        .to_canonical_bytes()
+        .expect("encode ref state 2");
+    let mut ref_state2_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefState, 1, ref_state2_bytes);
+    let ref_state2_id = ref_state2_envelope.object_id();
+    ref_state2_envelope
+        .add_signature(
+            maintainer_signature(&tip_signer, ObjectType::RefState, ref_state2_id)
+                .expect("sign ref state 2, soundly"),
+        )
+        .expect("attach the maintainer signature");
+
+    let ref_update2_payload = RefUpdatePayload {
+        ref_name: "heads/main".to_string(),
+        old_ref_state_id: Some(ref_state1_id),
+        new_ref_state_id: ref_state2_id,
+        new_target_object_id: block2_id,
+        update_seq: 2,
+        created_at: 0,
+        author_key_id: key_id.to_string(),
+    };
+    let ref_update2_bytes = ref_update2_payload
+        .to_canonical_bytes()
+        .expect("encode ref update 2");
+    let mut ref_update2_envelope =
+        ObjectEnvelope::unsigned(ObjectType::RefUpdate, 1, ref_update2_bytes);
+    let ref_update2_id = ref_update2_envelope.object_id();
+    ref_update2_envelope
+        .add_signature(
+            maintainer_signature(&tip_signer, ObjectType::RefUpdate, ref_update2_id)
+                .expect("sign the ref update, soundly"),
+        )
+        .expect("attach the maintainer signature");
+
+    RefStore::new(layout.clone())
+        .publish(&RefPublication {
+            ref_name: "heads/main".to_string(),
+            expected_previous_ref_state_id: Some(ref_state1_id),
+            ref_state: ref_state2_envelope,
+            ref_update: ref_update2_envelope,
+        })
+        .expect("publish heads/main at block 2");
+
+    layout
+}
+
 #[test]
 fn bundle_import_refuses_a_forged_publication_signature_and_writes_nothing() {
     let layout = build_source_signed_by("bundle-forged", &FORGER_SEED, support::MAINTAINER_KEY_ID);
@@ -471,6 +665,189 @@ fn archive_import_refuses_a_forged_publication_signature_and_writes_nothing() {
     assert!(
         status.status.success(),
         "the next ordinary command must proceed normally: {status:?}"
+    );
+
+    cleanup(&[&source_dir, &dest]);
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// The forger's own seed for block 1, when block 1 and block 2 are signed by two genuinely
+/// different keypairs under the identical key id (0.56.0 F2 item 1's own "sound tip over a forged
+/// ancestor" fixture) -- distinct from [`FORGER_SEED`] above (that one forges a whole, one-block
+/// chain) so a test failure naming one can never be confused with the other.
+const ANCESTOR_FORGER_SEED: [u8; 32] = [0xab; 32];
+
+/// 0.56.0 F2 item 1 (the review's own measured gap, `.git-exclude/reviewed/
+/// 0.56.0-step-3-f-review-v1.md`): before this round, the gate checked only each landing's own
+/// delivered tip. A bundle whose tip is honestly signed but whose own *parent* block carries a
+/// forged signature used to import with `bundle import` exiting `0`; only a later `prikk verify`
+/// caught it (`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE` on the forged block and its own
+/// `RefState`) -- stikk's own part-6 finding, one block back. `bundle import` now refuses it the
+/// same way it already refuses a forged tip, byte-identical.
+#[test]
+fn bundle_import_refuses_a_forged_ancestor_not_only_the_tip() {
+    let layout = build_source_with_two_generations(
+        "bundle-ancestor",
+        support::MAINTAINER_KEY_ID,
+        &ANCESTOR_FORGER_SEED,
+        &support::MAINTAINER_SEED,
+    );
+    let bundle_path = std::env::temp_dir().join(format!(
+        "prikk-step3f2-bundle-ancestor-forged-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&layout, &bundle_path);
+    let source_dir = layout.root().to_path_buf();
+
+    let dest = support::unique_repo("step3f2-bundle-ancestor-forged-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest); // adopts the *real* key under MAINTAINER_KEY_ID
+    let before = support::store_bytes(&dest);
+
+    let json = support::prikk(&dest)
+        .args([
+            "bundle",
+            "import",
+            "--input",
+            bundle_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let value = assert_valid_json(&stdout_of(&json));
+    assert_eq!(value.get("schema_version").as_str(), "refusal-v1");
+    assert_eq!(value.get("command").as_str(), "bundle-import");
+    assert_eq!(
+        value.get("refusal").as_str(),
+        "forged-publication-signature"
+    );
+    assert!(value.get("reason").is_null());
+
+    assert_eq!(
+        support::store_bytes(&dest),
+        before,
+        "a sound tip over a forged ancestor must still write nothing"
+    );
+
+    let verify = verify_text(&dest);
+    assert!(verify.contains("unreached objects: 0"), "{verify}");
+
+    cleanup(&[&source_dir, &dest]);
+    let _ = std::fs::remove_file(&bundle_path);
+}
+
+/// `archive import`'s own twin of `bundle_import_refuses_a_forged_ancestor_not_only_the_tip`: the
+/// widened fail-fast gate (`refuse_forged_publication_signatures_before_admission`, now checking
+/// every `Block`/`RefState` the archive carries, not only each planned landing's own tip) refuses
+/// before stage 1 ever writes a single object or the journal is ever created -- byte-identical.
+#[test]
+fn archive_import_refuses_a_forged_ancestor_not_only_the_tip() {
+    let layout = build_source_with_two_generations(
+        "archive-ancestor",
+        support::MAINTAINER_KEY_ID,
+        &ANCESTOR_FORGER_SEED,
+        &support::MAINTAINER_SEED,
+    );
+    let archive_path = std::env::temp_dir().join(format!(
+        "prikk-step3f2-archive-ancestor-forged-{}.prepo",
+        support::unique_suffix()
+    ));
+    export_archive_to(&layout, &archive_path);
+    let source_dir = layout.root().to_path_buf();
+
+    let dest = support::unique_repo("step3f2-archive-ancestor-forged-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    let before = support::store_bytes(&dest);
+
+    let json = support::prikk(&dest)
+        .args([
+            "archive",
+            "import",
+            archive_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let value = assert_valid_json(&stdout_of(&json));
+    assert_eq!(value.get("schema_version").as_str(), "refusal-v1");
+    assert_eq!(value.get("command").as_str(), "archive-import");
+    assert_eq!(
+        value.get("refusal").as_str(),
+        "forged-publication-signature"
+    );
+    assert!(value.get("reason").is_null());
+
+    assert_eq!(
+        support::store_bytes(&dest),
+        before,
+        "a sound tip over a forged ancestor (fresh run, fail-fast gate) must write nothing: no \
+         object, no journal"
+    );
+
+    let verify = verify_text(&dest);
+    assert!(verify.contains("unreached objects: 0"), "{verify}");
+
+    cleanup(&[&source_dir, &dest]);
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// 0.56.0 F2 item 4 (review `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item 4"):
+/// the 0.56.0 step F round's own red control removed `bundle import`'s calls only, leaving
+/// `archive import`'s own fail-fast gate unexercised by any control. With
+/// `PRIKK_ARCHIVE_IMPORT_DISABLE_FORGED_SIGNATURE_FAIL_FAST_GATE_FOR_TEST` set (a
+/// `test-support`-gated seam, the same shape `PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_
+/// CHECK_FOR_TEST` already uses), the whole-chain-forged fixture above
+/// (`archive_import_refuses_a_forged_publication_signature_and_writes_nothing`'s own fixture) is
+/// still refused -- `land_one_ref`'s own backstop still catches a forged *tip* -- but no longer
+/// byte-identical: stage 1 has already admitted every carried object, and the journal already
+/// exists, before the backstop ever runs, proving the byte-identical, "no object, no journal"
+/// result in the test above genuinely depends on the fail-fast gate running, not on some other,
+/// vacuous reason.
+#[test]
+fn archive_import_with_the_fail_fast_gate_disabled_writes_before_the_backstop_refuses() {
+    let layout = build_source_signed_by(
+        "archive-forged-red",
+        &FORGER_SEED,
+        support::MAINTAINER_KEY_ID,
+    );
+    let archive_path = std::env::temp_dir().join(format!(
+        "prikk-step3f2-archive-forged-red-{}.prepo",
+        support::unique_suffix()
+    ));
+    export_archive_to(&layout, &archive_path);
+    let source_dir = layout.root().to_path_buf();
+
+    let dest = support::unique_repo("step3f2-archive-forged-red-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    let before = support::store_bytes(&dest);
+
+    let refused = support::prikk(&dest)
+        .env(
+            "PRIKK_ARCHIVE_IMPORT_DISABLE_FORGED_SIGNATURE_FAIL_FAST_GATE_FOR_TEST",
+            "1",
+        )
+        .args(["archive", "import", archive_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !refused.status.success(),
+        "the backstop must still refuse the forged tip even with the fail-fast gate disabled: \
+         {refused:?}"
+    );
+    assert!(stderr_of(&refused).contains("forgery"), "{refused:?}");
+
+    assert_ne!(
+        support::store_bytes(&dest),
+        before,
+        "with the fail-fast gate disabled, stage 1 must have already admitted this archive's own \
+         objects (and created the journal) before the backstop ever refuses -- proving the \
+         byte-identical result above depends on the fail-fast gate, not on the backstop alone"
     );
 
     cleanup(&[&source_dir, &dest]);

@@ -318,6 +318,16 @@
   already a real local branch). A signature naming a key this repository has simply never adopted
   is unaffected and still imports exactly as before — only a signature that names an adopted key and
   fails to verify against it refuses.
+- **The forged-publication-signature refusal above now names a route out for its honest cause.**
+  Two independent installations that both happen to default to the same maintainer key id (most
+  commonly the shared pre-0.45.0 legacy default, `"maintainer"`) now refuse at import instead of
+  importing cleanly and only failing a later `prikk verify` — right, but the refusal's own message
+  used to name two possible causes (a forgery, or another maintainer using the same key id) with no
+  way out for the second, entirely legitimate one. It now also says what to do: the sending
+  maintainer signs under a distinct key id next time (`PRIKK_MAINTAINER_KEY_ID`, or a key made by
+  `prikk key generate --out <path>`), and the receiving repository adopts that distinct id with
+  `prikk trust maintainer add --key-id <that id> --public-key <its public key>` — the identical
+  route `trust maintainer add`'s own same-shaped TOFU-collision refusal already named.
 - **Both importers' `--format json` output now also prints a `refusal-v1` document when admission
   refuses a path outside this version's own rule** (the same non-ASCII-path refusal `extract
   --format json` already names `"outside-version-rule"`). Before this, both printed nothing at all

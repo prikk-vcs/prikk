@@ -4238,3 +4238,92 @@ fn bundle_and_local_reader_never_caches_a_blob() -> prikk_error::Result<()> {
     let _ = std::fs::remove_dir_all(source_root);
     Ok(())
 }
+
+/// 0.56.0 F2 item 3 (review `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item 3"):
+/// `bundle import` refuses a carried `Patch` whose own `CreateFile` operation names a path
+/// outside this version's own rule (a non-ASCII path), reporting
+/// `PrikkError::NonAsciiRepoPath`/`DecodeFailureKind::OutsideVersionRule` -- the library-level
+/// classification `refusal-v1`'s own `"outside-version-rule"` id is built from
+/// (`crates/prikk-cli/src/bundle.rs`'s own `err.decode_failure_kind() ==
+/// DecodeFailureKind::OutsideVersionRule` check). Built directly through `encode_bundle`, not
+/// `export_bundle`: `export_bundle` itself decodes every carried Patch's own operations
+/// (`decode_patch_operations`, to discover referenced Blobs) as part of its own closure walk, so
+/// no *local* repository holding this fixture (built the same write-time bypass
+/// `crates/prikk-store/src/archive/tests.rs::seal_one_block_with_an_outside_version_rule_patch`
+/// uses) can ever be exported to a bundle at all -- confirmed directly: attempting it fails with
+/// the identical `NonAsciiRepoPath` at *export* time, before any bundle file exists to import.
+/// `encode_bundle` sidesteps that: it serializes already-built envelopes verbatim, with no decode
+/// of its own, so this is the only way to get this exact byte shape into a `.pbndl` at all.
+/// Destination trust is irrelevant here (the dummy `maintainer_signature()`/`rollback_author_
+/// signature()` fixtures are never adopted by the destination, so a real `Ed25519` keypair is not
+/// needed): decode of a carried `Patch`'s own operations
+/// (`decode_patch_operations_for_admission`, called from `closure_metadata_for` during pass 1)
+/// runs unconditionally for every carried `Patch`, before any publication-trust check -- a path
+/// outside this version's own rule is refused on its own, regardless of who signed it.
+#[test]
+fn bundle_import_refuses_outside_version_rule_for_a_non_ascii_path() -> prikk_error::Result<()> {
+    use prikk_object::{CanonicalWriter, WireType};
+
+    let root_block = signed_block(BlockKind::Root, Vec::new(), Vec::new(), None);
+    let root_block_id = root_block.object_id();
+
+    // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode. Built
+    // by driving `CanonicalWriter` directly -- bypassing `CreateFile`'s own validating
+    // `encode_canonical`/`validate_repo_path` -- the identical bypass `archive/tests.rs::seal_
+    // one_block_with_an_outside_version_rule_patch` already uses. The named blob id need not
+    // exist anywhere: decode fails on the path itself, before any dependency is ever resolved.
+    let mut create_file = CanonicalWriter::new();
+    create_file.field_repo_path(1, "pages/日本語.md")?;
+    create_file.field_bytes(2, NodeId::from_bytes([0x5c; 32]).as_bytes())?;
+    create_file.field_object_id(3, &ObjectId::from_bytes([0x5d; 32]))?;
+    create_file.field_u32(4, 0o100_644)?;
+    let create_file_bytes = create_file.finish();
+
+    let mut operation = CanonicalWriter::new();
+    operation.field_u32(1, 1)?;
+    operation.field_raw(10, WireType::Record, &create_file_bytes)?;
+    let operation_bytes = operation.finish();
+
+    let mut payload = CanonicalWriter::new();
+    payload.field_raw(1, WireType::RecordListItem, &operation_bytes)?;
+    let canonical_payload = payload.finish();
+
+    let mut patch = ObjectEnvelope::unsigned(ObjectType::Patch, 1, canonical_payload);
+    let patch_id = patch.object_id();
+    patch.add_signature(crate::test_gates::test_support::rollback_author_signature())?;
+
+    let child_block = signed_block(BlockKind::Normal, vec![root_block_id], vec![patch_id], None);
+    let child_block_id = child_block.object_id();
+
+    let ref_state = signed_ref_state_envelope("heads/main", None, child_block_id, 1);
+    let ref_name = "heads/main".to_string();
+    let objects = vec![ref_state, root_block, child_block, patch];
+    let bytes = encode_bundle(&ref_name, &objects, &[], &test_manifest())?;
+
+    let target_root = unique_temp_dir("step3f2-bundle-outside-version-rule");
+    let target = RepositoryLayout::init(target_root.clone())?;
+    let before = crate::test_gates::test_support::repository_bytes(&target)?;
+    let options = BundleImportOptions::default_limits();
+    let result = import_bundle_from_bytes(&target, &bytes, &options);
+    let error = match result {
+        Ok(report) => panic!("a non-ASCII path must refuse, not import: {report:?}"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        error.decode_failure_kind(),
+        prikk_error::DecodeFailureKind::OutsideVersionRule,
+        "{error}"
+    );
+    assert!(
+        matches!(error, prikk_error::PrikkError::NonAsciiRepoPath { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        crate::test_gates::test_support::repository_bytes(&target)?,
+        before,
+        "a refused bundle import must leave every file under .prikk unchanged"
+    );
+
+    let _ = std::fs::remove_dir_all(target_root);
+    Ok(())
+}

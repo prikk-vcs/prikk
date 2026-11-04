@@ -2358,14 +2358,23 @@ pub fn import_bundle(
         });
     }
 
-    // 0.56.0 step F (stikk 023 part 6): refuse a forged MAINTAINER signature on the delivered
-    // tip's own `RefState` or `Block` -- still before the first object write, the same "all
-    // still before the first object write" zone as the connectivity refusal just above. Pass 1
-    // has already finished, so both envelopes are already resolved in `prepared`/`index_by_id`;
-    // read through a bundle-only `BundleAndLocalReader`, built the same way `preview_bundle`
-    // already builds one (`local: None` -- nothing here is about the local store, only the
-    // bundle's own delivered content). `&mut *source` reborrows rather than moves `source`, so
-    // the outer binding is still usable for the write loop below once this block ends.
+    // 0.56.0 F2 item 1 (stikk's part-6 finding, one block back): refuse a forged MAINTAINER
+    // signature on *every* Block and RefState this delivery is about to admit, not only the
+    // delivered tip's own -- the review's own measured gap, `.git-exclude/reviewed/
+    // 0.56.0-step-3-f-review-v1.md` "F2 item 1": a sound tip over a forged ancestor used to
+    // import clean (the old check here resolved only `ref_state_id`/`tip_block_id`), and only a
+    // later `verify` caught it. `prepared` already carries at most one entry per unique object
+    // id in this bundle (pass 1's own dedup, `index_by_id.insert` above never runs twice for the
+    // same id), so filtering it for `Block`/`RefState` and checking each once is exactly "every
+    // Block and RefState, deduplicated" -- one Ed25519 verification per signature, linear in the
+    // delivery, on objects pass 1 has already decoded. This subsumes the former tip-only check
+    // (the tip's own ids are themselves entries in `prepared`), so there is no separate tip check
+    // left to run. Read through a bundle-only `BundleAndLocalReader`, built the same way
+    // `preview_bundle` already builds one (`local: None` -- nothing here is about the local
+    // store, only the bundle's own delivered content). `&mut *source` reborrows rather than moves
+    // `source`, so the outer binding is still usable for the write loop below once this block
+    // ends. Still before the first object write, the same "all still before the first object
+    // write" zone as the connectivity refusal just above.
     let adopted_policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
     {
         let source_cell: RefCell<&mut BundleSource> = RefCell::new(&mut *source);
@@ -2377,30 +2386,24 @@ pub fn import_bundle(
             cache: &cache,
             local: None,
         };
-        let delivered_ref_state = bundle_only_reader.read_object(ref_state_id)?.ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "bundle import: delivered RefState {ref_state_id} is not among this bundle's own \
-                 carried objects"
-            ))
-        })?;
-        crate::trust::refuse_forged_publication_signature(
-            "bundle-import",
-            &adopted_policy,
-            &delivered_ref_state,
-        )?;
-        let delivered_block = bundle_only_reader
-            .read_object(tip_block_id)?
-            .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "bundle import: delivered Block {tip_block_id} is not among this bundle's own \
-                 carried objects"
-                ))
-            })?;
-        crate::trust::refuse_forged_publication_signature(
-            "bundle-import",
-            &adopted_policy,
-            &delivered_block,
-        )?;
+        for object in &prepared {
+            if !matches!(object.object_type, ObjectType::Block | ObjectType::RefState) {
+                continue;
+            }
+            let envelope = bundle_only_reader
+                .read_object(object.object_id)?
+                .ok_or_else(|| {
+                    PrikkError::Integrity(format!(
+                        "bundle import: {} {} is not among this bundle's own carried objects",
+                        object.object_type, object.object_id
+                    ))
+                })?;
+            crate::trust::refuse_forged_publication_signature(
+                "bundle-import",
+                &adopted_policy,
+                &envelope,
+            )?;
+        }
     }
 
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely

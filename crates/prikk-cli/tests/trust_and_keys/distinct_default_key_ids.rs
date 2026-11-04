@@ -706,6 +706,86 @@ fn control6_the_author_refusal_at_import_names_a_route_that_runs() {
     }
 }
 
+/// 0.56.0 F2 item 2 (review `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item 2"):
+/// the legacy-collision shape this whole file already works around for every other control
+/// (`control6_the_author_refusal_at_import_names_a_route_that_runs`'s own comment names it
+/// explicitly) is exercised directly here, against the refusal it actually trips --
+/// `forged-publication-signature`, not a `trust maintainer add` collision. Two independent,
+/// pre-0.45.0 "legacy" installations both default to the shared maintainer key id `"maintainer"`;
+/// B's own history, signed by B's real key under that id, now refuses at A's `bundle import` (A
+/// already self-adopted a *different* real key under the identical id, via `two_legacy`'s own
+/// setup) rather than importing cleanly and failing a later `verify` the way it did before this
+/// round. The refusal's own message must name a route out for this entirely legitimate cause, not
+/// just name the two possible causes and stop -- the same route
+/// `control6_the_maintainer_refusal_names_a_route_that_runs`'s own "Route 1" already proves works
+/// for the `trust maintainer add` collision.
+#[test]
+fn control7_the_forged_publication_signature_refusal_at_import_names_a_route_that_runs() {
+    let (a, repo_a, b, repo_b) = two_legacy("keyids-c7fps");
+    std::fs::write(repo_a.join("a.txt"), "a\n").unwrap();
+    support::ok(&a.run(&repo_a, &["commit", "-m", "a"]), "A commits");
+
+    let b_public = b.public_key(&repo_b, "maintainer");
+    // B signs this commit's own AUTHOR role under a distinct id -- otherwise this import is
+    // refused for the *author* collision first (both installations also default `author` to the
+    // identical legacy id, `control6_the_author_refusal_at_import_names_a_route_that_runs`'s own
+    // comment names this exact coincidence), never reaching the forged-publication-signature
+    // refusal this test is actually about. The MAINTAINER role is left at B's own installation
+    // default (`"maintainer"`) on purpose: that collision, against A's own different key already
+    // self-adopted under the identical id by `two_legacy`, is precisely what this test exercises.
+    let author_env = [("PRIKK_AUTHOR_KEY_ID", "c7fps-b-author")];
+    let legacy_bundle = b.commit_seal_export(&repo_b, &author_env, "b.txt");
+    let refused = import(&a, &repo_a, &legacy_bundle);
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
+    let message = text(&refused);
+    assert!(message.contains("forgery"), "{message}");
+    for named in [
+        "PRIKK_MAINTAINER_KEY_ID",
+        "prikk key generate --out",
+        "PRIKK_MAINTAINER_SEED_FILE",
+        "prikk trust maintainer add --key-id",
+    ] {
+        assert!(
+            message.contains(named),
+            "the refusal names {named}: {message}"
+        );
+    }
+
+    // Route 1 (mirrors `control6_the_maintainer_refusal_names_a_route_that_runs`'s own Route 1):
+    // B signs new history under `PRIKK_MAINTAINER_KEY_ID` (the identical underlying key material,
+    // a distinct self-chosen label), A adopts B's real key under that same distinct id, and the
+    // import that was refused above now succeeds, with `verify` reading sound. Also under a
+    // distinct `PRIKK_AUTHOR_KEY_ID` -- A's own earlier commit above already bound the legacy
+    // default `"author"` id to A's own key, so B's default-author-signed history would otherwise
+    // meet the identical author collision this test already routed around once above.
+    let env = [
+        ("PRIKK_MAINTAINER_KEY_ID", "b-maintainer"),
+        ("PRIKK_AUTHOR_KEY_ID", "c7fps-b-author-2"),
+    ];
+    let bundle = distinct_history(&b, &env, "keyids-c7fps-b2");
+    support::ok(
+        &a.run(
+            &repo_a,
+            &[
+                "trust",
+                "maintainer",
+                "add",
+                "--key-id",
+                "b-maintainer",
+                "--public-key",
+                &b_public,
+            ],
+        ),
+        "A adopts B's real maintainer key under the distinct id",
+    );
+    support::ok(
+        &import(&a, &repo_a, &bundle),
+        "new history under a distinct id imports",
+    );
+    let verify = a.run(&repo_a, &["verify"]);
+    assert_eq!(verify.status.code(), Some(0), "{}", text(&verify));
+}
+
 /// Control 6, the author refusal at commit: after an import bound `author` to the other key, `commit`
 /// refuses with the same advice, and signing under a distinct id commits.
 #[test]

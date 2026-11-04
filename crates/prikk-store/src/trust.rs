@@ -470,6 +470,22 @@ pub fn verify_trusted_publication_envelope(
 /// **One shared check, not a new copy:** every caller (`bundle::import_bundle`,
 /// `archive::import::land_one_ref`, `archive::import`'s own fail-fast gate) calls this directly,
 /// rather than re-deriving the `issue.code` match at its own call site.
+///
+/// **0.56.0 F2 item 2** (review `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item
+/// 2"): the message named two possible causes -- a forgery, or another maintainer using the same
+/// key id -- but gave no route out for the second, entirely legitimate one. Two independent,
+/// pre-0.45.0 "legacy" installations that both happen to default to the shared maintainer key id
+/// `"maintainer"` now correctly refuse here at import instead of importing cleanly and failing a
+/// later `verify` -- right, but a dead end without a route. The route added below mirrors
+/// `add_trusted_maintainer`'s own TOFU-collision refusal verbatim (same function below, "already
+/// adopted with a different public key"): the *sending* maintainer signs under a distinct key id
+/// next time (`PRIKK_MAINTAINER_KEY_ID`, or a key made by `prikk key generate --out <path>`,
+/// pointed at by `PRIKK_MAINTAINER_SEED_FILE`), and the *receiving* repository adopts that
+/// distinct id with `prikk trust maintainer add --key-id <that id> --public-key <its public
+/// key>`. Proven end to end by `distinct_default_key_ids.rs::
+/// control7_the_forged_publication_signature_refusal_at_import_names_a_route_that_runs`, the
+/// identical round-trip `control6_the_maintainer_refusal_names_a_route_that_runs`'s own "Route 1"
+/// already proves for the sibling `trust maintainer add` collision.
 pub fn refuse_forged_publication_signature(
     command: &'static str,
     policy: &MaintainerTrustPolicy,
@@ -481,8 +497,12 @@ pub fn refuse_forged_publication_signature(
         Err(issue) => Err(PrikkError::ForgedPublicationSignature {
             command,
             message: format!(
-                "{} -- a forgery, or another maintainer using the same key id; refusing before \
-                 admitting it",
+                "{} -- a forgery, or another maintainer using the same key id; if it is the \
+                 latter, that maintainer should sign under a distinct id next time -- a key made \
+                 by `prikk key generate --out <path>` has one (point PRIKK_MAINTAINER_SEED_FILE \
+                 at it), or set PRIKK_MAINTAINER_KEY_ID -- and you adopt it under that id with \
+                 `prikk trust maintainer add --key-id <that id> --public-key <its public key>`; \
+                 refusing before admitting it",
                 issue.message
             ),
         }),
