@@ -1080,6 +1080,111 @@ try {
   if ($originalProcessorArchitew6432) { $env:PROCESSOR_ARCHITEW6432 = $originalProcessorArchitew6432 } else { Remove-Item Env:\PROCESSOR_ARCHITEW6432 -ErrorAction SilentlyContinue }
 }
 
+# ---------------------------------------------------------------------------
+# Control 7 (0.56.0 step U2): the uninstall.ps1 guard added in step U -- `if ($args.Count -gt 0) {
+# throw ... }`, sitting outside the `& { ... }` wrapper (see uninstall.ps1.txt's own comment for
+# why it has to sit there) -- was reasoned about but never run for real, because no pwsh/
+# powershell runtime existed in the sandbox that wrote it. This is the first real measurement.
+#
+# (a) is the straightforward case: `-File uninstall.ps1 -Prefix C:\x` must refuse and remove
+# nothing, the same shape as `install.ps1`'s own argument handling and as `uninstall.sh`'s own
+# `unrecognized_argument_refuses_and_removes_nothing` test.
+#
+# (b) is the one the review itself flagged as uncertain, not merely a second easy case: `iex` runs
+# pasted text in the *current* scope -- Invoke-Expression's own documented behavior is that it does
+# not create a new scope for what it runs, so a bare `$args` reference inside the pasted text
+# resolves via ordinary PowerShell variable lookup, which finds whatever `$args` already exists in
+# that scope. A script invoked with no param() block binds its own `$args` to any positional
+# arguments it was given (about_Automatic_Variables), in its own top-level scope -- and that is
+# exactly the scope `iex` runs the pasted uninstall.ps1 text in, here. So this control deliberately
+# invokes a child script WITH its own extra positional arguments (simulating a real caller that
+# has stray arguments of its own for a wholly unrelated reason -- a wrapper script, a profile
+# function, anything that happens to pass args around and also runs `iex (irm ...)`), then has that
+# child script `iex` uninstall.ps1's own text with no wrapping try/catch or scriptblock around the
+# `iex` call -- the review's own specified shape. The uninstall must still succeed: the arguments
+# belong to the child script's own invocation, never to anything the user asked uninstall.ps1 to
+# parse.
+#
+# Reasoned about, not measured, before this CI run (no pwsh/powershell in the sandbox that wrote
+# this): by the "no new scope" mechanics above, the child script's own `$args` (bound by the extra
+# positional arguments passed to it below) is plausibly what the pasted text's `$args.Count -gt 0`
+# check reads too, which would make the guard incorrectly throw here -- the opposite of what this
+# control asserts. The review's own suggested fallback, gating the guard on `$PSCommandPath` also
+# being non-empty (true only for a direct `-File` invocation, not for text evaluated via `iex` at
+# a bare interactive prompt), was considered and not applied here: by the same "no new scope"
+# reasoning, `$PSCommandPath` inside `iex`'d text should resolve to whatever script is already
+# running in that ambient scope -- which, in this exact construction, is the child script itself
+# (a real .ps1 file on disk, non-empty `$PSCommandPath`) -- so that condition would not obviously
+# distinguish this control's own shape from a direct `-File uninstall.ps1` invocation either, and
+# adding it on a guess that does not clearly address this scenario seemed worse than leaving the
+# already-committed guard in place and reading what this run actually shows. This paragraph is a
+# prediction, not a measurement -- read the real PASS/FAIL lines below (and the raw assertion
+# messages) for the actual answer, on both engines this script runs under.
+# ---------------------------------------------------------------------------
+Write-Section "Control 7: the uninstall.ps1 argument guard, measured for real (reasoned, not assumed)"
+
+# --- (a): an unexpected -File argument must refuse and remove nothing -------------------------
+$installDir7a = Join-Path $scratchRoot "control7a"
+New-Item -ItemType Directory -Force -Path $installDir7a | Out-Null
+$fakeBinary7a = Join-Path $installDir7a "prikk.exe"
+Set-Content -Path $fakeBinary7a -Value "fake prikk binary for Control 7a"
+$env:PRIKK_INSTALL_DIR = $installDir7a
+try {
+  # Same 'Continue' idiom Control 6's Invoke-ArchRow already uses: a refusal row's own `throw`
+  # must not itself become a terminating error for this outer test script when its stderr is
+  # captured with 2>&1 under Windows PowerShell 5.1.
+  $previousEap7a = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output7a = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath -Prefix C:\x 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEap7a
+  }
+  $exitCode7a = $LASTEXITCODE
+  Assert-True ($exitCode7a -ne 0) "Control 7a: 'uninstall.ps1 -Prefix C:\x' (an argument it does not accept) exits non-zero"
+  Assert-True (Test-Path -Path $fakeBinary7a -PathType Leaf) "Control 7a: the fake binary survives the refusal"
+} finally {
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+}
+
+# --- (b): a caller with its own unbound arguments must still be able to iex the one-line form ---
+$installDir7b = Join-Path $scratchRoot "control7b"
+New-Item -ItemType Directory -Force -Path $installDir7b | Out-Null
+$fakeBinary7b = Join-Path $installDir7b "prikk.exe"
+Set-Content -Path $fakeBinary7b -Value "fake prikk binary for Control 7b"
+$env:PRIKK_INSTALL_DIR = $installDir7b
+try {
+  # The Control-4 child-process idiom: a genuinely separate PowerShell process (not a nested
+  # scriptblock in this test script's own process), built from a here-string with its own
+  # placeholder replaced, so the pasted uninstall.ps1 text is evaluated via Invoke-Expression with
+  # no wrapping try/catch or scriptblock around the iex call -- the review's own specified shape.
+  $child7bTemplate = @'
+Invoke-Expression (Get-Content -Path '__UNINSTALL_SCRIPT_PATH__' -Raw)
+Write-Output "PRIKK_SENTINEL=reached-after-iex"
+'@
+  $child7bContent = $child7bTemplate.Replace('__UNINSTALL_SCRIPT_PATH__', $uninstallScriptPath)
+  $child7bPath = Join-Path $childScriptsDir "child-7b.ps1"
+  Set-Content -Path $child7bPath -Value $child7bContent
+
+  # extra1/extra2 are positional arguments to the CHILD script's own invocation -- they populate
+  # the child script's own $args, simulating a caller (a wrapper script, a profile function) that
+  # has stray arguments of its own, unrelated to anything the user means for uninstall.ps1 to see.
+  $previousEap7b = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output7b = & $enginePath -NoProfile -File $child7bPath extra1 extra2 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEap7b
+  }
+  $exitCode7b = $LASTEXITCODE
+  Assert-True ($exitCode7b -eq 0) "Control 7b: the child process (invoked with its own extra1/extra2 arguments) exits 0 after iex'ing uninstall.ps1's text"
+  Assert-True (-not (Test-Path -Path $fakeBinary7b)) "Control 7b: the fake binary is removed by the iex'd uninstall -- the guard did not mistake the child script's own arguments for the user's"
+  $sentinel7b = ($output7b | ForEach-Object { "$_" }) -contains "PRIKK_SENTINEL=reached-after-iex"
+  Assert-True $sentinel7b "Control 7b: the sentinel after the iex'd uninstall was reached -- the guard did not throw and kill the child process first"
+} finally {
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+}
+
 Remove-Item -Path $scratchRoot -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Section "Summary"
