@@ -389,6 +389,21 @@
   (its exit code) is unaffected either way — this status is purely informational, exactly like the
   existing carried-key listing it refines, and a broken receiving repository never flips it.
 
+### Fixed
+
+- **`uninstall.sh --prefix <dir>` silently ignored `--prefix` and removed the binary at the default
+  install location instead (0.56.0 step U).** Found by an external consumer: a user who installed
+  with `install.sh --prefix /custom/path` and later ran `uninstall.sh --prefix /custom/path`,
+  expecting it to remove that custom-location binary, instead had the unrelated binary at
+  `~/.local/bin/prikk` removed, with no error, because `uninstall.sh` never read its own arguments
+  at all — only `$PRIKK_INSTALL_DIR`. `uninstall.sh` now accepts `--prefix`, mirroring `install.sh`'s
+  own argument parsing; refuses any argument it does not recognize; and refuses when `--prefix` and
+  `$PRIKK_INSTALL_DIR` are both given and disagree, naming both values, rather than silently
+  preferring one. `uninstall.ps1` has no `--prefix` of its own to disagree with (like `install.ps1`,
+  it is env-var-only by design — the one-line `irm | iex` form cannot forward CLI arguments), so it
+  now instead refuses any argument at all, the same defensive posture, rather than silently
+  swallowing or mis-binding one.
+
 ### Added
 
 - **`bundle preview --format json` and `bundle import`'s own text output now report a finer,

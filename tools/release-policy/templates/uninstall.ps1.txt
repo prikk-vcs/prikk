@@ -17,6 +17,30 @@
 #   $env:PRIKK_INSTALL_DIR = "C:\custom\path"
 #   irm https://github.com/REPO_SLUG/releases/latest/download/uninstall.ps1 | iex
 #
+# 0.56.0 step U: refuse any argument. Like install.ps1, this script declares no param() block and
+# accepts no --flags of its own -- $env:PRIKK_INSTALL_DIR is the only override (see install.ps1's
+# own comment for why: the one-line `irm | iex` form cannot forward CLI args in the first place, so
+# there is nothing here for a flag to disagree with the way uninstall.sh's own --prefix now can
+# disagree with its env var). about_Automatic_Variables documents $args as "an array of the
+# undeclared parameters and/or parameter values that are passed to a function, script, or script
+# block" -- since this script declares none, an argument a caller passes under the `-File`/
+# dot-invocation form (for example `./uninstall.ps1 -Prefix C:\x`) lands there silently today,
+# unused and unrefused, the same defect class `uninstall.sh` had.
+#
+# Checked here, at the script's own true top level, before the `& { ... }` wrapper below -- not
+# inside it. That wrapper is itself invoked as `& { ... }` with no arguments of its own after the
+# closing brace, and each function/script-block invocation gets its own $args scoped to the
+# arguments THAT call passed; reading $args from inside the block would see that invocation's own
+# (empty) $args, not whatever the top-level script received from its caller.
+#
+# NOT EMPIRICALLY VERIFIED: no pwsh/powershell runtime was available in this sandbox to run
+# `./uninstall.ps1 -Prefix C:\x` and confirm $args is actually populated, and this check actually
+# fires, the way about_Automatic_Variables's own wording implies. See the report for this round --
+# an architect with a real Windows box or CI run should confirm this before treating it as settled.
+if ($args.Count -gt 0) {
+  throw "prikk-uninstall: this script accepts no arguments (got '$($args[0])'); it reads `$env:PRIKK_INSTALL_DIR only"
+}
+
 # Windows installer/uninstaller handoff v1 Part 6a2 (review 0.54.0-step-3-part-6a-review-v1,
 # condition C1): wrapped in one script block (`& { ... }`), the same fix and for the same reason as
 # install.ps1 -- see that script's own comment for the citations (about_Operators's Call operator

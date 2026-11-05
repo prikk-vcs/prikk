@@ -10,14 +10,47 @@
 #
 # Usage:
 #   curl -fsSL https://github.com/REPO_SLUG/releases/latest/download/uninstall.sh | sh
+#   curl -fsSL https://github.com/REPO_SLUG/releases/latest/download/uninstall.sh | sh -s -- --prefix /custom/path
 #
-# If you installed with a custom PRIKK_INSTALL_DIR, pass the same value here so this script knows
-# where to look:
+# If you installed with a custom PRIKK_INSTALL_DIR, pass the same value here (either as --prefix or
+# as the environment variable itself) so this script knows where to look:
 #   PRIKK_INSTALL_DIR=/custom/path curl -fsSL .../uninstall.sh | sh
+#
+# Passing both at once is only accepted when they agree -- install.sh's own --prefix/--version pair
+# never needs this check since each overrides only its own env-var default, but this script's one
+# flag and the one env var name the same thing, so a disagreement between them would silently pick
+# one and remove the wrong binary. 0.56.0 step U: found by an external consumer running
+# `uninstall.sh --prefix <dir>` with no env var set and getting the default-location binary removed
+# instead of the named one, because this script never read its own arguments at all until now.
 
 set -eu
 
-install_dir="${PRIKK_INSTALL_DIR:-$HOME/.local/bin}"
+install_dir=""
+prefix_given=0
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --prefix)
+      install_dir="$2"
+      prefix_given=1
+      shift 2
+      ;;
+    *)
+      echo "prikk-uninstall: unrecognized argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$prefix_given" -eq 1 ]; then
+  if [ -n "${PRIKK_INSTALL_DIR:-}" ] && [ "$PRIKK_INSTALL_DIR" != "$install_dir" ]; then
+    echo "prikk-uninstall: --prefix $install_dir and \$PRIKK_INSTALL_DIR=$PRIKK_INSTALL_DIR disagree; pass only one" >&2
+    exit 1
+  fi
+else
+  install_dir="${PRIKK_INSTALL_DIR:-$HOME/.local/bin}"
+fi
+
 binary_path="$install_dir/prikk"
 path_marker_begin="# >>> prikk installer >>>"
 path_marker_end="# <<< prikk installer <<<"
