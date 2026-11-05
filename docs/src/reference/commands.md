@@ -466,8 +466,11 @@ four fixed strings, computed against the repository `archive verify` runs from, 
 archive's own carried trust policy: `"adopted"` (the same key id and the same public key are
 already adopted here); `"carried, not adopted"` (this key id is not adopted here at all);
 `"carried, conflicts with an adopted key"` (this key id is adopted here, but under a *different*
-public key); or `"carried, not checked against a repository"`, when `archive verify` is run
-outside any repository at all. Before this round, both forms printed `"carried, not adopted"`
+public key); or `"carried, not checked against a repository"`, for either of two cases: `archive
+verify` is run outside any repository at all (silent, with nothing to check against), or a
+`.prikk` is present but could not be read — a corrupted `FORMAT` marker, or a corrupted
+trust-policy container — which also prints exactly one line to stderr naming that a repository is
+here but unreadable. Before this round, both forms printed `"carried, not adopted"`
 unconditionally, even for a key the repository running `verify` had in fact already adopted. This
 is reporting only — the archive's own internal-consistency check, and its exit code, are
 unaffected either way, exactly as for the existing carried-key listing this refines; trust remains
