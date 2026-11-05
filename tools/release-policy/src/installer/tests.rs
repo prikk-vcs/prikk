@@ -159,7 +159,7 @@ mod uninstall_sh_execution {
             Some(value) => command.env("PRIKK_INSTALL_DIR", value),
             None => command.env_remove("PRIKK_INSTALL_DIR"),
         };
-        command.output().expect("running the generated uninstall.sh")
+        command.output().unwrap()
     }
 
     /// **The case stikk measured, "the way a user meets it."** A decoy binary sits at the default
