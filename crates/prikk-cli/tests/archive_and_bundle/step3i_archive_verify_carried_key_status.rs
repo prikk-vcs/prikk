@@ -14,10 +14,21 @@
 //! public key, so every one of the four statuses is reached by an honest `archive export` /
 //! `trust maintainer add` / `archive verify` round trip through the real binary, never by
 //! hand-crafting the archive's own wire bytes.
+//!
+//! 0.56.0 step 3i-b corrects one defect in 3i's own classification: a destination that *holds*
+//! `.prikk` but can't actually be read (a corrupted `FORMAT` marker, or a corrupted trust-policy
+//! container) used to either stay silent about it (the open-repository case) or, worse, make the
+//! whole `archive verify` command fail and never print the archive's own, already-computed report
+//! at all (the load-trust-policy case). Both cases below must still print the full report, still
+//! report the fourth status for the carried key, still exit `0` on the archive's own
+//! `is_internally_consistent()`, and now print exactly one explanatory line to stderr. The
+//! "no repository at all" case (`outside_any_repository_reports_not_checked_against_a_repository`,
+//! below) must keep behaving exactly as before, including staying silent on stderr.
 #![allow(clippy::expect_used, clippy::indexing_slicing, clippy::unwrap_used)]
 
 use crate::support;
 use crate::support::{MAINTAINER_KEY_ID, maintainer_public_key_hex, ok};
+use prikk_store::{ContainerSlot, RepositoryLayout};
 
 /// A different, but still valid, Ed25519 public key under the same key id -- the "conflicts" case
 /// needs a key id already adopted locally with *different* key material, the same TOFU-collision
@@ -85,14 +96,55 @@ fn verify_both_forms(dir: &std::path::Path, archive_path: &std::path::Path) -> (
     )
 }
 
+/// Like `verify_both_forms`, but also returns each form's stderr -- step 3i-b needs this: its own
+/// defect was that the two "no policy to check against" cases disagreed about whether anything was
+/// printed to stderr, and the fix adds exactly one explanatory line for the "a repository is here
+/// but could not be read" case while the "no repository at all" case must keep printing none.
+/// `verify_both_forms` itself never needed stderr, so it stays as-is for the other tests above.
+fn verify_both_forms_with_stderr(
+    dir: &std::path::Path,
+    archive_path: &std::path::Path,
+) -> (String, String, String, String) {
+    let text = support::prikk(dir)
+        .args(["archive", "verify"])
+        .arg(archive_path)
+        .output()
+        .unwrap();
+    assert!(
+        text.status.success(),
+        "archive verify (text) must exit 0 -- the archive's own `is_internally_consistent()` \
+         decides the exit code, never the receiving repository's own health: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let json = support::prikk(dir)
+        .args(["archive", "verify", "--format", "json"])
+        .arg(archive_path)
+        .output()
+        .unwrap();
+    assert!(
+        json.status.success(),
+        "archive verify --format json must exit 0 for the identical reason: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    (
+        String::from_utf8_lossy(&text.stdout).into_owned(),
+        String::from_utf8_lossy(&text.stderr).into_owned(),
+        String::from_utf8_lossy(&json.stdout).into_owned(),
+        String::from_utf8_lossy(&json.stderr).into_owned(),
+    )
+}
+
 /// Outside any repository at all: a plain directory with no `.prikk`. The planeter letter's
-/// fourth, repository-less status.
+/// fourth, repository-less status. 3i-b: this is the one case that must stay exactly as it was,
+/// including staying silent on stderr -- there genuinely is no repository here to report as
+/// broken.
 #[test]
 fn outside_any_repository_reports_not_checked_against_a_repository() {
     let archive_path = export_one_generation("outside");
     let no_repo_dir = support::unique_repo("step3i-no-repo");
 
-    let (text, json) = verify_both_forms(&no_repo_dir, &archive_path);
+    let (text, text_err, json, json_err) =
+        verify_both_forms_with_stderr(&no_repo_dir, &archive_path);
     assert!(
         text.contains(&format!(
             "maintainer key {MAINTAINER_KEY_ID} (carried, not checked against a repository):"
@@ -107,6 +159,187 @@ fn outside_any_repository_reports_not_checked_against_a_repository() {
         !text.contains("carried, not adopted"),
         "the old unconditional literal must not appear once the status is real: {text}"
     );
+    assert!(
+        text_err.is_empty(),
+        "no `.prikk` at all must print nothing to stderr (text form): {text_err:?}"
+    );
+    assert!(
+        json_err.is_empty(),
+        "no `.prikk` at all must print nothing to stderr (json form): {json_err:?}"
+    );
+
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// 3i-b: a destination that holds `.prikk`, but whose `FORMAT` marker is corrupted, so
+/// `open_repository` itself fails. The archive's own report must still print in full, the carried
+/// key must still get the fourth status (it's literally true: nothing *was* checked), the command
+/// must still exit `0` on the archive's own consistency, and exactly one line naming the broken
+/// repository must reach stderr -- the behaviour 3i itself got wrong (it stayed silent here).
+#[test]
+fn a_repository_with_a_corrupted_format_marker_still_prints_the_full_report_and_warns_once() {
+    let archive_path = export_one_generation("format-corrupt");
+    let dest = support::unique_repo("step3i-b-dest-format-corrupt");
+    support::init(&dest);
+    std::fs::write(
+        dest.join(".prikk").join("FORMAT"),
+        b"not a format number at all\n",
+    )
+    .expect("corrupt the FORMAT marker");
+
+    let (text, text_err, json, json_err) = verify_both_forms_with_stderr(&dest, &archive_path);
+
+    // The archive's own report is still printed in full.
+    assert!(
+        text.contains("structurally sound:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains("reference closure sound:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains("signatures checked:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "maintainer key {MAINTAINER_KEY_ID} (carried, not checked against a repository):"
+        )),
+        "a repository present but unreadable must still classify as the planeter's fourth, \
+         literally-true status: {text}"
+    );
+    assert!(
+        json.contains("\"status\": \"carried, not checked against a repository\""),
+        "the json form must carry the identical status string: {json}"
+    );
+    assert!(
+        json.contains("\"ok\": true"),
+        "the archive's own internal consistency, never the repository's health, decides `ok`: \
+         {json}"
+    );
+
+    for stderr in [&text_err, &json_err] {
+        assert_eq!(
+            stderr.lines().count(),
+            1,
+            "exactly one stderr line naming the unreadable repository: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("a repository is here"),
+            "the stderr line must name that a repository is present: {stderr}"
+        );
+        assert!(
+            stderr.contains("could not be read"),
+            "the stderr line must name that it could not be read: {stderr}"
+        );
+        assert!(
+            stderr.contains("carried keys were not checked against it"),
+            "the stderr line must name that carried keys were not checked against it: {stderr}"
+        );
+    }
+
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+/// The same corruption shape `rfc138_trust_read_surface.rs`'s own
+/// `corrupt_trust_policy_container` uses: a garbage prefix with no valid `PTRUPOL1` magic
+/// anywhere in it, long enough to clear `TRUST_POLICY_HEADER_LEN` (so it decodes as `Invalid`, a
+/// genuine item failure, not merely `TrailingPartial`, which `read_current_trust_policy_snapshot`
+/// tolerates and folds into "no snapshot yet" -- a shorter garbage payload, such as
+/// `trust/tests.rs`'s own `a_corrupt_policy_container_fails_closed_...` fixture, would silently
+/// miss `load_maintainer_trust_policy_or_empty`'s error path entirely and instead resolve to an
+/// empty policy), followed by one genuinely sound, empty snapshot record -- so the container is
+/// RFC 164 Rule A interior damage (a sound record follows the garbage), which this read path still
+/// fails closed on.
+fn corrupt_trust_policy_container(repo: &std::path::Path) {
+    let layout =
+        RepositoryLayout::open(repo).expect("repository must open to corrupt its container");
+    let mut bytes: Vec<u8> = b"this container has been damaged beyond its own header length and carries no valid magic anywhere in it".to_vec();
+    const MAGIC: &[u8; 8] = b"PTRUPOL1";
+    const VERSION: u16 = 1;
+    let body = 0_u32.to_be_bytes().to_vec();
+    let body_len = (body.len() as u64).to_be_bytes();
+    let mut preimage = MAGIC.to_vec();
+    preimage.extend_from_slice(&VERSION.to_be_bytes());
+    preimage.extend_from_slice(&body_len);
+    preimage.extend_from_slice(&body);
+    bytes.extend_from_slice(MAGIC);
+    bytes.extend_from_slice(&VERSION.to_be_bytes());
+    bytes.extend_from_slice(&body_len);
+    bytes.extend_from_slice(&prikk_hash::sha256(&preimage));
+    bytes.extend_from_slice(&body);
+    std::fs::write(
+        layout.trust_policy_container_slot_path(ContainerSlot::A),
+        bytes,
+    )
+    .expect("write corrupt trust policy bytes");
+}
+
+/// 3i-b: a destination that holds `.prikk` and opens fine, but whose trust-policy container is
+/// corrupted, so `load_maintainer_trust_policy_or_empty` fails -- the second of the two cases 3i-b
+/// unifies. Before this round this made the *whole command* fail and the archive's own, already
+/// computed report was never printed at all. Same assertions as the `FORMAT`-corruption case
+/// above: full report, fourth status, exit 0, one stderr line.
+#[test]
+fn a_repository_with_a_corrupted_trust_policy_container_still_prints_the_full_report_and_warns_once()
+ {
+    let archive_path = export_one_generation("policy-corrupt");
+    let dest = support::unique_repo("step3i-b-dest-policy-corrupt");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    corrupt_trust_policy_container(&dest);
+
+    let (text, text_err, json, json_err) = verify_both_forms_with_stderr(&dest, &archive_path);
+
+    assert!(
+        text.contains("structurally sound:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains("reference closure sound:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains("signatures checked:"),
+        "the full archive report must still print when the repository is unreadable: {text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "maintainer key {MAINTAINER_KEY_ID} (carried, not checked against a repository):"
+        )),
+        "a repository that opens but whose trust policy can't load must still classify as the \
+         planeter's fourth, literally-true status: {text}"
+    );
+    assert!(
+        json.contains("\"status\": \"carried, not checked against a repository\""),
+        "the json form must carry the identical status string: {json}"
+    );
+    assert!(
+        json.contains("\"ok\": true"),
+        "the archive's own internal consistency, never the repository's health, decides `ok`: \
+         {json}"
+    );
+
+    for stderr in [&text_err, &json_err] {
+        assert_eq!(
+            stderr.lines().count(),
+            1,
+            "exactly one stderr line naming the unreadable repository: {stderr:?}"
+        );
+        assert!(
+            stderr.contains("a repository is here"),
+            "the stderr line must name that a repository is present: {stderr}"
+        );
+        assert!(
+            stderr.contains("could not be read"),
+            "the stderr line must name that it could not be read: {stderr}"
+        );
+        assert!(
+            stderr.contains("carried keys were not checked against it"),
+            "the stderr line must name that carried keys were not checked against it: {stderr}"
+        );
+    }
 
     let _ = std::fs::remove_file(&archive_path);
 }

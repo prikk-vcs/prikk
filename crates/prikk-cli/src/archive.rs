@@ -185,7 +185,7 @@ fn run_verify(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     })?;
     let mut reader = std::io::BufReader::new(file);
     let report = prikk_store::verify_archive(&mut reader).map_err(|err| err.to_string())?;
-    let key_statuses = classify_maintainer_key_statuses(root, &report.maintainer_keys)?;
+    let key_statuses = classify_maintainer_key_statuses(root, &report.maintainer_keys);
 
     if parsed.format_json {
         print_verify_report_json(&report, &key_statuses);
@@ -204,46 +204,87 @@ fn run_verify(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     }
 }
 
-/// 0.56.0 step 3i (#6): the planeter letter's one field, `status`, for each carried maintainer
-/// key -- classified against the *receiving* repository's own adopted trust policy, never the
-/// archive's own carried policy (`prikk_store::verify_archive`'s own doc comment: that module
-/// reports "internally consistent", never "trusted" -- trust is always the receiver's). One of
-/// four fixed strings per key, in `report.maintainer_keys`'s own order:
-/// - `"carried, not checked against a repository"` when `root` names no repository at all --
-///   **and, by this round's own explicit call (stated in its report for the architect to confirm
-///   or override), for *any* `open_repository` failure, not only a missing `.prikk`:** no error
-///   variant distinguishes "not a repository" from another open failure, and this codebase's
-///   standing discipline is to classify by variant, never by matching message text, so adding a
-///   new structural variant for this one informational field would be new mechanism out of
-///   proportion to what it reports;
+/// 0.56.0 step 3i (#6), corrected by step 3i-b: the planeter letter's one field, `status`, for
+/// each carried maintainer key -- classified against the *receiving* repository's own adopted
+/// trust policy, never the archive's own carried policy (`prikk_store::verify_archive`'s own doc
+/// comment: that module reports "internally consistent", never "trusted" -- trust is always the
+/// receiver's). One of four fixed strings per key, in `report.maintainer_keys`'s own order:
 /// - `"carried, not adopted"`, `"adopted"`, or `"carried, conflicts with an adopted key"` --
 ///   `prikk_store::classify_carried_key_against_repository`'s own three outcomes -- once a
-///   repository does open.
+///   repository opens and its trust policy loads;
+/// - `"carried, not checked against a repository"` otherwise, for either of two distinct reasons,
+///   now handled by one rule instead of two inconsistent ones (3i-b):
+///   - **`root` holds no `.prikk` at all:** today's behaviour, unchanged, and silent -- nothing is
+///     printed to stderr, since there genuinely is no repository to report as broken;
+///   - **`root` holds `.prikk`, but `open_repository` fails on it, or it opens and
+///     `load_maintainer_trust_policy_or_empty` fails:** the status is the same planeter string
+///     (literally true: nothing *was* checked), but exactly one line is printed to stderr naming
+///     that a repository is present and could not be read -- a corrupted `FORMAT` marker or a
+///     damaged trust-policy container must never pass for "no repository here" by the user's own
+///     reading of the report. This function no longer propagates either failure: `archive
+///     verify`'s subject is the archive, and a broken *repository* -- only ever consulted for one
+///     extra field -- must never stop the archive's own, already-computed report from printing,
+///     or flip `run_verify`'s exit code away from the archive's own `is_internally_consistent()`.
+///
+/// Telling the two reasons apart uses the presence of `.prikk` on disk, a filesystem fact, never
+/// error-message matching -- the same distinction `RepositoryLayout::new` itself draws
+/// (`crates/prikk-store/src/foundation/layout.rs`) between `ErrorKind::NotFound` on
+/// `.prikk`'s own `symlink_metadata` (no repository here) and every other outcome (a repository
+/// is here, in whatever state). Mirrored exactly here, via `symlink_metadata` rather than the
+/// coarser `Path::exists` (which follows symlinks differently), so this function classifies a
+/// `.prikk` symlink exactly as `open_repository` itself would.
 fn classify_maintainer_key_statuses(
     root: PathBuf,
     maintainer_keys: &[prikk_store::CarriedMaintainerKeySummary],
-) -> std::result::Result<Vec<&'static str>, CliError> {
-    match crate::open_repository(root) {
-        Err(_) => Ok(maintainer_keys
+) -> Vec<&'static str> {
+    fn not_checked(
+        maintainer_keys: &[prikk_store::CarriedMaintainerKeySummary],
+    ) -> Vec<&'static str> {
+        maintainer_keys
             .iter()
             .map(|_| "carried, not checked against a repository")
-            .collect()),
-        Ok(layout) => {
-            let policy = prikk_store::load_maintainer_trust_policy_or_empty(&layout)
-                .map_err(|err| err.to_string())?;
-            Ok(maintainer_keys
-                .iter()
-                .map(|key| {
-                    prikk_store::classify_carried_key_against_repository(
-                        &policy,
-                        &key.key_id,
-                        &key.public_key_hex,
-                    )
-                    .as_str()
-                })
-                .collect())
-        }
+            .collect()
     }
+
+    let no_repository_here = matches!(
+        std::fs::symlink_metadata(root.join(".prikk")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound
+    );
+    if no_repository_here {
+        return not_checked(maintainer_keys);
+    }
+
+    let layout = match crate::open_repository(root) {
+        Ok(layout) => layout,
+        Err(err) => {
+            eprintln!(
+                "a repository is here, but it could not be read ({err}); carried keys were not \
+                 checked against it"
+            );
+            return not_checked(maintainer_keys);
+        }
+    };
+    let policy = match prikk_store::load_maintainer_trust_policy_or_empty(&layout) {
+        Ok(policy) => policy,
+        Err(err) => {
+            eprintln!(
+                "a repository is here, but it could not be read ({err}); carried keys were not \
+                 checked against it"
+            );
+            return not_checked(maintainer_keys);
+        }
+    };
+    maintainer_keys
+        .iter()
+        .map(|key| {
+            prikk_store::classify_carried_key_against_repository(
+                &policy,
+                &key.key_id,
+                &key.public_key_hex,
+            )
+            .as_str()
+        })
+        .collect()
 }
 
 fn print_verify_report(report: &prikk_store::ArchiveVerifyReport, key_statuses: &[&'static str]) {

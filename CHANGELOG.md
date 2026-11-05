@@ -372,17 +372,22 @@
   publication-trust check to skip in the first place — for `Patch`/`Blob` this is purely a presence
   record, never a trust-check side effect.
 - **`archive verify` now reports each carried maintainer key's real status in the receiving
-  repository (0.56.0 step 3i, #6), instead of printing the same hardcoded claim for every key.**
-  Before this, both the text form and `--format json`'s `"status"` field always printed `"carried,
-  not adopted"`, even for a key the repository running `verify` had in fact already adopted. The
-  status is now one of four fixed strings, computed against the repository `archive verify` runs
-  from: `"adopted"` (the same key id and the same public key are already adopted here);
-  `"carried, not adopted"` (this key id is not adopted here at all); `"carried, conflicts with an
-  adopted key"` (this key id is adopted here, but under a *different* public key); or `"carried,
-  not checked against a repository"`, when `archive verify` is run outside any repository at all,
-  with nothing to check against. The archive's own internal-consistency check (its exit code) is
-  unaffected either way — this status is purely informational, exactly like the existing
-  carried-key listing it refines.
+  repository (0.56.0 step 3i, #6; corrected by step 3i-b), instead of printing the same hardcoded
+  claim for every key.** Before this, both the text form and `--format json`'s `"status"` field
+  always printed `"carried, not adopted"`, even for a key the repository running `verify` had in
+  fact already adopted. The status is now one of four fixed strings, computed against the
+  repository `archive verify` runs from: `"adopted"` (the same key id and the same public key are
+  already adopted here); `"carried, not adopted"` (this key id is not adopted here at all);
+  `"carried, conflicts with an adopted key"` (this key id is adopted here, but under a *different*
+  public key); or `"carried, not checked against a repository"`, for either of two cases: no
+  `.prikk` at all here (silent, with nothing to check against), or a `.prikk` that is present but
+  could not be read — a corrupted `FORMAT` marker, or a corrupted trust-policy container — which
+  now also prints exactly one line to stderr naming that a repository is here but unreadable,
+  rather than either staying silent about it (3i's own behavior for the first of those) or, worse,
+  failing the whole command and losing the archive's own, already-computed report before it could
+  print at all (3i's own behavior for the second). The archive's own internal-consistency check
+  (its exit code) is unaffected either way — this status is purely informational, exactly like the
+  existing carried-key listing it refines, and a broken receiving repository never flips it.
 
 ### Added
 
