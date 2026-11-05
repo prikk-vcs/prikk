@@ -22,6 +22,16 @@
 # one and remove the wrong binary. 0.56.0 step U: found by an external consumer running
 # `uninstall.sh --prefix <dir>` with no env var set and getting the default-location binary removed
 # instead of the named one, because this script never read its own arguments at all until now.
+#
+# 0.56.0 step U2: a missing or empty --prefix value is refused here, by name, before --prefix is
+# even recorded. Measured on the step-U template: `--prefix ""` set install_dir to the empty
+# string, which made binary_path below resolve to "/prikk" -- a path nobody named -- and the script
+# proceeded and printed "done" as if it had succeeded. A missing value (--prefix as the script's
+# last argument) already aborted via `set -u`'s own "unbound variable" error when $2 did not exist,
+# but with that raw shell message instead of this script's own. Checking `[ "$#" -lt 2 ]` first
+# catches the missing-value case before $2 is ever referenced, so `set -u` never fires for it; `-z
+# "$2"` catches the empty-value case. Both now refuse with this script's own message, exit 1,
+# before anything is removed.
 
 set -eu
 
@@ -31,6 +41,10 @@ prefix_given=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --prefix)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "prikk-uninstall: --prefix needs a directory" >&2
+        exit 1
+      fi
       install_dir="$2"
       prefix_given=1
       shift 2

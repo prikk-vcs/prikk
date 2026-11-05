@@ -397,9 +397,12 @@
   expecting it to remove that custom-location binary, instead had the unrelated binary at
   `~/.local/bin/prikk` removed, with no error, because `uninstall.sh` never read its own arguments
   at all — only `$PRIKK_INSTALL_DIR`. `uninstall.sh` now accepts `--prefix`, mirroring `install.sh`'s
-  own argument parsing; refuses any argument it does not recognize; and refuses when `--prefix` and
+  own argument parsing; refuses any argument it does not recognize; refuses when `--prefix` and
   `$PRIKK_INSTALL_DIR` are both given and disagree, naming both values, rather than silently
-  preferring one. `uninstall.ps1` has no `--prefix` of its own to disagree with (like `install.ps1`,
+  preferring one; and refuses a missing or empty `--prefix` value before removing anything, rather
+  than acting on an unnamed path (`--prefix ""` set the target to `/prikk` and still printed "done";
+  a missing value aborted via a raw shell error instead of this script's own message).
+  `uninstall.ps1` has no `--prefix` of its own to disagree with (like `install.ps1`,
   it is env-var-only by design — the one-line `irm | iex` form cannot forward CLI arguments), so it
   now instead refuses any argument at all, the same defensive posture, rather than silently
   swallowing or mis-binding one.

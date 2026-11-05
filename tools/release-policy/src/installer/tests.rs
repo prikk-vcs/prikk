@@ -218,6 +218,61 @@ mod uninstall_sh_execution {
         );
     }
 
+    /// `--prefix` as the script's own last argument, with nothing after it to be its value. Before
+    /// 0.56.0 step U2 this aborted only via `set -u`'s raw "unbound variable" error when `$2` did
+    /// not exist; it must now refuse with this script's own message instead, before anything is
+    /// removed.
+    #[test]
+    fn prefix_with_missing_value_refuses_and_removes_nothing() {
+        let (_dist, script) = generated_uninstall_sh();
+        let home = tempfile::tempdir().unwrap();
+        let decoy_dir = home.path().join(".local/bin");
+        write_fake_binary(&decoy_dir);
+
+        let output = run_uninstall(&script, &["--prefix"], home.path(), None);
+
+        assert!(
+            !output.status.success(),
+            "a missing --prefix value must exit non-zero"
+        );
+        assert!(
+            decoy_dir.join("prikk").exists(),
+            "nothing should be removed when the script refuses"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--prefix needs a directory"),
+            "stderr should name the reason, not a raw shell error: {stderr}"
+        );
+    }
+
+    /// `--prefix ""` -- the actual 0.56.0 step U2 defect. Before the fix this set `install_dir` to
+    /// the empty string, which made the script act on "/prikk" (a path nobody named) and still
+    /// print "done". It must now refuse the same way the missing-value case does.
+    #[test]
+    fn prefix_with_empty_value_refuses_and_removes_nothing() {
+        let (_dist, script) = generated_uninstall_sh();
+        let home = tempfile::tempdir().unwrap();
+        let decoy_dir = home.path().join(".local/bin");
+        write_fake_binary(&decoy_dir);
+
+        let output = run_uninstall(&script, &["--prefix", ""], home.path(), None);
+
+        assert!(
+            !output.status.success(),
+            "an empty --prefix value must exit non-zero"
+        );
+        assert!(
+            decoy_dir.join("prikk").exists(),
+            "nothing should be removed when the script refuses"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("--prefix needs a directory"),
+            "stderr: {stderr}"
+        );
+    }
+
     /// `--prefix` and `$PRIKK_INSTALL_DIR` naming two different directories is refused outright,
     /// before anything is removed from either location.
     #[test]
