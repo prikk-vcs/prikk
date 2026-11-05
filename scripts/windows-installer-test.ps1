@@ -1081,47 +1081,56 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# Control 7 (0.56.0 step U2): the uninstall.ps1 guard added in step U -- `if ($args.Count -gt 0) {
+# Control 7 (0.56.0 step U2/U3): the uninstall.ps1 guard added in step U -- `if ($args.Count -gt 0) {
 # throw ... }`, sitting outside the `& { ... }` wrapper (see uninstall.ps1.txt's own comment for
-# why it has to sit there) -- was reasoned about but never run for real, because no pwsh/
-# powershell runtime existed in the sandbox that wrote it. This is the first real measurement.
+# why it has to sit there).
 #
-# (a) is the straightforward case: `-File uninstall.ps1 -Prefix C:\x` must refuse and remove
-# nothing, the same shape as `install.ps1`'s own argument handling and as `uninstall.sh`'s own
-# `unrecognized_argument_refuses_and_removes_nothing` test.
+# 7a is a real control: `-File uninstall.ps1 -Prefix C:\x` (an argument it does not accept) must
+# refuse and remove nothing, the same shape as `install.ps1`'s own argument handling and as
+# `uninstall.sh`'s own `unrecognized_argument_refuses_and_removes_nothing` test. Both the report
+# and the architect expect this to pass, so it stays an assertion (review
+# `0.56.0-step-u2-review-v1.md`'s own U3 instruction: "Keep 7a as an assertion").
 #
-# (b) is the one the review itself flagged as uncertain, not merely a second easy case: `iex` runs
-# pasted text in the *current* scope -- Invoke-Expression's own documented behavior is that it does
-# not create a new scope for what it runs, so a bare `$args` reference inside the pasted text
-# resolves via ordinary PowerShell variable lookup, which finds whatever `$args` already exists in
-# that scope. A script invoked with no param() block binds its own `$args` to any positional
-# arguments it was given (about_Automatic_Variables), in its own top-level scope -- and that is
-# exactly the scope `iex` runs the pasted uninstall.ps1 text in, here. So this control deliberately
-# invokes a child script WITH its own extra positional arguments (simulating a real caller that
-# has stray arguments of its own for a wholly unrelated reason -- a wrapper script, a profile
-# function, anything that happens to pass args around and also runs `iex (irm ...)`), then has that
-# child script `iex` uninstall.ps1's own text with no wrapping try/catch or scriptblock around the
-# `iex` call -- the review's own specified shape. The uninstall must still succeed: the arguments
-# belong to the child script's own invocation, never to anything the user asked uninstall.ps1 to
-# parse.
+# 7b used to be a second assertion: that the guard does NOT misfire when a caller invokes the
+# one-line `irm | iex` form from a context that happens to have its own, unrelated positional
+# arguments (a wrapper script, a profile function, ...). Invoke-Expression's own documented
+# behavior is that it does not create a new scope for what it runs, so a bare `$args` reference
+# inside the pasted text resolves via ordinary PowerShell variable lookup against whatever `$args`
+# already exists in the ambient scope -- plausibly the CALLER's own `$args`, not "no arguments",
+# which would make the guard throw exactly when it must not. That prediction was never run against
+# a real pwsh/powershell, which is why step U2's own `ab38a1da` was accepted as work but
+# deliberately not pushed: pushing an assertion both the dev team and the architect already expect
+# to fail would turn `main`'s own CI red on purpose (the review's "U3. Measure first, so `main`
+# stays green; then choose the guard from evidence").
 #
-# Reasoned about, not measured, before this CI run (no pwsh/powershell in the sandbox that wrote
-# this): by the "no new scope" mechanics above, the child script's own `$args` (bound by the extra
-# positional arguments passed to it below) is plausibly what the pasted text's `$args.Count -gt 0`
-# check reads too, which would make the guard incorrectly throw here -- the opposite of what this
-# control asserts. The review's own suggested fallback, gating the guard on `$PSCommandPath` also
-# being non-empty (true only for a direct `-File` invocation, not for text evaluated via `iex` at
-# a bare interactive prompt), was considered and not applied here: by the same "no new scope"
-# reasoning, `$PSCommandPath` inside `iex`'d text should resolve to whatever script is already
-# running in that ambient scope -- which, in this exact construction, is the child script itself
-# (a real .ps1 file on disk, non-empty `$PSCommandPath`) -- so that condition would not obviously
-# distinguish this control's own shape from a direct `-File uninstall.ps1` invocation either, and
-# adding it on a guess that does not clearly address this scenario seemed worse than leaving the
-# already-committed guard in place and reading what this run actually shows. This paragraph is a
-# prediction, not a measurement -- read the real PASS/FAIL lines below (and the raw assertion
-# messages) for the actual answer, on both engines this script runs under.
+# This round (0.56.0 step U3) turns 7b from an assertion into a pure measurement that cannot fail
+# this job, so steps U2 (items 1+2) and U3 can all go out together, green, on the architect's next
+# push. It records, from three contexts, the facts the review itself asked for: `$args.Count`,
+# `$PSCommandPath`, `$MyInvocation.MyCommand.CommandType`/`.Name`/`.Path`,
+# `$MyInvocation.InvocationName`, whether a leading `param()` block in `iex`'d text is accepted or
+# errors, and whether the running script file's own text (`$MyInvocation.MyCommand.ScriptBlock`)
+# contains a marker string unique to uninstall.ps1.txt's real template text ("this script accepts
+# no arguments", from its own throw line -- confirmed present, not assumed, and untouched by
+# `generate-installer`'s only substitution, `REPO_SLUG`, per `tools/release-policy/src/
+# installer.rs`) -- true only when uninstall.ps1 itself is the file actually running, false when
+# its text is `iex`'d from another script. The three contexts:
+#   - Context 1: uninstall.ps1 itself, run directly via `-File` with an extra argument.
+#   - Context 2: its text `iex`'d from a child script that was ITSELF invoked with its own extra
+#     positional arguments (the shape step U2's own Control 7b already used).
+#   - Context 3: its text `iex`'d from a child script invoked with none -- the comparison case.
+# Every fact is printed with a context-tagged `PRIKK_U3_CONTEXT<n>_<FACT>=...` prefix (the same
+# `PRIKK_...=` convention Control 4's `PRIKK_SENTINEL=`/`PRIKK_BEFORE=` lines already use), so the
+# architect can grep the CI log directly rather than parse prose. Choosing the final guard design
+# from what these three contexts actually print on CI's real Windows runner is explicitly not this
+# round's job (the review's own "Step 2, after I've read CI").
+#
+# The diagnostics are inserted into a THROWAWAY, in-memory copy of uninstall.ps1's own text (never
+# into the committed `tools/release-policy/templates/uninstall.ps1.txt`), immediately before its
+# `if ($args.Count -gt 0) { throw ... }` line -- so they print regardless of whether that guard
+# ends up throwing in a given context, and the real guard logic this measurement exercises is
+# exactly today's shipped logic, unperturbed.
 # ---------------------------------------------------------------------------
-Write-Section "Control 7: the uninstall.ps1 argument guard, measured for real (reasoned, not assumed)"
+Write-Section "Control 7: the uninstall.ps1 argument guard -- 7a is a real control; 7b is now a measurement (U3)"
 
 # --- (a): an unexpected -File argument must refuse and remove nothing -------------------------
 $installDir7a = Join-Path $scratchRoot "control7a"
@@ -1147,40 +1156,208 @@ try {
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
 }
 
-# --- (b): a caller with its own unbound arguments must still be able to iex the one-line form ---
-$installDir7b = Join-Path $scratchRoot "control7b"
-New-Item -ItemType Directory -Force -Path $installDir7b | Out-Null
-$fakeBinary7b = Join-Path $installDir7b "prikk.exe"
-Set-Content -Path $fakeBinary7b -Value "fake prikk binary for Control 7b"
-$env:PRIKK_INSTALL_DIR = $installDir7b
+# --- U3 measurement setup: an in-memory, throwaway copy of uninstall.ps1's own text, with --------
+# diagnostic Write-Output lines inserted immediately before its real `if ($args.Count -gt 0) {`
+# line, so every context below prints the same facts from the same unperturbed guard logic before
+# that logic has a chance to throw. The committed uninstall.ps1.txt template is never touched;
+# this copy exists only under $scratchRoot for the life of this one CI run.
+$u3GuardMarker = 'if ($args.Count -gt 0) {'
+if (-not $uninstallScriptContent.Contains($u3GuardMarker)) {
+  throw "U3's instrumentation point ('if (`$args.Count -gt 0) {') was not found in uninstall.ps1 -- the template changed shape; update this script"
+}
+$u3DiagnosticBlock = @'
+Write-Output "PRIKK_U3_ARGSCOUNT=$($args.Count)"
+Write-Output "PRIKK_U3_PSCOMMANDPATH=$PSCommandPath"
+Write-Output "PRIKK_U3_INVOCATION_COMMANDTYPE=$($MyInvocation.MyCommand.CommandType)"
+Write-Output "PRIKK_U3_INVOCATION_COMMANDNAME=$($MyInvocation.MyCommand.Name)"
+Write-Output "PRIKK_U3_INVOCATION_COMMANDPATH=$($MyInvocation.MyCommand.Path)"
+Write-Output "PRIKK_U3_INVOCATIONNAME=$($MyInvocation.InvocationName)"
 try {
-  # The Control-4 child-process idiom: a genuinely separate PowerShell process (not a nested
-  # scriptblock in this test script's own process), built from a here-string with its own
-  # placeholder replaced, so the pasted uninstall.ps1 text is evaluated via Invoke-Expression with
-  # no wrapping try/catch or scriptblock around the iex call -- the review's own specified shape.
-  $child7bTemplate = @'
+  if ($null -eq $MyInvocation.MyCommand.ScriptBlock) {
+    Write-Output "PRIKK_U3_SCRIPTBLOCK_CONTAINS_MARKER=scriptblock-null"
+  } else {
+    $prikkU3ScriptBlockText = $MyInvocation.MyCommand.ScriptBlock.ToString()
+    Write-Output "PRIKK_U3_SCRIPTBLOCK_CONTAINS_MARKER=$($prikkU3ScriptBlockText.Contains('this script accepts no arguments'))"
+  }
+} catch {
+  Write-Output "PRIKK_U3_SCRIPTBLOCK_CONTAINS_MARKER_ERROR=$($_.Exception.Message)"
+}
+'@
+$instrumentedUninstallContent = $uninstallScriptContent.Replace($u3GuardMarker, "$u3DiagnosticBlock`n$u3GuardMarker")
+$instrumentedUninstallPath = Join-Path $scratchRoot "uninstall-instrumented-u3.ps1"
+Set-Content -Path $instrumentedUninstallPath -Value $instrumentedUninstallContent
+
+# The PRIKK_U3_<FactName>=... lines the diagnostic block above (and the param-probe snippet below)
+# print from inside whichever context ran -- read back here and re-printed with a
+# PRIKK_U3_CONTEXT<n>_ prefix so the architect can grep the CI log for one context's facts
+# directly, instead of parsing prose.
+$u3FactNames = @(
+  'ARGSCOUNT',
+  'PSCOMMANDPATH',
+  'INVOCATION_COMMANDTYPE',
+  'INVOCATION_COMMANDNAME',
+  'INVOCATION_COMMANDPATH',
+  'INVOCATIONNAME',
+  'SCRIPTBLOCK_CONTAINS_MARKER',
+  'SCRIPTBLOCK_CONTAINS_MARKER_ERROR'
+)
+$u3ParamProbeFactNames = @('PARAMPROBE_OK', 'PARAMPROBE_ERROR', 'PARAMPROBE_INSIDE')
+$u3AllFactNames = $u3FactNames + $u3ParamProbeFactNames
+
+function Get-U3Fact([object[]]$OutputLines, [string]$FactName) {
+  $prefix = "PRIKK_U3_$FactName="
+  foreach ($rawLine in $OutputLines) {
+    $lineText = "$rawLine"
+    if ($lineText.StartsWith($prefix)) {
+      return $lineText.Substring($prefix.Length)
+    }
+  }
+  return $null
+}
+
+function Write-U3Fact([string]$ContextLabel, [object[]]$OutputLines, [string]$FactName) {
+  $value = Get-U3Fact -OutputLines $OutputLines -FactName $FactName
+  if ($null -eq $value) {
+    Write-Output "PRIKK_U3_${ContextLabel}_${FactName}=not-printed"
+  } else {
+    Write-Output "PRIKK_U3_${ContextLabel}_${FactName}=$value"
+  }
+}
+
+# The leading-param()-in-iex'd-text probe: its own try/catch traps a parse OR runtime error from
+# the `param()` line and never lets it propagate, printing the caught message instead -- "must not
+# assert anything that could fail the job" applies here most of all, since this is the one
+# experiment in this round that is expected to plausibly throw. Reused verbatim in Context 1 (as
+# its own tiny standalone file, run directly) and prefixed onto Context 2/3's shared child script
+# below, so all three contexts produce the identical PRIKK_U3_PARAMPROBE_* line shapes.
+$u3ParamProbeSnippet = @'
+try {
+  Invoke-Expression "param()`nWrite-Output 'PRIKK_U3_PARAMPROBE_INSIDE=reached'"
+  Write-Output "PRIKK_U3_PARAMPROBE_OK=true"
+} catch {
+  Write-Output "PRIKK_U3_PARAMPROBE_ERROR=$($_.Exception.Message)"
+}
+'@
+
+# The Control-4 child-process idiom, reused for both Context 2 and Context 3: a genuinely separate
+# PowerShell process, built from a here-string with its own placeholder replaced. The param-probe
+# above runs and is fully resolved FIRST, because the real, unperturbed-guard iex below it is
+# deliberately left unwrapped -- the review's own specified shape for Control 7b's original
+# invocation -- so if the real guard throws there, nothing after it in this child script runs.
+$u3ChildTemplate = $u3ParamProbeSnippet + "`n" + @'
 Invoke-Expression (Get-Content -Path '__UNINSTALL_SCRIPT_PATH__' -Raw)
 Write-Output "PRIKK_SENTINEL=reached-after-iex"
 '@
-  $child7bContent = $child7bTemplate.Replace('__UNINSTALL_SCRIPT_PATH__', $uninstallScriptPath)
-  $child7bPath = Join-Path $childScriptsDir "child-7b.ps1"
-  Set-Content -Path $child7bPath -Value $child7bContent
+$u3ChildContent = $u3ChildTemplate.Replace('__UNINSTALL_SCRIPT_PATH__', $instrumentedUninstallPath)
 
-  # extra1/extra2 are positional arguments to the CHILD script's own invocation -- they populate
-  # the child script's own $args, simulating a caller (a wrapper script, a profile function) that
-  # has stray arguments of its own, unrelated to anything the user means for uninstall.ps1 to see.
-  $previousEap7b = $ErrorActionPreference
+Write-Section "Control 7b: MEASUREMENT (U3), not a control -- recording facts, asserting nothing"
+
+# --- Context 1: uninstall.ps1 itself, run directly via -File with an extra argument -------------
+$installDirU3Ctx1 = Join-Path $scratchRoot "control7b-u3-context1"
+New-Item -ItemType Directory -Force -Path $installDirU3Ctx1 | Out-Null
+$fakeBinaryU3Ctx1 = Join-Path $installDirU3Ctx1 "prikk.exe"
+Set-Content -Path $fakeBinaryU3Ctx1 -Value "fake prikk binary for U3 context 1"
+$env:PRIKK_INSTALL_DIR = $installDirU3Ctx1
+try {
+  $previousEapU3Ctx1 = $ErrorActionPreference
   $ErrorActionPreference = 'Continue'
   try {
-    $output7b = & $enginePath -NoProfile -File $child7bPath extra1 extra2 2>&1
+    $outputU3Ctx1Main = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $instrumentedUninstallPath extra1 extra2 2>&1
   } finally {
-    $ErrorActionPreference = $previousEap7b
+    $ErrorActionPreference = $previousEapU3Ctx1
   }
-  $exitCode7b = $LASTEXITCODE
-  Assert-True ($exitCode7b -eq 0) "Control 7b: the child process (invoked with its own extra1/extra2 arguments) exits 0 after iex'ing uninstall.ps1's text"
-  Assert-True (-not (Test-Path -Path $fakeBinary7b)) "Control 7b: the fake binary is removed by the iex'd uninstall -- the guard did not mistake the child script's own arguments for the user's"
-  $sentinel7b = ($output7b | ForEach-Object { "$_" }) -contains "PRIKK_SENTINEL=reached-after-iex"
-  Assert-True $sentinel7b "Control 7b: the sentinel after the iex'd uninstall was reached -- the guard did not throw and kill the child process first"
+  $exitCodeU3Ctx1 = $LASTEXITCODE
+
+  # A separate tiny file for this context's own param-probe half: a leading `param()` is already
+  # well-established as legal at the true top of any -File script, so this is expected to be
+  # accepted -- measured anyway, for the same reason the review asked for all three contexts, not
+  # just the two that were already in doubt: read the real PASS line, don't assume it.
+  $paramProbeFilePathCtx1 = Join-Path $scratchRoot "control7b-u3-context1-paramprobe.ps1"
+  Set-Content -Path $paramProbeFilePathCtx1 -Value $u3ParamProbeSnippet
+  $previousEapU3Ctx1Param = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $outputU3Ctx1Param = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $paramProbeFilePathCtx1 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEapU3Ctx1Param
+  }
+
+  Write-Output "PRIKK_U3_CONTEXT1_EXITCODE=$exitCodeU3Ctx1"
+  Write-Output "PRIKK_U3_CONTEXT1_BINARY_REMOVED=$(-not (Test-Path -Path $fakeBinaryU3Ctx1 -PathType Leaf))"
+  $outputU3Ctx1Combined = @($outputU3Ctx1Main) + @($outputU3Ctx1Param)
+  foreach ($factName in $u3AllFactNames) {
+    Write-U3Fact -ContextLabel "CONTEXT1" -OutputLines $outputU3Ctx1Combined -FactName $factName
+  }
+} finally {
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+}
+
+# --- Context 2: the same text iex'd from a child script that was ITSELF invoked with its own ----
+# extra positional arguments (extra1/extra2) -- a caller (a wrapper script, a profile function)
+# that has stray arguments of its own, unrelated to anything the user means for uninstall.ps1 to
+# see. This is the shape step U2's own Control 7b already used, and the one the review flagged as
+# uncertain, not merely a second easy case.
+$installDirU3Ctx2 = Join-Path $scratchRoot "control7b-u3-context2"
+New-Item -ItemType Directory -Force -Path $installDirU3Ctx2 | Out-Null
+$fakeBinaryU3Ctx2 = Join-Path $installDirU3Ctx2 "prikk.exe"
+Set-Content -Path $fakeBinaryU3Ctx2 -Value "fake prikk binary for U3 context 2"
+$env:PRIKK_INSTALL_DIR = $installDirU3Ctx2
+try {
+  $childU3Ctx2Path = Join-Path $childScriptsDir "child-u3-context2.ps1"
+  Set-Content -Path $childU3Ctx2Path -Value $u3ChildContent
+
+  # extra1/extra2 are positional arguments to the CHILD script's own invocation -- they populate
+  # the child script's own $args, simulating a caller that has stray arguments of its own,
+  # unrelated to anything the user means for uninstall.ps1 to see.
+  $previousEapU3Ctx2 = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $outputU3Ctx2 = & $enginePath -NoProfile -File $childU3Ctx2Path extra1 extra2 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEapU3Ctx2
+  }
+  $exitCodeU3Ctx2 = $LASTEXITCODE
+  $sentinelU3Ctx2 = ($outputU3Ctx2 | ForEach-Object { "$_" }) -contains "PRIKK_SENTINEL=reached-after-iex"
+
+  Write-Output "PRIKK_U3_CONTEXT2_EXITCODE=$exitCodeU3Ctx2"
+  Write-Output "PRIKK_U3_CONTEXT2_SENTINEL_REACHED=$sentinelU3Ctx2"
+  Write-Output "PRIKK_U3_CONTEXT2_BINARY_REMOVED=$(-not (Test-Path -Path $fakeBinaryU3Ctx2))"
+  foreach ($factName in $u3AllFactNames) {
+    Write-U3Fact -ContextLabel "CONTEXT2" -OutputLines $outputU3Ctx2 -FactName $factName
+  }
+} finally {
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+}
+
+# --- Context 3: the same text iex'd from a child script invoked with NO extra arguments of its --
+# own -- the comparison case: if the discriminating facts above differ between Context 2 and this
+# one, that difference is itself the signal step 2 needs; if they read identically, that is just
+# as informative (it would mean $args.Count alone cannot tell these two shapes apart).
+$installDirU3Ctx3 = Join-Path $scratchRoot "control7b-u3-context3"
+New-Item -ItemType Directory -Force -Path $installDirU3Ctx3 | Out-Null
+$fakeBinaryU3Ctx3 = Join-Path $installDirU3Ctx3 "prikk.exe"
+Set-Content -Path $fakeBinaryU3Ctx3 -Value "fake prikk binary for U3 context 3"
+$env:PRIKK_INSTALL_DIR = $installDirU3Ctx3
+try {
+  $childU3Ctx3Path = Join-Path $childScriptsDir "child-u3-context3.ps1"
+  Set-Content -Path $childU3Ctx3Path -Value $u3ChildContent
+
+  $previousEapU3Ctx3 = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $outputU3Ctx3 = & $enginePath -NoProfile -File $childU3Ctx3Path 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEapU3Ctx3
+  }
+  $exitCodeU3Ctx3 = $LASTEXITCODE
+  $sentinelU3Ctx3 = ($outputU3Ctx3 | ForEach-Object { "$_" }) -contains "PRIKK_SENTINEL=reached-after-iex"
+
+  Write-Output "PRIKK_U3_CONTEXT3_EXITCODE=$exitCodeU3Ctx3"
+  Write-Output "PRIKK_U3_CONTEXT3_SENTINEL_REACHED=$sentinelU3Ctx3"
+  Write-Output "PRIKK_U3_CONTEXT3_BINARY_REMOVED=$(-not (Test-Path -Path $fakeBinaryU3Ctx3))"
+  foreach ($factName in $u3AllFactNames) {
+    Write-U3Fact -ContextLabel "CONTEXT3" -OutputLines $outputU3Ctx3 -FactName $factName
+  }
 } finally {
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
 }
