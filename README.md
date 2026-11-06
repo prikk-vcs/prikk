@@ -135,6 +135,20 @@ reference](./docs/src/reference/commands.md).
 What works today, and the limits worth knowing before relying on it, are in the [current state
 reference](./docs/src/reference/current-state.md).
 
+## Related projects
+
+Three separate projects are built around prikk, each described here in the words of its own published
+README: [stikk](https://github.com/prikk-vcs/stikk) is "a history browser and workbench for the prikk
+version control system"; [planeter](https://github.com/prikk-vcs/planeter) is "The forge for the prikk
+version-control system — the web service that hosts prikk repositories and the collaboration around
+them"; [brygge](https://github.com/prikk-vcs/brygge) "carries version-control history from one system
+to another". They are released separately, and prikk's guarantees cover prikk, not them.
+
+What prikk itself does, as measured: it has no network code, so `sync`, `bundle` and `archive` write
+files that you carry to the other repository yourself; and a branch that already exists in a repository
+advances only by a signature made in that repository. The
+[current state reference](./docs/src/reference/current-state.md#related-projects) has the detail.
+
 ## Crates
 
 `prikk` is the command-line tool. The others are the libraries it is built from, published so the

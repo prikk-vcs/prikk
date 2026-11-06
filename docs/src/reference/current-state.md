@@ -53,6 +53,26 @@ Prikk is not yet the right tool if you need:
   `ROADMAP.md` lists a proposed theme for 0.58.0, "who may author, who may seal, and what a consumer
   may rely on", that takes this up.
 
+Other projects are built around prikk; see [Related projects](#related-projects).
+
+## Related projects
+
+These are separate projects, released separately; prikk's guarantees cover prikk, not them. Each is
+described in the words of its own published README.
+
+- [stikk](https://github.com/prikk-vcs/stikk): "a history browser and workbench for the prikk version
+  control system".
+- [planeter](https://github.com/prikk-vcs/planeter): "The forge for the prikk version-control system —
+  the web service that hosts prikk repositories and the collaboration around them".
+- [brygge](https://github.com/prikk-vcs/brygge): "carries version-control history from one system to
+  another".
+
+What prikk itself does, as measured: it has no network code, so `sync`, `bundle` and `archive` write
+files that you carry to the other repository yourself; and a branch that already exists in a repository
+advances only by a signature made in that repository. `bundle import` and `sync accept` bring in
+received pointers and claims and move no local ref; `archive import --adopt` can only create a branch
+that is absent here, signed by a key this repository has already adopted.
+
 ## Known limitations, measured
 
 Disclosed here rather than left implicit, each with the figure it was measured at and the release it is
