@@ -406,8 +406,29 @@
   it is env-var-only by design — the one-line `irm | iex` form cannot forward CLI arguments), so it
   now instead refuses any argument at all, the same defensive posture, rather than silently
   swallowing or mis-binding one.
+- **`trust maintainer add` told a falsehood for a removed key id (0.56.0 step T).** After `trust
+  maintainer remove --key-id x`, `trust maintainer list` no longer shows `x`, but adding `x` with a
+  *different* public key refused with "maintainer key id x is already adopted with a different
+  public key" — false, because `x` is not adopted. The refusal itself was right and is unchanged: a
+  key id stays bound to the first key it was adopted with, also after removal, because the id travels
+  in every signature and a changed key under a familiar id is what trust on first use exists to
+  catch. The message now says so for a removed id (not currently adopted, but bound to its first
+  key; re-adding it with that original key still works) and names the same way forward the
+  adopted-id message already names: the other maintainer signs under a distinct key id, and you
+  adopt it under that id. The adopted-id message is unchanged. Exit code `1` and the `error:
+  precondition not met:` prefix are unchanged for both.
 
 ### Added
+
+- **`trust maintainer add --format json` (0.56.0 step T).** Prints `trust-add-v1` (`key_id`,
+  `public_key`, `newly_added`, `adopted_count` — what the text form prints) and nothing else. For a
+  key id already bound to a different public key it also prints a `refusal-v1` document with
+  `"command": "trust-maintainer-add"` and one of two ids, so a script can tell the causes apart:
+  `maintainer-key-id-adopted-with-different-key` (the id is adopted) and
+  `maintainer-key-id-bound-to-removed-key` (the id was removed; only its first key is on record).
+  Before this the command refused the flag outright as an unknown argument. Any other failure
+  (a malformed key id or key, a case-insensitive collision, a held lock) prints no document under the
+  flag. Without the flag nothing changes.
 
 - **`bundle preview --format json` and `bundle import`'s own text output now report a finer,
   six-value `"class"`** (`no-local-history`, `already-at-tip`, `rollback`, `fast-forward`,

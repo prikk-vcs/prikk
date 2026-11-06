@@ -134,10 +134,13 @@ prikk trust maintainer remove --key-id ID
 ```
 
 `ID` must be the key id the MAINTAINER signer signs under, which `prikk key status --role maintainer`
-reports. If `ID` is already adopted with a different public key, `add` is refused. Adopting under
-another local id would not help, because the id travels in every signature: the other maintainer must
-sign under a distinct id. `HEX` must be the lowercase
-64-hex-character Ed25519 public key that matches the MAINTAINER seed file.
+reports. If `ID` is already adopted with a different public key, `add` is refused; so is a `ID` that
+was *removed* with `remove` and is offered a different public key (the refusal says the id is not
+currently adopted but stays bound to its first key). Adopting under another local id would not help,
+because the id travels in every signature: the other maintainer must sign under a distinct id. `HEX`
+must be the lowercase 64-hex-character Ed25519 public key that matches the MAINTAINER seed file.
+`add --format json` prints a `trust-add-v1` document, or a `refusal-v1` document for these two
+refusals ([Command Surface](../reference/commands.md)).
 
 `add` writes the trusted public key and adds it to the repository's adopted-key set, with `required = 1`
 continuing to mean any one adopted key's signature suffices. Adopting a key id already in the set with

@@ -16,7 +16,7 @@ prikk key generate [--out <path>]
 prikk key public [--seed-file <path>] [--role author|maintainer]
 prikk key status [path] [--role author|maintainer] [--format json]
 prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]
-prikk trust maintainer add --key-id ID --public-key HEX
+prikk trust maintainer add --key-id ID --public-key HEX [--format json]
 prikk trust maintainer remove --key-id ID
 prikk trust maintainer list [--format json]
 prikk trust maintainer check --key-id ID [--format json]
@@ -792,7 +792,30 @@ never part of the refusal's own text itself; the JSON document never paraphrases
 (`schema_version`, `command`, `refusal`, `reason`, `message`) was designed as a precedent other
 commands adopt when next touched, not a one-off specific to `extract`. `bundle import` is its
 second adopter (see above), for exactly three of its own refusals; `extract`'s own twenty ids
-above are unaffected.
+above are unaffected. `trust maintainer add` is a later adopter (next paragraph).
+
+**Trusting a key: `trust maintainer add`, and a key id that is already bound.** `trust maintainer add
+--key-id ID --public-key HEX` adopts one MAINTAINER key. A key id stays bound to the first public key it
+was adopted with — **also after `trust maintainer remove`**, because the id travels in every signature and
+a changed key under a familiar id is what trust on first use exists to catch — so offering a *different*
+key for such an id refuses (exit `1`, `error: precondition not met: …`, nothing written). The message
+says which state the id is in: *already adopted* (it is in `trust maintainer list`), or *not currently
+adopted, but bound to the key it was first adopted with* (it was removed). Re-adding a removed id with its
+**original** key works. Either way the way forward for a different key is a distinct id: its maintainer
+signs under one (`prikk key generate --out <path>`, or `PRIKK_MAINTAINER_KEY_ID`) and you adopt it with
+`trust maintainer add --key-id <that id> --public-key <its public key>`.
+
+`--format json` prints one document and nothing else. On success it is `trust-add-v1`:
+`{"schema_version": "trust-add-v1", "key_id": "…", "public_key": "<lowercase hex>", "newly_added": true,
+"adopted_count": N}`. `newly_added` is `false` only for the idempotent re-add of an id that is already
+adopted with the same key; re-adding a *removed* id with its original key is `true`, because the adopted
+set gained the id (the key's own record was already kept and is not rewritten). `adopted_count` is the
+`adopted maintainer keys: N` line of the text form. On exactly the refusal above it prints a `refusal-v1`
+document to stdout, with `"command": "trust-maintainer-add"`, `"reason": null`, and `refusal` one of two
+stable ids: `maintainer-key-id-adopted-with-different-key` (the id is adopted now) or
+`maintainer-key-id-bound-to-removed-key` (the id was removed and only its first key remains on record).
+Every other failure — a malformed id or key, a case-insensitive collision with another adopted id, a held
+lock, a torn container tail — prints no document under the flag: stderr and exit `1` only, as without it.
 
 **Removing a received pointer: `received remove`.** `received remove <remotes/…> [--plan-only]`
 removes one received ref's own pointer from the received-index container — the same container
