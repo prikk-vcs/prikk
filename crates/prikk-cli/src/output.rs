@@ -34,7 +34,8 @@ pub(crate) use status::{QueueTarget, QueueThresholdStatus, print_status_json};
 pub(crate) use sync::print_sync_pending_json;
 pub(crate) use tag::{TagListEntry, print_tag_list_json};
 pub(crate) use trust::{
-    print_trust_check, print_trust_check_json, print_trust_list, print_trust_list_json,
+    print_trust_add_json, print_trust_add_refusal_json, print_trust_check, print_trust_check_json,
+    print_trust_list, print_trust_list_json,
 };
 pub(crate) use verification::{
     print_active_session_repairs, print_doctor_report, print_repair_tails_report,

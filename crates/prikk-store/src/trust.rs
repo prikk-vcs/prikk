@@ -81,8 +81,12 @@ impl MaintainerTrustPolicy {
 /// **TOFU history persists across removal**: the key-material container is never pruned, so
 /// re-adopting a key id that was previously removed from the active policy with a *different* public
 /// key is still refused — the identity was seen once, and a changed key under a familiar id is exactly
-/// what TOFU exists to catch, active policy membership or not. Returns the adopted key and whether
-/// this call actually wrote anything.
+/// what TOFU exists to catch, active policy membership or not. Both refusals are
+/// [`PrikkError::MaintainerKeyIdBound`], told apart by `currently_adopted`, so the text (and the CLI's
+/// `refusal-v1` id) says whether the id is adopted now or only remembered. Returns the adopted key and
+/// whether this call wrote to the *policy*: re-adopting a removed id with its original key returns
+/// `true` (the policy gained the id) although the key material was already on record and is not
+/// rewritten.
 pub fn add_trusted_maintainer(
     layout: &RepositoryLayout,
     key_id: &str,
@@ -127,25 +131,28 @@ pub fn add_trusted_maintainer(
     // recorded but not adopted -- one file changed, the other refused, and the refusal's own text said
     // nothing was written. Deciding both up front closes that: a conflicting key still refuses
     // unconditionally, appending nothing.
+    // Whether the id is in the *active* policy now. `existing_entry` below comes from the key-material
+    // container, which keeps a removed id's first key as TOFU history, so a conflict can be found for
+    // an id that is no longer adopted -- and the refusal must say which of the two it is.
+    let currently_adopted = key_ids.iter().any(|existing| existing == key_id);
     let key_will_append = match existing_entry {
         Some(existing) if existing.public_key == public_key => false,
         // RFC 147 §2d: a trust-on-first-use collision, detected before anything is verified -- no
         // signature was checked here, so `InvalidSignature` named the wrong axis. The arm above is
         // idempotent for the same key, which is why `prikk setup` on an existing repository always
         // lands here: fresh material every run, under the fixed key id `maintainer`.
+        // 0.56.0 step T: a structural variant, and a message that tells the truth for a removed id
+        // (it used to say "already adopted" for one `trust maintainer list` does not show).
         Some(_) => {
-            return Err(PrikkError::Precondition(format!(
-                "maintainer key id {key_id} is already adopted with a different public key. A \
-                 key id travels in every signature, so adopting this key under another local id \
-                 would match none of its blocks: its maintainer must sign under a distinct id -- a \
-                 key made by `prikk key generate --out <path>` has one (point \
-                 PRIKK_MAINTAINER_SEED_FILE at it), or set PRIKK_MAINTAINER_KEY_ID -- and you adopt it under that id with `prikk trust \
-                 maintainer add --key-id <that id> --public-key <its public key>`"
-            )));
+            return Err(PrikkError::MaintainerKeyIdBound {
+                key_id: key_id.to_string(),
+                currently_adopted,
+                message: key_id_bound_message(key_id, currently_adopted),
+            });
         }
         None => true,
     };
-    let policy_will_append = !key_ids.iter().any(|existing| existing == key_id);
+    let policy_will_append = !currently_adopted;
 
     if key_will_append {
         crate::foundation::tail_guard::require_no_unclean_tail(
@@ -184,6 +191,34 @@ pub fn add_trusted_maintainer(
     key_ids.push(key_id.to_string());
     append_trust_policy_snapshot(layout, &key_ids)?;
     Ok((adopted, true))
+}
+
+/// The route both causes of [`PrikkError::MaintainerKeyIdBound`] share: adopting the other key under
+/// another local id would match none of its blocks, because the id travels in every signature.
+const DISTINCT_ID_ROUTE: &str = "A key id travels in every signature, so adopting this key under \
+     another local id would match none of its blocks: its maintainer must sign under a distinct id \
+     -- a key made by `prikk key generate --out <path>` has one (point PRIKK_MAINTAINER_SEED_FILE \
+     at it), or set PRIKK_MAINTAINER_KEY_ID -- and you adopt it under that id with `prikk trust \
+     maintainer add --key-id <that id> --public-key <its public key>`";
+
+/// The text of [`PrikkError::MaintainerKeyIdBound`]. The adopted case is the long-standing sentence;
+/// the removed case says what is true: the id is not adopted now, but `trust maintainer remove`
+/// never forgets which key it first belonged to.
+fn key_id_bound_message(key_id: &str, currently_adopted: bool) -> String {
+    if currently_adopted {
+        format!(
+            "maintainer key id {key_id} is already adopted with a different public key. \
+             {DISTINCT_ID_ROUTE}"
+        )
+    } else {
+        format!(
+            "maintainer key id {key_id} is not currently adopted (it was removed), but it stays \
+             bound to the public key it was first adopted with, and a different public key is \
+             refused: removing an id takes it out of the adopted set, not out of the record of \
+             which key it belongs to. Re-adopting {key_id} with its original public key still \
+             works. {DISTINCT_ID_ROUTE}"
+        )
+    }
 }
 
 /// Revoke a MAINTAINER key id: remove it from the active policy by appending a new snapshot without

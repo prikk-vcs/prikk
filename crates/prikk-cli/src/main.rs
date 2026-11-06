@@ -65,9 +65,10 @@ use output::{
     print_doctor_report, print_help, print_history, print_history_json, print_merge_evidence,
     print_merge_plan, print_patch_inverse_plan, print_repair_tails_report,
     print_rollback_draft_report, print_rollback_draft_verification, print_rollback_preview_plan,
-    print_show, print_show_json, print_status_json, print_trust_check, print_trust_check_json,
-    print_trust_list, print_trust_list_json, print_verify_report, print_verify_report_json,
-    print_worktree_status, print_worktree_status_json,
+    print_show, print_show_json, print_status_json, print_trust_add_json,
+    print_trust_add_refusal_json, print_trust_check, print_trust_check_json, print_trust_list,
+    print_trust_list_json, print_verify_report, print_verify_report_json, print_worktree_status,
+    print_worktree_status_json,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -494,6 +495,7 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
         (Some("maintainer"), Some("add")) => {
             let mut key_id = None;
             let mut public_key = None;
+            let mut format_json = false;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--key-id" => {
@@ -503,6 +505,15 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
                     "--public-key" => {
                         let value = flag_value(&mut args, "--public-key")?;
                         public_key.set_once("--public-key", value)?;
+                    }
+                    "--format" => {
+                        let value = flag_value(&mut args, "trust maintainer add --format")?;
+                        if value != "json" {
+                            return Err(CliError::Usage(format!(
+                                "trust maintainer add --format does not support {value:?}"
+                            )));
+                        }
+                        mark_seen(&mut format_json, "--format")?;
                     }
                     other => return Err(unknown_argument("trust maintainer add", other)),
                 }
@@ -516,19 +527,39 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
             let root = current_dir()?;
             let layout = open_repository(root)?;
             let (adopted, newly_added) = add_trusted_maintainer(&layout, &key_id, &public_key)
-                .map_err(|err| err.to_string())?;
-            if newly_added {
-                println!("trusted maintainer key: {}", adopted.key_id);
-            } else {
-                println!("maintainer key already trusted: {}", adopted.key_id);
-            }
+                .map_err(|err| {
+                    // 0.56.0 step T: a `refusal-v1` document on exactly the one condition this
+                    // command classifies structurally -- a key id already bound to a different
+                    // public key, via `PrikkError::MaintainerKeyIdBound`, never by matching `err`'s
+                    // own message text. Every other failure (a malformed id or key, a case
+                    // collision, a lock, a torn tail) prints no document: stderr and exit code only.
+                    if let (
+                        true,
+                        prikk_error::PrikkError::MaintainerKeyIdBound {
+                            currently_adopted, ..
+                        },
+                    ) = (format_json, &err)
+                    {
+                        print_trust_add_refusal_json(*currently_adopted, &err.to_string());
+                    }
+                    err.to_string()
+                })?;
             // RFC 138 §4.2 carried-defects B: a derived count, not the `policy: required=1`
             // literal that used to print here -- `MaintainerTrustPolicy` holds a `Vec` and nothing
             // else, so this line's job is to say how many, not to restate trust semantics that
             // `prikk trust maintainer list` already states correctly.
             let policy =
                 load_maintainer_trust_policy_or_empty(&layout).map_err(|err| err.to_string())?;
-            println!("adopted maintainer keys: {}", policy.keys.len());
+            if format_json {
+                print_trust_add_json(&adopted, newly_added, policy.keys.len());
+            } else {
+                if newly_added {
+                    println!("trusted maintainer key: {}", adopted.key_id);
+                } else {
+                    println!("maintainer key already trusted: {}", adopted.key_id);
+                }
+                println!("adopted maintainer keys: {}", policy.keys.len());
+            }
             Ok(())
         }
         // RFC 102 Stage 5, design-v1.md §14.9: a supported interface for the revocation capability
@@ -647,7 +678,7 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
             Ok(())
         }
         _ => Err(CliError::Usage(
-            "usage: prikk trust maintainer add --key-id <key-id> --public-key <64-hex>\n       \
+            "usage: prikk trust maintainer add --key-id <key-id> --public-key <64-hex> [--format json]\n       \
              prikk trust maintainer remove --key-id <key-id>\n       \
              prikk trust maintainer list [--format json]\n       \
              prikk trust maintainer check --key-id <key-id> [--format json]"

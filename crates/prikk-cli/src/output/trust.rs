@@ -94,3 +94,53 @@ pub(crate) fn print_trust_check_json(key_id: &str, found: Option<&AdoptedMaintai
     json.push('}');
     println!("{json}");
 }
+
+/// `prikk trust maintainer add --format json`, on success: `trust-add-v1` (0.56.0 step T), named for
+/// the tool (`trust`) and the question (`add`) like `trust-list-v1` and `trust-check-v1`. It carries
+/// what the prose form prints -- which key id, whether this call changed the adopted set
+/// (`newly_added`, `false` for the idempotent re-add), and the `adopted maintainer keys: N` count --
+/// plus the public key, lowercase hex. Nothing else is printed under the flag.
+pub(crate) fn print_trust_add_json(
+    adopted: &AdoptedMaintainerKey,
+    newly_added: bool,
+    adopted_count: usize,
+) {
+    let mut json = String::new();
+    json.push_str("{\n");
+    json.push_str("  \"schema_version\": \"trust-add-v1\",\n");
+    json.push_str(&format!(
+        "  \"key_id\": {},\n",
+        escape_json_string(&adopted.key_id)
+    ));
+    json.push_str(&format!(
+        "  \"public_key\": {},\n",
+        escape_json_string(&prikk_hash::to_hex(&adopted.public_key))
+    ));
+    json.push_str(&format!("  \"newly_added\": {newly_added},\n"));
+    json.push_str(&format!("  \"adopted_count\": {adopted_count}\n"));
+    json.push('}');
+    println!("{json}");
+}
+
+/// `refusal-v1` (the project's reusable refusal document, see `bundle.rs`'s
+/// `print_bundle_import_refusal_json`) for `trust maintainer add`'s one structurally classified
+/// cause, a key id already bound to a different public key. `currently_adopted` picks the id:
+/// `maintainer-key-id-adopted-with-different-key` when the id is in the adopted set, and
+/// `maintainer-key-id-bound-to-removed-key` when it was removed and only its first key is on record.
+/// `reason` is always `null`; `message` is `err.to_string()`, stderr's own text without `error: `.
+pub(crate) fn print_trust_add_refusal_json(currently_adopted: bool, message: &str) {
+    let id = if currently_adopted {
+        "maintainer-key-id-adopted-with-different-key"
+    } else {
+        "maintainer-key-id-bound-to-removed-key"
+    };
+    let mut json = String::new();
+    json.push_str(
+        "{\"schema_version\": \"refusal-v1\", \"command\": \"trust-maintainer-add\", \"refusal\": ",
+    );
+    json.push_str(&escape_json_string(id));
+    json.push_str(", \"reason\": null, \"message\": ");
+    json.push_str(&escape_json_string(message));
+    json.push('}');
+    println!("{json}");
+}

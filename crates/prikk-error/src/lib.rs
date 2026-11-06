@@ -166,6 +166,27 @@ pub enum PrikkError {
         /// The fully rendered message, naming both possible causes.
         message: String,
     },
+    /// 0.56.0 step T: `trust maintainer add` refused because the key id is already bound to a
+    /// different public key (trust on first use). Exists apart from [`Self::Precondition`] for the
+    /// same reason [`Self::BundleNonFastForward`] does: `prikk-cli`'s own `refusal-v1` document
+    /// must classify this refusal structurally, never by matching this error's own message text.
+    /// Its `Display` text keeps the `precondition not met:` prefix, so stderr and exit code `1`
+    /// are what [`Self::Precondition`] gave before.
+    ///
+    /// **One variant for two causes, told apart by `currently_adopted`**, because both are the
+    /// same rule (an id stays bound to its first key) reached from two states: the id is in the
+    /// adopted set now, or it was removed from it and its key material was kept as TOFU history.
+    /// The two read differently to the operator (the second used to be reported, falsely, as
+    /// "already adopted"), so the two causes keep distinct `refusal-v1` ids.
+    MaintainerKeyIdBound {
+        /// The key id the refused `add` named.
+        key_id: String,
+        /// `true` when the id is in the active adopted set; `false` when it was removed from it
+        /// and only its first key remains on record.
+        currently_adopted: bool,
+        /// The fully rendered message.
+        message: String,
+    },
     /// An I/O failure. `kind` is `Some` only when this value was built from a real
     /// `std::io::Error` via [`From`] -- every explicit construction site elsewhere in the workspace
     /// (a caller-precondition violation, a platform-capability refusal, or a validation failure
@@ -207,6 +228,9 @@ impl fmt::Display for PrikkError {
                 write!(f, "precondition not met: {message}")
             }
             Self::ForgedPublicationSignature { message, .. } => {
+                write!(f, "precondition not met: {message}")
+            }
+            Self::MaintainerKeyIdBound { message, .. } => {
                 write!(f, "precondition not met: {message}")
             }
             Self::AmbiguousGenerationLog(msg) => write!(f, "ambiguous generation log: {msg}"),

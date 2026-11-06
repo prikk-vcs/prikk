@@ -173,7 +173,13 @@ fn readopting_an_existing_key_id_with_a_different_key_is_refused() {
         // `.is_err()` alone could not tell the difference.
         let refused = add_trusted_maintainer(&layout, "maintainer", &conflicting);
         assert!(
-            matches!(refused, Err(PrikkError::Precondition(_))),
+            matches!(
+                refused,
+                Err(PrikkError::MaintainerKeyIdBound {
+                    currently_adopted: true,
+                    ..
+                })
+            ),
             "a key-id collision is a precondition, not a signature failure: {refused:?}"
         );
         // The refusal must not have changed anything.
@@ -581,6 +587,62 @@ fn a_changed_key_under_a_removed_and_readded_id_is_still_refused() {
         if let Ok(loaded) = loaded {
             assert!(loaded.keys.iter().any(|key| key.key_id == "maintainer"));
         }
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.56.0 step T: the refusal for a removed id says it is not adopted (`currently_adopted: false`),
+/// the one for an adopted id says it is; re-adding the removed id with its original key succeeds and
+/// reports the policy as changed; and a refusal appends to neither container.
+#[test]
+fn a_bound_key_id_refusal_tells_adopted_from_removed_and_writes_nothing() {
+    let root = unique_temp_dir("trust-bound-id-removed-vs-adopted");
+    let layout = RepositoryLayout::init(root.clone());
+    assert!(layout.is_ok());
+    if let Ok(layout) = layout {
+        let key_a = public_key_hex(&[1_u8; 32]);
+        let key_b = public_key_hex(&[2_u8; 32]);
+        let key_c = public_key_hex(&[3_u8; 32]);
+        assert!(add_trusted_maintainer(&layout, "x", &key_a).is_ok());
+        assert!(add_trusted_maintainer(&layout, "z", &key_b).is_ok());
+
+        let adopted = add_trusted_maintainer(&layout, "x", &key_c);
+        assert!(
+            matches!(
+                &adopted,
+                Err(PrikkError::MaintainerKeyIdBound { key_id, currently_adopted: true, message })
+                    if key_id == "x" && message.contains("is already adopted")
+            ),
+            "{adopted:?}"
+        );
+
+        assert!(matches!(remove_trusted_maintainer(&layout, "x"), Ok(true)));
+        let before = std::fs::read(layout.trust_key_container_path()).ok();
+        let removed = add_trusted_maintainer(&layout, "x", &key_c);
+        assert!(
+            matches!(
+                &removed,
+                Err(PrikkError::MaintainerKeyIdBound { key_id, currently_adopted: false, message })
+                    if key_id == "x"
+                        && message.contains("is not currently adopted")
+                        && !message.contains("already adopted")
+            ),
+            "{removed:?}"
+        );
+        assert_eq!(
+            std::fs::read(layout.trust_key_container_path()).ok(),
+            before
+        );
+        let loaded = load_maintainer_trust_policy(&layout);
+        assert!(matches!(&loaded, Ok(p) if p.keys.len() == 1 && p.keys[0].key_id == "z"));
+
+        // Its original key is still accepted, and the policy gains the id again.
+        assert!(matches!(
+            add_trusted_maintainer(&layout, "x", &key_a),
+            Ok((_, true))
+        ));
+        let loaded = load_maintainer_trust_policy(&layout);
+        assert!(matches!(&loaded, Ok(p) if p.keys.len() == 2));
     }
     let _ = std::fs::remove_dir_all(root);
 }

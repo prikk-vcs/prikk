@@ -19,5 +19,7 @@ mod rfc138_trust_read_surface;
 mod rfc148_key_directory;
 #[path = "trust_and_keys/rfc150_key_status.rs"]
 mod rfc150_key_status;
+#[path = "trust_and_keys/step_t_trust_add_known_key_id.rs"]
+mod step_t_trust_add_known_key_id;
 #[path = "support/mod.rs"]
 mod support;
