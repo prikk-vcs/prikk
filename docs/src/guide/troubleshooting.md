@@ -219,7 +219,8 @@ fail closed, since there is then nothing to compare `--ref` against.
 **The way out**, run end to end against a real killed repository:
 
 ```sh
-# If a previous run was interrupted mid-write, its lock may still be on disk:
+# If a previous run was interrupted mid-write, its lock may still be on disk. `prikk unlock` lists it
+# with the recorded process id; clear it only once you have confirmed that process is gone:
 prikk unlock --lock .prikk/active/default/active.lock --yes
 
 # See what this would do first, without writing anything -- the plan shows each queued commit's own

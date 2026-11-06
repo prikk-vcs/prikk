@@ -264,8 +264,10 @@ history until publication succeeds.
 metadata on a non-empty WAL is an integrity issue because seal must not guess the publication target.
 
 `active.lock` is a local synchronization file. It prevents concurrent active-session writers, but it is
-not evidence of repository history or trust. Stale lock cleanup after a crash is manual today; see
-[concurrency and locking](./concurrency-locking.md) for the current operator boundary.
+not evidence of repository history or trust. A lock left behind by a crash is listed by `prikk unlock`
+and `prikk doctor`, and cleared only by an operator with `prikk unlock --lock <path>`; see
+[concurrency and locking](./concurrency-locking.md#stale-locks-and-manual-cleanup) for the current
+operator boundary.
 
 ## Trust Store
 

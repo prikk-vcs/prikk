@@ -29,7 +29,8 @@ Release-transaction durability, artifact identity, and evidence limits are docum
   file of its own), not a root of trust.
 - `doctor` repairs are opt-in and narrow; they do not synthesize missing objects, signatures, trust
   policy, or key material.
-- Stale `active.lock` cleanup after a crash is manual today; the current lock/CAS boundary is covered
+- A lock left behind by a crash is cleared by an operator with `prikk unlock`; prikk never steals or
+  expires a lock on its own, and `prikk doctor` names every held lock. The lock/CAS boundary is covered
   by the [concurrency and locking](./concurrency-locking.md) reference.
 
 ## Commit Persistence Boundary
@@ -579,16 +580,24 @@ recover missing key material, or clear unsafe active sessions.
 
 ## Stale Locks and Manual Repair
 
-`active.lock` is acquired with exclusive file creation. If a process dies while holding it, stale lock
-cleanup is manual today. DC-28 does not define lock stealing, lock expiry, process ownership checks, or
-automatic stale-lock repair. The current lock and compare-and-swap behavior is covered by the
-[concurrency and locking](./concurrency-locking.md) reference.
+`active.lock` is acquired with exclusive file creation. If a process dies while holding it, the file
+can remain, and clearing it is the operator's decision, made with `prikk unlock`. A bare `prikk unlock`
+lists every held lock with its recorded process id and an advisory check of whether that process still
+appears to be running; `prikk unlock --lock <path>` clears one lock after a typed `yes`, or with
+`--yes`. The check only advises: a lock whose process appears to be running is marked "do not clear",
+and prikk does not decide for the operator either way. `prikk doctor` names every held lock too
+(`PRIKK-DOCTOR-HELD-LOCK`, informational; it does not change `doctor`'s exit code), and the
+`lock conflict` error names `prikk unlock`. DC-28 does not define lock stealing, lock expiry, or
+automatic stale-lock repair, and they remain deliberately absent: clearing a lock whose process is
+still running would let two writers hold the same container. The current lock and compare-and-swap
+behavior is covered by the [concurrency and locking](./concurrency-locking.md#stale-locks-and-manual-cleanup)
+reference.
 
 ## Deferred Work
 
 Still deferred: the broad crash-matrix campaign, a fuzzing campaign for WAL/ref-log recovery (the
 proptest decoder property tests in `crates/prikk-store/src/test_gates/framed_decoder_fuzz.rs` are a first fuzz
-target, not that campaign), macOS and Windows filesystem validation, stale-lock policy, broad active-session
+target, not that campaign), macOS and Windows filesystem validation, broad active-session
 recovery, ref-log repair beyond `ref complete` and `--repair-tails` (a complete damaged ref-log record still needs
 a copy, RFC 165), missing-object recovery, object quarantine or garbage collection, multi-ref backup export,
 a rehearsed repository-format-migration restore, stable repository-format migration, and

@@ -329,14 +329,15 @@ boundary.
 
 ## Deferred Work
 
-Still deferred: broader repair policy, stale-lock policy, missing-object recovery, malformed-log
+Still deferred: broader repair policy, missing-object recovery, malformed-log
 repair, checksum-mismatch repair, object quarantine and garbage collection, repository-wide AUTHOR
 trust policy, key rotation, hardware signing, remote trust, hosted identity, doctor JSON output, stable
 diagnostic schema, stable repository-format migration, multi-ref backup export, a rehearsed
 repository-format-migration restore, and production readiness. (MAINTAINER key revocation is no
 longer deferred — `prikk trust maintainer remove`. Single-ref backup/restore tooling is no longer
 deferred either — `prikk bundle export`/`verify`/`import`, see
-[Backup and Restore](../guide/backup-restore.md).)
+[Backup and Restore](../guide/backup-restore.md). An automatic stale-lock policy is not deferred: stealing
+or expiring a lock is deliberately absent, and `prikk unlock` is the supported path.)
 
 ## Claim-to-Source Anchors
 
