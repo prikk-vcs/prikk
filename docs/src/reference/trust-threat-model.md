@@ -10,6 +10,8 @@ status records listed in the anchor table at the foot of the page.
 - `.prikk/` is Prikk's native repository format and is not Git-compatible storage.
 - Ref pointers are mutable, not roots of trust.
 - Maintainer trust is repository-local with the current minimal `required = 1` policy.
+  The local account that can write `.prikk` controls that repository's trust: it can `trust maintainer
+  add` a key of its own, with no signature from an adopted maintainer, and seal under it.
 - `verify` is not a global trust proof.
 - MAINTAINER key revocation exists (`prikk trust maintainer remove`); there is no key rotation, hardware
   signing, remote trust, a distinct peer/sync trust framework, or stable migration policy yet, and no

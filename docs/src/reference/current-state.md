@@ -40,7 +40,18 @@ Prikk is not yet the right tool if you need:
 - flexible exclusion of generated files — `.prikkignore` (since 0.29.0) takes literal repo-relative
   path prefixes, one per line, with no globbing, no negation, and no per-directory files, so
   patterns like `*.log` do not work; and a file swept into history by mistake still cannot be
-  removed later.
+  removed later;
+- a separation between an automated process's authority and the maintainer's — that is not yet a
+  supported pattern. Removing environment variables does not stop a seal: `prikk setup` keeps both seeds
+  in `~/.config/prikk/`, and prikk finds them with no environment variable set. Removing the process's
+  access to `maintainer.seed` does stop it: `seal` refuses ("maintainer signing is required: no seed
+  at …") and `prikk key status` reads `usable: false` for the maintainer role. But a process that can
+  write the repository can `key generate` a new key, `trust maintainer add` it (no signature is needed)
+  and seal under it, so the authoring process needs a repository of its own, with the receiving one out
+  of its reach. A copy that trusts only the owner's key reports such a seal: `verify` exits 1 with
+  "publication trust issues" (the import into that copy exits 0, as an untrusted received pointer).
+  `ROADMAP.md` lists a proposed theme for 0.58.0, "who may author, who may seal, and what a consumer
+  may rely on", that takes this up.
 
 ## Known limitations, measured
 
