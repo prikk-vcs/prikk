@@ -988,10 +988,11 @@ file. The message is the same for the active-session lock, a ref lock and a cont
 the file. `prikk unlock` lists every held lock with the recorded process id and whether that process
 still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
 live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after you have confirmed the
-process that held it is gone: `appears running` is reliable, but `does not appear to be running` is
+process that held it is gone: treat a lock that `appears running` as held (the check can be wrong
+after PID reuse, but only in the direction of not clearing it), and `does not appear to be running` is
 not proof, and clearing a live holder's lock can corrupt the repository.
 
-## `error: precondition not met: bundle import: this delivery classifies as `rollback` against remotes/<name>'s current pointer -- refusing …`
+## ``error: precondition not met: bundle import: this delivery classifies as `rollback` against remotes/<name>'s current pointer -- refusing …``
 
 `bundle import` and `archive import` compare what they are given with the received pointer they would
 replace, and refuse a delivery that is a `rollback` (older than what you hold), `diverged` (both sides

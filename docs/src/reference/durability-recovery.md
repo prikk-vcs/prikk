@@ -347,7 +347,7 @@ new slot nor a new generation record, and says so ("pointer index already matche
 written") — before this round it wrote a new generation unconditionally, even over an already-healthy
 index.
 
-**The way back (0.50.0 step 1 Parts F/F2):** before flipping away from the live slot, a real run
+**The way back:** before flipping away from the live slot, a real run
 saves a full copy of it, the rebuilt slot's own pre-rebuild bytes, and the generation log's own
 before/after bytes, to the recovery log under one run -- `prikk doctor --recovery-restore <id>` undoes
 the switch byte for byte, rewriting both slots and re-appending a generation record naming the old

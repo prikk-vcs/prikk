@@ -408,7 +408,7 @@ planned for.
   removed by this or any command. **`unreached_objects` and `PRIKK-DOCTOR-UNREACHED-OBJECT` count
   `Patch` and `Blob` objects as well as `Block` and `RefState`:** a rolled-back or `received remove`d
   block's own patch (and the blobs its own operations name), a claimless accepted patch, and a
-  refused or crashed import's leftover patch and blob objects are counted as unreached. Neither
+  crashed or interrupted import's leftover patch and blob objects are counted as unreached. Neither
   type has a publication-trust check to skip (DC-78 §D2) -- for them this is purely a presence
   record, the same "the bytes stay either way" as above.
 

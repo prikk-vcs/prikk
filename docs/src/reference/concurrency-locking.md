@@ -238,9 +238,10 @@ path is `prikk unlock` alone.
 `prikk unlock` is the supported recovery path. A bare invocation lists every currently held lock, its
 recorded process id, and a best-effort advisory on whether that process still appears to be running
 (checked with `kill(pid, 0)` on Linux and macOS; unknown on other platforms). This check is
-asymmetric on purpose: a positive result — the process still appears to be running — is reliable
-evidence, for the operator, that the lock is not stale and should not be cleared, because the check
-actually found it (the listing says `appears running -- do not clear`). `prikk unlock` only advises:
+asymmetric on purpose: treat a lock whose process still appears to be running as held (the listing
+says `appears running -- do not clear`). The check can be wrong after PID reuse, since the lock
+records only a bare process id and an unrelated process may now own it, but it can only be wrong in
+the direction of not clearing the lock. `prikk unlock` only advises:
 it does not refuse on this result, and `--yes` (or `--force`) clears the lock whatever the check
 found. A negative or unknown result is *not*
 evidence the lock is safe to clear, since PID reuse after a reboot or PID-namespace isolation inside a

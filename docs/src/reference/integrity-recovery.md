@@ -236,7 +236,7 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
 - `--rebuild-pointer-index [--plan-only]`: re-derives the ref-pointer index from the ref log (RFC 165 R5,
   `pointer_rebuild.rs`). Before flipping away from the live slot, a real run saves a full copy of it, of
   the rebuilt slot's own pre-rebuild bytes, and of the generation log's own before/after bytes, to the
-  recovery log under one run (0.50.0 step 1 Parts F/F2) -- `--recovery-restore <id>` undoes the whole
+  recovery log under one run -- `--recovery-restore <id>` undoes the whole
   switch byte for byte: both slots and the generation record all go back to what they were, naming the
   old slot live again. A restore refuses, and writes nothing, if an ordinary write has landed in the
   rebuilt slot since (a new branch, a publication).

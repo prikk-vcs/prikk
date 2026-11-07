@@ -165,7 +165,8 @@ and `verify`/`doctor` do not look at it.
   when the ref being committed onto is itself published. When the commit is onto any other ref
   (`commit --ref <x>`, `<x>` not the current branch), the only command named is `prikk branch switch
   <x>`, with `<x>` substituted literally: switching to the record's ref or to the current branch
-  would change nothing there, and the same commit would refuse again. A path missing from the worktree that the
+  would change nothing there, and the same commit would refuse again. A refused `commit` leaves
+  `.prikk` unchanged except for its cache, as `worktree-status` itself does. A path missing from the worktree that the
   record never explains reads "not in this worktree, and never were" (the deletion-shaped case: a
   command moved the ref without writing the worktree, or `commit --ref <other>` ran from a worktree
   recorded against a different branch). A path the worktree still physically holds, but whose
@@ -224,8 +225,9 @@ and `verify`/`doctor` do not look at it.
     that names no claims, takes none of these steps.
   - **`archive import --adopt`** runs both checks before the import journal exists, so nothing from
     the archive has been admitted when either refuses. The in-the-way check reads the archive's own
-    Patch and Blob sections in place, and adds about 8.5–10.4% to the import's total time at
-    10,000–20,000 objects (release build, `archive import --adopt` of one genesis generation). The
+    Patch and Blob sections in place, and adds about 9% to the import's total time at
+    10,000–20,000 objects (release build, in-memory filesystem, `archive import --adopt` of one
+    genesis generation). The
     clean check runs again, together with a second in-the-way check, immediately before the
     publish that moves the current branch — on a fresh import and a resumed one alike — as the
     backstop for a file created by a process outside prikk in between; the backstop's message says
@@ -343,7 +345,10 @@ itself is unchanged by this.
   refuse the same way, under the same flag. When the flag lets the adoption through anyway, the
   landing's own `"remote_reason"` names the class, even though adoption itself succeeded — the one
   case this field carries something other than why a ref fell through to `remotes/` instead of
-  being adopted.
+  being adopted. When a local branch of that name already exists, `--adopt` lands the delivery as
+  `remotes/<name>` instead, classified against the received pointer only (often `no-local-history`,
+  and the first such landing reads that next to "a ref by this name already exists locally"). The
+  local branch is neither compared nor moved, and the class id is unchanged.
 - **`--format json` reports the same classification `bundle import --format json` does.** Each
   entry in its own `"landings"` array carries `"class"` and `"ref_state_chain"` (the same names and
   values described above, for every landing, not only a refused one), and a refusal prints the
@@ -391,6 +396,8 @@ unchanged by this), an additive `"sealed_by_signatures"` field lists the same si
 (the key is not adopted by this repository at all), or `"invalid"` (the key is adopted, but the
 signature does not verify — the same condition `bundle import` refuses on). This is reporting
 only, exactly like `"sealed_by"` itself — `bundle import` is still the only thing that acts on it.
+The outcomes are for the signatures on the delivered tip: `bundle import` checks every Block and
+RefState it would admit, so a `sound` here does not mean the import will admit the delivery.
 
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
 `remotes/…` name answers against the received pointer held under that exact name; if none is held
@@ -452,7 +459,7 @@ held Block's own `patch_ids` — the same membership `sync pending` subtracts, i
 whether any ref, local or received, still reaches that Block), `"pending"` (not sealed, but named
 by a held recognition claim — the same membership `sync pending` itself reports), or `"unclaimed"`
 (held, but sealed by no Block and named by no held claim — a hand-made patch accepted without
-ever naming a claim, or a refused or crashed import's leftover, reads this way). `state` is the
+ever naming a claim, or a crashed or interrupted import's leftover, reads this way). `state` is the
 same whichever id names the patch, a block's own bare id included: a patch a rollback or a
 `received remove` left unreached by any tip still reads `"sealed"`, because its own Block is still
 held — a bare-id read never needed a reachability check at all, and neither does this. `"sealed"`
@@ -721,7 +728,7 @@ removes one received ref's own pointer from the received-index container — the
 `"patch"` or `"blob"`) and by `prikk doctor` as a `PRIKK-DOCTOR-UNREACHED-OBJECT` warning — a
 non-blocking warning either way, never a failure (see `verify`'s own entry above). A rolled-back or
 `received remove`d block's own patch (and the blobs its own operations name), a claimless accepted
-patch, and a refused or crashed import's leftover patch and blob objects are counted too. An
+patch, and a crashed or interrupted import's leftover patch and blob objects are counted too. An
 object counts when no tip, no WAL record and no pending patch (with the blobs its operations name)
 reaches it. A `Block`/`RefState`'s own publication trust is skipped while it stays
 unreached (reclassified, and checked again, the moment something reaches it); a `Patch`/`Blob` has

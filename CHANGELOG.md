@@ -33,10 +33,11 @@
   a block id.
 - **`verify` and `doctor` may now report `unreached objects: N` on a repository that 0.55.0
   reported as clean:** patch and blob objects nothing reaches (after a rollback, a `received
-  remove`, or a refused import) are counted too. The count is a non-blocking warning; the exit
+  remove`, or an interrupted import) are counted too. The count is a non-blocking warning; the exit
   code does not change.
 - **No migration is needed.** `.prikk/worktree.baseline` is new (`init` and `setup` write it); a
-  repository made by an earlier release gets it at its first `commit`, `seal` or `branch switch`,
+  repository made by an earlier release gets it at its first `commit`, `seal`, or switch to
+  another branch,
   and works without it until then. An `archive import` that 0.55.0 left unfinished resumes under
   0.56.0.
 - **`uninstall.sh` accepts `--prefix <dir>` and refuses any other argument;** `uninstall.ps1`
@@ -63,6 +64,9 @@
 - **`archive import --adopt` looks for files in the way before it writes anything,** which costs
   about 34 ms at 10,000 files and 70 ms at 20,000, about 9 % of the import, and about 2–3 MiB more
   memory (same build and filesystem).
+- **`commit` on a large tree needs about 10 % more memory:** about 11 MiB more at 64,000 files
+  (release build). It keeps a second per-path record of what the worktree was last written from,
+  which is what lets it refuse to author over a path the worktree never received.
 
 ### Output changes
 
@@ -115,9 +119,10 @@ stdout, with the same text on stderr and the same exit code (`1`) as without the
 - **`bundle import` of a rollback, a divergent rewrite or an unrelated history,** against an
   existing received pointer: before, exit `0` and the pointer replaced; after, exit `1`, ``error:
   precondition not met: bundle import: this delivery classifies as
-  `<rollback|diverged|does-not-connect>` against <ref>'s current pointer -- refusing rather than silently rewriting received history; pass
-  --allow-non-fast-forward to accept a delivery that does not simply extend the pointer it would
-  replace``, and nothing written. `--allow-non-fast-forward` is new. Under `--format json` the
+  `<rollback|diverged|does-not-connect>` against <ref>'s current pointer -- refusing rather than
+  silently rewriting received history; pass --allow-non-fast-forward to accept a delivery that
+  does not simply extend the pointer it would replace``, and nothing written.
+  `--allow-non-fast-forward` is new. Under `--format json` the
   refusal is `refusal-v1` with `"command": "bundle-import"`, `"reason": null` and `"refusal"` one
   of `rollback`, `diverged`, `does-not-connect`.
 - **`bundle import` text:** gains a `class:` line (`no-local-history`, `already-at-tip`,
@@ -262,7 +267,8 @@ after a `merge --into` of the current branch that brought in `c.txt`, `commit` r
   the current branch, that is `prikk branch switch <the record's own ref>`, and also `prikk branch
   switch <the current branch>` when that branch is published; when it is `commit --ref <x>` onto
   any other ref, it is `prikk branch switch <x>` alone, substituted literally. A path that is not
-  stale, or one the worktree already matches, is authored as before.
+  stale, or one the worktree already matches, is authored as before. A refused `commit` leaves
+  `.prikk` unchanged except for its cache, as `worktree-status` itself does.
 - **The four commands above bring a clean worktree along or refuse before they write anything.**
   Each requires the worktree to be clean against its record and no untracked file to sit where the
   new files go; each then marks the worktree, publishes as before, writes the new tip's files
@@ -385,9 +391,9 @@ repository damage.
   (the block was never unwritten). A patch sealed by a held block is sealed, whichever ref reaches
   it.
 - **`verify` and `doctor` could not see unreached patches and blobs:** a rolled-back or `received
-  remove`d block's patch and the blobs its operations name, a claimless accepted patch, a refused
-  or crashed import's leftover objects. They are counted when no tip, no WAL record and no pending
-  patch (with the blobs it names) reaches them, as a non-blocking warning; the bytes stay and no
+  remove`d block's patch and the blobs its operations name, a claimless accepted patch, a crashed
+  or interrupted import's leftover objects. They are counted when no tip, no WAL record and no
+  pending patch (with the blobs it names) reaches them, as a non-blocking warning; the bytes stay and no
   command removes them.
 - **A crash that left a lock behind was invisible to `doctor`, and the `lock conflict` error did
   not say how to proceed.** `doctor` names every held lock and the error names `prikk unlock`;
@@ -419,7 +425,7 @@ are unaffected, and trust remains the receiver's own adopted set, never the arch
   never empty. The text form (a count and one id per line) keeps its shape.
 - **`show --format json` reports each patch's `state`:** `queued`, `pending`, `sealed` or
   `unclaimed` (held, sealed by no block and named by no claim — a hand-made patch accepted without
-  a claim, or a refused or crashed import's leftover), the same whichever id names the patch,
+  a claim, or a crashed or interrupted import's leftover), the same whichever id names the patch,
   including a block's bare id. A pending text edit's path resolves through the claims that name it,
   following a chain of unsealed claims back to a block this repository holds, exactly as `extract
   --claim` walks; `resolved_through_claim_id` names the claim that resolved it, the one the patch names,
@@ -451,7 +457,9 @@ are unaffected, and trust remains the receiver's own adopted set, never the arch
   pointer it would actually write to, which can differ from the `--ref` it was asked to inspect;
   and `sealed_by_signatures`, one entry per signature in `sealed_by`, each with an `outcome`:
   `sound` (adopted and verifies), `unverifiable` (not adopted here) or `invalid` (adopted but does
-  not verify — what `bundle import` refuses). It is reported, not trusted, like `sealed_by`.
+  not verify — what `bundle import` refuses). It is reported, not trusted, like `sealed_by`, and it
+  covers the signatures on the delivered tip: `bundle import` checks every Block and RefState, so
+  a `sound` there does not mean the import will admit the delivery.
 - **`trust maintainer add --format json`** (`trust-add-v1`: `key_id`, `public_key`, `newly_added`,
   `adopted_count`) prints that and nothing else. For a key id already bound to a different public
   key it prints the `refusal-v1` document listed under Output changes. Without the flag nothing

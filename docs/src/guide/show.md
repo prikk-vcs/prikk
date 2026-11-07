@@ -99,7 +99,7 @@ exchange artifact and that a recognition claim names, but that no block here sea
 through, never the same thing twice. `show --format json` says which one a patch is, as `"state"`:
 `"queued"`, `"pending"`, `"sealed"` (named by a block this repository holds, whether or not any ref
 still reaches that block), or `"unclaimed"` (held, but sealed by no block and named by no claim, such
-as the leftover of a refused import). A pending patch's node-addressed paths resolve through the
+as the leftover of a crashed or interrupted import). A pending patch's node-addressed paths resolve through the
 claims that name it, back to a block this repository holds; when they cannot, `"unresolved_node_id"`
 carries a `"reason"`. See [Command Surface](../reference/commands.md).
 
