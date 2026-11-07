@@ -237,3 +237,38 @@ Fixed entry's "about one run in forty" is not what CI shows. That test failed on
 v6 at both depths: 289/289 cells the same as their 0.55.0 output, plus 8 `SILENT` `worktree.baseline` cells. Their
 `reproduce.sh` gives the same 68 exit codes. The external-review letter (046) is drafted, and the owner sends it.
 **Nothing is owed by the dev team** until the external answer, or a re-date commit if the tag lands on another day.
+
+**External review 046 (2026-11-07): one item blocks the tag** (reading `external-046-reading-v1`). On a repository
+with one text file edited at every step, `verify` and `doctor` report one **false unreached Blob per checkpoint**
+(every 64th block), with the forgery-leftover warning. The architect reproduced it: `ffa581db` gives 0 at 64 blocks
+and 2 at 130; 0.55.0 gives 0, because it counted no Blobs. The cause is
+`verify/reachability.rs::expand_frontier`: it follows a Block's `snapshot_blob_ref` to the manifest Blob, and its
+`ObjectType::Blob` arm expands nothing. So the checkpoint's content Blobs, named only by the manifest, are never
+reached. `archive/verify.rs` uses the same walk.
+
+**Next: P4, the reach walk follows a checkpoint's manifest** (one sitting, 60 min, stop at 120; report
+`release-0.56.0-prep-P4-report.md`):
+1. **The fix, in `expand_frontier`:** for a Blob of `BlobKind::Snapshot`, decode its manifest (the existing
+   `validate_snapshot_manifest`) and push every content Blob it names.
+   - A manifest that does not decode is treated as the walk treats a Patch that does not decode today: say which,
+     and keep it.
+   - Every caller of `expand_frontier` gets the fix. Name them; `verify` and `archive verify` at least.
+2. **Tests:**
+   - 65 blocks with one edited text file: `verify` reads `unreached objects: 0`;
+   - the same history exported: `archive verify` reports nothing unreached;
+   - 130 blocks: still 0;
+   - a red control: name the assertion that fails with the arm removed.
+3. **Also:** check every other walk that decides "reached" (`received remove`'s plan, `doctor`'s unreached stage,
+   `show`'s state). Each must either use this walk or reach manifests itself. Name each.
+4. **The smoke:** a section with a 65-block edited-file history, asserting `unreached objects: 0`, on the release
+   build. Name it on 0.55.0 too (it passes there vacuously: 0.55.0 counts no Blobs).
+5. **CHANGELOG:**
+   - **no Fixed entry**, because the unreached Blob count is unreleased; fold the fix into the "`verify` and `doctor`
+     could not see unreached patches and blobs" story, if any wording there needs it;
+   - **Security (a) and (b)'s "Affected"** become "0.53.0, 0.54.1 and 0.55.0 (measured), and every earlier release that
+     has `bundle import` or `archive import` (from reading the code; not run)". The external review measured 0.53.0
+     and 0.54.1. (c) and (d) are unchanged.
+6. **No new release commit is needed:** the version is already 0.56.0 on `main`. If the tag day is not 2026-11-07,
+   the last commit re-dates the CHANGELOG heading. On the final commit: tests, the 14 gates, the smoke on the release
+   build, and `matrix.py` **v7** (from `receive/046…/reproduce/`) at both depths with and without `--hexflip`,
+   compared by row with the external architect's `ffa581db` logs.
