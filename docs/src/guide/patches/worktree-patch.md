@@ -99,7 +99,6 @@ at the repository root is skipped by this scan entirely — never authored, neve
 - symlink authoring (fails closed on all symlinks)
 - text↔binary kind transitions (fail closed)
 - rename detection (a move is a `DeleteNode` + `CreateFile`)
-- branch switching or branch copy/fork from an existing tip
 - multi-commit queued active sessions or per-ref active WALs
 - multi-operation text diff minimization, commutation, conflict witnesses
 

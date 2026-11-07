@@ -94,8 +94,14 @@ and where each kind of id is listed; it is not reported as damage.
 Three things are easy to conflate, and `show` only ever speaks to the first: `queued` here means
 committed to *this* repository's own local active WAL — not yet sealed, and never anything received
 from elsewhere; `sync pending` means a patch `sync accept` has already verified and stored from an
-exchange artifact, but not yet sealed into a block; and [`log`](history.md) means sealed, permanent
-history. All three are distinct states a patch passes through, never the same thing twice.
+exchange artifact and that a recognition claim names, but that no block here seals yet; and
+[`log`](history.md) means sealed, permanent history. All three are distinct states a patch passes
+through, never the same thing twice. `show --format json` says which one a patch is, as `"state"`:
+`"queued"`, `"pending"`, `"sealed"` (named by a block this repository holds, whether or not any ref
+still reaches that block), or `"unclaimed"` (held, but sealed by no block and named by no claim, such
+as the leftover of a refused import). A pending patch's node-addressed paths resolve through the
+claims that name it, back to a block this repository holds; when they cannot, `"unresolved_node_id"`
+carries a `"reason"`. See [Command Surface](../reference/commands.md).
 
 **A rename names every signer.** A patch may carry several AUTHOR signatures (format 7: another
 signer's copy of the same patch merges in). A rename reports every one: prose lists them all on its

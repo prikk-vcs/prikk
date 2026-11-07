@@ -11,7 +11,7 @@ prikk sync compare   --summary <file>
 prikk sync have      <ref> --output <file>
 prikk sync build     <ref> --have <file> --output <file> [--force]
 prikk sync accept    <file> [--claims-out <file>] [--force]
-prikk sync pending
+prikk sync pending [--format json]
 prikk sync seal      <ref> --claim <id>
 prikk sync seal      <ref> --claims <file>
 prikk sync tags

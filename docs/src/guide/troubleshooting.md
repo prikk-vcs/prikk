@@ -922,7 +922,9 @@ closed` for a closed branch: `prikk branch list` shows the open ones.
 
 You committed on one branch and have not sealed, and are switching to another. Unsealed work belongs
 to the branch it was committed on, so the switch refuses rather than leave it stranded. Seal it
-(`prikk seal --allow-no-audit --ref heads/<name>`, exactly as the message prints), then switch.
+(`prikk seal --allow-no-audit --ref heads/<name>`, exactly as the message prints), then switch. The
+same message comes from `merge --into`, `branch create --from` and `archive import --adopt` when they
+would move a branch that holds unsealed work: seal it, then run the command again.
 
 ## `error: precondition not met: the worktree is not clean against heads/<name>: <path> (modified), …`
 
@@ -930,7 +932,10 @@ The switch replaces the worktree's tracked files with the other branch's, so it 
 them differs from the branch you are on — it would otherwise overwrite or delete your edits. The
 message lists each path and whether it is `modified`, `missing` or an `unsupported-path`;
 `prikk worktree-status` shows the same list. Commit the changes, or restore the files, and switch
-again. Untracked files do not count and are never touched.
+again. Untracked files do not count and are never touched. The same message (`… before creating
+heads/<name>`, `… before merging <from> into <into>`, `… before sealing onto <ref>`, `… before adopting <ref>`) comes from the other commands that bring a worktree along
+with a branch (`merge --into`, `branch create --from`, `sync seal` and `archive import --adopt` onto the
+current branch); the way out is the same, and they refuse before they write anything.
 
 **After a power loss on Windows, following a completed `branch switch` or `checkout` (RFC 168 residual (a)).** The rewritten files
 can hold their old contents, deleted files can come back, and created files can be lost. Nothing in the repository is damaged.
@@ -952,6 +957,76 @@ listed paths aside and switch again.
 **If a switch was interrupted** (a crash, a full disk), no file is torn and the current branch is still
 the old one; `commit` then refuses with `worktree materialization was interrupted` (below). Run the same
 `prikk branch switch heads/<name>` again: it recognises the half-switched files and completes.
+
+## `error: precondition not met: <n> file(s) are in the way of heads/<name>'s files: <path> (…); move them aside before <action> (nothing was written)`
+
+`merge --into`, `branch create --from`, `sync seal` or `archive import --adopt` was about to write the
+current branch's new files into your worktree, and an untracked file already sits at one of those paths.
+Nothing was written: `.prikk` and the worktree are as you left them. Move the listed paths aside, then
+run the same command again. (`branch switch` says the same thing in its own words, above.)
+
+If the file appears only after the branch has moved — another program created it in between — the
+message reads `heads/<name> was published, but <n> file(s) are in the way of materializing it into the
+worktree: …; move them aside, then run prikk branch switch heads/<name> to finish`. The branch is
+published; the switch writes the files.
+
+## `error: precondition not met: refusing to commit: heads/<name> is now at <state>, and this worktree was last written from <state>; …`
+
+The branch moved without this worktree being told: another command moved it (an `archive import`
+that reached it, a `sync seal`, a `merge`), or you committed with `--ref` onto a branch other than the
+one you are on. Committing now would either record the files you did not receive as deleted, or
+silently undo what moved the branch. The message lists every path and ends with the command that brings
+the worktree up to date, `prikk branch switch <branch>`, with the branch named literally. Run it, then
+commit again. `prikk worktree-status` reports the same state as `behind heads/<name>` instead of
+listing every new file as `missing`.
+
+## `error: lock conflict: active lock already exists: <path> -- run prikk unlock to list held locks, …`
+
+Another prikk process is writing this repository, or one that was writing it died and left its lock
+file. The message is the same for the active-session lock, a ref lock and a container lock, and names
+the file. `prikk unlock` lists every held lock with the recorded process id and whether that process
+still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
+live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after you have confirmed the
+process that held it is gone: `appears running` is reliable, but `does not appear to be running` is
+not proof, and clearing a live holder's lock can corrupt the repository.
+
+## `error: precondition not met: bundle import: this delivery is a rollback against remotes/<name>'s current pointer -- refusing …`
+
+`bundle import` and `archive import` compare what they are given with the received pointer they would
+replace, and refuse a delivery that is a `rollback` (older than what you hold), `diverged` (both sides
+moved) or `does-not-connect` (no shared history), before writing anything. Nothing is wrong with your
+repository; the delivery is not an extension of what you have. If you want it anyway — restoring an
+older backup, say — pass `--allow-non-fast-forward`.
+
+## `error: precondition not met: ref-state <id> carries a MAINTAINER signature by adopted key <key id> that does not verify: … a forgery, or another maintainer using the same key id; …`
+
+`bundle import` or `archive import` found a Block or RefState signed under a key id you have adopted,
+with a signature that does not verify against the key you adopted for that id. Either the delivery
+is forged, or its maintainer is a different person who happens to use the same key id — most often the
+legacy id `maintainer` that every installation made before 0.45.0 shares. Nothing was written. If it is
+the second case, that maintainer signs under a distinct id (`prikk key generate --out <path>`, then
+`PRIKK_MAINTAINER_SEED_FILE`; or `PRIKK_MAINTAINER_KEY_ID`) and you adopt that id with `prikk trust
+maintainer add --key-id <that id> --public-key <its public key>`. `bundle preview` shows the same
+signature as `invalid` before you import.
+
+## `error: precondition not met: maintainer key id <id> is not currently adopted (it was removed), but it stays bound to the public key it was first adopted with, …`
+
+`prikk trust maintainer add` refuses a different public key under a key id that was adopted once, whether
+the id is adopted now (`is already adopted with a different public key`) or was removed with
+`trust maintainer remove` (this message). A key id is bound to the first key it was adopted with, because
+the id travels in every signature and a changed key under a familiar id is what trust on first use
+exists to catch. Re-adding a removed id with its **original** key works. For a different key, its
+maintainer signs under a distinct id and you adopt that id. With `--format json` the refusal is a
+`refusal-v1` document whose `refusal` is `maintainer-key-id-adopted-with-different-key` or
+`maintainer-key-id-bound-to-removed-key`.
+
+## `error: <block id> is a block id; log does not show history ending at a block …`
+
+`prikk log --ref` takes a ref name (`heads/…`, `tags/…`, `remotes/…`): it shows the chain of
+publications that ref went through. A block has no such chain — it can have more than one parent — so
+`log` refuses a block id instead of printing an empty history. To read what a block holds, use
+`prikk show <block id>`, `prikk tree --ref <block id>` or `prikk cat --ref <block id>`. A block id that
+names nothing here refuses with `block <id> is not in this repository`.
 
 ## `error: precondition not met: refusing to materialize: <n> path(s) in the way: …`
 

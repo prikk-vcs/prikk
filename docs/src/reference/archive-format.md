@@ -141,8 +141,13 @@ It reports *internally consistent*, **never** *trusted*: trust comes only from a
 adopted set, checked after import. That note is printed — in text and in `--format json` — only
 when the archive genuinely is internally consistent; a damaged or unresolvable archive gets its
 damage lines and the error, never a note beside them that contradicts them. The carried maintainer
-keys are listed, labeled *"carried, not adopted."* It writes nothing, on any exit path — no scratch
-file, no scratch directory.
+keys are listed, each with its status in the repository `archive verify` is run from — `adopted`,
+`carried, not adopted`, `carried, conflicts with an adopted key` (the key id is adopted here under a
+different public key), or `carried, not checked against a repository` (no `.prikk` here, or one that
+could not be read, which also prints one line to stderr saying so). The status is reporting only: it
+never changes the archive's own verdict or exit code, and a repository that cannot be read never turns
+a consistent archive into a failure. It writes nothing, on any exit path — no scratch file, no scratch
+directory.
 
 The manifest's own declared `repository_format` number (checked above, against what this build
 knows how to read) is purely informative past that check: `archive import` always writes the

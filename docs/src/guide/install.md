@@ -57,8 +57,12 @@ curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall
 
 Removes the binary from its install directory and the marked `PATH` block from whichever shell
 startup file has it, and nothing else — an unrelated file in the same directory, or unrelated lines
-in the same startup file, are left untouched. If you installed with a custom `PRIKK_INSTALL_DIR`,
-pass the same value to the uninstaller too, the same way: `PRIKK_INSTALL_DIR=/custom/path curl ...`.
+in the same startup file, are left untouched. If you installed with a custom directory, name the same
+one to the uninstaller: `curl -fsSL <url> | sh -s -- --prefix /custom/path`, or
+`PRIKK_INSTALL_DIR=/custom/path` in the environment. Giving both is accepted only when they agree. The
+uninstaller refuses, and removes nothing, when `--prefix` has no value or an empty one, when `--prefix`
+and `PRIKK_INSTALL_DIR` name different directories, and when it is given any argument it does not
+recognize.
 Neither script touches any repository's own `.prikk` directory — delete those yourself if you no
 longer want that history tracked.
 
@@ -128,7 +132,9 @@ irm https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.ps1 | 
 
 Removes `prikk.exe`, the marker file, and the install directory itself if it is then empty, and the
 `PATH` entry — but only if the marker says this installer's own run added it. If you installed with
-a custom `PRIKK_INSTALL_DIR`, set the same value before running the uninstaller too.
+a custom `PRIKK_INSTALL_DIR`, set the same value before running the uninstaller too. `uninstall.ps1`
+takes no arguments (the environment variable is its only override, as for `install.ps1`) and refuses
+any it is given.
 
 ## Arch Linux (AUR)
 

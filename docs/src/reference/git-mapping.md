@@ -109,8 +109,8 @@ history between repositories is always a file you produce and hand to the other 
 
 - [`prikk bundle export`/`import`/`verify`](../guide/backup-restore.md) — a complete, self-contained
   history bundle in one file.
-- [`prikk archive export`/`verify`](archive-format.md) — a whole repository, every ref and every
-  object, verbatim, in one file (RFC 155). `archive import` is not built yet.
+- [`prikk archive export`/`verify`/`import`](archive-format.md) — a whole repository, every ref and every
+  object, verbatim, in one file (RFC 155).
 - [`prikk sync`](../guide/sync.md)'s `summary`/`compare`/`have`/`build`/`accept`/`pending`/`seal`
   subcommands — an incremental, gap-closing exchange, still file-based, still no sockets.
 

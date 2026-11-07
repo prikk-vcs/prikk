@@ -73,8 +73,10 @@ files and then moves the pointer. It refuses, and writes nothing, when the branc
 closed, when unsealed work belongs to another branch (`seal` first), or when the worktree has changes
 against the branch you are on (`prikk worktree-status` lists them). Untracked files are never
 touched; a file of the old branch is deleted only when it is unchanged. Switching to the branch you
-are already on is always a no-op — including when it has never been sealed, which just says so rather
-than claiming the branch does not exist.
+are already on is a no-op when the worktree already matches it — including when the branch has never
+been sealed, which just says so rather than claiming the branch does not exist. When the worktree has
+fallen behind the branch (`prikk worktree-status` says `behind heads/<name>`), switching to it brings
+the files up to date.
 
 An explicit `--ref` still works on every command without switching. `prikk branch list` shows what
 exists and marks the current branch with `*`. **A fresh repository's current branch, before its first

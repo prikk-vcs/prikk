@@ -159,7 +159,8 @@ bundle you make, not only here.
 For every ref, every object, and the trust material in one file, see
 [The Archive Format](../reference/archive-format.md) instead: `prikk archive export <file>` carries
 the whole repository, verbatim. `prikk archive verify <file>` reads one back and reports whether it
-is internally consistent, needing no repository and writing nothing. `prikk archive import <file>
+is internally consistent, needing no repository and writing nothing (run inside a repository, it also
+says whether each carried maintainer key is already adopted there). `prikk archive import <file>
 [--adopt]` lands every ref the archive carries into a fresh (or existing) repository: by default
 under `remotes/<ref>`, the same received-pointer shape `bundle import` already produces, or as a
 real local branch under `--adopt`, when it is absent locally, signed by a key this repository has
@@ -234,6 +235,7 @@ RefState: ...
 objects: 9
 new objects: 9
 author key material: 1 recorded (continuity only, not a trust decision)
+class: no-local-history
 note: no local ref was created or advanced, and no MAINTAINER key was trusted; this repository now holds the received history at remotes/heads/main, which `prikk log --ref remotes/heads/main` and `prikk show` read, and `prikk verify` checks once `trust maintainer add` trusts the sealing key
 ```
 
@@ -242,6 +244,16 @@ it already holds under the same signatures is counted but not written; the same 
 additional signature — a copy another maintainer sealed — merges into the stored one in a format-7
 repository, reported as `objects gaining signatures: N`, and is refused in a format-6 one (see
 [Sync](sync.md)).
+
+**A bundle that would take a received pointer backward or sideways is refused.** `bundle import` (and
+`archive import`) compare the delivery with the received pointer they would replace, and print the
+result as `class:` — `no-local-history`, `already-at-tip`, `fast-forward`, `rollback` (older than what
+is held), `diverged` (both sides moved) or `does-not-connect` (no shared history). The last three are
+refused when a pointer already exists, before anything is written (`error: precondition not met: bundle
+import: this delivery is a rollback against remotes/heads/main's current pointer -- refusing rather than
+silently rewriting received history; pass --allow-non-fast-forward to accept a delivery that does not
+simply extend the pointer it would replace`). Restoring an older backup over a newer copy therefore
+needs `--allow-non-fast-forward`, given on purpose. `--format json` prints the same facts.
 
 **Import records material; it does not create trust.** The imported history lands as
 `remotes/heads/main`, not `heads/main` — no local ref moved, and the maintainer key that sealed it
@@ -305,7 +317,8 @@ continue working in that way. `prikk archive export <file>` writes a whole repos
 one file (RFC 155) — see [The Archive Format](../reference/archive-format.md). `prikk archive verify
 <file>` reads one back and checks structure, reference closure, and every signature against the
 archive's own carried key material, reporting *internally consistent*, never *trusted* — it needs no
-repository and writes nothing. A signature by a key the archive does not carry (for instance, a
+repository and writes nothing (run inside a repository, it also reports each carried maintainer key as
+adopted, not adopted, or conflicting with an adopted key). A signature by a key the archive does not carry (for instance, a
 received branch the source repository itself never trusted) is named, not refused on: trust is
 always the receiving repository's own decision, never the archive's. `prikk archive import <file>
 --adopt` is the landing step that turns a
