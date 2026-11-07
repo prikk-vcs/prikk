@@ -231,3 +231,9 @@ Fixed entry's "about one run in forty" is not what CI shows. That test failed on
 2. The three-file release commit again.
 3. **On it:** `cargo test --workspace`, the 14 gates, and the release binary's sha256, which must be
    `1828804ee7ee…`. If it is, the smoke, the matrix and `reproduce.sh` carry over from P3c; if not, rerun them.
+
+**P3d ACCEPTED 2026-11-07. Release prep is complete:** the 0.56.0 candidate is **`ffa581db`**, pushed, CI green
+(`42378051038`, 17/17). The architect rebuilt it (sha256 `1828804ee7ee…`) and ran the external architect's `matrix.py`
+v6 at both depths: 289/289 cells the same as their 0.55.0 output, plus 8 `SILENT` `worktree.baseline` cells. Their
+`reproduce.sh` gives the same 68 exit codes. The external-review letter (046) is drafted, and the owner sends it.
+**Nothing is owed by the dev team** until the external answer, or a re-date commit if the tag lands on another day.
