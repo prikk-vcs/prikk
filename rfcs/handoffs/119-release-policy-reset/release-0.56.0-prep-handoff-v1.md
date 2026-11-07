@@ -216,3 +216,18 @@ at 180:**
 4. **On it:** tests, the 14 gates, the smoke on the release build, `matrix.py` v6 at both depths by row, and
    `reproduce.sh`. The binary changes, so nothing carries over. The architect pushes the fix commits first and reads
    their Windows jobs before the release commit goes up.
+
+**P3c reviewed 2026-11-07** (review `release-0.56.0-prep-P3c-review-v1`). `fe69c565` and `13a483a5` (the Windows lock
+race) are accepted and pushed. **CI is green on `13a483a5`** (`42374829699`, 17/17); the Windows job runs the new
+hammer test and the racing test, and both are `ok`. **The release commit `9aebe969` is held for one sentence:** the
+Fixed entry's "about one run in forty" is not what CI shows. That test failed once in 503 CI runs on `main` since
+2026-09-12, the architect having searched every failed run's log.
+
+**Next: P3d** (one sitting, 20 min, stop at 40; report `release-0.56.0-prep-P3d-report.md`):
+0. `git log --oneline origin/main..main` must show exactly `9aebe969`. Then `git reset --keep origin/main`. Paste
+   both.
+1. In the `### Fixed` entry and the hammer test's doc comment, write "seen once in CI (one run in about 500 since
+   the test was added)", or drop the rate.
+2. The three-file release commit again.
+3. **On it:** `cargo test --workspace`, the 14 gates, and the release binary's sha256, which must be
+   `1828804ee7ee…`. If it is, the smoke, the matrix and `reproduce.sh` carry over from P3c; if not, rerun them.
