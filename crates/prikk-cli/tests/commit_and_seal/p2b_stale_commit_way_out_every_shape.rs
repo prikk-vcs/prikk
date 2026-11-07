@@ -19,6 +19,7 @@
 //! | 3 | = | = | ≠ | the stuck state, then `heads/docs`' own tip moved on; `commit --ref heads/docs` |
 //! | 4 | ≠ | = | = | `heads/feature` diverged `a.txt`; `commit --ref heads/feature` from `heads/main` |
 //! | 5 | ≠ | ≠ | ≠ | the stuck state plus a diverged `heads/feature`; `commit --ref heads/feature` |
+//! | 6 | ≠ | = | = | `commit --ref heads/new` onto a ref never published: the named switch refuses with its own reason |
 //!
 //! (R = B and C = R with C ≠ B cannot be told apart from the table's rows 4 and 3; C = B = R with a
 //! current branch that cannot be resolved keeps the old text and is not a shape of its own.)
@@ -317,4 +318,57 @@ fn a_commit_onto_another_ref_names_only_the_switch_to_that_ref() {
         );
         let _ = std::fs::remove_dir_all(&shape.repo);
     }
+}
+
+/// Shape 6 (the commit is onto a ref that has never been published, from another branch's
+/// worktree): the refusal names `prikk branch switch heads/new`, and that switch refuses with its
+/// own, different reason (`heads/new does not exist; run prikk branch create heads/new first`),
+/// which is the second thing the rule allows. Following that reason, `branch create` and then the
+/// same commit goes through. Before this round the refusal named the record's ref, a no-op, and
+/// the same commit refused again with the identical message.
+#[test]
+fn shape_6_the_commit_is_onto_an_unborn_ref_and_the_named_switch_says_why_it_refuses() {
+    let repo = support::unique_repo("p2b-shape6");
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "a.txt", b"a\n", "genesis");
+    std::fs::write(repo.join("z.txt"), b"innocent\n").unwrap();
+    let args = ["commit", "--ref", "heads/new", "-m", "innocent z"];
+
+    let refused = authored(&repo, &args);
+    let message = stderr(&refused);
+    assert!(
+        !refused.status.success() && message.contains("refusing to commit:"),
+        "the commit must refuse as stale: {message}"
+    );
+    assert!(
+        message.contains("run `prikk branch switch heads/new` to bring"),
+        "{message}"
+    );
+    assert!(!message.contains("<the current branch>"), "{message}");
+    assert_eq!(
+        message.matches("prikk branch switch").count(),
+        1,
+        "{message}"
+    );
+
+    let switched = switch(&repo, "heads/new");
+    assert!(!switched.status.success(), "heads/new does not exist yet");
+    assert!(
+        stderr(&switched).contains("heads/new does not exist; run `prikk branch create heads/new`"),
+        "the switch refuses for its own reason: {}",
+        stderr(&switched)
+    );
+
+    ok(
+        &support::branch_create(&repo, "heads/new", "heads/main"),
+        "the step that refusal names",
+    );
+    let again = authored(&repo, &args);
+    assert!(again.status.success(), "{}", stderr(&again));
+    let report = stdout(&again);
+    assert!(
+        report.contains("create-file z.txt") && report.contains("operations: 1"),
+        "{report}"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
 }
