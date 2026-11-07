@@ -99,3 +99,35 @@ is needed" holds). **Next: P2,** as above, plus:
   present, `--adopt` lands the delivery as `remotes/<name>`, classified against the received pointer only (often
   `no-local-history`). The local branch is neither compared nor moved. The class id is unchanged.
 - **`log --ref` versus `tree`/`checkout` wording and exit code:** a ROADMAP candidate, not this release.
+
+**P2 ACCEPTED 2026-11-07** (`45d42d89`, pushed; review `release-0.56.0-prep-P2-review-v1`). The architect reran the
+smoke (1047 ok, 0 FAIL), the memory profile across four builds (+11 MiB at 64,000 files, W2b's guard) and an
+independent `archive import` timing (+132 ms for 4,000 signatures, as predicted).
+
+**Next: P2b, the way out that works** (one sitting, 45 min, stop at 90; report `release-0.56.0-prep-P2b-report.md`):
+- **F1, a product fix.** Every command a stale-commit refusal names, run literally, is followed by the same `commit`
+  succeeding, or by a refusal that names its own different reason. With `commit --ref <x>` where `<x>` is not the
+  record's own ref, the way out is `prikk branch switch <x>`, substituted literally, and the two no-ops are not
+  named. 44a and 44d keep their text.
+  - **The test** enumerates the shapes by which of the three refs are equal: the ref committed onto, the record's ref
+    and the current branch. Each shape that can refuse runs the named commands literally, then the same commit.
+    Say which assertion fails without the fix.
+  - **Docs:** `commands.md:162` ("always works") and the CHANGELOG at ~261 say the rule as measured. §44b asserts
+    that the named command unblocks the commit.
+- **One message string:** "this delivery is a `<class>` against …" becomes one grammatical form for all three
+  classes. The `refusal-v1` ids and fields stay. Update the quotations: the CHANGELOG ~117, the `troubleshooting.md:993`
+  heading, `backup-restore.md:253`, and the tests.
+- `cargo test --workspace` and the 14 gates on the final commit.
+
+**P3 then carries, besides R1–R4:**
+- **R5:** `### Upgrading` gains the third cost, `commit` on a large tree needs about 10 % more memory (about 11 MiB
+  more at 64,000 files, release build).
+- **R6:** `commands.md:223` says "about 9 %", with the CHANGELOG's conditions.
+- **R7:** "a refused or crashed import's leftover" becomes "a crashed or interrupted import's leftover" in
+  `show.md:101–102`, `commands.md:451` and `:720`, `current-state.md:411`, and the CHANGELOG at ~387 and ~420.
+- **R8:** one sentence on `bundle preview`, in `commands.md` ~383 and the CHANGELOG's preview bullet: the outcomes
+  are for the tip's signatures, while `bundle import` checks every Block and RefState.
+- **R9:** a refused `commit` leaves `.prikk` unchanged except for its cache, as `worktree-status` does.
+  CHANGELOG ~39: "at its first `commit`, `seal`, or switch to another branch".
+- **R10:** one line in `passes-on-0.55.0.md`: 46c's two lines pass on 0.55.0 only on some runs (171–173 ok over
+  five runs), because 0.55.0's `sync pending` lists two or three patches.
