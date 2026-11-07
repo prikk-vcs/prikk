@@ -4,8 +4,8 @@
 WAL. The patch carries a real role-bound Ed25519 `AUTHOR` signature.
 
 ```sh
-# `prikk setup` wrote your AUTHOR seed to the key directory (~/.config/prikk/author.seed), and
-# prikk finds it there: nothing to export. To sign with another seed instead, name it:
+# `prikk setup` wrote your AUTHOR seed to the key directory (~/.config/prikk/author.seed), where
+# commit looks for it: nothing to export. To sign with another seed instead, name it:
 #   export PRIKK_AUTHOR_SEED_FILE="<path to a 0600 seed file>"
 #   export PRIKK_AUTHOR_KEY_ID="<an id>"           # optional: overrides the key-id file beside the seed
 

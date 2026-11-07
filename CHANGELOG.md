@@ -137,7 +137,7 @@ stdout, with the same text on stderr and the same exit code (`1`) as without the
   earlier, interrupted run completed it (`(completed by an earlier, interrupted run of this
   import)`).
 - **`archive import --format json`:** each entry of `landings` gains `class`, `ref_state_chain`
-  and `completed_by_interrupted_run`; the document gains `materialized_into_worktree`,
+  and `completed_by_interrupted_run`, for every landing, not only a refused one; the document gains `materialized_into_worktree`,
   `materialized_written_files`, `materialized_unchanged_files` and `materialized_deleted_files`.
 - **`archive import` and `archive verify` of an archive carrying a patch whose operations do not
   decode:** before, `archive import` landed it and `archive verify` reported the archive
@@ -280,8 +280,9 @@ after a `merge --into` of the current branch that brought in `c.txt`, `commit` r
   replay every other switch uses, so it refuses and names `seal` then `branch switch <the current
   branch>`; `seal` advances the worktree's record only when the worktree already matched the fold
   it sealed, so that second switch resyncs.
-- **`worktree-status` says `behind <ref>`,** with the record showing it, instead of calling every
-  file the ref gained `missing`; a file the user really deleted still reads `missing`.
+- **`worktree-status` says `behind <ref>`** when the record shows the worktree behind that ref's
+  sealed tip, its queued fold, or both, instead of calling every file the ref gained `missing`; a
+  file the user really deleted still reads `missing`.
 - **`merge --into`, `branch create --from` and `archive import --adopt` refuse to move a ref the
   active WAL holds queued work for,** before any write; they used to move it out from under the
   queue, leaving the queued patch authored against a tip that was no longer current. `sync seal`
@@ -399,7 +400,8 @@ are unaffected, and trust remains the receiver's own adopted set, never the arch
   a claim, or a refused or crashed import's leftover), the same whichever id names the patch,
   including a block's bare id. A pending text edit's path resolves through the claims that name it,
   following a chain of unsealed claims back to a block this repository holds, exactly as `extract
-  --claim` walks; the claim that resolved it is `resolved_through_claim_id`. A claim with an
+  --claim` walks; `resolved_through_claim_id` names the claim that resolved it, the one the patch names,
+  never an earlier link in its chain. A claim with an
   invalid MAINTAINER signature, or whose patches do not fold onto its declared parent, is skipped
   at any link and never makes `show` refuse. Where no claim resolves a path, `unresolved_node_id`
   carries a `reason`, the most specific that applies: an invalid signature, a fold failure, a
