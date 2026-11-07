@@ -427,7 +427,7 @@ of prikk accepts, and a newer version of prikk may have written it`; `"refusal":
   either gets the lock or gets `lock conflict`, and nothing had been written when it failed. If the
   denial persists and the lock file is there, it is reported as the lock conflict it is; if it
   persists with no lock file, it is a real permission problem and is reported as itself, now naming
-  the file. Seen once in the Windows mutation suite's racing-append test (about one run in forty).
+  the file. Seen once in CI (one run in about 500 since the test was added).
 - **`uninstall.sh --prefix <dir>` ignored `--prefix` and removed the binary at the default
   location instead** (found by an external consumer): `uninstall.sh` read only `$PRIKK_INSTALL_DIR`
   and never its own arguments. It now accepts `--prefix`, refuses an argument it does not

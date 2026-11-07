@@ -410,7 +410,7 @@ fn a_lock_create_failure_names_the_lock_file() {
 /// that one create meets the other's removal over and over (on Windows, the window in which the file
 /// is marked for deletion and a create is answered `ERROR_ACCESS_DENIED`). Every outcome must be
 /// either the lock or `LockConflict` -- never another error. The single-shot racing test in
-/// `object_store/tests.rs` hits that window rarely (it failed once in about forty CI runs); this one
+/// `object_store/tests.rs` hits that window rarely (it failed once in about 500 CI runs); this one
 /// hits it many times per run, which is what a Windows job needs to show the fix holds.
 #[test]
 fn two_writers_acquiring_and_releasing_one_lock_get_the_lock_or_a_conflict_never_another_error() {
