@@ -131,3 +131,12 @@ independent `archive import` timing (+132 ms for 4,000 signatures, as predicted)
   CHANGELOG ~39: "at its first `commit`, `seal`, or switch to another branch".
 - **R10:** one line in `passes-on-0.55.0.md`: 46c's two lines pass on 0.55.0 only on some runs (171–173 ok over
   five runs), because 0.55.0's `sync pending` lists two or three patches.
+
+**P2b ACCEPTED 2026-11-07** (`4fae9401` … `43787138`, pushed; review `release-0.56.0-prep-P2b-review-v1`). The
+architect ran shapes 4 and 6 by hand and repeated the red control (`2 passed; 5 failed` with the new arm disabled);
+the smoke gives 1046 ok. **Next: P3**, with these two added to its first commits:
+- **R11:** `concurrency-locking.md:241` and `troubleshooting.md:991` stop calling `appears running` reliable. Say
+  instead: "treat a lock that `appears running` as held; the check can be wrong after pid reuse, but only in the
+  direction of not clearing it". The negative half is unchanged, and part L (0.57.0) changes the mechanism.
+- **R12:** double-backtick spans for the two quotations of the class message, which now contains backticks:
+  `troubleshooting.md:994`'s heading and `backup-restore.md:253`. Rewrap the CHANGELOG's line ~118.
