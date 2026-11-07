@@ -114,8 +114,8 @@ stdout, with the same text on stderr and the same exit code (`1`) as without the
 **`bundle import`, `bundle preview`**
 - **`bundle import` of a rollback, a divergent rewrite or an unrelated history,** against an
   existing received pointer: before, exit `0` and the pointer replaced; after, exit `1`, ``error:
-  precondition not met: bundle import: this delivery is a <rollback|diverged|does-not-connect>
-  against <ref>'s current pointer -- refusing rather than silently rewriting received history; pass
+  precondition not met: bundle import: this delivery classifies as
+  `<rollback|diverged|does-not-connect>` against <ref>'s current pointer -- refusing rather than silently rewriting received history; pass
   --allow-non-fast-forward to accept a delivery that does not simply extend the pointer it would
   replace``, and nothing written. `--allow-non-fast-forward` is new. Under `--format json` the
   refusal is `refusal-v1` with `"command": "bundle-import"`, `"reason": null` and `"refusal"` one
@@ -257,10 +257,12 @@ after a `merge --into` of the current branch that brought in `c.txt`, `commit` r
 - **`commit` remembers, per path, what the worktree was last written from,** and refuses before
   authoring anything for a path whose live and recorded states disagree in content, mode, kind,
   presence or node — whichever ref the record names, and whichever ref is being committed onto —
-  naming every such path and the command that catches the worktree up. The way out always names
-  `prikk branch switch <the record's own ref>`; it names `prikk branch switch <the current branch>`
-  as well only when the branch being committed onto is published. A path that is not stale, or one
-  the worktree already matches, is authored as before.
+  naming every such path and the command that catches the worktree up. Every command the refusal
+  names, run as written, is followed by the same `commit` going through. When the commit is onto
+  the current branch, that is `prikk branch switch <the record's own ref>`, and also `prikk branch
+  switch <the current branch>` when that branch is published; when it is `commit --ref <x>` onto
+  any other ref, it is `prikk branch switch <x>` alone, substituted literally. A path that is not
+  stale, or one the worktree already matches, is authored as before.
 - **The four commands above bring a clean worktree along or refuse before they write anything.**
   Each requires the worktree to be clean against its record and no untracked file to sit where the
   new files go; each then marks the worktree, publishes as before, writes the new tip's files

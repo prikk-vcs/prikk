@@ -156,12 +156,16 @@ and `verify`/`doctor` do not look at it.
   worktree already holds the live state for it, and this holds in exactly the same way whichever
   ref the record itself names.** The refusal comes before anything is authored and names every such
   path: ``precondition not met: refusing to commit: <ref> is now at <state>, and this worktree was
-  last written from <state>; …; run `prikk branch switch <the record's own ref>` to bring the
-  worktree up to date, then commit again``. The way out named is `prikk branch switch <the record's
-  own ref>`, with the ref the record actually names substituted literally, since switching to it
-  always works (the record is an accurate description of what the worktree physically holds). The
-  current-branch self-switch, `prikk branch switch <the current branch>`, is named additionally only
-  when the ref being committed onto is itself published. A path missing from the worktree that the
+  last written from <state>; …; run `prikk branch switch <ref>` to bring the worktree up to date,
+  then commit again``. Every command the refusal names, run as written, is followed by the same
+  `commit` going through (or by a refusal of its own that says why). When the commit is onto the
+  current branch, the way out is `prikk branch switch <the record's own ref>`, with the ref the
+  record actually names substituted literally (the record is an accurate description of what the
+  worktree physically holds), and also the self-switch, `prikk branch switch <the current branch>`,
+  when the ref being committed onto is itself published. When the commit is onto any other ref
+  (`commit --ref <x>`, `<x>` not the current branch), the only command named is `prikk branch switch
+  <x>`, with `<x>` substituted literally: switching to the record's ref or to the current branch
+  would change nothing there, and the same commit would refuse again. A path missing from the worktree that the
   record never explains reads "not in this worktree, and never were" (the deletion-shaped case: a
   command moved the ref without writing the worktree, or `commit --ref <other>` ran from a worktree
   recorded against a different branch). A path the worktree still physically holds, but whose

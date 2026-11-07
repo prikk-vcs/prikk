@@ -450,6 +450,16 @@ fn assert_refusal_v1(out: &std::process::Output, expected_id: &str) {
         value.get("message").as_str().contains(expected_id),
         "{value:?}"
     );
+    // One grammatical form for all three classes (0.56.0 P2b): "is a diverged" and "is a
+    // does-not-connect" read wrongly, so the class is named, not used as a noun.
+    let message = value.get("message").as_str();
+    assert!(
+        message.contains(&format!(
+            "this delivery classifies as `{expected_id}` against "
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("this delivery is a "), "{message}");
 }
 
 #[test]

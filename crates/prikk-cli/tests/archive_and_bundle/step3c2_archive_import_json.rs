@@ -315,6 +315,13 @@ fn rollback_without_the_flag_refuses_with_refusal_v1_and_writes_nothing() {
     assert_eq!(value.get("schema_version").as_str(), "refusal-v1");
     assert_eq!(value.get("command").as_str(), "archive-import");
     assert_eq!(value.get("refusal").as_str(), "rollback");
+    // One grammatical form for all three classes (0.56.0 P2b).
+    let message = value.get("message").as_str();
+    assert!(
+        message.contains(" classifies as `rollback` against its current "),
+        "{message}"
+    );
+    assert!(!message.contains(" is a rollback "), "{message}");
     let after = support::store_bytes(&target);
     assert_eq!(
         before, after,

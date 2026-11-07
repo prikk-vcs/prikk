@@ -1177,12 +1177,27 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
             .map(|recorded| format!("`prikk branch switch {}`", recorded.ref_name));
         let self_switch = "`prikk branch switch <the current branch>` (`prikk status` names the \
                             current branch)";
-        let ways_out = match (&record_switch, lineage_baseline_block_id.is_some()) {
-            (Some(record_switch), true) => format!("run {record_switch}, or {self_switch},"),
-            (Some(record_switch), false) => format!("run {record_switch}"),
-            // Unreachable alongside `recorded_desc`'s own `None` arm, for the same reason -- kept
-            // as a real sentence, never `unreachable!()`.
-            (None, _) => format!("run {self_switch}"),
+        let ways_out_for_the_current_branch =
+            match (&record_switch, lineage_baseline_block_id.is_some()) {
+                (Some(record_switch), true) => format!("run {record_switch}, or {self_switch},"),
+                (Some(record_switch), false) => format!("run {record_switch}"),
+                // Unreachable alongside `recorded_desc`'s own `None` arm, for the same reason --
+                // kept as a real sentence, never `unreachable!()`.
+                (None, _) => format!("run {self_switch}"),
+            };
+        // 0.56.0 P2b: the two commands above are the way out only when this commit is onto the
+        // current branch (the stuck record, or the worktree behind its own branch). A commit onto
+        // some *other* ref (`commit --ref <x>`) is not helped by either: switching to the record's
+        // ref, or to the current branch, is a no-op whenever the worktree is already what the
+        // record says, and the same commit then refuses with the same message. The command that
+        // makes the worktree match `<x>` is the switch to `<x>` itself, so that is the only one
+        // named, with the ref substituted. When the current branch cannot be resolved the text
+        // stays as it was (display never refuses).
+        let ways_out = match crate::refs::current_branch(layout) {
+            Ok(current) if current != canonical_ref.as_str() => {
+                format!("run `prikk branch switch {canonical_ref}`")
+            }
+            _ => ways_out_for_the_current_branch,
         };
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
             "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; {ways_out} \

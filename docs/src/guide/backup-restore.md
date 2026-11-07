@@ -250,7 +250,7 @@ repository, reported as `objects gaining signatures: N`, and is refused in a for
 result as `class:` — `no-local-history`, `already-at-tip`, `fast-forward`, `rollback` (older than what
 is held), `diverged` (both sides moved) or `does-not-connect` (no shared history). The last three are
 refused when a pointer already exists, before anything is written (`error: precondition not met: bundle
-import: this delivery is a rollback against remotes/heads/main's current pointer -- refusing rather than
+import: this delivery classifies as `rollback` against remotes/heads/main's current pointer -- refusing rather than
 silently rewriting received history; pass --allow-non-fast-forward to accept a delivery that does not
 simply extend the pointer it would replace`). Restoring an older backup over a newer copy therefore
 needs `--allow-non-fast-forward`, given on purpose. `--format json` prints the same facts.

@@ -2354,8 +2354,8 @@ pub fn import_bundle(
             command: "bundle-import",
             class: connectivity_class.as_str(),
             message: format!(
-                "bundle import: this delivery is a {} against {received_ref_name}'s current \
-                 pointer -- refusing rather than silently rewriting received history; pass \
+                "bundle import: this delivery classifies as `{}` against {received_ref_name}'s \
+                 current pointer -- refusing rather than silently rewriting received history; pass \
                  --allow-non-fast-forward to accept a delivery that does not simply extend the \
                  pointer it would replace",
                 connectivity_class.as_str()

@@ -1457,8 +1457,8 @@ fn land_as_received_pointer(
             command: "archive-import",
             class: class.as_str(),
             message: format!(
-                "archive import: landing {ref_name} is a {} against its current received \
-                 pointer -- refusing rather than silently rewriting received history; pass \
+                "archive import: landing {ref_name} classifies as `{}` against its current \
+                 received pointer -- refusing rather than silently rewriting received history; pass \
                  --allow-non-fast-forward to accept a landing that does not simply extend the \
                  pointer it would replace",
                 class.as_str()
@@ -2310,8 +2310,8 @@ fn classify_every_planned_landing_or_refuse<R: Read + Seek>(
                 command: "archive-import",
                 class: class.as_str(),
                 message: format!(
-                    "archive import: landing {} is a {} against its current received pointer \
-                     -- refusing before writing anything for this import at all; pass \
+                    "archive import: landing {} classifies as `{}` against its current received \
+                     pointer -- refusing before writing anything for this import at all; pass \
                      --allow-non-fast-forward to accept a landing that does not simply extend \
                      the pointer it would replace",
                     landing.ref_name,

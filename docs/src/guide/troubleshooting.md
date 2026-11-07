@@ -977,7 +977,8 @@ that reached it, a `sync seal`, a `merge`), or you committed with `--ref` onto a
 one you are on. Committing now would either record the files you did not receive as deleted, or
 silently undo what moved the branch. The message lists every path and ends with the command that brings
 the worktree up to date, `prikk branch switch <branch>`, with the branch named literally. Run it, then
-commit again. `prikk worktree-status` reports the same state as `behind heads/<name>` instead of
+commit again. When you committed with `--ref <x>` onto a branch you are not on, the command is the
+switch to `<x>` itself. `prikk worktree-status` reports the same state as `behind heads/<name>` instead of
 listing every new file as `missing`.
 
 ## `error: lock conflict: active lock already exists: <path> -- run prikk unlock to list held locks, …`
@@ -990,7 +991,7 @@ live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after y
 process that held it is gone: `appears running` is reliable, but `does not appear to be running` is
 not proof, and clearing a live holder's lock can corrupt the repository.
 
-## `error: precondition not met: bundle import: this delivery is a rollback against remotes/<name>'s current pointer -- refusing …`
+## `error: precondition not met: bundle import: this delivery classifies as `rollback` against remotes/<name>'s current pointer -- refusing …`
 
 `bundle import` and `archive import` compare what they are given with the received pointer they would
 replace, and refuse a delivery that is a `rollback` (older than what you hold), `diverged` (both sides
