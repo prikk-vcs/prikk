@@ -272,3 +272,9 @@ reached. `archive/verify.rs` uses the same walk.
    the last commit re-dates the CHANGELOG heading. On the final commit: tests, the 14 gates, the smoke on the release
    build, and `matrix.py` **v7** (from `receive/046…/reproduce/`) at both depths with and without `--hexflip`,
    compared by row with the external architect's `ffa581db` logs.
+
+**P4 ACCEPTED 2026-11-08** (`7fe71628`, pushed, CI green `42383276299` 17/17; review `release-0.56.0-prep-P4-review-v1`).
+**The 0.56.0 candidate is now `7fe71628`.** The architect rebuilt it: a 130-block edited-file history reads `unreached
+objects: 0`, and the full smoke gives 1074 ok. Letter 047 to the external architect is drafted, and the owner sends
+it. **For the dev team, only on the tag day:** the CHANGELOG heading says 2026-11-07, so a one-line re-date commit
+comes last. The architect pushes it and reads its CI before the tag.
