@@ -666,6 +666,21 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // live state actually agree, never merely because the record names a different ref.
     let recorded_identity =
         crate::worktree_baseline::read_worktree_baseline(layout).map_err(AuthorError::Store)?;
+    // 0.56.0 P3b: a record naming a Block this repository does not hold (a flipped hex digit still
+    // parses) is damaged derived state and reads as no record, like one that does not parse; the
+    // next `commit`, `seal` or `branch switch` writes a correct one.
+    let recorded_identity = match recorded_identity {
+        Some(recorded)
+            if !crate::worktree_baseline::recorded_baseline_block_is_held(
+                &object_store,
+                &recorded,
+            )
+            .map_err(AuthorError::Store)? =>
+        {
+            None
+        }
+        other => other,
+    };
     let recorded_baseline: Option<BaselineSplit> = match &recorded_identity {
         None => None,
         Some(recorded) => {

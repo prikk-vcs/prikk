@@ -55,10 +55,11 @@
 //! something `doctor` needs to repair.
 
 use prikk_error::Result;
-use prikk_object::ObjectId;
+use prikk_object::{ObjectId, ObjectType};
 
 use crate::foundation::fsutil::{read_file_if_exists, rewrite_in_place_or_create_required};
 use crate::foundation::layout::RepositoryLayout;
+use crate::object_store::{FileObjectStore, ObjectReader};
 use crate::patch_replay::{WorktreeBaseline, resolve_worktree_baseline};
 use crate::refs::validate_local_branch_ref;
 use crate::wal::WalReplay;
@@ -478,11 +479,37 @@ pub(crate) fn compare_worktree_baseline_with_live(
     if recorded.baseline == live.baseline && recorded.queued_fold == live.queued_fold {
         Ok(WorktreeBaselineComparison::Current)
     } else {
+        // 0.56.0 P3b: a record that parses but names a Block this repository does not hold is
+        // damaged derived state (a flipped hex digit still parses), exactly like one that does not
+        // parse: it reads as no record, so no caller goes on to load a Block that is not there and
+        // fail with an integrity error about objects that are intact. Checked only here, on the
+        // `Behind` path, where the recorded Block is about to be loaded by the caller: `Current`
+        // means the record names the very Block the live ref resolved to, so it is held, and the
+        // common path pays nothing.
+        if !recorded_baseline_block_is_held(&FileObjectStore::new(layout.clone()), &recorded)? {
+            return Ok(WorktreeBaselineComparison::NoRecord);
+        }
         Ok(WorktreeBaselineComparison::Behind {
             recorded,
             live: Box::new(live),
         })
     }
+}
+
+/// Whether the Block `recorded` names is held by this repository (a genesis record names none and
+/// is always "held"). `false` only for a Block that is absent from the object store; a Block that is
+/// present but damaged is still an error from the read, never a silent "no record" (damage to the
+/// repository's own objects is not what this tolerates).
+pub(crate) fn recorded_baseline_block_is_held(
+    object_store: &impl ObjectReader,
+    recorded: &WorktreeBaselineIdentity,
+) -> Result<bool> {
+    let Some(block_id) = recorded.baseline else {
+        return Ok(true);
+    };
+    Ok(object_store
+        .read_typed(block_id, ObjectType::Block)?
+        .is_some())
 }
 
 /// Render an identity's state in words, for a refusal or status message: "Block <id>", "Block <id>

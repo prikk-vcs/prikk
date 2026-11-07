@@ -291,9 +291,11 @@ fn an_inline_test_module_is_not_production() {
         // `ways_out` match plus its own doc comment, 1853 -> 1881. 0.56.0 P2b: a commit onto some
         // other ref than the current branch names only the switch to that ref (the two commands
         // above are no-ops there), a second match on the current branch plus its doc comment,
-        // 1881 -> 1897.
+        // 1881 -> 1897. 0.56.0 P3b: a record naming a Block the repository does not hold reads as
+        // no record (a filter at the one place `commit` reads the record, plus its comment),
+        // 1897 -> 1912.
         physical,
-        1897,
+        1912,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -303,7 +305,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1848);
+    assert_eq!(counted.production_lines, 1863);
     assert_eq!(
         physical - counted.production_lines,
         49,

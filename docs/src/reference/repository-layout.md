@@ -51,7 +51,11 @@ and sealed tip block the worktree was last made to match, plus the active WAL's 
 [Command Surface](commands.md)). It is worktree-local operational state, like the two markers beside
 it, never part of a versioned object. A repository made by an earlier release has no such file or an
 empty one; the first `commit`, `seal`, `branch switch` or checkout writes it, and until then the
-commands compare the worktree against the ref's live state as before.
+commands compare the worktree against the ref's live state as before. The same holds for a record that
+is absent, empty or unreadable, or that names a Block this repository does not hold (a damaged copy of
+the file can still parse): it is ignored, and the next `commit`, `seal` or `branch switch` rewrites it.
+Until then `commit` cannot tell a branch that moved from the user's own change, exactly as before 0.56.0.
+`verify` and `doctor` do not check the file.
 
 ```text
 .prikk/

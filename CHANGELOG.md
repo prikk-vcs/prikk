@@ -306,7 +306,9 @@ after a `merge --into` of the current branch that brought in `c.txt`, `commit` r
   switch <the current branch>` when that branch is published; when it is `commit --ref <x>` onto
   any other ref, it is `prikk branch switch <x>` alone, substituted literally. A path that is not
   stale, or one the worktree already matches, is authored as before. A refused `commit` leaves
-  `.prikk` unchanged except for its cache, as `worktree-status` itself does.
+  `.prikk` unchanged except for its cache, as `worktree-status` itself does. The record the guard
+  reads is worktree-local and derived: one that is absent, empty, unreadable or names a Block the
+  repository does not hold is ignored and rewritten by the next `commit`, `seal` or switch.
 - **The four commands above bring a clean worktree along or refuse before they write anything.**
   Each requires the worktree to be clean against its record and no untracked file to sit where the
   new files go; each then marks the worktree, publishes as before, writes the new tip's files
