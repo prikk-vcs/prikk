@@ -41,7 +41,19 @@
   0.56.0.
 - **`uninstall.sh` accepts `--prefix <dir>` and refuses any other argument;** `uninstall.ps1`
   refuses any argument at all. A wrapper that passed other arguments to either must stop.
-<!-- Public API: the architect adds the break lines from the API diff here (P1 item 4). -->
+- **If you call the `prikk-store` library (this changes its public API):**
+  - `execute_merge` takes a trailing `current_branch: Option<&str>`; pass `None` for 0.55.0's
+    behaviour (the worktree is never written).
+  - `ArchiveImportOptions` is no longer `Copy`; call `.clone()`.
+  - `BlockStateStatus::Failed`, `ObjectItemStatus::Failed` (new `kind`) and
+    `ShowPathResolution::Unresolved` (new `reason`) gained a field, and `BundleImportOptions`,
+    `BundlePreviewReport` and `MergeExecutionReport` gained fields. All of them are now
+    `#[non_exhaustive]`, so later fields will not break you again: match the variants with `..`,
+    build `BundleImportOptions` with `default_limits()` and its `with_*` methods
+    (`with_allow_non_fast_forward` is new), and read the reports field by field.
+  - New public enums and structs (for example `PatchState`, `BundleConnectivityClass`,
+    `DecodeFailureKind`) are `#[non_exhaustive]` from the start: match them with a wildcard arm,
+    as you already must for `PrikkError`, which gained four variants.
 <!-- P2: the cost of the admission signature check and of `archive import --adopt`'s early check, if the architect wants it stated here. -->
 
 ### Output changes
@@ -308,8 +320,8 @@ object it carries and leaves the pointer alone.
 
 Neither importer checked publication trust at admission; only a later `prikk verify` caught a
 signature that named an adopted key id but did not verify against that key, by which time the
-object was durably admitted (and, for `archive import --adopt`, possibly already a real local
-branch). Both now check every Block and RefState the delivery would admit, not only its tip, each
+object was durably admitted (`archive import --adopt` landed it under `remotes/`, marked not
+adopted, never as a local branch). Both now check every Block and RefState the delivery would admit, not only its tip, each
 once, and refuse before the first write. The same check `verify` and `seal` apply
 (`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`) decides it; a signature by a key this repository has
 never adopted (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`) is not refused and imports as before. The
