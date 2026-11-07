@@ -27,7 +27,13 @@
   reading the code; not run). In a repository that admitted one, `verify` and `doctor` fail
   (`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`, exit `1`), under 0.55.0 as well.
   `prikk received remove remotes/<ref>` takes the pointer away, but `verify` keeps failing and no
-  command deletes the block.
+  command deletes the block. To keep your own history, carry it to a new repository: `prikk setup
+  <new-dir>` under the same keys, then, for your branch, `prikk sync have heads/<branch>` in the new
+  one, `prikk sync build heads/<branch> --have <file> --output <file>` in the old one, and `prikk
+  sync accept` then `prikk sync seal heads/<branch> --claims <file>` in the new one. Block ids,
+  messages and files stay the same, and `verify` exits `0` there. Received refs and trust entries
+  other than your own key are not carried, and a second branch must be created in the new
+  repository (`prikk branch create heads/<other> --from heads/<branch>`) before it is carried.
 - **`extract --claim` extracted a claim whose MAINTAINER signature is forged or missing** (see
   "Fixed — `extract --claim` extracted a forged or unsigned claim, and anchored on a parent no
   branch reaches"). Affected: 0.55.0 (measured), and every earlier release that has `extract
