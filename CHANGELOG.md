@@ -25,8 +25,7 @@
   names the command that does it, `prikk branch switch <branch>`. Run that command, then commit
   again.
 - **`extract --claim` refuses a claim whose MAINTAINER signature is forged or missing,** where
-  0.55.0 extracted it. A script that extracted unsigned claims must adopt the signer's key first
-  (`prikk trust maintainer add`).
+  0.55.0 extracted it. A claim signed by a key this repository has not adopted still extracts.
 - **`sync pending` lists fewer patches:** only a patch some held recognition claim names and no
   held block seals. A script that used it to find every patch without a sealing block should read
   `show --format json`'s `state` instead.
