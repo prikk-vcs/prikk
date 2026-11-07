@@ -140,3 +140,40 @@ the smoke gives 1046 ok. **Next: P3**, with these two added to its first commits
   direction of not clearing it". The negative half is unchanged, and part L (0.57.0) changes the mechanism.
 - **R12:** double-backtick spans for the two quotations of the class message, which now contains backticks:
   `troubleshooting.md:994`'s heading and `backup-restore.md:253`. Rewrap the CHANGELOG's line ~118.
+
+**P3 reviewed 2026-11-07** (review `release-0.56.0-prep-P3-review-v1`). `40a63a8e` and `f2a586e2` are accepted and
+pushed. **The release commit `25f28e10` is not the candidate, and is not pushed.** Finding 1 (a record naming a Block
+this repository does not hold makes `commit` and `branch switch` fail with `integrity error`, while `verify` and
+`doctor` stay clean) is fixed first.
+
+**Next: P3b, the record that names a missing block** (one sitting, 60 min, stop at 120; report
+`release-0.56.0-prep-P3b-report.md`):
+0. **Drop the unpushed release commit.** `git log --oneline origin/main..main` must show exactly `25f28e10`; then
+   `git reset --keep origin/main`. Paste both. `origin/main` now carries this note.
+1. **Route (a).** `commit`, `seal`, `branch switch` and `worktree-status` read a record whose Block this repository
+   does not hold as no record. That is the module's posture for a record that does not parse, and the next write
+   replaces it.
+   - **The test:** replace one hex digit of the block id with another valid hex digit. `commit` succeeds and authors
+     only the new file; after `seal` the record names the new tip; on a second fixture the self-switch exits 0.
+     Include a red control.
+   - **`repository-layout.md`:** one sentence. Ignored records are absent, empty, unreadable, or naming a missing
+     Block, and the next `commit`, `seal` or `branch switch` rewrites them. Until then `commit` cannot tell a moved
+     branch from the user's own change, as before 0.56.0.
+   - **CHANGELOG:** one clause in the commit-guard bullet, not a Fixed entry.
+2. **Security (c)'s last sentence, measured.** Start with the fork's recipe, from a repository 0.55.0 admitted the
+   archive into. Find the shortest route to a repository that passes `verify` with the user's own history (e.g.
+   `bundle export --ref heads/<branch>` into a fresh `prikk setup`, plus whatever makes it a local branch again).
+   Every step must be measured, ending with `verify` exit 0.
+   - **If nothing works in 30 minutes,** the bullet ends: "0.56.0 has no command that makes such a repository pass
+     `verify`; its other history stays usable (`commit` and `seal` work); a fix is planned" (the ROADMAP row exists).
+   - The bullet must not say "restore a `.prikk`" or "read it with a newer version".
+3. **The three-file release commit again.**
+4. **On that final commit:**
+   - `cargo test --workspace`;
+   - the 14 gates;
+   - the smoke on the release build;
+   - `matrix.py` v6 at `--compactions 1` and `2` on the candidate, compared by row with P3's 0.55.0 runs;
+   - the external `reproduce.sh`;
+   - finding 1's probe (a hex-preserving flip of the block id now heals).
+
+The 8 `SILENT` cells are accepted for 0.56.0 (ROADMAP: a `doctor` notice for an ignored record).
