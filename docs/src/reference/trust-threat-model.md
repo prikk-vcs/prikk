@@ -178,8 +178,12 @@ The local maintainer trust store supports a set of repository-local adopted MAIN
 `required = 1` continuing to mean any one adopted key's signature suffices. `prikk trust maintainer add`
 adds a new key id to the set, or idempotently confirms an already-adopted id's matching key; it refuses
 to replace an adopted id's key with a different one. This refusal is a trust-on-first-use rule: the
-first public key seen for a key id is the one trusted for that id, permanently, until an operator
-removes it out-of-band. There is no remote trust distribution.
+first public key seen for a key id is the one trusted for that id. `prikk trust maintainer remove`
+takes an id out of the adopted set but not out of the record of which key it belongs to: a removed id
+stays bound to its first key, adding it with a different key is refused (naming the id as removed
+rather than adopted), and adding it with its original key works. Only an operator's own `add` and
+`remove` change the adopted set, and a different key needs a distinct id. There is no remote trust
+distribution.
 
 `prikk trust maintainer list` and `prikk trust maintainer check --key-id <ID>` (RFC 138) read that
 same set without changing it: `list` enumerates every currently adopted key and `check` answers

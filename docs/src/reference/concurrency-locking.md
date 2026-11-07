@@ -239,7 +239,10 @@ cleanup path itself, which remains `prikk unlock` alone.
 recorded process id, and a best-effort advisory on whether that process still appears to be running
 (checked with `kill(pid, 0)` on Linux and macOS; unknown on other platforms). This check is
 asymmetric on purpose: a positive result — the process still appears to be running — is reliable
-evidence to refuse, because the check actually found it. A negative or unknown result is *not*
+evidence, for the operator, that the lock is not stale and should not be cleared, because the check
+actually found it (the listing says `appears running -- do not clear`). `prikk unlock` only advises:
+it does not refuse on this result, and `--yes` (or `--force`) clears the lock whatever the check
+found. A negative or unknown result is *not*
 evidence the lock is safe to clear, since PID reuse after a reboot or PID-namespace isolation inside a
 container can both make a genuinely running process appear absent. `prikk unlock --lock <path>` clears
 one specific lock, after printing its details, and requires typing `yes` at an interactive prompt
