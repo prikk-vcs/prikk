@@ -7,17 +7,17 @@
 - **A forged MAINTAINER signature on a Block or RefState, on the tip or on an ancestor, was
   admitted by `bundle import` and `archive import`** (see "Fixed — `bundle import` and `archive
   import` admitted a Block or RefState whose MAINTAINER signature does not verify"). Affected:
-  0.55.0 (measured), and every earlier release that has `bundle import` or `archive import` (from
-  reading the code; not run). To check a repository, run `prikk verify`: an admitted forgery is
+  0.53.0, 0.54.1 and 0.55.0 (measured), and every earlier release that has `bundle import` or
+  `archive import` (from reading the code; not run). To check a repository, run `prikk verify`: an admitted forgery is
   reported as `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`, and the exit code is `1`. To remove it,
   run `prikk received remove remotes/<ref>` (add `--plan-only` first to see what it would remove);
   `verify` then exits `0`. The objects stay and are reported as `unreached objects` warnings; no
   command removes them.
 - **A rollback, a divergent rewrite or an unrelated history silently replaced a received pointer
   in `bundle import` and `archive import`** (see "Fixed — a rollback, a divergent rewrite or an
-  unrelated history silently replaced a received pointer"). Affected: 0.55.0 (measured), and every
-  earlier release that has `bundle import` or `archive import` (from reading the code; not run).
-  Nothing marks a pointer that was already replaced: compare `prikk log --ref remotes/<name>` (or
+  unrelated history silently replaced a received pointer"). Affected: 0.53.0, 0.54.1 and 0.55.0
+  (measured), and every earlier release that has `bundle import` or `archive import` (from
+  reading the code; not run). Nothing marks a pointer that was already replaced: compare `prikk log --ref remotes/<name>` (or
   `prikk branch list --all`) with the tip you expect. Import the right delivery again: one that
   extends the pointer is accepted, and one that diverges from it needs `--allow-non-fast-forward`,
   which you should pass only when you mean it.
@@ -463,9 +463,9 @@ of prikk accepts, and a newer version of prikk may have written it`; `"refusal":
   it.
 - **`verify` and `doctor` could not see unreached patches and blobs:** a rolled-back or `received
   remove`d block's patch and the blobs its operations name, a claimless accepted patch, a crashed
-  or interrupted import's leftover objects. They are counted when no tip, no WAL record and no
-  pending patch (with the blobs it names) reaches them, as a non-blocking warning; the bytes stay and no
-  command removes them.
+  or interrupted import's leftover objects. They are counted when no tip, no WAL record, no pending
+  patch (with the blobs it names) and no checkpoint snapshot (with the content blobs its manifest
+  names) reaches them, as a non-blocking warning; the bytes stay and no command removes them.
 - **A crash that left a lock behind was invisible to `doctor`, and the `lock conflict` error did
   not say how to proceed.** `doctor` names every held lock and the error names `prikk unlock`;
   prikk still never steals or expires a lock on its own.

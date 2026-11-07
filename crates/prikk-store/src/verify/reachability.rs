@@ -238,8 +238,33 @@ pub(crate) fn expand_frontier(envelope: &ObjectEnvelope) -> Vec<ObjectId> {
             };
             next.extend(blob_ids);
         }
+        // 0.56.0 P4: a reachable Blob of kind `Snapshot` (a checkpoint's manifest, named by a
+        // reachable Block's `snapshot_blob_ref`) reaches every content Blob its entries name. An
+        // `EditText` names no Blob, so a text file edited step after step has its content Blobs named
+        // only by the checkpoint manifests: without this arm every checkpoint's Blobs read as
+        // unreached (one per 64th block), with the forgery-leftover warning, on an honest repository.
+        // Every other Blob kind names nothing. A manifest that does not decode is treated like a Patch
+        // that does not decode (above): the manifest Blob itself stays reached (the caller inserted
+        // it before this runs), the walk builds no further past it, and the damage is `verify`'s
+        // snapshot check to report, not this walk's.
+        ObjectType::Blob => {
+            let Ok(blob) = prikk_object::BlobPayload::decode_canonical(&envelope.canonical_payload)
+            else {
+                return next;
+            };
+            if blob.blob_kind != prikk_object::BlobKind::Snapshot {
+                return next;
+            }
+            let Ok(manifest) = crate::snapshot::SnapshotManifest::decode(&blob.content) else {
+                return next;
+            };
+            for entry in &manifest.entries {
+                if let crate::state_root::StateRootContent::Blob(blob_id) = &entry.content {
+                    next.push(*blob_id);
+                }
+            }
+        }
         ObjectType::RefUpdate
-        | ObjectType::Blob
         | ObjectType::Attestation
         | ObjectType::BlockSummaryCache
         | ObjectType::RecoveryNote

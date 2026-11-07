@@ -1,6 +1,7 @@
 //! Repository verification tests.
 
 mod acknowledged_damage_is_not_a_tail;
+mod checkpoint_manifest_blobs;
 mod connectivity;
 mod current_branch_warning;
 mod every_signature;
