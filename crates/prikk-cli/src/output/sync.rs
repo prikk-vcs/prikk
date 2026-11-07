@@ -78,6 +78,11 @@ fn push_signature(json: &mut String, signature: &PendingClaimSignatureOutcome) {
             json.push_str(", \"reason\": ");
             json.push_str(&escape_json_string(reason));
         }
+        // An outcome a later version adds: never reported as sound.
+        _ => {
+            json.push_str(&escape_json_string("unverifiable"));
+            json.push_str(", \"key_id\": null");
+        }
     }
     json.push('}');
 }

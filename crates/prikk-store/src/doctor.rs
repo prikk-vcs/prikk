@@ -1028,7 +1028,8 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                              with a newer version of prikk"
                                 .to_string(),
                         ),
-                        prikk_error::DecodeFailureKind::Corrupt => (
+                        // `Corrupt`, and any kind added later: treated as damage, the safe default.
+                        _ => (
                             "PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE",
                             "preserve the repository and inspect the failing object before \
                              attempting repair"
@@ -1065,10 +1066,8 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          a newer version of prikk"
                             .to_string(),
                     ),
-                    BlockStateStatus::Failed {
-                        message,
-                        kind: prikk_error::DecodeFailureKind::Corrupt,
-                    } => (
+                    // `Corrupt`, and any kind added later: treated as damage, the safe default.
+                    BlockStateStatus::Failed { message, .. } => (
                         "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE",
                         format!(
                             "Block {} state-root verification failed: {message}",

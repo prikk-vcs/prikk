@@ -585,6 +585,7 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
                     unchanged_files,
                     deleted_files,
                     anchor_fallback,
+                    ..
                 }) => {
                     crate::warn_anchor_fallbacks(anchor_fallback.iter());
                     println!(

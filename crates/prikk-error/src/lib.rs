@@ -272,6 +272,7 @@ impl fmt::Display for PrikkError {
 /// `OutsideVersionRule` would be actively wrong. [`PrikkError::NonAsciiRepoPath`] now exists apart
 /// from `InvalidName` specifically so this match can tell the two apart structurally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DecodeFailureKind {
     /// A truncated varint, bad canonical encoding, wrong field count, or other real damage.
     Corrupt,

@@ -51,6 +51,7 @@ use crate::{
 
 /// Result of a completed merge execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MergeExecutionReport {
     /// Ref advanced by the merge (the "into" side).
     pub into_ref: String,

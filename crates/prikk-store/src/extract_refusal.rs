@@ -135,6 +135,7 @@ pub struct ClaimDoesNotFoldInfo {
 /// -- a simplified, wire-friendly three-way tag (`extract-report-v1`/`refusal-v1` carry the same
 /// three strings `sync-pending-v1` already does: `"sound"`, `"unverifiable"`, `"invalid"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChainSignatureOutcomeKind {
     /// The signature verifies against a key this repository has adopted.
     Sound,

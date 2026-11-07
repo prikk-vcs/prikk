@@ -41,6 +41,7 @@ pub enum ObjectItemStatus {
     /// reference existence). Its signature-envelope findings and (for a `Block`) merge-baseline
     /// divergence and `pending_v3_blocks` contribution are *not* recorded -- this object's own
     /// verification did not run to completion, so nothing derived partway through it is reported.
+    #[non_exhaustive]
     Failed {
         /// The error the check raised.
         message: String,

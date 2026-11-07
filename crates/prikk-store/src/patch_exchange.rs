@@ -65,6 +65,7 @@ pub use crate::patch_set_digest::accepted_but_unsealed_patch_ids;
 /// before any release; `order_claims_for_sealing`'s own batch ordering is unaffected, since it
 /// reads `RecognitionClaimPayload::parent_block_ids` directly, never this summarized type.)
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PendingPatchClaim {
     /// The claim's own content-addressed id.
     pub claim_id: ObjectId,
@@ -94,6 +95,7 @@ pub struct PendingPatchClaim {
 /// because a listing must show the operator *which* claim failed, not hide the whole listing
 /// behind one forged claim's refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PendingClaimSignatureOutcome {
     /// Mirrors [`ClaimSignatureVerification::Sound`].
     Sound {
@@ -143,6 +145,7 @@ fn first_maintainer_key_id(envelope: &prikk_object::ObjectEnvelope) -> Option<St
 
 /// One pending patch, with every recognition claim (held locally) that names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PendingPatchEntry {
     /// The pending patch's own id.
     pub patch_id: ObjectId,

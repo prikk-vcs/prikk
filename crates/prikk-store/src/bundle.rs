@@ -135,6 +135,7 @@ pub const DEFAULT_BUNDLE_MAX_OBJECT_BYTES: usize = DEFAULT_BUNDLE_MAX_TOTAL_BYTE
 /// DC-86 resource bound for [`import_bundle`], checked before any object is decoded or written —
 /// DC-57's shape: a hard block ahead of any write, with a documented default the CLI may override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BundleImportOptions {
     /// Maximum objects a bundle may declare. Refused before the decode loop runs.
     pub max_object_count: usize,
@@ -328,6 +329,7 @@ pub struct BundleImportReport {
 /// reads and which keeps its existing values unchanged -- `AlreadyAtTip` and `Rollback` here both
 /// still map to [`BundlePreviewConnectivity::AlreadyIncluded`] there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BundleConnectivityClass {
     /// The local side (the ref being previewed against, or the pointer a delivery would replace)
     /// has never been published -- there is no local target to compare against at all.
@@ -368,6 +370,7 @@ impl BundleConnectivityClass {
 /// `previous_ref_state_id`. A boolean would hide which of the two problems (`Older` vs `Unrelated`)
 /// applies, so this is a three-value field instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RefStateChainRelation {
     /// The prior pointer's own RefState id appears in the delivered RefState's own chain: the
     /// delivery genuinely continues from it.
@@ -511,6 +514,7 @@ impl BundlePreviewEffectKind {
 /// publication-trust outcome -- the per-signature detail `sealed_by` (alongside it on
 /// [`BundlePreviewReport`]) deliberately does not carry, since `sealed_by` stays unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BundlePreviewSealerSignature {
     /// The MAINTAINER key id this signature names (`sealed_by`'s own entries, in the same order).
     pub key_id: String,
@@ -523,6 +527,7 @@ pub struct BundlePreviewSealerSignature {
 /// anything -- see [`preview_bundle`]'s own doc comment for the write-nothing guarantee and its
 /// control.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BundlePreviewReport {
     /// The bundle's own exported ref name (not the local ref it was previewed against).
     pub bundle_ref_name: String,

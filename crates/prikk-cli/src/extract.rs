@@ -995,6 +995,8 @@ fn chain_signature_word(outcome: ChainSignatureOutcomeKind) -> &'static str {
         ChainSignatureOutcomeKind::Sound => "sound",
         ChainSignatureOutcomeKind::Unverifiable => "unverifiable",
         ChainSignatureOutcomeKind::Invalid => "invalid",
+        // A kind a later version adds: never reported as sound.
+        _ => "unverifiable",
     }
 }
 

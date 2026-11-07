@@ -399,6 +399,7 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         unchanged_files,
         deleted_files,
         anchor_fallback,
+        ..
     }) = materialization
     {
         // RFC 136 increment 2b: a replay-verified snapshot the materialization could not anchor

@@ -555,6 +555,7 @@ pub fn refuse_forged_publication_signature(
 /// `crate::recognition_claim::verify_claim_signature` already call, rather than a third copy of
 /// that logic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PublicationSignatureOutcome {
     /// Adopted, and verifies.
     Sound,
@@ -609,6 +610,7 @@ pub fn classify_publication_signatures(
 /// any repository, so there is no policy at all) has no counterpart here and is decided at the CLI
 /// layer before this is ever called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CarriedKeyRepositoryStatus {
     /// No entry under this key id in the receiving repository's adopted policy.
     NotAdopted,

@@ -64,6 +64,7 @@ use crate::wal::Wal;
 /// falls back to the WAL scan when that read finds nothing -- so the other three already win over
 /// `queued` by construction, with no additional priority check needed here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PatchState {
     /// Found only in this repository's own active WAL -- committed but not yet sealed.
     Queued,
@@ -93,6 +94,7 @@ pub enum ShowPathResolution {
     /// or queue no longer makes an earlier patch's own edit unresolved -- each patch resolves
     /// against its own state, stikk 020), and whenever the target is a bare sealed patch id with no
     /// block or queue to resolve against.
+    #[non_exhaustive]
     Unresolved {
         /// Hex-encoded node id that failed to resolve.
         node_id: String,

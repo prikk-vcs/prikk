@@ -620,6 +620,7 @@ pub enum BlockStateStatus {
     /// The block's state root was independently re-derived and matches its recorded value.
     Verified,
     /// The block's own state-root check failed.
+    #[non_exhaustive]
     Failed {
         /// The error the check raised.
         message: String,

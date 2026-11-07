@@ -468,6 +468,7 @@ pub fn mark_current_branch_switch_pending(
 /// [`PendingCurrentBranchMaterialization`] -- `branch create --from`'s own CLI output
 /// (`crates/prikk-cli/src/branch.rs::run_create`) reads these fields directly, the way `execute_merge`
 /// reads them to fill `MergeExecutionReport`'s own five materialization fields.
+#[non_exhaustive]
 pub struct CurrentBranchMaterializeReport {
     /// Files created or replaced in the worktree.
     pub written_files: usize,

@@ -16,12 +16,14 @@ fn print_path(label: &str, path: &ShowPathResolution) {
         ShowPathResolution::Unresolved {
             node_id,
             reason: None,
+            ..
         } => {
             println!("    {label}: <unresolved node {node_id}>");
         }
         ShowPathResolution::Unresolved {
             node_id,
             reason: Some(reason),
+            ..
         } => {
             println!("    {label}: <unresolved node {node_id}: {reason}>");
         }
@@ -35,6 +37,8 @@ fn state_label(state: PatchState) -> &'static str {
         PatchState::Sealed => "sealed",
         // 0.56.0 step 3g, A1 ruling: additive within `show-report-v1`.
         PatchState::Unclaimed => "unclaimed",
+        // A state a later version adds: claims no seal.
+        _ => "unclaimed",
     }
 }
 
@@ -172,7 +176,9 @@ fn push_path(json: &mut String, path: &ShowPathResolution) {
             json.push_str(&escape_json_string(path));
             json.push('}');
         }
-        ShowPathResolution::Unresolved { node_id, reason } => {
+        ShowPathResolution::Unresolved {
+            node_id, reason, ..
+        } => {
             json.push_str("{\"unresolved_node_id\": ");
             json.push_str(&escape_json_string(node_id));
             json.push_str(", \"reason\": ");
