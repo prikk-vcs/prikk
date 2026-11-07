@@ -393,6 +393,14 @@ fn ownership_missing_refusal_text(restore: Option<RestoreRefusalContext<'_>>) ->
     }
 }
 
+/// The current branch's name for a refusal's own text, or `None` when the pointer cannot be
+/// resolved (a message must never fail to compose). Like the arm above, this is a default used to
+/// name a concrete command, never an authority, a trust input or a signing input; it lives here so
+/// that this file stays the one place a `commit`-path refusal text reads the pointer.
+pub(super) fn current_branch_for_refusal_text(layout: &RepositoryLayout) -> Option<String> {
+    crate::refs::current_branch(layout).ok()
+}
+
 // Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that
 // need a Linux-only, Unix-only or directory-sync mechanism carry their own narrower gate.
 #[cfg(test)]

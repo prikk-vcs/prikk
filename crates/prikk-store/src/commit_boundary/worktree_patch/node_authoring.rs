@@ -1193,12 +1193,13 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
         // makes the worktree match `<x>` is the switch to `<x>` itself, so that is the only one
         // named, with the ref substituted. When the current branch cannot be resolved the text
         // stays as it was (display never refuses).
-        let ways_out = match crate::refs::current_branch(layout) {
-            Ok(current) if current != canonical_ref.as_str() => {
-                format!("run `prikk branch switch {canonical_ref}`")
-            }
-            _ => ways_out_for_the_current_branch,
-        };
+        let ways_out =
+            match crate::commit_boundary::classification::current_branch_for_refusal_text(layout) {
+                Some(current) if current != canonical_ref.as_str() => {
+                    format!("run `prikk branch switch {canonical_ref}`")
+                }
+                _ => ways_out_for_the_current_branch,
+            };
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
             "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; {ways_out} \
              to bring the worktree up to date, then commit again",

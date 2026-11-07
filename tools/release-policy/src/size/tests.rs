@@ -288,9 +288,12 @@ fn an_inline_test_module_is_not_production() {
         // composition is re-derived to name the record's own ref literally (read off
         // `recorded_identity`, not the pointer) always, and the self-switch placeholder
         // additionally only when `canonical_ref` is published -- a `record_switch`/`self_switch`/
-        // `ways_out` match plus its own doc comment, 1853 -> 1881.
+        // `ways_out` match plus its own doc comment, 1853 -> 1881. 0.56.0 P2b: a commit onto some
+        // other ref than the current branch names only the switch to that ref (the two commands
+        // above are no-ops there), a second match on the current branch plus its doc comment,
+        // 1881 -> 1897.
         physical,
-        1881,
+        1897,
         "the fixture moved; re-read it before trusting this"
     );
 
