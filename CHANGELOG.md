@@ -54,7 +54,15 @@
   - New public enums and structs (for example `PatchState`, `BundleConnectivityClass`,
     `DecodeFailureKind`) are `#[non_exhaustive]` from the start: match them with a wildcard arm,
     as you already must for `PrikkError`, which gained four variants.
-<!-- P2: the cost of the admission signature check and of `archive import --adopt`'s early check, if the architect wants it stated here. -->
+- **`bundle import` and `archive import` check every maintainer signature before they write
+  anything, and that takes time:** about 0.55–0.6 s for 20,000 signed objects (a history of about
+  10,000 steps), growing in step with the number of signatures. That is about 22 % of an
+  `archive import` and about 5 % of a `bundle import` of that size, and a `bundle import` needs
+  about 9 MiB more memory (release build, in-memory filesystem; a disk adds its own time to the
+  rest of the import).
+- **`archive import --adopt` looks for files in the way before it writes anything,** which costs
+  about 34 ms at 10,000 files and 70 ms at 20,000, about 9 % of the import, and about 2–3 MiB more
+  memory (same build and filesystem).
 
 ### Output changes
 
