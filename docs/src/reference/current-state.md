@@ -306,8 +306,8 @@ planned for.
   (`bundle preview` about 2.4 times), even though 0.55.0's own streaming work made both follow the
   largest single object rather than the whole bundle. The two remaining copies — a decoded envelope
   that borrows the frame instead of owning a second copy of it, and a container append written as
-  its header and body separately under one sync instead of one combined buffer — are 0.56.0 work,
-  owner-decided 2026-10-28.
+  its header and body separately under one sync instead of one combined buffer — are scheduled for
+  0.57.0 (`ROADMAP.md`).
 - **`bundle preview` into a repository that creates many files at once holds every created file's
   own content at once**, for as long as that one comparison runs, to report what changed — a
   per-file diff that dropped each file's content once its own effect was known would remove this,
@@ -405,11 +405,10 @@ planned for.
   received remove <remotes/…>` removes the pointer directly, the same consequence as replacing it
   (everything it alone reached becomes an unreached-object warning on the next `verify`), without
   waiting for a later, sound import to happen to supersede it. The objects themselves are still not
-  removed by this or any command. **0.56.0 step 3h widens `unreached_objects`/`PRIKK-DOCTOR-
-  UNREACHED-OBJECT` from `Block`/`RefState` only to `Patch` and `Blob` too:** a rolled-back or
-  `received remove`d block's own patch (and the blobs its own operations name), a claimless
-  accepted patch, or a refused or crashed import's leftover patch/blob objects are now counted as
-  unreached, where before this round they were invisible to both `verify` and `doctor`. Neither
+  removed by this or any command. **`unreached_objects` and `PRIKK-DOCTOR-UNREACHED-OBJECT` count
+  `Patch` and `Blob` objects as well as `Block` and `RefState`:** a rolled-back or `received remove`d
+  block's own patch (and the blobs its own operations name), a claimless accepted patch, and a
+  refused or crashed import's leftover patch and blob objects are counted as unreached. Neither
   type has a publication-trust check to skip (DC-78 §D2) -- for them this is purely a presence
   record, the same "the bytes stay either way" as above.
 

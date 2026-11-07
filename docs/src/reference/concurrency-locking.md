@@ -231,9 +231,9 @@ the exact race locking exists to prevent.
 `prikk doctor` names every held lock too (`PRIKK-DOCTOR-HELD-LOCK`, informational severity — a held
 lock does not change `doctor`'s exit code), with the same path, kind, recorded pid and advisory
 liveness `prikk unlock`'s own listing reports, and its `lock conflict` error names `prikk unlock`
-directly. This closes the gap where a crash with no interrupted-import journal (`bundle import`, not
-`archive import`) left `doctor` silent about the very locks it left behind; it does not change the
-cleanup path itself, which remains `prikk unlock` alone.
+directly. A crash during `bundle import`, which writes no interrupted-import journal (unlike
+`archive import`), is visible to `doctor` this way too. `doctor` does not clear anything: the cleanup
+path is `prikk unlock` alone.
 
 `prikk unlock` is the supported recovery path. A bare invocation lists every currently held lock, its
 recorded process id, and a best-effort advisory on whether that process still appears to be running

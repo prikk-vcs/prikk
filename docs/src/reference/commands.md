@@ -141,264 +141,153 @@ repository at open. See [Release Compatibility](release-compatibility.md).
 - **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
   <path>"), decided when the repository is opened, in every command that opens one.
 
-**The worktree's recorded baseline (0.56.0, R1/R2).** `setup`/`init`, `branch switch`, both
+**The worktree's recorded baseline.** `setup`/`init`, `branch switch`, both
 `checkout --patch-materialize`/`--snapshot-materialize` writers, `commit` and `seal` each record
 what this worktree was last made to match: a ref's sealed tip block (or none, for an unborn ref)
 plus a content identity over whichever of the active WAL's queued patches are folded on top, in
 their own order — not a bare count, so a `doctor` repair that removes one specific queued patch is
-told apart from an identical commit retried after a crash. This is worktree-local operational
-state, like the unclean-shutdown marker beside it — never part of any versioned object, and
-`verify`/`doctor` do not look at it.
+told apart from an identical commit retried after a crash. `seal` advances the record only when the
+worktree already matched the fold it sealed; a fold the worktree was never written to match (the one
+`rollback-draft --append-inverse` queues) leaves the record where it was. This is worktree-local
+operational state, like the unclean-shutdown marker beside it — never part of any versioned object,
+and `verify`/`doctor` do not look at it.
 - **`commit` (and `commit --ref <x>`) refuses to author over a path that is stale against this
   worktree's own record — content, mode, kind, presence, or the node it belongs to — unless the
   worktree already holds the live state for it, and this holds in exactly the same way whichever
-  ref the record itself names.** `precondition not met: refusing to commit: <ref> is now at <state>,
-  and this worktree was last written from <state>; ...; run `prikk branch switch <the record's own
-  ref>` ... then commit again`, before authoring anything, naming every such path. The way out
-  named is `prikk branch switch <the record's own ref>` — the ref the worktree's own record
-  actually names, substituted literally, never a placeholder, since switching to it always works
-  (the record is always an accurate description of what the worktree physically holds). The
-  current-branch self-switch, `prikk branch switch <the current branch>`, is named *additionally*
-  only when the ref actually being committed onto is itself published (0.56.0 step W3-0) — naming
-  it unconditionally used to send a user stuck on an unpublished current branch to a switch that
-  itself refused ("... does not exist; run `prikk branch create ...` first"), a dead end the
-  `worktree-patch.md` walkthrough's own `commit --ref heads/topic` on a genuinely unborn ref
-  reaches. A path
-  missing from the worktree that the record also never explains reads "not in this worktree, and
-  never were" (the deletion-shaped case: `merge --into`, `archive import --adopt`, `sync seal
-  --claim`, `branch create --from` onto the unborn current branch, or `commit --ref <other>` from a
-  worktree recorded against a different branch, each moved the ref without the worktree's
-  knowledge). A path the worktree still physically holds, but whose content, mode, or node disagrees
-  between the record and the ref's current state, reads as the worktree holding content that does
-  not match the ref's current state — because authoring it now would either revert whatever moved
-  the ref underneath this worktree, or record a conflict (the worktree holding a third state) as an
-  ordinary edit. Either way the commit refuses rather than guess. Staleness is judged per path, in
-  states, never by comparing ref names: committing onto a ref other than the one the record names is
-  ordinary and unrefused on every path where the record and that ref's live state genuinely agree
-  (shared, undiverged history), the same as committing onto the ref the record does name — but a
-  path where they genuinely disagree refuses exactly the same way regardless of which ref the record
-  happens to name, including an edit that would otherwise silently revert a sibling branch's own
-  diverged change. A path that is not stale, or one the worktree already matches the live state for,
-  still authors exactly as before, including a genuine deletion, edit, mode change, or rename of
-  content this worktree really did hold.
-  **0.56.0 step W3b:** `merge --into` the current branch now closes part of this gap for itself,
-  instead of only ever being caught by the refusal above. When the worktree is clean against its
-  own record, the merge marks it dirty as a `Switch` to the current branch (`worktree_marker.rs`),
-  publishes exactly as before, and then materializes the newly merged tip into the worktree through
-  the same verified path (`replay_for_verified_worktree_write`) `branch switch` already uses below —
-  the merged files are genuinely present afterward, the record ends current, and the next ordinary
-  commit finds nothing stale. A dirty worktree still refuses the merge itself, before any write,
-  naming the same paths `worktree-status` would. `archive import --adopt`, `sync seal --claim`, and
-  `branch create --from` onto the unborn current branch are unchanged this round and still rely only
-  on the refusal above.
-  **0.56.0 step W3c-1:** that "before any write" was not yet true -- the clean check
-  (`require_worktree_clean_and_capture`) ran after `seal_block_at` had already built and written
-  the merge's own Block/RefState/RefUpdate objects, so a refused merge still left an orphaned,
-  unreferenced Block behind. The clean check and the old-baseline capture now run after every one
-  of the merge's own read-only refusals (its ref-ownership check, `refuse_if_active_queue_owns_
-  ref`, and RFC 164 Rule D's own pointer-index tail/damage check among them), before any object
-  write at all; the dirty-worktree marker (`mark_current_branch_switch_pending`) is set
-  immediately before the publish instead. A refused merge into the current branch now genuinely
-  writes nothing.
-  **0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now closes this
-  same gap for itself, called directly from `crates/prikk-cli/src/branch.rs::run_create` (the two
-  shared functions and the pending type are re-exported narrowly from `prikk-store`'s `lib.rs`, the
-  precedent `switch_branch`/`worktree_status` already set, since this producer's own publish logic
-  lives in the CLI crate, not `prikk-store`). The clean check and the capture run after every one
-  of `create`'s own read-only refusals and before it builds a single object, the marker is set
-  immediately before the publish, and the `--from` target's files are materialized into the
-  worktree right after (`materialize_after_publish`) — the created branch is genuinely current and
-  clean afterward. A dirty worktree still refuses the create itself, before any write.
-  `archive import --adopt` and `sync seal --claim` are unchanged this round and still rely only on
-  the refusal above.
-  **0.56.0 step W3c-3:** a clean worktree did not always end current either. An untracked file
-  already on disk at a path the `--from` target's own files occupy passes the clean check (an
-  untracked file is never a reason to refuse) but still collides with what
-  `materialize_after_publish` is about to write -- before this round, that collision was caught
-  only by `plan_materialization`'s own `in_the_way` check inside `materialize_after_publish`, which
-  by construction runs *after* the producer's own publish, so `branch create --from` could publish
-  (or move) the ref and only then refuse. A new shared check, `require_nothing_in_the_way`
-  (`crates/prikk-store/src/worktree_materialize.rs`), runs the identical `plan_materialization`
-  planner one step earlier -- after the clean check and capture, before the producer's own publish
-  -- re-exported for `branch create --from` as `require_nothing_in_the_way_for_published_ref`,
-  which derives the `--from` ref's own manifest through the same verified-anchor replay
-  `materialize_after_publish` uses, since that ref must already be published to be nameable by
-  `--from` at all. The sentence follows `branch switch`'s own in-the-way wording and ends "nothing
-  was written". `materialize_after_publish`'s own post-publish check is unchanged, as the backstop
-  for the one window this earlier check cannot see into: a file created by a process outside
-  prikk, under the same lock, between the two checks.
-  **0.56.0 step W3c-3b:** two items. First, the sentence above read "refusing to creating
-  heads/main" as landed in W3c-3 — ungrammatical, since `action` is a gerund phrase and the
-  template prefixed it with another verb. It now follows the clean check's own shape instead:
-  "`<n>` file(s) are in the way of `<ref>`'s files: `<path>` (…); move them aside before `<action>`
-  (nothing was written)". Second, `merge --into` is fixed too: unlike `branch create --from`, its
-  own target was not a published ref to replay, and the confluence proof's own folded state
-  (`OracleState`) is a proof device with its own representation, not the state the merge Block will
-  actually commit to, so widening that proof's evidence API to expose it was rejected as the wrong
-  source. Instead `execute_merge` derives the merge Block's own candidate state directly with
-  `derive_candidate` (`crates/prikk-store/src/block_state.rs`) — the identical call
-  `seal_block_at` itself makes again moments later, from the same mainline parent, the same adopted
-  patch ids, and the same merge anchor site — before `seal_block_at` ever runs (derived twice, by
-  design, rather than changing `seal_block_at`'s own signature to share it). The derived `entries`
-  plus `text_cache` are turned into a `ReplayManifest` the way `patch_replay::extract`'s own claim
-  path already builds its file list from a derivation no Block holds (resident bytes from the text
-  cache first, the Blob only when absent — the text cache, not a node's own tracked blob id, holds
-  the truth for a node an `EditText` has touched, DC-65). `require_nothing_in_the_way` then runs
-  against it directly: `execute_merge` is in-crate, so it never needs the narrower, re-exported
-  `require_nothing_in_the_way_for_published_ref` `branch create --from` uses.
-  **0.56.0 step W3c-4:** `sync seal <ref> --claim <id>`/`--claims <file>`, onto the current branch,
-  now closes this same gap for itself, with the full R3 shape (the clean check, the pre-write
-  in-the-way check, the marker, and the materialize call) added in one round, since it had none of
-  it before — unlike the other three producers, which each got it in smaller steps. A single
-  `--claim` is treated as a batch of exactly one claim throughout
-  (`crates/prikk-cli/src/sync.rs::run_seal`). The clean check and the capture run once, before the
-  first claim in the batch is sealed; the pre-write in-the-way check
-  (`require_nothing_in_the_way_for_seal_batch`,
-  `crates/prikk-store/src/seal_from_accepted.rs`) runs against the whole batch's own simulated
-  final state — every claim's own still-unsealed patches, concatenated in `order_claims_for_sealing`'s
-  own order, replayed through `derive_candidate` in one call, since one claim's own patches alone
-  may collide with nothing while the batch as a whole does — not against any one claim's own
-  `block_id` (which names a block on the *sender's* repository that `sync accept`'s own admission
-  never writes here, and so cannot be replayed by id at all). The marker is set once, immediately
-  before the batch's first claim seals, and the batch's own content is materialized into the
-  worktree once, after the last claim, from the ref's own real, final tip. A dirty worktree, or a
-  file in the way, refuses before any claim seals, leaving `.prikk` byte-identical except its own
-  cache. The batch's own "stop at the first failure, no rollback" rule (RFC 116 stage 5 §3) is
-  unchanged: the pre-write in-the-way check only ever *defers* (skips itself) when its own
-  simulation cannot derive a combined state at all — a claim that does not exist, or patches that
-  do not fold together between claims — rather than refusing the whole batch over a failure the
-  real, per-claim loop would have reported against only the one claim that actually fails, with
-  every earlier claim's own valid seal already landed and kept; a genuine file-in-the-way collision
-  is unaffected, since the worktree is not party to any claim's own ordering. When a later claim in
-  an otherwise-valid batch fails after an earlier one has already published, the earlier claim's
-  seal stays sealed, and the tip it actually produced is still materialized into the worktree before
-  the batch's own error is returned. If that materialize call itself then fails too, the marker
-  stays set and the error names `branch switch <the current branch>`, the same route every other
-  producer's own marker already promises. Sealing onto a ref that is not the current branch, or a
-  `--claims <file>` naming no claims at all, is unaffected by any of this.
-  **0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
-  closes this last gap too. A courtesy clean check (`require_worktree_clean_and_capture`) runs
-  before the import journal exists at all, for an unclean worktree to refuse as early as possible
-  -- it captures nothing durable, since a crash-and-resume is a new process invocation with no
-  access to an earlier attempt's own in-memory capture. The authoritative capture, marker, and
-  materialize call (the same `require_worktree_clean_and_capture`/
-  `mark_current_branch_switch_pending`/`materialize_after_publish` calls every other producer
-  uses) all run again, from scratch, inside `try_adopt_local_ref`
-  (`crates/prikk-store/src/archive/import.rs`) at stage 3, on both a fresh import and a resumed
-  one alike, immediately before the one publish that actually moves the current branch. A dirty
-  worktree refuses before any object is written at all.
-  **0.56.0 step W3c-5b** corrected two defects review found before release:
-  1. **A file in the way of the adopted tip's own files now also refuses before the journal**,
-     before stage 1 ever admits an object -- the identical guarantee the dirty-worktree check
-     already had. `ArchiveEarlyCheckReader` (`archive/import.rs`) is a seeking `ObjectReader` over
-     the archive's own Patch/Blob sections (`verify::index_object_offsets`/
-     `decode_object_record_at`, mirroring `crate::bundle::BundleAndLocalReader`'s own pattern,
-     sourced from the archive's container format instead of a bundle's), built and measured
-     against the import's own total time (about 8.5-10.4% added, at 10,000-20,000 objects,
-     release build) before landing. The unchanged stage-3 check
-     (`require_nothing_in_the_way_for_block`, replaying the adopted chain's own final `RefState`'s
-     target block directly by block id, through `replay_for_verified_worktree_write_by_block_id`)
-     stays as the backstop for the one window the early check cannot see into -- a file created by
-     a process outside prikk, between the two checks, under the same lock -- with its own message
-     corrected to name what stage 1 and the journal already wrote by the time it fires, rather than
-     the shared `require_nothing_in_the_way`/`require_nothing_in_the_way_for_block` wording's
-     default "(nothing was written)", which would be false there every time it runs, not only in
-     that rare race.
-  2. **Resuming an import that crashed between a `--adopt` landing's own publish and its
-     materialize now reports that landing honestly.** `try_adopt_local_ref`'s own condition 1 (`a
-     ref by this name already exists locally`) now checks for an *exact* match against this
-     landing's own final `RefState` id first, **but only when this call is genuinely resuming an
-     earlier run's own journal** (`resumed`) -- a content-addressed id match alone does not prove
-     common origin (two unrelated, independently created repositories can converge on the exact
-     same id for a trivial state, such as an empty genesis ref with no timestamp or randomness to
-     make it distinct), so the match is honored only when the journal itself already correlates
-     this run to the one that published it. On a resumed exact match: this is the import's own
-     completed landing from an earlier, interrupted run, reported as `adopted: true` with
-     `completed_by_interrupted_run: true` (a new `LandingOutcome` field, additive in
-     `--format json` too) rather than a false `adopted: false`/`landed_as: "remotes/<ref>"` fall-
-     through, and no `remotes/` pointer is landed for it. When that landing is also the current
-     branch and its materialize never finished (the dirty marker still names it), the resume
-     finishes the materialize itself, through the same `require_worktree_clean_and_capture`/
-     `materialize_after_publish` pair the ordinary adoption path uses -- no second
-     `branch switch <the current branch>` step is needed. Any other local state at that ref name
-     (a different tip, or none at all), or any match on a fresh, non-resumed run, keeps the prior
-     fall-through behavior unchanged.
-  **0.56.0 step W3c-5c** narrowed point 2 once more: a resumed, genuine id match still is not
-     enough by itself. A ref this import never touched at all can already hold that exact id,
-     not because an earlier attempt of *this* import published it, but because some *other*,
-     earlier import already adopted it, and this import's own archive happens to carry the same,
-     unchanged tip for that ref name. `try_adopt_local_ref`'s own exact-match check now also
-     requires that the ref was genuinely *absent* locally when this import's own plan was first
-     computed (before stage 1 ever wrote anything) -- `PlannedRefLanding::plan_time_
-     local_ref_state`, read once at that point and carried in the journal. Only that combination
-     (absent at plan time, and an exact match now) proves *this* import created the ref; any other
-     plan-time state keeps the ordinary fall-through, exactly what an uninterrupted run of the same
-     archive would report. A journal written by an older binary, from an import still in progress
-     across the upgrade, has no such record at all and still resumes correctly: the ordinary
-     fall-through applies there too, never a false adoption.
+  ref the record itself names.** The refusal comes before anything is authored and names every such
+  path: ``precondition not met: refusing to commit: <ref> is now at <state>, and this worktree was
+  last written from <state>; …; run `prikk branch switch <the record's own ref>` to bring the
+  worktree up to date, then commit again``. The way out named is `prikk branch switch <the record's
+  own ref>`, with the ref the record actually names substituted literally, since switching to it
+  always works (the record is an accurate description of what the worktree physically holds). The
+  current-branch self-switch, `prikk branch switch <the current branch>`, is named additionally only
+  when the ref being committed onto is itself published. A path missing from the worktree that the
+  record never explains reads "not in this worktree, and never were" (the deletion-shaped case: a
+  command moved the ref without writing the worktree, or `commit --ref <other>` ran from a worktree
+  recorded against a different branch). A path the worktree still physically holds, but whose
+  content, mode, or node disagrees between the record and the ref's current state, reads as the
+  worktree holding content that does not match the ref's current state — authoring it now would
+  either revert whatever moved the ref underneath this worktree, or record a conflict (the worktree
+  holding a third state) as an ordinary edit. Either way the commit refuses rather than guess.
+  Staleness is judged per path, in states, never by comparing ref names: committing onto a ref other
+  than the one the record names is ordinary and unrefused on every path where the record and that
+  ref's live state agree (shared, undiverged history), and a path where they disagree refuses
+  exactly the same way whichever ref the record names, including an edit that would otherwise
+  silently revert a sibling branch's own diverged change. A path that is not stale, or one the
+  worktree already matches the live state for, authors as usual, including a genuine deletion, edit,
+  mode change, or rename of content this worktree really did hold.
+- **The commands that move the current branch bring a clean worktree along, or refuse before they
+  write anything:** `merge --into <the current branch>`, `branch create --from <ref>` when the new
+  branch is the unborn current branch, `sync seal <ref> --claim`/`--claims <file>` onto the current
+  branch, and `archive import --adopt` of a ref destined for the current branch. Each follows one
+  rule:
+  1. The worktree must be clean against its own record. A dirty worktree refuses the command, naming
+     the paths `worktree-status` would: ``precondition not met: the worktree is not clean against
+     <ref>: <path> (modified); commit it, or restore those files, before <action>
+     (`prikk worktree-status` lists them)``.
+  2. A file already on disk at a path the new tip's files occupy, untracked so the clean check does
+     not refuse it, is in the way: `precondition not met: <n> file(s) are in the way of <ref>'s
+     files: <path> (<why>); move them aside before <action> (nothing was written)`. This check is
+     part of the command's own read-only refusals, so a refused command writes no object and leaves
+     `.prikk` unchanged except for its own cache (`verify` reports no unreached object afterward).
+     Moving the path aside and running the command again is all a caller needs to do.
+  3. Past those refusals the command marks the worktree dirty, publishes exactly as it always did,
+     and writes the new tip's files into the worktree through the same verified path `branch switch`
+     uses, then records the new baseline. It prints `materialized into the worktree: files written:
+     <n>, unchanged: <n>, deleted: <n>`, and `--format json` on `archive import` carries the same
+     counts as `materialized_into_worktree`, `materialized_written_files`,
+     `materialized_unchanged_files` and `materialized_deleted_files`. The next ordinary `commit`
+     finds nothing stale. If a file appears in the way after the publish (created by a process
+     outside prikk), the error says the ref was published, names the path, and says to move it
+     aside and run `prikk branch switch <the current branch>`, which finishes the write.
 
-  A landing not destined for the current branch, or one `--adopt` cannot land as a real local ref
-  at all (it falls through to `remotes/`), is unaffected by either point above: no clean check, no
-  marker, no materialize call, the ordinary pre-round behavior.
+  Each command then adds only what is specific to it:
+  - **`merge --into`** derives the merge Block's own state before it writes anything, so the
+    in-the-way check judges the files the merge will actually commit, including a file whose latest
+    content exists only as a text edit.
+  - **`branch create --from`** checks the unborn current branch's own (empty) baseline and the
+    `--from` target's files.
+  - **`sync seal`** treats a single `--claim` as a batch of one. The clean check and the in-the-way
+    check run once, before the first claim seals, against the state after the claims that will
+    actually seal (folded claim by claim in sealing order, stopping at the first claim that does not
+    fold). The worktree is materialized once, after the last claim, from the ref's real final tip.
+    Sealing in order and stopping at the first failure, with no rollback, is unchanged: when a later
+    claim fails after an earlier one has published, the earlier seal stays, the tip it produced is
+    still written into the worktree, and then the batch's error is reported; if that write itself
+    fails, the error also names `branch switch <the current branch>`. A batch that publishes nothing
+    (every claim refused outright or already sealed) writes nothing into the worktree and prints no
+    `materialized` line. Sealing onto a ref that is not the current branch, or a `--claims <file>`
+    that names no claims, takes none of these steps.
+  - **`archive import --adopt`** runs both checks before the import journal exists, so nothing from
+    the archive has been admitted when either refuses. The in-the-way check reads the archive's own
+    Patch and Blob sections in place, and adds about 8.5–10.4% to the import's total time at
+    10,000–20,000 objects (release build, `archive import --adopt` of one genesis generation). The
+    clean check runs again, together with a second in-the-way check, immediately before the
+    publish that moves the current branch — on a fresh import and a resumed one alike — as the
+    backstop for a file created by a process outside prikk in between; the backstop's message says
+    the archive's objects are already admitted and the journal written, and that running the same
+    import again resumes it. Resuming an import that crashed between a landing's publish and its
+    write into the worktree reports that landing as `adopted`, noting it was completed by an
+    earlier, interrupted run (`completed_by_interrupted_run: true` in `--format json`), writes no
+    `remotes/` pointer for it, and finishes the write into the worktree itself, so no `branch
+    switch` is left to run by hand. That report is made only for a genuine resume of this import's
+    own journal, and only when the ref was absent when the import's plan was first computed: a ref
+    that already holds the same tip because some other, earlier import adopted it reports the
+    ordinary `remotes/` fall-through, exactly as an uninterrupted run would. A journal written by
+    an older binary, from an import still in progress across the upgrade, carries no plan-time
+    record and resumes with that ordinary fall-through. A landing not destined for the current
+    branch, or one `--adopt` cannot land as a real local ref (it falls through to `remotes/`), takes
+    none of these steps.
+  - **`rollback-draft --append-inverse`** moves only the active WAL's queued fold, never a sealed
+    block or the worktree, and says so: ``note: the worktree is unchanged by this draft; run `prikk
+    seal`, then `prikk branch switch <ref>`, to apply the inverse``.
 - **`branch switch <the current branch>` is a no-op only when the record is current.** When the
-  record shows the worktree behind that branch's live *sealed* tip, naming the current branch now
-  materializes the branch's current files and clears the staleness — the same write-then-publish
-  choreography switching to a different branch already uses — instead of the unconditional no-op
-  RFC 147 §2j gave it. Both directions of `require_clean` (leaving a branch, and this same-branch
-  resync) judge "clean", and which files the old baseline held, against the worktree's recorded
-  state whenever a record exists and disagrees with the branch's live one — **whichever ref the
-  record itself names**, not only when it happens to already name the branch being left or
-  switched to — falling back to the live tip itself only when no record exists, or the record
-  already agrees with it. (0.56.0 step W2f: before this, a `commit --ref <other>` left the record
-  naming a different ref than the current-branch pointer, and the record was then never consulted
-  for either switch direction — both fell back to the pointer's own live state, which the worktree
-  genuinely disagreed with, so neither direction could ever resync.) This is what lets a switch
-  away from a stale branch, and this same-branch resync, both succeed where each used to refuse or
-  no-op. Switching to a *different* branch still materializes only that branch's sealed tip, never
-  its own queued fold, unchanged by this round.
-  - **The self-switch also now resyncs when the current branch has never been published at all
-    (0.56.0 step W3-0)** — no `RefState` exists for it yet, and the record reads behind it (the
-    `worktree-patch.md` walkthrough's own shape: `commit --ref heads/topic` on a genuinely unborn
-    ref, then `seal`, leaves the current branch unpublished). Before this, naming the current
-    branch in that exact shape refused unconditionally, at the existing-branch check every switch
-    opens with, with a wholly different message ("`<branch>` does not exist; run `prikk branch
-    create <branch>` first") — even though the worktree's own record already named exactly what it
-    should resync to. It now materializes the branch's own empty (never-published) state, judges
-    "clean" against the record the same way every other behind-reading switch does, and records
-    that — narrowly for this one shape; every other target still refuses without a published
-    `RefState`, open-or-closed check unaffected.
-  - **A moved, queued, unsealed fold (0.56.0 step W2c) — as `rollback-draft --append-inverse`
-    moves without touching the sealed branch or the worktree — is detected the same way, but a
-    bare same-branch resync never materializes it directly (0.56.0 step W2d-2): doing so would
-    write the sealed portion of the worktree through the lifecycle cache rather than the
-    verified-anchor replay every other switch in this command uses, so it refuses instead, naming
-    `seal` then `branch switch <the current branch>` again. `seal` (0.56.0 step W2e) only advances
-    the worktree's own recorded baseline when it already matched the fold it just sealed, so a
-    fold the worktree was never written to match leaves the record exactly where it was — which is
-    what lets this second switch genuinely resync through the ordinary, verified-anchor path,
-    rather than reading the record's own fresh-but-untrue agreement with the newly sealed tip as
-    "nothing to do."
+  record shows the worktree behind that branch's live *sealed* tip, naming the current branch
+  materializes the branch's current files and clears the staleness, the same write-then-publish
+  choreography switching to a different branch uses. Both directions of a switch (leaving a
+  branch, and this same-branch resync) judge "clean", and which files the old baseline held, against
+  the worktree's recorded state whenever a record exists and disagrees with the branch's live one —
+  **whichever ref the record itself names**, not only when it names the branch being left or
+  switched to — and fall back to the live tip itself only when no record exists, or the record
+  already agrees with it. That is what lets a switch away from a stale branch, and the same-branch
+  resync, both succeed after a `commit --ref <other>` left the record naming a different ref than
+  the current-branch pointer. Switching to a *different* branch materializes only that branch's
+  sealed tip, never its queued fold.
+  - **The self-switch also resyncs when the current branch has never been published** (no `RefState`
+    exists for it yet) and the record reads behind it — the `worktree-patch.md` walkthrough's shape:
+    `commit --ref heads/topic` on a genuinely unborn ref, then `seal`. It materializes the branch's
+    own empty (never-published) state, judges "clean" against the record the same way every other
+    behind-reading switch does, and records that — for this one shape only; every other target
+    refuses without a published `RefState`, and the open-or-closed check is unaffected.
+  - **A moved, queued, unsealed fold** — as `rollback-draft --append-inverse` moves it without
+    touching the sealed branch or the worktree — is detected the same way, but a bare same-branch
+    resync never writes it into the worktree directly: that would bypass the verified replay every
+    other switch uses. The self-switch over a non-empty, behind-reading queue refuses instead,
+    naming `seal` then `branch switch <the current branch>` again; because `seal` leaves the record
+    where it was for a fold the worktree never matched, that second switch resyncs through the
+    ordinary verified path.
 - **`worktree-status` reports `behind <ref>`** instead of listing every file a moved ref added as
   `missing`, specifically when the record shows this worktree behind the ref it is reporting on —
   its sealed block, its queued fold, or both — (not when a file was genuinely deleted, which still
-  reports as `missing`). `--format json` carries this as an additive `"behind_ref"` field beside
-  `"queued_elsewhere"`, `null` when the worktree is current or no record exists.
+  reports as `missing`). The text form prints ``worktree: behind <ref> (<n> file(s) it added since
+  this worktree was last written from it are not here yet; not a deletion); run `prikk branch switch
+  <the current branch>` … to catch up``. `--format json` carries this as an additive `"behind_ref"`
+  field beside `"queued_elsewhere"`, `null` when the worktree is current or no record exists; its
+  `changes` list is unchanged.
 - **`merge --into`, `archive import --adopt` and `branch create --from` refuse to move a ref the
-  active WAL already holds queued, unsealed work for (0.56.0 step W3, R4).** Before this, each
-  moved the ref out from under a locally committed-but-not-yet-sealed patch with no refusal and no
-  warning — the patch stayed queued, now authored against a tip that would no longer be current by
-  the time it was eventually sealed. Each now checks before any write and refuses, naming the ref
-  and `prikk seal --allow-no-audit --ref <ref>` as the way out; a queue that targets a *different*
-  ref, or no queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse`
-  already refuse on *any* non-empty active WAL regardless of which ref owns it, a strictly stronger
-  condition that already covered this case for both of them, so neither changed.
+  active WAL already holds queued, unsealed work for.** Each checks before any write and refuses,
+  ``precondition not met: the active WAL holds unsealed work for <ref>; seal it (`prikk seal
+  --allow-no-audit --ref <ref>`) before <action>``; a queue that targets a *different* ref, or no
+  queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse` refuse on
+  *any* non-empty active WAL regardless of which ref owns it, a strictly stronger condition that
+  already covers this case for both.
 
 **`bundle import` and `bundle preview` classify a delivery against the pointer it would replace,
 in six classes:** `no-local-history` (nothing to compare against), `already-at-tip` (identical to
 what is already there), `rollback` (the delivery is older than what is already there),
 `fast-forward` (the delivery extends what is already there), `diverged` (both sides moved since a
 shared point), and `does-not-connect` (no shared history at all). `bundle preview --format json`
-reports this as a new, additive `"class"` field — its existing `"connectivity"` field keeps its
+reports this as an additive `"class"` field — its existing `"connectivity"` field keeps its
 original five values unchanged (`already-at-tip` and `rollback` both still read
 `"already-included"` there), so nothing a script already reads changes. Both commands also report
 `"ref_state_chain"`: `"extends"`, `"older"`, or `"unrelated"` — how the delivery's own publication
@@ -425,9 +314,10 @@ itself is unchanged by this.
 - **On a refusal, `bundle import --format json` prints a `refusal-v1` document** (the same shape
   `extract`'s own `refusal-v1` uses, see below) with `"command": "bundle-import"`, to stdout, on
   stderr and the exit code otherwise unchanged — for exactly the three refusals above
-  (`"refusal"`: `"rollback"`, `"diverged"`, or `"does-not-connect"`), never for `bundle import`'s
-  other, pre-existing refusals (a damaged bundle, a digest mismatch, an author-key conflict, and so
-  on), which this round leaves unclassified. `"reason"` is always `null` for these three.
+  (`"refusal"`: `"rollback"`, `"diverged"`, or `"does-not-connect"`), and for the two refusals
+  described further below (`"forged-publication-signature"`, `"outside-version-rule"`), never for
+  `bundle import`'s other refusals (a damaged bundle, a digest mismatch, an author-key conflict, and
+  so on), which print no document. `"reason"` is always `null`.
 
 **`archive import` applies the identical classification and refusal to its own landings, plus
 `--adopt`.**
@@ -460,9 +350,8 @@ before anything is written** — the identical check `bundle import`'s own admis
 commands apply the same check, so a change `bundle import` would refuse is refused by
 `archive import`/`archive verify` too, never landed or reported as internally consistent.
 
-**`archive verify` reports each carried maintainer key's real status in the receiving repository
-(0.56.0 step 3i).** Both the text form and `--format json`'s `"status"` field now carry one of
-four fixed strings, computed against the repository `archive verify` runs from, never against the
+**`archive verify` reports each carried maintainer key's real status in the receiving repository.**
+Both the text form and `--format json`'s `"status"` field carry one of four fixed strings, computed against the repository `archive verify` runs from, never against the
 archive's own carried trust policy: `"adopted"` (the same key id and the same public key are
 already adopted here); `"carried, not adopted"` (this key id is not adopted here at all);
 `"carried, conflicts with an adopted key"` (this key id is adopted here, but under a *different*
@@ -470,32 +359,33 @@ public key); or `"carried, not checked against a repository"`, for either of two
 verify` is run outside any repository at all (silent, with nothing to check against), or a
 `.prikk` is present but could not be read — a corrupted `FORMAT` marker, or a corrupted
 trust-policy container — which also prints exactly one line to stderr naming that a repository is
-here but unreadable. Before this round, both forms printed `"carried, not adopted"`
-unconditionally, even for a key the repository running `verify` had in fact already adopted. This
-is reporting only — the archive's own internal-consistency check, and its exit code, are
+here but unreadable. This is reporting only — the archive's own internal-consistency check, and its exit code, are
 unaffected either way, exactly as for the existing carried-key listing this refines; trust remains
 the receiver's own adopted set, never the archive's.
 
-**`bundle import` and `archive import` refuse a forged MAINTAINER signature on a delivered tip,
-before anything is written.** Both already compute whether a delivered `RefState`/`Block`'s own
-MAINTAINER signature verifies against this repository's adopted trust policy
-(`verify_trusted_publication_envelope`, the same check `verify` and `seal` already use); until
-now, neither refused on it — a tip whose signature named an adopted key id but did not verify
-against it (a forgery, or another maintainer who happens to use the same key id) was admitted
-silently, and only a later `prikk verify` reported it (`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`).
-Both importers now refuse before the first object is written, naming both possible causes. A
-signature by a key this repository has simply never adopted at all is a different, pre-existing
-condition (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`) and is unaffected — that history still imports,
-untrusted, exactly as before; the way to gain trust in it is still `trust maintainer add` followed
-by an ordinary `verify`. Under `--format json`, the refusal prints the same `refusal-v1` document
-described above, with `"refusal": "forged-publication-signature"`.
+**`bundle import` and `archive import` refuse a forged MAINTAINER signature on any Block or RefState
+they would admit, before anything is written.** A signature that names a key id this repository has
+adopted but does not verify against that key (a forgery, or another maintainer who happens to use the
+same key id) refuses the import — checked on every Block and RefState the delivery carries, not
+only its tip, each once — with the same check `verify` and `seal` apply to publication objects
+(`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`). The message names both possible causes and a route
+for the honest one: the sending maintainer signs under a distinct key id (`prikk key generate --out
+<path>` makes one, pointed at by `PRIKK_MAINTAINER_SEED_FILE`; or `PRIKK_MAINTAINER_KEY_ID`), and the
+receiving repository adopts that id with `prikk trust maintainer add --key-id <that id> --public-key
+<its public key>`. Two installations made before 0.45.0 share the default id `maintainer`, so a
+delivery between them refuses here instead of importing and failing a later `verify`. A signature
+by a key this repository has never adopted is a different condition
+(`PRIKK-TRUST-PUBLICATION-UNTRUSTED`) and is not refused: that history still imports, untrusted, and
+the way to gain trust in it is `trust maintainer add` followed by an ordinary `verify`. Under
+`--format json`, the refusal prints the `refusal-v1` document described above, with `"refusal":
+"forged-publication-signature"`.
 
 **`bundle preview` reports each sealer's own publication-trust outcome, additively.** Alongside
 the existing `"sealed_by"` field (a plain list of signing key ids, reported but never trusted,
-unchanged by this), a new `"sealed_by_signatures"` field lists the same signatures with an
+unchanged by this), an additive `"sealed_by_signatures"` field lists the same signatures with an
 `"outcome"` for each: `"sound"` (the key is adopted and the signature verifies), `"unverifiable"`
 (the key is not adopted by this repository at all), or `"invalid"` (the key is adopted, but the
-signature does not verify — the same condition `bundle import` now refuses on). This is reporting
+signature does not verify — the same condition `bundle import` refuses on). This is reporting
 only, exactly like `"sealed_by"` itself — `bundle import` is still the only thing that acts on it.
 
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
@@ -520,11 +410,10 @@ needed and to read the repository with a newer version of `prikk`, rather than t
 operator to preserve the repository and inspect the failing object or block. A worktree file
 with such a name, reached while authoring a commit (including from `diff`'s and `status`'s own
 worktree scans), is told something different instead: that this version of `prikk` does not
-accept non-ASCII repository paths, naming the file. Every one of these commands still refuses;
-only the classification and wording changed. `bundle import --format json` and
-`archive import --format json` now also print a `refusal-v1` document for this cause (`"refusal":
-"outside-version-rule"`, the same id `extract --format json` already uses) — before this, both
-printed nothing at all to stdout for it under `--format json`.
+accept non-ASCII repository paths, naming the file. Every one of these commands refuses; the
+classification and the wording say why. `bundle import --format json` and
+`archive import --format json` print a `refusal-v1` document for this cause (`"refusal":
+"outside-version-rule"`, the same id `extract --format json` gives).
 
 **A point: a ref or a bare block id.** `checkout`'s read-only modes (`--plan-only`, `--snapshot-plan`,
 `--patch-plan` with or without `--content-path`, `--patch-delete-plan`) take `--ref` as a ref name or a
@@ -542,16 +431,18 @@ bare block id, 64 lowercase hex characters, resolved by one resolver.
   possibly a block id; its schema version is unchanged.
 
 **`log --ref` and a bare block id.** `log --ref` is resolved by the same one resolver described
-above, so a value that is neither a ref name nor 64 lowercase hex refuses, and a block id naming
-nothing in this repository refuses as a precondition — but `log` itself still refuses a block id
-that does resolve: `<id> is a block id; log does not show history ending at a block` (exit `1`). A
-block can have more than one parent, so there is no single next entry to walk the way
-`RefState.previous_ref_state_id` gives one; `log`'s own history is the publication chain of a ref,
-not a block's own ancestry. This closes a prior gap where `log --ref <block id>` exited `0` with an
-empty history instead of refusing.
+above. A block id naming nothing in this repository refuses as a precondition (`precondition not
+met: block <id> is not in this repository`, exit `1`); a value that is neither a ref name nor 64
+lowercase hex refuses too (`invalid name: <value> is not a point this command reads: expected a ref
+name (heads/…, tags/… or remotes/…) or a block id (64 lowercase hex characters)`, exit `1`); and a
+block id that does resolve refuses, because `log` shows the publication chain of a ref, not a
+block's own ancestry: ``<id> is a block id; `log` does not show history ending at a block -- a block
+can have more than one parent, so there is no single next entry to walk; expected a ref name
+(heads/…, tags/… or remotes/…)`` (exit `1`). `log --ref` never answers a block id with an empty
+history.
 
 **`show`'s own `state` field, and resolving a pending text edit's path.** Every patch
-`show --format json` reports (`show-report-v1`, additive; redefined 0.56.0 step 3g) carries
+`show --format json` reports (`show-report-v1`, additive) carries
 `"state"`: `"queued"` (found only in this repository's own active WAL), `"sealed"` (named by a
 held Block's own `patch_ids` — the same membership `sync pending` subtracts, independent of
 whether any ref, local or received, still reaches that Block), `"pending"` (not sealed, but named
@@ -569,7 +460,7 @@ falling back to the queue, so `"sealed"` wins.
 
 A pending patch's own node-addressed operations (`edit-text`, `replace-binary`, `change-perm`)
 resolve a real path when a recognition claim naming it leads back, through as many further held
-claims as it takes (0.56.0 step 3f — before this, only one hop), to a real parent block this
+claims as it takes, to a real parent block this
 repository already holds, sealed or received — folding every link's own patches in order onto that
 real parent's state, the same way a sealed block's own patches fold onto its parent's. A claim's
 own declared parent need not itself be sealed or received: it can instead be the prospective block
@@ -595,12 +486,12 @@ nameable facts about the store's state; the last two name only where the walk st
 nothing more specific to go on). A bare sealed patch id shown directly stays unresolved too, also
 naming why: `show` does not search for the block that sealed a patch shown by its own id; `prikk
 log` or `prikk tree` finds it. **An `"unclaimed"` patch is classified before any of this is even
-attempted** (0.56.0 step 3g): since no held claim names it, there is nothing to resolve a path
+attempted**: since no held claim names it, there is nothing to resolve a path
 through at all, and its own operations are reported unresolved with that reason directly.
 
 **`sync pending` and its own `--format json`: `sync-pending-v1`.** `sync pending` lists patches
-this repository holds that are named by a held recognition claim and named by no held Block
-(0.56.0 step 3g, design review v2's A1 ruling): patch objects present, minus those any held
+this repository holds that are named by a held recognition claim and named by no held Block:
+patch objects present, minus those any held
 Block's own `patch_ids` names, intersected with those a held claim's own `patch_ids` names. A
 patch sealed by a held Block is excluded whether or not any ref — local or received — still
 reaches that Block: a rolled-back block, or one a `received remove` orphaned, still excludes its
@@ -624,8 +515,8 @@ same meaning as `extract-report-v1`'s own `claim_parent_block_id`, but as a **li
 root claim, one entry ordinarily, two for a claim about a merge. This listing reports a
 merge-shaped claim in full rather than refusing one, unlike `extract --claim`, which has no
 mainline to pick from and refuses such a claim outright — a listing has no such need to pick one.
-**`"claims": []` no longer occurs, since 0.56.0 step 3g:** this listing's own membership now
-requires a held claim, so every entry it reports already has at least one. A patch no held claim
+**`"claims"` is never empty:** this listing's membership requires a held claim, so every entry it
+reports has at least one. A patch no held claim
 names is `"unclaimed"` (`show`'s own `state`), not pending, and does not appear in this listing at
 all. `patches[]` is ordered by patch id, the same order the text form already uses; each entry's
 own `claims[]` is ordered by claim id. **The text form itself (the count line and one id per line)
@@ -765,12 +656,12 @@ walk builds from it. `claim-does-not-fold` means some link's own patches do not 
 the state the chain has built up to that point — that claim is unsound, not this repository. A
 link whose own patch names a path outside this version's own rule (today: non-ASCII) is not this
 case: it reads `outside-version-rule`, with the same "outside what this version of `prikk` accepts"
-sentence `extract --ref` already gives for the identical path (see "A path this version of `prikk`
+sentence `extract --ref` gives for the identical path (see "A path this version of `prikk`
 does not accept is not damage", above) — a claim can be perfectly sound and still carry a patch a
 newer `prikk` wrote.
 `outside-version-rule` itself means the refusal's own cause was a path this version of `prikk`'s own
-rule refuses (today: non-ASCII), never corruption — classified structurally from
-`PrikkError::decode_failure_kind()`, never from the message text, and given both by `extract --ref`
+rule refuses (today: non-ASCII), never corruption — decided from the error's kind, never from its
+message text, and given both by `extract --ref`
 (a point whose own history replays a patch naming such a path) and by `extract --claim` (a chain
 link whose own patch names one) for the identical underlying cause. An empty, absolute, too-long,
 or otherwise ill-formed path is a different, permanently invalid cause — no future version of
@@ -824,11 +715,11 @@ removes one received ref's own pointer from the received-index container — the
 `RefState`, `Patch` or `Blob` nothing else reaches any more is reported by `prikk verify` as an
 **unreached object** (`unreached_objects`, with `object_type` one of `"block"`, `"ref-state"`,
 `"patch"` or `"blob"`) and by `prikk doctor` as a `PRIKK-DOCTOR-UNREACHED-OBJECT` warning — a
-non-blocking warning either way, never a failure (see `verify`'s own entry above). 0.56.0 step 3h
-widened both from `Block`/`RefState` only: a rolled-back or `received remove`d block's own patch
-(and the blobs its own operations name), a claimless accepted patch, or a refused or crashed
-import's leftover patch/blob objects are now counted too, where before this round they were
-invisible to both commands. A `Block`/`RefState`'s own publication trust is skipped while it stays
+non-blocking warning either way, never a failure (see `verify`'s own entry above). A rolled-back or
+`received remove`d block's own patch (and the blobs its own operations name), a claimless accepted
+patch, and a refused or crashed import's leftover patch and blob objects are counted too. An
+object counts when no tip, no WAL record and no pending patch (with the blobs its operations name)
+reaches it. A `Block`/`RefState`'s own publication trust is skipped while it stays
 unreached (reclassified, and checked again, the moment something reaches it); a `Patch`/`Blob` has
 no publication-trust concept to skip in the first place — for them this is purely a presence
 record. The bytes stay either way; no command removes them yet. When `verify` also reports a
@@ -922,7 +813,7 @@ in memory while it works:
   for a bundle that creates many files at once, the comparison genuinely holds each file's own
   content once while it decides what changed, so its own peak still grows with how much a bundle
   changes, not with the bundle's own size on disk (a mixed 158 MiB bundle peaks around 162 MiB,
-  down from about 640 MiB before this release's own streaming work, where `import`/`verify` on the
+  down from about 640 MiB before 0.55.0's streaming reads, where `import`/`verify` on the
   identical bundle peak under 15 MiB).
 
 A pipe or FIFO input to any of the three is unchanged: a non-seekable input cannot be read twice,

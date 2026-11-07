@@ -34,102 +34,44 @@ worktree. It does not copy/fork `heads/main`, switch the checkout branch, or cre
 A later `prikk branch switch heads/topic` brings the current-branch pointer in line with what the
 worktree already holds.
 
-**0.56.0 step W3b:** `merge --into` the current branch now writes the merged files into the
-worktree itself, when the worktree was clean against its own recorded baseline beforehand — it is
-no longer only `heads/main`'s ref that moves while the worktree is left to find out later, through
-a stale `commit` refusal or a `branch switch heads/main` resync. A dirty worktree still refuses the
-merge, before any write. `archive import --adopt`, `sync seal --claim`, and `branch create --from`
-onto the unborn current branch are not yet changed and still leave the worktree exactly as it was,
-recoverable the same way the `commit --ref heads/topic` walkthrough above is.
+## Commands that move the current branch
 
-**0.56.0 step W3c-1:** "before any write" above is now actually true. As W3b first landed it, the
-clean check ran after the merge's own Block/RefState/RefUpdate objects were already built and
-written, so a refused merge still left an orphaned, unreferenced Block behind in the object store
-(invisible in the worktree, but reported by `prikk verify` as an unreached object). The clean
-check now runs after every one of the merge's own read-only refusals (its ref-ownership check and
-RFC 164 Rule D's own pointer-index check among them), before it builds or writes anything of its
-own; the dirty-worktree marker is set immediately before the publish instead. A
-refused merge into the current branch now writes nothing at all, anywhere in the repository.
+Four commands can move the branch your worktree is on, and each writes the result into the worktree
+itself, so the worktree and the branch end in step and the next `prikk commit` finds nothing stale:
 
-**0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now writes the
-`--from` target's files into the worktree itself too, the same way `merge` does above, with the
-same "before any write" guarantee W3c-1 gave `merge`: a dirty worktree refuses the create outright,
-before any write. `archive import --adopt` and `sync seal --claim` are not yet changed and still
-leave the worktree exactly as it was, recoverable the same way the `commit --ref heads/topic`
-walkthrough above is.
+- `merge --into <the current branch>`;
+- `branch create --from <ref>`, when the new branch is the unborn current branch;
+- `sync seal <ref> --claim <id>` (or `--claims <file>`) onto the current branch;
+- `archive import --adopt`, for a ref that becomes the current branch.
 
-**0.56.0 step W3c-3:** a clean worktree does not always end current, either. A file already on
-disk at a path the `--from` target's own files occupy — present but untracked, so the clean check
-above does not refuse it — is also "in the way," the same reason `branch switch` can already
-refuse on. Before this round, that collision was only discovered *after* `branch create --from`
-had already published the new branch (or, for `merge --into`, after the merge had already moved
-the current branch's tip): the command still exited with an error, but the ref had already moved,
-leaving the dirty marker set and a later `commit` or `branch switch heads/<branch>` to resync —
-exactly the state a reader of W3c-1/W3c-2 above would not expect from "before any write." For
-`branch create --from`, this is fixed: the same in-the-way collision now refuses before the create
-publishes anything, naming the colliding path and saying nothing was written, so moving it aside
-and running the create again is all a caller needs to do.
+Each one checks two things before it writes anything, and refuses if either fails:
 
-**0.56.0 step W3c-3b:** `merge --into` is fixed the same way. Its own target was not available to
-check this way directly: the confluence proof computes the merged state but discards it behind its
-own, differently-shaped representation (`OracleState`, a proof device), and widening that proof's
-own evidence API to expose it would have coupled the worktree write to the proof's own internals.
-Instead, `merge` now derives its own merge Block's candidate state directly — the identical
-`derive_candidate` call `seal_block_at` itself makes again moments later, from the same mainline
-parent, the same adopted patch ids, and the same merge anchor site — before `seal_block_at` ever
-runs, and turns the derived state into a file list the same way `extract --claim` already builds
-one from a derivation no Block holds (resident bytes from the text cache first, the Blob only when
-absent). The identical `require_nothing_in_the_way` planner then runs against it, before any write,
-naming the colliding path the same way `branch create --from`'s own refusal does. `archive import
---adopt` and `sync seal --claim` are unaffected either way, since neither one yet writes the
-worktree at all.
+- **The worktree is clean against its own recorded baseline.** A worktree with uncommitted changes
+  refuses the command, naming the paths `prikk worktree-status` lists. Commit them or restore them,
+  then run the command again.
+- **No file is in the way.** A file that is not tracked, sitting at a path the new tip's files
+  occupy, refuses the command: `<n> file(s) are in the way of <ref>'s files: <path> (…); move them
+  aside before <action> (nothing was written)`. Move the file aside and run the command again.
 
-**0.56.0 step W3c-4:** `sync seal <ref> --claim`/`--claims <file>`, onto the current branch, now
-writes the sealed claim's own content into the worktree itself too, with the complete guarantee
-the paragraphs above build up in parts: a dirty worktree, or a file already in the way of the
-claim's own target files, refuses before any claim is sealed, and the claim (or, for a batch of
-several, every claim up to and including the last one that actually publishes) is materialized
-into the worktree afterward. A single `--claim <id>` is a batch of one claim, not a separate
-behavior. Sealing every claim in a batch in order and keeping an earlier one's seal even when a
-later one fails is unchanged: when that happens, the tip the batch actually produced is still
-materialized into the worktree before the batch's own error is reported, so the worktree never
-disagrees with what the batch really sealed. `archive import --adopt` is the one producer this
-round leaves unaffected, still leaving the worktree exactly as it was, recoverable the same way the
-`commit --ref heads/topic` walkthrough above is -- until the next paragraph closes it too.
+A command that refuses leaves `.prikk` and the worktree as it found them (apart from `.prikk`'s own
+cache), so nothing needs undoing. `archive import --adopt` makes both checks before it admits
+anything from the archive.
 
-**0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
-writes the adopted content into the worktree too. A courtesy clean check runs before anything from
-the archive is written at all, so an unclean worktree refuses as early as possible; it is purely a
-courtesy, since it cannot survive a crash and resume (a resumed import is a new process invocation
-with no memory of an earlier attempt). The real guarantee runs again, from scratch, at the one
-point immediately before the adoption's own publish, on both a fresh import and a resumed one
-alike: the worktree must be clean, and only then does the publish move the current branch and the
-adopted content get materialized into the worktree afterward.
+For `sync seal` with several claims, claims seal in order and sealing stops at the first claim that
+fails, keeping the seals before it; the worktree is then written to match what actually sealed, and
+then the error is reported. A batch that seals nothing writes nothing into the worktree. If an
+`archive import` is interrupted after a ref is adopted but before its files are written, running the
+same import again finishes the write and reports the ref as adopted, completed by the earlier run;
+no `branch switch` is needed.
 
-**0.56.0 step W3c-5b** corrected two defects review found in this shape before release. First, a
-file in the way of the adopted tip's own files now refuses before *anything* is written, the same
-as every other producer in this series: `archive import --adopt` builds a seeking reader over the
-archive's own carried Patch/Blob content and checks for a collision before the journal, before the
-archive's own objects are ever admitted locally, rather than only after. A real backstop still runs
-at the old, later point too, for the one window the early check cannot close (a file appearing
-between the two checks, from outside prikk, under the same lock) — but it is now genuinely a
-backstop, caught only in that rare case, not the normal path. Second, resuming an import that
-crashed between a `--adopt` landing's own publish and its materialize now reports that landing as
-what it actually is: adopted, completed by the earlier run, not a fresh fall-through to a received
-`remotes/` pointer the uninterrupted import would never have written — and if that earlier run's
-own materialize never finished either, this resume finishes it directly, so there is no second
-`branch switch` step left for the operator to run by hand. A landing not destined for the current
-branch, or one that cannot be adopted as a real local ref at all, is unaffected by either fix.
+If a file appears in the way after the branch has moved (created by a process outside prikk),
+the error says the branch was published, names the file, and says to move it aside and run
+`prikk branch switch <the current branch>`, which finishes the write.
 
-**0.56.0 step W3c-5c** closed one remaining gap in that second fix. A ref this import never
-touched at all could already hold the identical content — not because an earlier attempt of this
-import adopted it, but because some *other*, earlier import already had, and this import's own
-archive happens to carry the same, unchanged tip for that ref. Resuming now also checks what the
-ref held before this import's own plan was first computed, not only whether the content matches on
-resume, so that case reports the ordinary fall-through too — exactly what an uninterrupted run of
-the same import would have reported, rather than a false claim that this import adopted something
-it never touched. An import still in progress from before this fix resumes correctly as well: the
-ordinary fall-through applies there too, never a false adoption.
+A command that moves a branch which is *not* the current one leaves the worktree alone.
+`rollback-draft --append-inverse` also leaves the worktree alone, and says so: `prikk seal`, then
+`prikk branch switch <ref>`, applies the inverse. See [Command Surface](../../reference/commands.md)
+for the exact messages.
 
 The active WAL queues commits until `seal`, up to the queue limit described in the [FAQ](../faq.md). The
 active WAL records the one ref it belongs to, and a commit for a different ref is refused while the queue is
