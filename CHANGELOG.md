@@ -2,7 +2,41 @@
 
 ## Unreleased
 
-<!-- Security: pending the architect's ruling (P1 item 2) -->
+### Security
+
+- **A forged MAINTAINER signature on a Block or RefState, on the tip or on an ancestor, was
+  admitted by `bundle import` and `archive import`** (see "Fixed — `bundle import` and `archive
+  import` admitted a Block or RefState whose MAINTAINER signature does not verify"). Affected:
+  0.55.0 (measured), and every earlier release that has `bundle import` or `archive import` (from
+  reading the code; not run). To check a repository, run `prikk verify`: an admitted forgery is
+  reported as `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`, and the exit code is `1`. To remove it,
+  run `prikk received remove remotes/<ref>` (add `--plan-only` first to see what it would remove);
+  `verify` then exits `0`. The objects stay and are reported as `unreached objects` warnings; no
+  command removes them.
+- **A rollback, a divergent rewrite or an unrelated history silently replaced a received pointer
+  in `bundle import` and `archive import`** (see "Fixed — a rollback, a divergent rewrite or an
+  unrelated history silently replaced a received pointer"). Affected: 0.55.0 (measured), and every
+  earlier release that has `bundle import` or `archive import` (from reading the code; not run).
+  Nothing marks a pointer that was already replaced: compare `prikk log --ref remotes/<name>` (or
+  `prikk branch list --all`) with the tip you expect. Import the right delivery again: one that
+  extends the pointer is accepted, and one that diverges from it needs `--allow-non-fast-forward`,
+  which you should pass only when you mean it.
+- **`archive import` admitted a patch whose path is not ASCII, and `archive verify` called such an
+  archive sound** (see "Fixed — `archive import` admitted a patch whose path this version does not
+  accept"). Affected: 0.55.0 (measured), and every earlier release that has `archive import` (from
+  reading the code; not run). In a repository that admitted one, `verify` and `doctor` fail
+  (`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`, exit `1`), under 0.55.0 as well.
+  `prikk received remove remotes/<ref>` takes the pointer away, but `verify` keeps failing and no
+  command deletes the block.
+- **`extract --claim` extracted a claim whose MAINTAINER signature is forged or missing** (see
+  "Fixed — `extract --claim` extracted a forged or unsigned claim, and anchored on a parent no
+  branch reaches"). Affected: 0.55.0 (measured), and every earlier release that has `extract
+  --claim` (0.54.0 and 0.54.1; from reading the code, not run). It needs a repository that has
+  adopted the signer's key id: a claim by a signer it has not adopted still extracts. Run `prikk
+  extract --claim <claim-id> <new-dir>` again for any claim from a source you do not control: a
+  forged claim is refused (`claim-signature-invalid`, exit `1`, nothing written) and a sound one
+  writes the same files. 0.55.0 left nothing in `.prikk`; the output directory it wrote is the only
+  trace.
 
 ### Upgrading
 
@@ -26,6 +60,8 @@
   again.
 - **`extract --claim` refuses a claim whose MAINTAINER signature is forged or missing,** where
   0.55.0 extracted it. A claim signed by a key this repository has not adopted still extracts.
+- **`archive import` and `archive verify` refuse an archive whose patches name a non-ASCII path,**
+  as `outside-version-rule`; 0.55.0 admitted it and called it sound.
 - **`sync pending` lists fewer patches:** only a patch some held recognition claim names and no
   held block seals. A script that used it to find every patch without a sealing block should read
   `show --format json`'s `state` instead.
@@ -100,7 +136,9 @@ stdout, with the same text on stderr and the same exit code (`1`) as without the
   import`/`verify`/`preview`, `archive import`/`verify`:** before, the message called the path
   "malformed" or "does not decode" and could end with "non-ASCII paths are deferred until Unicode
   NFC normalization is implemented"; after, `invalid name: <path> is outside what this version of
-  prikk accepts, and a newer version of prikk may have written it`. All of them still refuse.
+  prikk accepts, and a newer version of prikk may have written it`. All of them still refuse,
+  except that `archive import` and `archive verify` used to accept an archive carrying such a path
+  (see "Fixed — `archive import` admitted a patch whose path this version does not accept").
 - **A worktree file with such a name, met by `commit`, `diff` or `status`:** `this version of prikk
   does not accept non-ASCII repository paths: <path>`, naming the file.
 - **`doctor`:** such a path is reported as `PRIKK-DOCTOR-VERIFY-OBJECT-OUTSIDE-VERSION-RULE` or
@@ -356,6 +394,16 @@ say) was accepted as an anchor; it now refuses the way a parent never received d
 patches do not apply onto the state before it reads as that specifically rather than as
 repository damage.
 
+### Fixed — `archive import` admitted a patch whose path this version does not accept
+
+`archive import` stored the patches an archive carries without decoding their operations, so a
+patch naming a non-ASCII path was admitted, and `archive verify` called such an archive
+structurally sound. `verify` and `doctor` then failed on the stored block
+(`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`). Both now read the carried patches' paths
+before the first write and refuse the archive (`invalid name: <path> is outside what this version
+of prikk accepts, and a newer version of prikk may have written it`; `"refusal":
+"outside-version-rule"` under `--format json`), and `.prikk` is left byte for byte as it was.
+
 ### Fixed
 
 - **`uninstall.sh --prefix <dir>` ignored `--prefix` and removed the binary at the default
@@ -384,8 +432,9 @@ repository damage.
   different commands (and, reading stored history, as a roadmap statement about Unicode). Every
   reader and importer now says the same sentence — outside what this version accepts, a newer
   version may have written it — and `doctor` recommends reading the repository with a newer version
-  instead of preserving it. Everything still refuses; only the classification and the wording
-  changed.
+  instead of preserving it. Every reader still refused it; only the classification and the
+  wording changed (`archive import` and `archive verify` are the exception: see "Fixed —
+  `archive import` admitted a patch whose path this version does not accept").
 - **`sync pending` and `show` read a rolled-back block's patch, or one orphaned by `received
   remove`, as unsealed,** because they asked whether any ref still reached the block that sealed it
   (the block was never unwritten). A patch sealed by a held block is sealed, whichever ref reaches
