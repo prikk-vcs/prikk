@@ -177,3 +177,20 @@ this repository does not hold makes `commit` and `branch switch` fail with `inte
    - finding 1's probe (a hex-preserving flip of the block id now heals).
 
 The 8 `SILENT` cells are accepted for 0.56.0 (ROADMAP: a `doctor` notice for an ignored record).
+
+**P3b reviewed 2026-11-07** (review `release-0.56.0-prep-P3b-review-v1`). `baf66df2` and `c936c151` are accepted and
+pushed. **The release commit `36544bf3` is held once more:** the Security (c) route text cannot be run as written,
+because `sync have` lacks `--output` and a bare `sync accept` fails with "requires a file path". The architect ran
+the route with the full flags (two branches, identical block ids, `verify` and `doctor` exit 0) and reran the memory
+profile, which is unchanged.
+
+**Next: P3c, the (c) wording** (one sitting, 20 min, stop at 40; report `release-0.56.0-prep-P3c-report.md`):
+0. `git log --oneline origin/main..main` must show exactly `36544bf3`. Then `git reset --keep origin/main`. Paste
+   both.
+1. In `CHANGELOG.md` only, the (c) bullet's route sentences become the text in the review's ruling 1. Every command
+   carries its file arguments: `sync have … --output have.bin`, `sync build … --have have.bin --output art.bin`,
+   and `sync accept art.bin --claims-out claims.txt`, then `sync seal heads/<branch> --claims claims.txt`. Say
+   "under the same user account, so that it holds the same keys", and keep the second-branch `branch create` step.
+2. The three-file release commit again.
+3. **On it:** `cargo test --workspace` and the 14 gates. Also show the release binary's sha256 is
+   `286d5db50401…`, as at `36544bf3`. If it differs, rerun the smoke, the matrix and `reproduce.sh`.
