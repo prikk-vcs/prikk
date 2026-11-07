@@ -303,7 +303,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1832);
+    assert_eq!(counted.production_lines, 1848);
     assert_eq!(
         physical - counted.production_lines,
         49,
