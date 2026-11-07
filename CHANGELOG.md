@@ -2,499 +2,437 @@
 
 ## Unreleased
 
+<!-- Security: pending the architect's ruling (P1 item 2) -->
+
+### Upgrading
+
+- **`bundle import` and `archive import` refuse a delivery that is a rollback, a divergent rewrite
+  or an unrelated history** against the received pointer they would replace; 0.55.0 replaced the
+  pointer without a word. Pass `--allow-non-fast-forward` when that is what you mean, for example
+  to restore an older backup over a newer copy. A delivery that is the same tip or a plain
+  extension, or that finds no pointer to replace, is not affected.
+- **`bundle import` and `archive import` refuse a MAINTAINER signature that names an adopted key
+  id but does not verify against that key.** Two installations that both still use the legacy key
+  id `maintainer` (every installation made before 0.45.0) can no longer exchange history: the
+  sending maintainer signs under a distinct id (`prikk key generate --out <path>`, or
+  `PRIKK_MAINTAINER_KEY_ID`), and the receiving repository adopts that id with `prikk trust
+  maintainer add`.
+- **`merge --into`, `branch create --from`, `sync seal` and `archive import --adopt` write the
+  worktree when they move the current branch, and refuse before writing anything** if the worktree
+  has uncommitted changes (commit or restore them) or an untracked file sits where the new files
+  go (move it aside). Run them from a clean worktree.
+- **`commit` refuses to author over a path the worktree was never brought up to date for,** and
+  names the command that does it, `prikk branch switch <branch>`. Run that command, then commit
+  again.
+- **`extract --claim` refuses a claim whose MAINTAINER signature is forged or missing,** where
+  0.55.0 extracted it. A script that extracted unsigned claims must adopt the signer's key first
+  (`prikk trust maintainer add`).
+- **`sync pending` lists fewer patches:** only a patch some held recognition claim names and no
+  held block seals. A script that used it to find every patch without a sealing block should read
+  `show --format json`'s `state` instead.
+- **`log --ref` exits `1`, not `0`,** for a block id and for a value that is neither a ref name nor
+  a block id.
+- **`verify` and `doctor` may now report `unreached objects: N` on a repository that 0.55.0
+  reported as clean:** patch and blob objects nothing reaches (after a rollback, a `received
+  remove`, or a refused import) are counted too. The count is a non-blocking warning; the exit
+  code does not change.
+- **No migration is needed.** `.prikk/worktree.baseline` is new (`init` and `setup` write it); a
+  repository made by an earlier release gets it at its first `commit`, `seal` or `branch switch`,
+  and works without it until then. An `archive import` that 0.55.0 left unfinished resumes under
+  0.56.0.
+- **`uninstall.sh` accepts `--prefix <dir>` and refuses any other argument;** `uninstall.ps1`
+  refuses any argument at all. A wrapper that passed other arguments to either must stop.
+<!-- Public API: the architect adds the break lines from the API diff here (P1 item 4). -->
+<!-- P2: the cost of the admission signature check and of `archive import --adopt`'s early check, if the architect wants it stated here. -->
+
 ### Output changes
 
-- **`log --ref <block id>` now refuses instead of silently answering an empty history.** A block
-  id that names nothing in this repository refuses as a precondition (`block <id> is not in this
-  repository`); a block id that does resolve refuses too, naming the reason: `log` does not walk a
-  block's own ancestry as history (a block can have more than one parent, so there is no single
-  next entry), only a ref's own publication chain. Before this, either case exited `0` with
-  `"blocks": []` — a silent wrong answer, never a refusal. A value that is neither a ref name nor a
-  block id now also refuses by name, the same wording `cat`/`tree`/`extract`/`checkout`/`diff`
-  already give for the identical shape.
-- **`prikk doctor` now names every stale lock a crashed writer left behind.** Each held lock
-  (`active.lock`, a ref lock, or a container lock) is reported as an informational
-  `PRIKK-DOCTOR-HELD-LOCK` diagnostic, with its path, kind, recorded process id, and the same
-  advisory liveness check `prikk unlock` already prints — `doctor`'s exit code is unchanged, since
-  a held lock is ordinary during a live write. Before this, a crash during `bundle import`, which
-  writes no interrupted-import journal, left `doctor` completely silent about the locks it left
-  behind. The `lock conflict` refusal message itself now also names `prikk unlock` directly.
-- **`bundle import` now refuses a rollback, a divergent rewrite, or an unrelated history, against
-  the received pointer it would replace, unless `--allow-non-fast-forward` is given.** Before this,
-  any delivery that decoded and admitted cleanly overwrote the received pointer outright, including
-  one that moved it backward or onto an unrelated history, with no warning and no way to require a
-  plain extension. The refusal names which of the three applies and happens before any object is
-  written; a delivery with no existing pointer to replace, or one that is already at the same tip or
-  a genuine fast-forward, is never affected. A delivery that is already at the same tip but whose own
-  publication history is older than what is already there now writes every object it carries while
-  leaving the pointer itself untouched, and exits `0` rather than silently moving the pointer's own
-  record backward.
-- **`archive import` applies the identical rule, fully, before anything is written.** Landing a
-  ref as a received pointer (the default, and `--adopt`'s own fallback) refuses a rollback, a
-  divergent rewrite, or an unrelated history against the pointer it would replace, unless
-  `--allow-non-fast-forward` is given — the same flag, the same three names, `bundle import`
-  already has. `--adopt` itself also checks the received pointer already held at the name it would
-  otherwise land under before adopting a real local branch: adopting onto an unrelated or
-  rolled-back received history refuses the same way, under the same flag, and the note explaining
-  why a ref landed under `remotes/` instead of as a real local branch also names this case when the
-  flag let it through anyway. Every planned landing is checked against the local repository before
-  anything at all is written, not only after every object has already landed, so a refusal leaves
-  the repository exactly as it was found: no object written, no unfinished import record behind.
-  Resuming a genuinely interrupted import still works the same way, and still catches the rarer
-  case of the pointer moving again in the gap before the resume. `--format json` reports the same
-  classification `bundle import --format json` does: each landing carries `"class"` and
-  `"ref_state_chain"`, for every landing, not only a refused one, and a refusal prints the same
-  reusable refusal document `bundle import` already uses, naming the refused class.
-- **`archive import` and `archive verify` now refuse a carried change whose own recorded edits do
-  not decode, before anything is written.** Before this, `archive import` could land such a change
-  with no warning at all, and `archive verify` reported the archive as internally consistent —
-  while `bundle import` already refused the identical change. All three now apply the same check.
-- **`bundle preview --ref remotes/<name>` now resolves what this repository actually received at
-  that name, instead of always reporting "no local history" for it.** Before this, previewing a
-  bundle against a received (not yet locally published) ref always answered as if nothing had ever
-  been received there, even when something had — while `bundle import` of the identical bundle
-  correctly read it and refused as a rollback or similar. A `remotes/…` name now resolves against
-  what was actually received; if nothing was received under that exact name, the command refuses
-  by name rather than giving a misleading answer. A `heads/…` or `tags/…` name is unaffected.
-- **A path this version of `prikk` does not accept is reported as outside this version's own
-  rule, never as damage — and, reading stored or delivered history, names the path, not a
-  roadmap statement.** Every reader (`verify`, `doctor`, `show`, `tree`, `extract`, and `commit`
-  when it replays existing history to derive state) and every importer's admission check
-  (`bundle import`/`verify`/`preview`, `archive import`/`verify`) now say the identical sentence:
-  that this path is outside what this version of `prikk` accepts, and that a newer version of
-  `prikk` may have written it — never "malformed", never "does not decode", and never "non-ASCII
-  paths are deferred until Unicode NFC normalization is implemented", which used to follow in a
-  parenthesis even where the rest of the message had already been corrected. `doctor`'s own
-  recommendation for this case now also says to read the repository with a newer version of
-  `prikk`, in addition to saying no repair is needed. A worktree file with such a name, reached
-  while authoring a commit (including from `diff`'s and `status`'s own worktree scans), is told
-  something different and actionable instead: that this version of `prikk` does not accept
-  non-ASCII repository paths, naming the file. Every one of these commands still refuses; only
-  how the refusal is classified and worded has changed.
-- **`extract --claim` now checks every claim's own signature, and walks back through unsealed
-  ancestor claims to find the sealed or received history they build on.** Before this, `extract
-  --claim` checked no signature at all, so a forged or unsigned claim extracted its files with
-  exit `0`; a forged (a MAINTAINER signature naming an adopted key that does not actually verify)
-  or unsigned claim now refuses instead. A claim whose declared parent block is held in this
-  repository but reachable from no branch or received history — for example, one orphaned by a
-  later `received remove` — used to be treated as a usable anchor anyway; it now refuses exactly
-  the way a parent that was never received at all already did. A claim whose own patch does not
-  actually apply onto the state before it now reads as that specifically, rather than as generic
-  repository damage — except a patch whose own path is simply outside this version's own rule (one
-  a newer `prikk` may have written), which classifies as `outside-version-rule` — the same id
-  `extract --ref` now gives for the identical cause — never as an unsound claim. None of this
-  affects a claim whose own signature is simply unadopted (not forged) rather than invalid — that
-  continues to extract, as it always has.
-- **`show` of a pending patch now resolves through a chain of unsealed recognition claims, not only
-  one hop.** Before this, a claim whose own declared parent was itself only another pending claim's
-  prospective block — never sealed or received — read as an unrealized chain and stayed unresolved,
-  even when that other claim's own parent really was sealed or received. `show` now walks back
-  through as many such claims as it takes to reach real history, the same walk `extract --claim`
-  already uses. Two new reasons can now appear where a pending patch stays unresolved: a chain that
-  needs to resolve a block two or more held claims recognize, with none or more than one of them
-  signed by an adopted key (a shared-block collision), and a chain that loops back on itself (a
-  cycle) — both report the condition by name rather than refusing. An invalid MAINTAINER signature
-  anywhere in the chain is still skipped, not only at the claim named directly;
-  `"resolved_through_claim_id"` is still the claim naming the patch, never an earlier link in its
-  own chain.
-- **`extract --ref` now reports a path outside this version's own rule as `outside-version-rule`
-  under `--format json`, not `damaged-repository`.** The point's own history already told the
-  truth in its `message` text — that the path is outside what this version of `prikk` accepts,
-  and that a newer version of `prikk` may have written it — but the machine-readable `refusal` id
-  next to it, under `extract --ref`'s own `refusal-v1` document, still said `damaged-repository`,
-  which a script reading only the id (not the prose) would misread as corruption. `extract --claim`
-  now gives the identical id for the identical cause, matching the sentence it already gave. An
-  empty, absolute, too-long, or otherwise ill-formed path is unaffected and still reads
-  `damaged-repository`: only the genuinely version-relative cause (today: non-ASCII) moved.
-- **`commit` now refuses to author over a path that is stale against this worktree's own recorded
-  baseline, instead of silently signing a lie about it — whether or not the record names the ref
-  being committed onto.** Before this, each per-path authoring decision only ever compared the
-  worktree against the ref's own *current* state — so a producer that moved the ref forward
-  without ever writing the worktree (`merge --into`, `archive import --adopt`, `sync seal --claim`,
-  `branch create --from` onto the unborn current branch) or a `commit --ref <other>` targeting a
-  branch this worktree had never synced to, left the next ordinary commit reading the gap as
-  whatever shape it happened to take: a path "missing from the worktree" was authored as a
-  deletion, even when the worktree had simply never received it; a path whose content, mode, or
-  node the producer had actually changed was authored as an ordinary edit, mode change, or rename,
-  silently reverting the producer's own change (or, if the worktree's bytes had since diverged a
-  third way, recording a conflict as if it were ordinary) — and this last shape stayed possible
-  even after an earlier correction of this same point, for a `commit --ref <other>` specifically,
-  because that correction stopped checking a path at all once the record named a different ref,
-  rather than checking the path's own state regardless of which ref the record names. `commit` now
-  remembers, per path, what this worktree was last actually written from, and refuses before
-  authoring anything for a path whose live and recorded states disagree — in content, mode, kind,
-  presence, or the node it belongs to — naming every such path and the command that resyncs. The
-  way out always names `prikk branch switch <the record's own ref>` literally (the ref the
-  worktree's record actually names, never a placeholder — this always works, since the record is
-  always an accurate description of what the worktree physically holds), and additionally names
-  the current-branch self-switch, `prikk branch switch <the current branch>`, only when the branch
-  actually being committed onto is itself published — naming it unconditionally used to send a
-  user stuck on an unpublished current branch to a switch that itself refused ("... does not
-  exist; run `prikk branch create ...` first"), a dead end a real walkthrough
-  (`docs/src/guide/patches/worktree-patch.md`'s `commit --ref heads/topic` on a genuinely unborn
-  ref) reaches. A path that is not stale, or a worktree that
-  already holds the live state for a stale one, is authored exactly as before; a genuine deletion,
-  edit, mode change, or rename of content this worktree really did hold still authors normally.
-  Committing onto a different ref than the one the worktree's record names is still ordinary and
-  unrefused on every path where the record and that ref's live state genuinely agree (shared,
-  undiverged history) — only a path where they disagree is ever in question, never the ref name
-  itself.
-  **0.56.0 step W3b:** `merge --into` the current branch now closes part of this gap for itself,
-  instead of only ever being caught by the refusal above. When the worktree is clean against its
-  own record, the merge marks it dirty as a `Switch` to the current branch, publishes exactly as
-  before, and then materializes the newly merged tip into the worktree through the same
-  verified path `branch switch` already uses — the merged files are genuinely present afterward,
-  the record ends current, and the next ordinary commit finds nothing stale. A dirty worktree
-  still refuses the merge itself, before any write, naming the same paths `worktree-status` would.
-  `archive import --adopt`, `sync seal --claim`, and `branch create --from` onto the unborn current
-  branch are unchanged this round and still rely only on the refusal above.
-  **0.56.0 step W3c-1:** "before any write" above was not yet true as landed — the clean check ran
-  after the merge's own Block, RefState, and RefUpdate objects were already built and durably
-  written, so a refused merge still left an orphaned, unreferenced Block behind (`verify` would
-  report it as an unreached object). The clean check, and the capture of the files the worktree
-  is about to stop holding, now run after every one of the merge's own read-only refusals (its
-  ref-ownership check and RFC 164 Rule D's own pointer-index check among them), before it builds
-  or writes a single object of its own; the dirty-worktree marker is set immediately
-  before the publish instead. A refused merge into the current branch now genuinely writes
-  nothing at all, confirmed by a whole-repository (worktree and `.prikk` both) comparison before
-  and after the refusal, and by `verify` reporting zero unreached objects afterward.
-  **0.56.0 step W3c-2:** `branch create --from`, of the unborn current branch, now closes this
-  same gap for itself, the identical shape W3c-1 gave `merge`: the clean check and the capture of
-  the current branch's own (empty) baseline files run after every one of `create`'s own read-only
-  refusals and before it builds a single object, the dirty-worktree marker is set immediately
-  before the publish, and the `--from` target's files are materialized into the worktree right
-  after. A dirty worktree still refuses the create itself, before any write, leaving `.prikk`
-  byte-identical except its own cache. `archive import --adopt` and `sync seal --claim` are
-  unchanged this round and still rely only on the refusal above.
-  **0.56.0 step W3c-3:** a clean worktree did not always end current either — a file already on
-  disk, untracked, at a path the `--from` target's own files occupy passes the clean check (an
-  untracked file is never a reason to refuse) but still collides. Before this round, `branch create
-  --from` discovered that collision only *after* publishing the new branch (and, for `merge
-  --into`, only after moving the current branch's own tip): the command still exited 1, but the ref
-  had already moved, leaving the dirty marker set and a `branch switch heads/<branch>` to resync —
-  not the "before any write" this round's own entries above promise. For `branch create --from`,
-  the identical in-the-way collision now refuses before the create publishes anything, naming the
-  colliding path and leaving `.prikk` byte-identical, the same way the dirty-worktree refusal
-  already does; moving the path aside and running the create again is all a caller needs to do.
-  **0.56.0 step W3c-3b:** the refusal sentence above read "refusing to creating heads/main" as
-  landed — ungrammatical, since `action` is a gerund and the template prefixed it with another
-  verb — and now follows the clean check's own shape instead, ending "move them aside before
-  `<action>` (nothing was written)". `merge --into` is fixed the same way `branch create --from`
-  was: it derives its own merge Block's candidate state (the identical `derive_candidate` call
-  `seal_block_at` itself will make moments later, from the same mainline parent, adopted patch ids,
-  and merge anchor site) before `seal_block_at` ever runs, turns the derived `entries` plus
-  `text_cache` into a `ReplayManifest` the way `patch_replay::extract`'s claim path already builds
-  its own file list, and runs the identical `require_nothing_in_the_way` against it, directly,
-  before any write — including the DC-65 case of an adopted-side deletion of a file edited by
-  `EditText`, whose content was never stored as a Blob. `archive import --adopt` and `sync seal
-  --claim` are unaffected either way, since neither yet writes the worktree at all.
-  **0.56.0 step W3c-4:** `sync seal <ref> --claim`/`--claims <file>`, onto the current branch, now
-  closes this same gap for itself, in one sitting rather than in the smaller steps the other three
-  producers needed: it had no worktree-write behavior of any kind before this round, so it gets the
-  clean check, the pre-write in-the-way check, the marker, and the materialize call all together.
-  The clean check and the capture of the current branch's own baseline run once, before the first
-  claim in the batch is sealed; the pre-write in-the-way check runs against the batch's own
-  simulated final state, folded claim by claim in the order `order_claims_for_sealing` already
-  sorts them and stopping at the first claim whose own fold fails, checked against the state after
-  the last claim that folded successfully — the exact tip the loop below will actually publish
-  and then materialize (0.56.0 step W3c-4b fixed an all-or-nothing first cut of this fold, which
-  gave no opinion at all whenever any later claim in the batch failed to fold, even though an
-  earlier claim would still really publish); the marker is set once, immediately before the
-  batch's first claim seals; and the batch's own content is materialized into the worktree once,
-  after the last claim, from the ref's own real, final tip — unless the batch published nothing at
-  all (every claim either refused outright or was already fully sealed), in which case nothing is
-  materialized, no "materialized into the worktree" line is printed, and the marker is cleared
-  directly instead (0.56.0 step W3c-4b; before that fix, this case still ran the materialize call
-  unconditionally, which could print a confusing no-op line, or find no tip at all to replay on a
-  still-unborn current branch). A dirty worktree, or a file in the way of the batch's own target
-  files, refuses before any claim seals, leaving `.prikk` byte-identical except its own cache and
-  no claim sealed at all. Sealing every claim in order and stopping at the first failure, with no
-  rollback, is unchanged (§3 of the sync module's own doc): when a later claim in an otherwise-valid
-  batch fails after an earlier one has already published, the earlier claim's own seal stays in
-  place, and the tip it actually produced is still materialized into the worktree before the
-  batch's own error is returned, so the worktree never disagrees with what the batch really did —
-  even though the batch as a whole failed. If that materialize call itself then fails, the marker
-  stays set and the combined error names `branch switch <the current branch>` as the way out, the
-  same route every other producer's own marker already promises (0.56.0 step W3c-4b: dropped a
-  second, redundant copy of that same sentence from the combined message). `--claim`/`--claims`
-  onto a ref that is not the current branch, or a `--claims <file>` that names no claims at all,
-  are unaffected: no clean check, no marker, no materialize call, the ordinary pre-round behavior.
-  **0.56.0 step W3c-5:** `archive import --adopt`, of a ref destined for the current branch, now
-  closes this last remaining gap. A courtesy clean check runs before the journal (and before stage
-  1 ever admits an object) whenever the plan has such a landing, so an unclean worktree is refused
-  as early as possible; it captures nothing durable, since a crash-and-resume is a brand-new
-  process invocation with no access to an earlier attempt's own in-memory capture. The
-  authoritative capture, marker, and materialize call all run again, from scratch, inside the
-  adoption itself, at stage 3, on both a fresh import and a resumed one alike — immediately before
-  the one publish that actually moves the current branch. A dirty worktree refuses before any
-  object is written at all. **0.56.0 step W3c-5b corrected two defects found in review before
-  release, folded in here rather than listed separately:** (1) a file in the way of the adopted
-  tip's own files now also refuses before the journal, before stage 1 ever admits an object — the
-  same guarantee the dirty-worktree check already had — through a seeking reader over the
-  archive's own Patch/Blob sections, built and measured against the import's own total time before
-  landing; the unchanged stage-3 check stays as a backstop for the one window the early check
-  cannot see into (a file created by a process outside prikk, between the two checks, under the
-  same lock), with its own message corrected to say what that backstop actually leaves behind
-  rather than falsely claiming nothing was written; (2) resuming an import that crashed between a
-  `--adopt` landing's own publish and its materialize now reports that landing honestly —
-  `adopted`, with a note that it was completed by the earlier, interrupted run — instead of
-  misreporting it as a fresh fall-through to a `remotes/` pointer the uninterrupted import would
-  never have written, recognized only on a genuine resume of that same import's own journal (an id
-  match alone, on a fresh run, is not enough — two unrelated repositories can coincidentally reach
-  the same id for a trivial state); when that landing is also the current branch and its
-  materialize never finished, the resume finishes it directly, so no second `branch switch` step
-  is needed. **0.56.0 step W3c-5c narrowed that same resume-honesty check once more:** an id match
-  on a genuine resume is still not enough by itself, either — a ref this import never touched at
-  all can already hold that exact id because some *other*, earlier import already adopted it, and
-  this import's own archive happens to carry the same, unchanged tip for that ref name. Resuming
-  now checks what the ref held before this import's own plan was first computed, not only whether
-  the resumed id happens to match, so a crash during that later import's own first attempt still
-  reports the ordinary fall-through on resume — exactly what an uninterrupted run of the same
-  import would have reported. An in-progress import whose journal predates this check (written by
-  an older binary) still resumes correctly: the ordinary fall-through applies there too, never a
-  false adoption.
-  A landing that is not destined for the current branch, or that `--adopt` cannot land as a real
-  local ref at all (it falls through to `remotes/`), is unaffected: no clean check, no marker, no
-  materialize call, the ordinary pre-round behavior.
-- **`branch switch <the current branch>` is no longer always a no-op.** Before this, naming the
-  branch you were already on did nothing, even when the worktree had fallen behind that branch's
-  own current tip (the exact situation the point above now refuses to commit through) — and
-  switching away and back did not help either, since leaving was itself refused against the
-  branch's own moved tip. Naming the current branch now resyncs when the worktree's own recorded
-  state disagrees with the branch's own sealed tip, the same way switching to a different branch
-  always has. It remains the documented no-op whenever the worktree's record is already current.
-  Both directions judge "clean", and which files the old baseline held, against the worktree's
-  recorded baseline whenever one exists, whichever ref it names — never only when the record
-  happens to already name the branch being switched to or from. Before this, a `commit --ref
-  <other>` (which records the ref it actually authored onto, not the current-branch pointer) left
-  the pointer and the record naming two different refs, and the record was then never consulted
-  for either switch direction — both fell back to comparing against the pointer's own live state,
-  which the worktree genuinely disagreed with, so neither a self-switch nor a switch to the ref the
-  record actually named could ever resync; an ordinary commit afterward refused as stale and named
-  a self-switch that itself refused the same way. A record is always what the worktree was
-  actually, physically last written to match, so using it is never less correct than trusting the
-  pointer's own live state. The self-switch now also resyncs when the current branch has never
-  been published at all (no `RefState` exists for it yet) and the record reads behind it — before
-  this, naming the current branch in that exact shape refused unconditionally ("`<branch>` does
-  not exist; run `prikk branch create <branch>` first"), even though the worktree's own record
-  already named exactly what it should resync to. It now materializes the branch's own empty
-  (never-published) state and records that, narrowly for this one shape — every other target still
-  refuses without a published `RefState`, open-or-closed check unaffected.
-  A moved *queued, unsealed* fold (for example `rollback-draft --append-inverse`, which never
-  touches the sealed branch or the worktree) is detected the same way, but is never resynced by a
-  self-switch materializing it directly — doing so would write the sealed portion of the worktree
-  through the lifecycle cache rather than the verified-anchor replay every other switch uses, so a
-  self-switch over a non-empty, behind-reading queue refuses instead, naming `seal` then `branch
-  switch <the current branch>` again as the way out. `seal` only advances the worktree's own
-  recorded baseline when it already matched the fold it just sealed — a queued fold the worktree
-  was never written to match (`rollback-draft --append-inverse`'s own shape) leaves the record
-  exactly where it was, so this second switch now genuinely resyncs through the ordinary,
-  verified-anchor path, rather than reading the record's own fresh-but-untrue agreement with the
-  newly sealed tip as "nothing to do."
-- **`worktree-status` reports "behind `<ref>`" instead of listing every file a moved ref added as
-  `missing`**, when the worktree's own record shows it has fallen behind that ref — the same
-  staleness `commit`'s new refusal above detects, including a ref whose sealed tip has not moved
-  but whose queued fold has. A file the user genuinely deleted is unaffected and still reports as
-  `missing`; `--format json` carries the same fact as a new, additive `"behind_ref"` field, `null`
-  when the worktree is current.
-- **`merge --into`, `archive import --adopt`, and `branch create --from` now refuse to move a ref
-  the active WAL already holds queued, unsealed work for, instead of moving it out from under that
-  queue with no warning.** Before this, none of the three asked whether a locally committed-but-
-  not-yet-sealed patch already targeted the exact ref they were about to advance or publish; the
-  queue was silently left in place, authored against a tip that was no longer current by the time
-  it would eventually be sealed. Each now refuses before any write, naming the ref and `seal` as
-  the way out (`prikk seal --allow-no-audit --ref <ref>`); a queue that targets a *different* ref,
-  or no queue at all, is unaffected. `sync seal --claim` and `rollback-draft --append-inverse`
-  already refused on any non-empty active WAL regardless of which ref owned it — a strictly
-  stronger, pre-existing condition that already covered this case for both of them.
-- **`bundle import` and `archive import` now refuse a forged MAINTAINER signature on a delivered
-  tip, before anything is written.** When the tip's own `Block` or `RefState` carries a MAINTAINER
-  signature naming a key id this repository has adopted, but the signature does not verify against
-  that key's own public key — a forgery, or another maintainer who happens to use the same key id —
-  the import now refuses by name (`refusal-v1`'s own new `"forged-publication-signature"` id under
-  `--format json`) rather than admitting the object silently. Before this, neither importer checked
-  publication trust at admission time at all; only a later `prikk verify` caught it, by which point
-  the forged object was already durably admitted (and, for `archive import --adopt`, possibly
-  already a real local branch). A signature naming a key this repository has simply never adopted
-  is unaffected and still imports exactly as before — only a signature that names an adopted key and
-  fails to verify against it refuses.
-- **The forged-publication-signature refusal above now names a route out for its honest cause.**
-  Two independent installations that both happen to default to the same maintainer key id (most
-  commonly the shared pre-0.45.0 legacy default, `"maintainer"`) now refuse at import instead of
-  importing cleanly and only failing a later `prikk verify` — right, but the refusal's own message
-  used to name two possible causes (a forgery, or another maintainer using the same key id) with no
-  way out for the second, entirely legitimate one. It now also says what to do: the sending
-  maintainer signs under a distinct key id next time (`PRIKK_MAINTAINER_KEY_ID`, or a key made by
-  `prikk key generate --out <path>`), and the receiving repository adopts that distinct id with
-  `prikk trust maintainer add --key-id <that id> --public-key <its public key>` — the identical
-  route `trust maintainer add`'s own same-shaped TOFU-collision refusal already named.
-- **Both importers' `--format json` output now also prints a `refusal-v1` document when admission
-  refuses a path outside this version's own rule** (the same non-ASCII-path refusal `extract
-  --format json` already names `"outside-version-rule"`). Before this, both printed nothing at all
-  to stdout for this cause under `--format json`, leaving a scripted caller with only the generic
-  stderr text.
-- **`bundle preview` now also reports each sealer's own publication-trust outcome**, additively,
-  as a new `"sealed_by_signatures"` field: one entry per signature already listed in `"sealed_by"`
-  (which is unchanged), each naming its own key id and an `"outcome"` of `"sound"` (adopted and
-  verifies), `"unverifiable"` (not adopted by this repository at all), or `"invalid"` (adopted, but
-  does not verify — the same condition `bundle import` now refuses on). Reported, not trusted, the
-  same disclaimer `"sealed_by"` itself already carries: `bundle import` is still the only thing that
-  acts on this.
-- **`sync pending` and `show` redefine what "pending" means (0.56.0 step 3g, design review v2's A1
-  ruling): `sync pending` no longer lists a patch with no held recognition claim naming it, nor a
-  patch whose own Block is still held, even when no ref — local or received — reaches that Block
-  any more (a rollback, or a `received remove`).** Before this, both commands decided `pending`
-  versus `sealed` by whether any local or received ref's own tip could still reach the patch; a
-  rolled-back block, or one orphaned by `received remove`, read as unsealed and reappeared as
-  pending, even though the block that sealed it was never unwritten. `show` now classifies such a
-  patch `sealed`, agreeing whether shown by its own id or through the still-held block, and `sync
-  pending` now excludes it from the listing, the same way it already excluded a patch a *received*
-  history sealed. `show`'s own `state` field also gains a new, fourth value, `"unclaimed"`: a held
-  patch sealed by no Block and named by no held recognition claim at all (a hand-made patch
-  accepted without ever naming a claim, or a refused or crashed import's own leftover) — reported
-  additively, never a breaking change to the existing three. `sync-pending-v1`'s own `"claims": []`
-  no longer occurs: this listing's own membership now requires a held claim, so every patch it
-  reports already has at least one — a claimless patch is `"unclaimed"`, reported only by `show`,
-  never by this listing. `sync pending`'s own text form (the count line and one id per line) keeps
-  its exact shape; only the membership changed.
-- **`verify`'s own `unreached_objects` and `doctor`'s own `PRIKK-DOCTOR-UNREACHED-OBJECT` issue now
-  count `Patch` and `Blob` too (0.56.0 step 3h, #9), not only `Block`/`RefState`.** A rolled-back or
-  `received remove`d block's own patch (and the blobs its own operations name), a claimless
-  accepted patch with no sealing Block, or a refused or crashed import's leftover patch/blob
-  objects are now reported as unreached — before this round they were invisible to both commands.
-  An object counts when it is reached by no tip, by no WAL record, and by no pending patch (3g's
-  own `pending` predicate, reused unmodified — "with the blobs they name," so a pending patch and
-  every blob its own operations reference stay out of the count too, agreeing with `sync
-  pending`/`show`'s own `"pending"` classification that there is somewhere real for an operator to
-  act on it). `verify`'s own `object_type` values gain `"patch"` and `"blob"`, read generically by
-  the existing JSON printer with no new match arm; `doctor`'s own fixed recommendation ("the bytes
-  stay; no command removes them yet") and its message text are unchanged, since neither type has a
-  publication-trust check to skip in the first place — for `Patch`/`Blob` this is purely a presence
-  record, never a trust-check side effect.
-- **`archive verify` now reports each carried maintainer key's real status in the receiving
-  repository (0.56.0 step 3i, #6; corrected by step 3i-b), instead of printing the same hardcoded
-  claim for every key.** Before this, both the text form and `--format json`'s `"status"` field
-  always printed `"carried, not adopted"`, even for a key the repository running `verify` had in
-  fact already adopted. The status is now one of four fixed strings, computed against the
-  repository `archive verify` runs from: `"adopted"` (the same key id and the same public key are
-  already adopted here); `"carried, not adopted"` (this key id is not adopted here at all);
-  `"carried, conflicts with an adopted key"` (this key id is adopted here, but under a *different*
-  public key); or `"carried, not checked against a repository"`, for either of two cases: no
-  `.prikk` at all here (silent, with nothing to check against), or a `.prikk` that is present but
-  could not be read — a corrupted `FORMAT` marker, or a corrupted trust-policy container — which
-  now also prints exactly one line to stderr naming that a repository is here but unreadable,
-  rather than either staying silent about it (3i's own behavior for the first of those) or, worse,
-  failing the whole command and losing the archive's own, already-computed report before it could
-  print at all (3i's own behavior for the second). The archive's own internal-consistency check
-  (its exit code) is unaffected either way — this status is purely informational, exactly like the
-  existing carried-key listing it refines, and a broken receiving repository never flips it.
+Commands that print a machine-readable `refusal-v1` document under `--format json` write it to
+stdout, with the same text on stderr and the same exit code (`1`) as without the flag.
+
+**`log`**
+- **`log --ref <block id naming nothing here>`:** before, exit `0` and `history: <empty>`
+  (`"blocks": []` under `--format json`); after, exit `1` and `error: precondition not met: block
+  <id> is not in this repository`.
+- **`log --ref <a block id this repository holds>`:** before, the same empty answer; after, exit
+  `1` and ``error: <id> is a block id; `log` does not show history ending at a block -- a block
+  can have more than one parent, so there is no single next entry to walk; expected a ref name
+  (heads/…, tags/… or remotes/…)``.
+- **`log --ref <neither a ref name nor a block id>`:** before, exit `0` and an empty history;
+  after, exit `1` and `error: invalid name: <value> is not a point this command reads: expected a
+  ref name (heads/…, tags/… or remotes/…) or a block id (64 lowercase hex characters)`.
+
+**Locks**
+- **Any command that meets a held lock:** the `lock conflict` error gains a closing clause. Before,
+  `error: lock conflict: <kind> lock already exists: <path>`; after, the same text followed by `` --
+  run `prikk unlock` to list held locks, or `prikk unlock --lock <path>` to clear one once the
+  process that held it is confirmed gone``. Exit code unchanged.
+- **`doctor`:** one new informational diagnostic per held lock (`active.lock`, a ref lock or a
+  container lock), `info [PRIKK-DOCTOR-HELD-LOCK]: a <kind> lock is held: <path> (recorded pid:
+  <n>, liveness: <advisory>)`. Before, a crash during `bundle import`, which writes no journal,
+  left `doctor` silent about its lock. `doctor`'s exit code is unchanged.
+
+**A path outside this version's rule (today: non-ASCII)**
+- **`verify`, `doctor`, `show`, `tree`, `extract`, `commit` replaying history, `bundle
+  import`/`verify`/`preview`, `archive import`/`verify`:** before, the message called the path
+  "malformed" or "does not decode" and could end with "non-ASCII paths are deferred until Unicode
+  NFC normalization is implemented"; after, `invalid name: <path> is outside what this version of
+  prikk accepts, and a newer version of prikk may have written it`. All of them still refuse.
+- **A worktree file with such a name, met by `commit`, `diff` or `status`:** `this version of prikk
+  does not accept non-ASCII repository paths: <path>`, naming the file.
+- **`doctor`:** such a path is reported as `PRIKK-DOCTOR-VERIFY-OBJECT-OUTSIDE-VERSION-RULE` or
+  `PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE` (severity `error`) with the recommendation
+  `no repair is needed: this path is outside what this version of prikk accepts, and a newer
+  version of prikk may have written it; read it with a newer version of prikk`. Before, it was
+  `PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE` or `-BLOCK-STATE-INCOMPLETE` with `preserve the
+  repository and inspect the failing object before attempting repair`.
+- **`bundle import`, `archive import` and `extract --ref`/`--claim`, under `--format json`:** a
+  `refusal-v1` document with `"refusal": "outside-version-rule"` (`"command"`: `bundle-import`,
+  `archive-import` or `extract`). Before, the two importers printed nothing on stdout for this
+  cause, and `extract` said `damaged-repository`; an empty, absolute, too-long or otherwise
+  ill-formed path still reads `damaged-repository`.
+
+**`bundle import`, `bundle preview`**
+- **`bundle import` of a rollback, a divergent rewrite or an unrelated history,** against an
+  existing received pointer: before, exit `0` and the pointer replaced; after, exit `1`, ``error:
+  precondition not met: bundle import: this delivery is a <rollback|diverged|does-not-connect>
+  against <ref>'s current pointer -- refusing rather than silently rewriting received history; pass
+  --allow-non-fast-forward to accept a delivery that does not simply extend the pointer it would
+  replace``, and nothing written. `--allow-non-fast-forward` is new. Under `--format json` the
+  refusal is `refusal-v1` with `"command": "bundle-import"`, `"reason": null` and `"refusal"` one
+  of `rollback`, `diverged`, `does-not-connect`.
+- **`bundle import` text:** gains a `class:` line (`no-local-history`, `already-at-tip`,
+  `fast-forward`, `rollback`, `diverged` or `does-not-connect`) and, when the delivery's own
+  publication history can be compared, `ref state chain: <extends|older|unrelated>`. A delivery
+  that is `already-at-tip` but whose publication history is `older` writes every object it carries,
+  leaves the received pointer unchanged, exits `0`, and says so (`note: every object was written,
+  but the pointer at <ref> was left unchanged -- …`).
+- **`bundle import --format json`:** new. Prints `bundle-import-report-v1`; see Added.
+- **`bundle import` of a Block or RefState with a forged signature:** before, imported, and only a
+  later `verify` failed; after, exit `1`, `error: precondition not met: <object> <id> carries a
+  MAINTAINER signature by adopted key <key id> that does not verify: … -- a forgery, or another
+  maintainer using the same key id; if it is the latter, that maintainer should sign under a
+  distinct id next time … and you adopt it under that id with `prikk trust maintainer add --key-id
+  <that id> --public-key <its public key>`; refusing before admitting it`. Under `--format json`,
+  `refusal-v1` with `"refusal": "forged-publication-signature"`. A signature naming a key this
+  repository has never adopted is not refused.
+- **`bundle preview --format json`:** adds `class`, `ref_state_chain`, `import_class`,
+  `import_ref_state_chain` and `sealed_by_signatures`; `connectivity` keeps its five values
+  (`already-at-tip` and `rollback` both still read `already-included`). The text form prints
+  `class:`, `bundle import of this delivery would classify as: <class>` with an indented `ref
+  state chain:` line, and each sealer's outcome (`<key id>: sound (reported, not trusted)`).
+- **`bundle preview --ref remotes/<name>`:** before, always `no-local-history`, whatever had been
+  received; after, the answer against the pointer received under that exact name, or a refusal
+  naming the missing ref if none was.
+
+**`archive import`, `archive verify`**
+- **`archive import` of a rollback, divergent or unrelated landing** (the default, and
+  `--adopt`'s fall-through to `remotes/…`), and **`archive import --adopt`** over the received
+  pointer already held at the name it would otherwise land under: before, exit `0`; after, the same
+  refusal as `bundle import` (exit `1`), before anything is written, unless
+  `--allow-non-fast-forward` is given. Under `--format json`, `refusal-v1` with `"command":
+  "archive-import"` and the same ids. The forged-signature and outside-version-rule refusals above
+  apply to it too.
+- **`archive import` text:** each landing gains `class:` and `ref state chain:` lines; `adopted as
+  a local branch` gains a parenthesis when the class let it through (`(<reason>)`) or when an
+  earlier, interrupted run completed it (`(completed by an earlier, interrupted run of this
+  import)`).
+- **`archive import --format json`:** each entry of `landings` gains `class`, `ref_state_chain`
+  and `completed_by_interrupted_run`; the document gains `materialized_into_worktree`,
+  `materialized_written_files`, `materialized_unchanged_files` and `materialized_deleted_files`.
+- **`archive import` and `archive verify` of an archive carrying a patch whose operations do not
+  decode:** before, `archive import` landed it and `archive verify` reported the archive
+  consistent; after, both refuse, as `bundle import` already did.
+- **`archive verify` (text and `--format json`'s `"status"` per carried maintainer key):** before,
+  always `carried, not adopted`; after, one of `adopted`, `carried, not adopted`, `carried,
+  conflicts with an adopted key`, `carried, not checked against a repository`. A `.prikk` that is
+  present but unreadable also prints one line to stderr, `a repository is here, but it could not
+  be read (<reason>); carried keys were not checked against it`. The exit code is unchanged.
+
+**`extract`**
+- **`extract --claim`:** refuses a forged or unsigned claim at any link of its chain (before, exit
+  `0`), and a claim whose declared parent is held but reachable from no branch or received history
+  (before, accepted as an anchor). `refusal-v1` ids for `extract` go from fifteen to twenty: new
+  `claim-signature-invalid`, `claim-does-not-fold`, `claim-chain-shared-block`,
+  `claim-chain-cycle`, plus `outside-version-rule` (above); `claim-parent-not-sealed` now also covers
+  a parent that is held but unreachable.
+- **`extract --format json`:** `extract-report-v1` adds `chain` (every link, oldest claim first,
+  each with `claim_id`, `target_block_id`, `parent_block_ids`, `signature` and
+  `other_candidates`) and `chain_signature` (the weakest outcome across the chain, `null` for a
+  ref or block id); `claim_parent_block_id` keeps its meaning. The text form prints `chain: <n>
+  link(s), root to foot`, one `link N: claim <id> (<outcome>)` line per link, and an `unverified`
+  line when any link's signer is not adopted.
+
+**`show`, `sync pending`, `verify`**
+- **`show --format json`:** every patch gains `state` (`queued`, `pending`, `sealed` or `unclaimed`)
+  and `resolved_through_claim_id`; an unresolved `unresolved_node_id` gains `reason`. The text form
+  prints `resolved through claim: <id>` and `<unresolved node <id>: <reason>>`. A patch whose
+  block is held but no ref reaches (after a rollback or a `received remove`) now reads `sealed`;
+  before, it read as unsealed.
+- **`sync pending`:** membership narrowed (see Upgrading); the text form (a count line and one id
+  per line) keeps its exact shape. **`sync pending --format json`:** before, `error: unknown sync
+  pending argument: --format` (exit `2`); after, `sync-pending-v1`.
+- **`verify --format json` and `doctor`:** `unreached_objects[].object_type` and
+  `PRIKK-DOCTOR-UNREACHED-OBJECT` also cover `patch` and `blob`; `verify`'s `unreached objects: N`
+  counts them. Exit codes are unchanged.
+
+**The worktree and the current branch**
+- **`commit`:** a path that is stale against the worktree's record now refuses, exit `1`: ``error:
+  precondition not met: refusing to commit: <ref> is now at <state>, and this worktree was last
+  written from <state>; …; run `prikk branch switch <ref>` to bring the worktree up to date, then
+  commit again``. Before, it authored the path as a deletion or an ordinary edit (measured on
+  0.55.0: after a `merge --into` of the current branch that brought in `c.txt`, `commit` recorded
+  `delete-file c.txt`).
+- **`worktree-status`:** when the worktree has fallen behind its ref, the text form prints one
+  `worktree: behind <ref> (<n> file(s) it added since this worktree was last written from it are
+  not here yet; not a deletion); run `prikk branch switch <current branch>` …` line instead of a
+  `missing` line per file; `--format json` adds `behind_ref` (`null` when current) and leaves
+  `changes` as it was.
+- **`merge --into <current branch>`, `branch create --from <ref>` (unborn current branch), `sync
+  seal` (current branch), `archive import --adopt` (current branch):** each prints `materialized
+  into the worktree: files written: <n>, unchanged: <n>, deleted: <n>`, and refuses, before writing,
+  with ``error: precondition not met: the worktree is not clean against <ref>: <path> (modified);
+  commit it, or restore those files, before <action> (`prikk worktree-status` lists them)`` or
+  ``error: precondition not met: <n> file(s) are in the way of <ref>'s files: <path> (<why>); move
+  them aside before <action> (nothing was written)``. Before, they left the worktree as it was.
+- **`merge --into`, `branch create --from`, `archive import --adopt`:** refuse to move a ref the
+  active WAL holds queued work for: ``error: precondition not met: the active WAL holds unsealed
+  work for <ref>; seal it (`prikk seal --allow-no-audit --ref <ref>`) before <action>``. Before,
+  they moved it.
+- **`branch switch <the current branch>`:** before, always a no-op; after, it brings the worktree up
+  to date when the worktree's record shows it behind the branch (and prints the usual `files
+  written` counts), and is a no-op otherwise.
+- **`rollback-draft --append-inverse`:** prints a closing `note: the worktree is unchanged by this
+  draft; run `prikk seal`, then `prikk branch switch <ref>`, to apply the inverse`.
+
+**Trust**
+- **`trust maintainer add --key-id <removed id> --public-key <a different key>`:** before, `error:
+  precondition not met: maintainer key id <id> is already adopted with a different public key …`,
+  which was false for a removed id; after, ``… maintainer key id <id> is not currently adopted (it
+  was removed), but it stays bound to the public key it was first adopted with, and a different
+  public key is refused …``, naming the same way forward. The message for an adopted id, exit `1`
+  and the `precondition not met:` prefix are unchanged.
+- **`trust maintainer add --format json`:** before, `error: unknown trust maintainer add argument:
+  --format` (exit `2`); after, `trust-add-v1` on success, and `refusal-v1` with `"command":
+  "trust-maintainer-add"` and `"refusal"` `maintainer-key-id-adopted-with-different-key` or
+  `maintainer-key-id-bound-to-removed-key` for the refusal above. Any other failure prints no
+  document.
+
+**Installers**
+- **`uninstall.sh`:** accepts `--prefix <dir>`; ``prikk-uninstall: unrecognized argument: <arg>``,
+  `prikk-uninstall: --prefix needs a directory` (a missing or empty value) and `prikk-uninstall:
+  --prefix <dir> and $PRIKK_INSTALL_DIR=<dir> disagree; pass only one`, each exit `1` with nothing
+  removed. Before, it read no arguments at all and removed the binary at the default location.
+  **`uninstall.ps1`:** throws `prikk-uninstall: this script accepts no arguments (got '<arg>'); it
+  reads $env:PRIKK_INSTALL_DIR only` for any argument.
+
+### Fixed — a commit after a merge, an import or a seal recorded files the worktree never received as deleted
+
+`merge --into`, `branch create --from`, `sync seal` and `archive import --adopt` moved the current
+branch without writing the worktree, so the next `commit` read the gap as the user's own change: a
+file the branch had gained was authored as a deletion, and a file whose content, mode or node the
+command had changed was authored as an ordinary edit that silently reverted it. Measured on 0.55.0:
+after a `merge --into` of the current branch that brought in `c.txt`, `commit` recorded
+`delete-file c.txt`. The worktree now follows the current branch:
+
+- **`commit` remembers, per path, what the worktree was last written from,** and refuses before
+  authoring anything for a path whose live and recorded states disagree in content, mode, kind,
+  presence or node — whichever ref the record names, and whichever ref is being committed onto —
+  naming every such path and the command that catches the worktree up. The way out always names
+  `prikk branch switch <the record's own ref>`; it names `prikk branch switch <the current branch>`
+  as well only when the branch being committed onto is published. A path that is not stale, or one
+  the worktree already matches, is authored as before.
+- **The four commands above bring a clean worktree along or refuse before they write anything.**
+  Each requires the worktree to be clean against its record and no untracked file to sit where the
+  new files go; each then marks the worktree, publishes as before, writes the new tip's files
+  through the path `branch switch` uses, and records the new baseline. A refused command writes no
+  object (`verify` reports no unreached object afterward) and leaves `.prikk` unchanged except for
+  its cache; moving the file aside and running it again is all a caller needs to do. If a file
+  appears in the way after the publish (created by another program), the error says the branch was
+  published and that `branch switch <the current branch>` finishes the write.
+  - `merge --into` judges the files in the way against the state the merge Block will commit.
+  - `sync seal` treats a single `--claim` as a batch of one, checks once before the first claim
+    seals, and writes the worktree once after the last. Sealing in order and stopping at the first
+    failure, with no rollback, is unchanged: when a later claim fails after an earlier one has
+    published, the earlier seal stays, the tip it produced is still written into the worktree, and
+    the batch's error follows. A batch that seals nothing writes nothing and prints no
+    `materialized` line.
+  - `archive import --adopt` runs both checks before the import journal exists, so a refusal has
+    admitted nothing from the archive; the early check reads the archive's own patch and blob
+    sections in place. The clean check and a second in-the-way check run again immediately before
+    the publish, on a fresh import and a resumed one alike, for a file created by another program
+    in between; that refusal says the archive's objects are already admitted and the journal
+    written, and that running the same import again resumes it. Resuming an import that crashed
+    between a landing's publish and its write into the worktree reports the landing as adopted,
+    completed by the earlier run, writes no `remotes/` pointer for it, and finishes the write
+    itself. That report needs a genuine resume of this import's own journal and a ref that was
+    absent when its plan was computed: a ref some other, earlier import already adopted at the same
+    tip reports the ordinary `remotes/` fall-through, as an uninterrupted run would. A journal
+    written by an older binary resumes with that ordinary fall-through.
+- **`branch switch <the current branch>` resyncs a worktree that has fallen behind,** judging
+  "clean", and which files the old baseline held, against the worktree's record whichever ref it
+  names (a `commit --ref <other>` used to leave the record and the current-branch pointer naming
+  different refs, so neither a self-switch nor a switch to the record's ref could resync). It also
+  resyncs when the current branch has never been published and the record reads behind it,
+  materializing its empty state — the shape `commit --ref heads/topic` then `seal` leaves; before,
+  that switch refused with "does not exist; run `prikk branch create …` first". A queued, unsealed
+  fold that moved (as `rollback-draft --append-inverse` moves it) is detected the same way but is
+  never written into the worktree directly by a bare self-switch: that would bypass the verified
+  replay every other switch uses, so it refuses and names `seal` then `branch switch <the current
+  branch>`; `seal` advances the worktree's record only when the worktree already matched the fold
+  it sealed, so that second switch resyncs.
+- **`worktree-status` says `behind <ref>`,** with the record showing it, instead of calling every
+  file the ref gained `missing`; a file the user really deleted still reads `missing`.
+- **`merge --into`, `branch create --from` and `archive import --adopt` refuse to move a ref the
+  active WAL holds queued work for,** before any write; they used to move it out from under the
+  queue, leaving the queued patch authored against a tip that was no longer current. `sync seal`
+  and `rollback-draft --append-inverse` already refused on any non-empty queue.
+
+### Fixed — a rollback, a divergent rewrite or an unrelated history silently replaced a received pointer
+
+`bundle import` and `archive import` overwrote the received pointer with any delivery that decoded
+and was admitted, including one that moved it backward or onto an unrelated history. Both now
+classify the delivery against the pointer it would replace — `no-local-history`, `already-at-tip`,
+`fast-forward`, `rollback`, `diverged` or `does-not-connect` — and refuse the last three when a
+pointer exists, before anything is written, unless `--allow-non-fast-forward` is given (the refusal
+names the class; the ids are under Output changes). An `archive import` landing is classified
+against the received pointer of the same name before any object is written, so a refusal leaves
+the repository exactly as found, with no unfinished import record; `archive import --adopt` also
+classifies against the received pointer already held at the name a ref would otherwise land under,
+and the note saying why a ref landed under `remotes/` names the class when the flag let it through.
+Resuming an interrupted import works as before and still catches the pointer moving again in the
+gap. A delivery that is `already-at-tip` but whose own publication history is older writes every
+object it carries and leaves the pointer alone.
+
+### Fixed — `bundle import` and `archive import` admitted a Block or RefState whose MAINTAINER signature does not verify
+
+Neither importer checked publication trust at admission; only a later `prikk verify` caught a
+signature that named an adopted key id but did not verify against that key, by which time the
+object was durably admitted (and, for `archive import --adopt`, possibly already a real local
+branch). Both now check every Block and RefState the delivery would admit, not only its tip, each
+once, and refuse before the first write. The same check `verify` and `seal` apply
+(`PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE`) decides it; a signature by a key this repository has
+never adopted (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`) is not refused and imports as before. The
+refusal names both possible causes, a forgery or another maintainer using the same key id, and the
+route for the second: the sending maintainer signs under a distinct id, and the receiver adopts it
+with `prikk trust maintainer add` (the same route `trust maintainer add`'s own collision refusal
+names). The message and ids are under Output changes.
+
+### Fixed — `extract --claim` extracted a forged or unsigned claim, and anchored on a parent no branch reaches
+
+`extract --claim` checked no signature. It now checks every claim of its chain: a signature that
+names an adopted key but does not verify, or no MAINTAINER signature at all, refuses; a signature
+naming a key that is simply not adopted still extracts, as before. A claim whose declared parent is
+held but reachable from no branch or received history (one orphaned by a later `received remove`,
+say) was accepted as an anchor; it now refuses the way a parent never received does. A claim whose
+patches do not apply onto the state before it reads as that specifically rather than as
+repository damage.
 
 ### Fixed
 
-- **`uninstall.sh --prefix <dir>` silently ignored `--prefix` and removed the binary at the default
-  install location instead (0.56.0 step U).** Found by an external consumer: a user who installed
-  with `install.sh --prefix /custom/path` and later ran `uninstall.sh --prefix /custom/path`,
-  expecting it to remove that custom-location binary, instead had the unrelated binary at
-  `~/.local/bin/prikk` removed, with no error, because `uninstall.sh` never read its own arguments
-  at all — only `$PRIKK_INSTALL_DIR`. `uninstall.sh` now accepts `--prefix`, mirroring `install.sh`'s
-  own argument parsing; refuses any argument it does not recognize; refuses when `--prefix` and
-  `$PRIKK_INSTALL_DIR` are both given and disagree, naming both values, rather than silently
-  preferring one; and refuses a missing or empty `--prefix` value before removing anything, rather
-  than acting on an unnamed path (`--prefix ""` set the target to `/prikk` and still printed "done";
-  a missing value aborted via a raw shell error instead of this script's own message).
-  `uninstall.ps1` has no `--prefix` of its own to disagree with (like `install.ps1`,
-  it is env-var-only by design — the one-line `irm | iex` form cannot forward CLI arguments), so it
-  now instead refuses any argument at all, the same defensive posture, rather than silently
-  swallowing or mis-binding one.
-- **`trust maintainer add` told a falsehood for a removed key id (0.56.0 step T).** After `trust
-  maintainer remove --key-id x`, `trust maintainer list` no longer shows `x`, but adding `x` with a
-  *different* public key refused with "maintainer key id x is already adopted with a different
-  public key" — false, because `x` is not adopted. The refusal itself was right and is unchanged: a
-  key id stays bound to the first key it was adopted with, also after removal, because the id travels
-  in every signature and a changed key under a familiar id is what trust on first use exists to
-  catch. The message now says so for a removed id (not currently adopted, but bound to its first
-  key; re-adding it with that original key still works) and names the same way forward the
-  adopted-id message already names: the other maintainer signs under a distinct key id, and you
-  adopt it under that id. The adopted-id message is unchanged. Exit code `1` and the `error:
-  precondition not met:` prefix are unchanged for both.
+- **`uninstall.sh --prefix <dir>` ignored `--prefix` and removed the binary at the default
+  location instead** (found by an external consumer): `uninstall.sh` read only `$PRIKK_INSTALL_DIR`
+  and never its own arguments. It now accepts `--prefix`, refuses an argument it does not
+  recognize, refuses a `--prefix` and `$PRIKK_INSTALL_DIR` that disagree (naming both), and refuses
+  a missing or empty `--prefix` value before removing anything (`--prefix ""` used to target
+  `/prikk` and still print "done"; a missing value aborted with a raw shell error). `uninstall.ps1`
+  has no `--prefix` to disagree with (like `install.ps1` it is environment-only, since the one-line
+  `irm | iex` form cannot forward arguments), so it refuses any argument.
+- **`trust maintainer add` told a falsehood for a removed key id.** After `trust maintainer remove
+  --key-id x`, adding `x` with a different public key refused with "already adopted with a different
+  public key", although `x` is not adopted. The refusal itself is right and unchanged: a key id
+  stays bound to the first key it was adopted with, also after removal, because the id travels in
+  every signature and a changed key under a familiar id is what trust on first use exists to catch.
+  The message now says so, and that re-adding the id with its original key works.
+- **`log --ref <block id>` answered an empty history with exit `0`** — a silent wrong answer. It
+  refuses, as listed under Output changes.
+- **`archive import` and `archive verify` accepted a change whose recorded edits do not decode;**
+  `archive import` landed it with no warning and `archive verify` reported the archive consistent,
+  while `bundle import` already refused the identical change. All three apply the same check.
+- **`bundle preview --ref remotes/<name>` always answered "no local history",** even when something
+  had been received there, while `bundle import` of the same bundle read the pointer and refused.
+  A `remotes/…` name now resolves against what was received; `heads/…` and `tags/…` are unaffected.
+- **A path this version of prikk does not accept was reported as damage,** in different words by
+  different commands (and, reading stored history, as a roadmap statement about Unicode). Every
+  reader and importer now says the same sentence — outside what this version accepts, a newer
+  version may have written it — and `doctor` recommends reading the repository with a newer version
+  instead of preserving it. Everything still refuses; only the classification and the wording
+  changed.
+- **`sync pending` and `show` read a rolled-back block's patch, or one orphaned by `received
+  remove`, as unsealed,** because they asked whether any ref still reached the block that sealed it
+  (the block was never unwritten). A patch sealed by a held block is sealed, whichever ref reaches
+  it.
+- **`verify` and `doctor` could not see unreached patches and blobs:** a rolled-back or `received
+  remove`d block's patch and the blobs its operations name, a claimless accepted patch, a refused
+  or crashed import's leftover objects. They are counted when no tip, no WAL record and no pending
+  patch (with the blobs it names) reaches them, as a non-blocking warning; the bytes stay and no
+  command removes them.
+- **A crash that left a lock behind was invisible to `doctor`, and the `lock conflict` error did
+  not say how to proceed.** `doctor` names every held lock and the error names `prikk unlock`;
+  prikk still never steals or expires a lock on its own.
+
+### Changed — `archive verify` reports each carried maintainer key's status in the receiving repository
+
+`archive verify` printed `carried, not adopted` for every key, text and `--format json`'s
+`"status"` alike, even for a key the repository running it had adopted. The status is computed
+against the repository `archive verify` runs from, never against the archive's own carried trust
+policy, and is one of four fixed strings: `adopted` (the same key id and public key are adopted
+here), `carried, not adopted` (the key id is not adopted here), `carried, conflicts with an adopted
+key` (the key id is adopted here under a different public key), or `carried, not checked against a
+repository` (no `.prikk` here, which is silent; or a `.prikk` that is present but unreadable — a
+corrupted `FORMAT` marker or trust-policy container — which prints exactly one line to stderr
+saying so). A broken receiving repository never fails the command or hides the archive's own
+report. The status is reporting only: the archive's internal-consistency verdict and exit code
+are unaffected, and trust remains the receiver's own adopted set, never the archive's.
 
 ### Added
 
-- **`trust maintainer add --format json` (0.56.0 step T).** Prints `trust-add-v1` (`key_id`,
-  `public_key`, `newly_added`, `adopted_count` — what the text form prints) and nothing else. For a
-  key id already bound to a different public key it also prints a `refusal-v1` document with
-  `"command": "trust-maintainer-add"` and one of two ids, so a script can tell the causes apart:
-  `maintainer-key-id-adopted-with-different-key` (the id is adopted) and
-  `maintainer-key-id-bound-to-removed-key` (the id was removed; only its first key is on record).
-  Before this the command refused the flag outright as an unknown argument. Any other failure
-  (a malformed key id or key, a case-insensitive collision, a held lock) prints no document under the
-  flag. Without the flag nothing changes.
-
-- **`bundle preview --format json` and `bundle import`'s own text output now report a finer,
-  six-value `"class"`** (`no-local-history`, `already-at-tip`, `rollback`, `fast-forward`,
-  `diverged`, `does-not-connect`), from one shared classifier both commands now call. This is purely
-  additive: `bundle preview`'s existing `"connectivity"` field keeps its original five values
-  unchanged (`already-at-tip` and `rollback` both still read `"already-included"` there), so nothing
-  a script already reads changes. Both commands also report `"ref_state_chain"` (`"extends"`,
-  `"older"`, or `"unrelated"`): how the delivery's own publication history relates to the pointer it
-  would replace, independent of the class above.
-
-- **`bundle import --format json`** (`bundle-import-report-v1`): carries the same fields the text
-  form already prints, plus `"class"` and `"ref_state_chain"` (the same fields and values
-  `bundle preview --format json` already reports) and `"pointer_updated"`. On exactly the three
-  refusals above (a rollback, a divergent rewrite, or a history that does not connect), it also
-  prints a `refusal-v1` document naming the refused class, the same reusable shape `extract` already
-  uses for its own refusals.
-
-- **`bundle preview` now always reports two additional fields, `"import_class"` and
-  `"import_ref_state_chain"`.** These answer a different question from the existing `"class"`/
-  `"ref_state_chain"` above: what `bundle import` of this exact delivery would actually do, against
-  whatever this repository would actually write to, which is not always the same thing a preview's
-  own comparison target was asked to inspect. The two can genuinely disagree — previewing a
-  bundle's effect against one ref for inspection does not change which pointer `bundle import` of
-  the identical bytes would actually touch.
-
-- **`sync pending`, and its own `--format json`** (`sync-pending-v1`): lists patches accepted into
-  this repository and not sealed by any history it holds, its own or received. Each entry carries
-  the recognition claim(s) naming the patch, each claim's own `target_block_id` (the block it
-  recognizes, the same field `extract-report-v1`'s own `target_block_id` carries) and
-  `parent_block_ids` (the block(s) it declares as that block's own parents, as a list — the same
-  meaning as `extract-report-v1`'s own `claim_parent_block_id`, but reporting a merge-shaped claim
-  in full rather than refusing one), and that claim's own MAINTAINER signature outcome: sound,
-  unverifiable and why, or invalid (a detected forgery, reported for that one claim rather than
-  refusing the whole listing). A patch no held claim names reports `"claims": []`. The text form's
-  own shape (a count and one id per line) is unchanged.
-- **`show --format json` now reports each patch's own `"state"`**: `"queued"`, `"pending"`, or
-  `"sealed"` — the same whichever id names the patch, a block's own bare id included. A pending
-  text edit's path resolves when a recognition claim naming it names a single parent block this
-  repository already holds; the claim that resolved it is named by the patch's own
-  `"resolved_through_claim_id"` (`null` otherwise). A claim whose own MAINTAINER signature is
-  invalid, or whose own patches do not fold against its own declared parent, is skipped rather than
-  used, and never makes `show` itself refuse. Where no claim resolves the path (no claim names the
-  patch, every claim's own parent is itself only pending, or every claim names more than one parent
-  with no mainline to pick), the existing `"unresolved_node_id"` carries a `"reason"` alongside it,
-  naming the most specific of these that applies, rather than leaving the reader to guess.
-- **`extract --claim` now follows a chain of unsealed recognition claims back to real history,
-  instead of stopping at the first one whose own declared parent is not itself a real block.** A
-  claim naming a parent that no real block names, but that another held claim recognizes, is now
-  walked through: if that other claim's own parent is in turn genuinely reachable (or itself
-  recognized by yet another held claim, and so on), the whole chain extracts as one plan. When two
-  or more held claims recognize the same block, the one signed by an adopted key is used and the
-  others are named in the report; with none or more than one signed that way, the command refuses
-  rather than guessing. A chain that loops back on itself, or that holds a claim declaring more
-  than one parent anywhere in it, refuses by name. The chain's own total length (however far its
-  real anchor already sits from the last trusted checkpoint, plus every additional unsealed claim
-  beyond it) is bounded the same way a very old or crafted point already is, and `--allow-full-
-  replay` overrides it the same way too.
-- **`extract --format json`'s own `extract-report-v1` carries the whole walked chain**: a `"chain"`
-  array, oldest claim first, each entry naming the claim, the block it recognizes, its own declared
-  parent(s), and its MAINTAINER signature outcome (plus any other claim that recognized the same
-  block and was not used); and a `"chain_signature"` field giving the single weakest outcome across
-  the whole chain, so a consuming tool does not have to scan the array itself to tell whether every
-  link traces back to an adopted key. The text form prints one line per link and an explicit
-  `unverified` line whenever any link's signature is from a key this repository has not adopted.
-  `"claim_parent_block_id"` keeps its existing meaning (the named claim's own immediate declared
-  parent) unchanged; the chain is additive.
+- **`sync pending --format json`** (`sync-pending-v1`): lists the patches this repository holds
+  that a held recognition claim names and no held block seals. Each carries the claim(s) naming it,
+  with the claim's `target_block_id` (the block it recognizes, as in `extract-report-v1`),
+  `parent_block_ids` (the block(s) it declares as that block's parents, as a list: a merge-shaped
+  claim is reported in full, not refused) and its MAINTAINER signature outcome — `sound`,
+  `unverifiable` with the reason, or `invalid` (a detected forgery, no MAINTAINER signature, or a
+  non-Ed25519 one), reported for that claim alone and never refusing the listing. `"claims"` is
+  never empty. The text form (a count and one id per line) keeps its shape.
+- **`show --format json` reports each patch's `state`:** `queued`, `pending`, `sealed` or
+  `unclaimed` (held, sealed by no block and named by no claim — a hand-made patch accepted without
+  a claim, or a refused or crashed import's leftover), the same whichever id names the patch,
+  including a block's bare id. A pending text edit's path resolves through the claims that name it,
+  following a chain of unsealed claims back to a block this repository holds, exactly as `extract
+  --claim` walks; the claim that resolved it is `resolved_through_claim_id`. A claim with an
+  invalid MAINTAINER signature, or whose patches do not fold onto its declared parent, is skipped
+  at any link and never makes `show` refuse. Where no claim resolves a path, `unresolved_node_id`
+  carries a `reason`, the most specific that applies: an invalid signature, a fold failure, a
+  shared-block collision, a cycle, a chain not yet realized, or a merge-shaped claim with no
+  mainline.
+- **`extract --claim` follows a chain of unsealed recognition claims back to real history.** A
+  claim whose declared parent no real block names but another held claim recognizes is walked
+  through, link by link, until a block reachable from some branch or received history is reached,
+  and the whole chain extracts as one plan. When several held claims recognize the same block, the
+  one signed by an adopted key is used and the others are named in the report; with none, or more
+  than one, so signed the command refuses rather than guess. A cycle, or a claim declaring more than
+  one parent anywhere in the chain, refuses by name. The chain's total length (the real anchor's
+  distance from the last trusted checkpoint plus every unsealed claim passed through) is bounded as
+  a very old point already is, and `--allow-full-replay` overrides it. The report carries the whole
+  chain (see Output changes).
+- **`bundle import --format json`** (`bundle-import-report-v1`): the fields the text form prints
+  (`ref_name`, `ref_state_id`, `object_count`, `written_object_count`, `merged_object_count`,
+  `dropped_signatures`, `recorded_author_key_count`) plus `class`, `ref_state_chain` and
+  `pointer_updated` (`false` only for the `already-at-tip` delivery with an older publication
+  history). A refusal prints a `refusal-v1` document.
+- **`bundle preview` and `bundle import` report a six-value `class`,** from one shared classifier,
+  and `ref_state_chain` — how the delivery's own publication history relates to the pointer it
+  would replace, independent of the class. `bundle preview` also reports `import_class` and
+  `import_ref_state_chain`, what `bundle import` of the identical bytes would do against the
+  pointer it would actually write to, which can differ from the `--ref` it was asked to inspect;
+  and `sealed_by_signatures`, one entry per signature in `sealed_by`, each with an `outcome`:
+  `sound` (adopted and verifies), `unverifiable` (not adopted here) or `invalid` (adopted but does
+  not verify — what `bundle import` refuses). It is reported, not trusted, like `sealed_by`.
+- **`trust maintainer add --format json`** (`trust-add-v1`: `key_id`, `public_key`, `newly_added`,
+  `adopted_count`) prints that and nothing else. For a key id already bound to a different public
+  key it prints the `refusal-v1` document listed under Output changes. Without the flag nothing
+  changes.
 
 ## 0.55.0 — 2026-10-29
 

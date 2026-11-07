@@ -38,7 +38,7 @@ For format stability, migration limits, and release identity, see
 
 A fresh `prikk init` creates the repository directory, the initialized directories below, the format
 marker file, and the leaf files the default session and the write state need before their first write:
-`worktree.marker`, `worktree.provisional`, `current-branch` (`heads/main`), `active/default/queue.wal`,
+`worktree.marker`, `worktree.provisional`, `worktree.baseline`, `current-branch` (`heads/main`), `active/default/queue.wal`,
 `active/default/ref-name`, `active/default/declarations`, `active/default/witness`, and `recovery/log`
 (`crates/prikk-store/src/foundation/layout.rs:280-305`, and `ensure_write_state` at `layout.rs:740-751`).
 The active WAL and active ref metadata are therefore empty when `init` returns. Ref, received-ref, and
@@ -46,12 +46,20 @@ trust storage are fixed, named container files allocated by `init` itself, empty
 there is no per-ref, per-received-ref, or per-key-id file or directory created later, since none of
 those names exist at `init` time and a per-name file would have to be.
 
+`worktree.baseline` is the worktree's recorded baseline: one record, replaced in place, naming the ref
+and sealed tip block the worktree was last made to match, plus the active WAL's queued fold on top (see
+[Command Surface](commands.md)). It is worktree-local operational state, like the two markers beside
+it, never part of a versioned object. A repository made by an earlier release has no such file or an
+empty one; the first `commit`, `seal`, `branch switch` or checkout writes it, and until then the
+commands compare the worktree against the ref's live state as before.
+
 ```text
 .prikk/
   FORMAT
   current-branch
   worktree.marker
   worktree.provisional
+  worktree.baseline
   recovery/
     log
   containers/
