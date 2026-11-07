@@ -194,3 +194,25 @@ profile, which is unchanged.
 2. The three-file release commit again.
 3. **On it:** `cargo test --workspace` and the 14 gates. Also show the release binary's sha256 is
    `286d5db50401…`, as at `36544bf3`. If it differs, rerun the smoke, the matrix and `reproduce.sh`.
+
+**P3c is larger than the note above says (2026-11-07, after CI finished).** CI on `c936c151` is **red**: the Windows
+mutation suite failed in `object_store::tests::two_racing_object_appends_serialise_and_never_share_an_offset`. One
+racer got `Io(PermissionDenied, "Access is denied. (os error 5)")`, where only success or `LockConflict` is allowed.
+The same source ran green at `9776930e`, so this is an intermittent race. It has existed since RFC 102 (2026-09-12)
+and is not this round's. No release is cut on red CI, so it is fixed first. **P3c is now one sitting, 90 min, stop
+at 180:**
+0. As above (`git reset --keep origin/main`, after confirming `36544bf3` is the only commit ahead).
+1. **The Windows race:**
+   - give the I/O errors on the lock and object-append paths their path;
+   - from the code, name the operation that returns `ERROR_ACCESS_DENIED` in this race (a delete-pending lock file
+     under `CREATE_NEW`, or a replace-by-rename onto a file still open without `FILE_SHARE_DELETE`);
+   - fix it there, Windows only, so a racer gets `LockConflict` or goes through. A persistent permission error with
+     no competing writer stays itself;
+   - say whether the store is consistent after such a failure today;
+   - add a deterministic Windows-only test if one can be built, or say why not and how the fix is shown;
+   - a CHANGELOG `### Fixed` entry (a released defect).
+2. The (c) wording, as above.
+3. The three-file release commit again.
+4. **On it:** tests, the 14 gates, the smoke on the release build, `matrix.py` v6 at both depths by row, and
+   `reproduce.sh`. The binary changes, so nothing carries over. The architect pushes the fix commits first and reads
+   their Windows jobs before the release commit goes up.
