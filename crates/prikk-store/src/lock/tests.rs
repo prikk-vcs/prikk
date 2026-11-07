@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::fs;
 
 use crate::foundation::fsutil::{TestFailPoint, fail_once_for_test};
