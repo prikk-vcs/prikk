@@ -203,7 +203,18 @@ pub(crate) fn create_new_file_required(
     relative: &Path,
     bytes: &[u8],
 ) -> std::io::Result<()> {
-    ACTIVE_DURABILITY.create_exclusive(root, relative, bytes)
+    ACTIVE_DURABILITY
+        .create_exclusive(root, relative, bytes)
+        .map_err(|error| {
+            // "Already exists" is the answer callers act on and is passed through as it is. Every other
+            // failure names the file: a bare "Access is denied. (os error 5)" did not, and a failed CI
+            // run could not say which file it was about. The kind is kept.
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                error
+            } else {
+                std::io::Error::new(error.kind(), format!("{}: {error}", relative.display()))
+            }
+        })
 }
 
 /// Remove a file and sync the exact parent handle that owned the unlink.

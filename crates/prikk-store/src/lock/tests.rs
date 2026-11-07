@@ -278,3 +278,176 @@ fn active_lock_require_layout_refuses_a_different_repository_authority() -> prik
     let _ = fs::remove_dir_all(root_b);
     Ok(())
 }
+
+use super::retry_denied_create;
+use prikk_error::PrikkError;
+use std::time::Duration;
+
+// ---- 0.56.0 P3c: a denied lock create (Windows: the other writer's removal is still pending) ----
+
+fn denied() -> std::io::Error {
+    std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+}
+
+/// The race this exists for: the create is denied while the other writer's removal finishes, then
+/// goes through. The writer simply got the lock; it is neither refused nor reported as an error.
+#[test]
+fn a_create_denied_while_a_removal_is_pending_goes_through_once_it_finishes() {
+    let mut denials_left = 3;
+    let mut attempts = 0;
+    let result = retry_denied_create(
+        || {
+            attempts += 1;
+            if denials_left > 0 {
+                denials_left -= 1;
+                Err(denied())
+            } else {
+                Ok(())
+            }
+        },
+        || panic!("the name is only consulted once the denial persists"),
+        10,
+        Duration::ZERO,
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(attempts, 4);
+}
+
+/// The other writer took the lock between the denial and the retry: the ordinary conflict.
+#[test]
+fn a_denial_followed_by_the_name_existing_is_the_ordinary_conflict() {
+    let mut calls = 0;
+    let result = retry_denied_create(
+        || {
+            calls += 1;
+            if calls == 1 {
+                Err(denied())
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+            }
+        },
+        || panic!("not consulted: the retry already said the name exists"),
+        10,
+        Duration::ZERO,
+    );
+    assert_eq!(
+        result.expect_err("a conflict").kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+}
+
+/// A denial that persists while the lock name is still there (held, or a removal that never
+/// finishes) is reported as the conflict it is, after a bounded number of attempts.
+#[test]
+fn a_denial_that_persists_while_the_lock_name_is_present_is_a_conflict() {
+    let mut attempts = 0;
+    let result = retry_denied_create(
+        || {
+            attempts += 1;
+            Err(denied())
+        },
+        || true,
+        5,
+        Duration::ZERO,
+    );
+    assert_eq!(
+        result.expect_err("a conflict").kind(),
+        std::io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(attempts, 6, "one attempt plus five retries, then it stops");
+}
+
+/// A real permission problem -- denied again and again with no lock file there at all -- is reported
+/// as itself, never turned into a lock conflict.
+#[test]
+fn a_denial_that_persists_with_no_lock_file_is_reported_as_itself() {
+    let result = retry_denied_create(|| Err(denied()), || false, 5, Duration::ZERO);
+    assert_eq!(
+        result.expect_err("denied").kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+}
+
+/// Every other failure passes through untouched and is not retried.
+#[test]
+fn other_failures_are_not_retried() {
+    let mut attempts = 0;
+    let result = retry_denied_create(
+        || {
+            attempts += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        },
+        || panic!("not consulted"),
+        10,
+        Duration::ZERO,
+    );
+    assert_eq!(
+        result.expect_err("not found").kind(),
+        std::io::ErrorKind::NotFound
+    );
+    assert_eq!(attempts, 1);
+}
+
+/// A failure to create a lock file names the file (a bare "Access is denied. (os error 5)" did not).
+#[test]
+fn a_lock_create_failure_names_the_lock_file() {
+    use crate::foundation::layout::{LockableContainer, RepositoryLayout};
+    let root = crate::test_gates::test_support::unique_temp_dir("lock-names-its-file");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    let _held = acquire_container_locks(&layout, &[LockableContainer::ObjectStore]).expect("held");
+    let conflict = acquire_container_locks(&layout, &[LockableContainer::ObjectStore])
+        .expect_err("already held");
+    assert!(
+        matches!(&conflict, PrikkError::LockConflict(message) if message.contains("object-store")),
+        "{conflict}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The race itself, hammered: two threads acquire and release the same container lock in a loop, so
+/// that one create meets the other's removal over and over (on Windows, the window in which the file
+/// is marked for deletion and a create is answered `ERROR_ACCESS_DENIED`). Every outcome must be
+/// either the lock or `LockConflict` -- never another error. The single-shot racing test in
+/// `object_store/tests.rs` hits that window rarely (it failed once in about forty CI runs); this one
+/// hits it many times per run, which is what a Windows job needs to show the fix holds.
+#[test]
+fn two_writers_acquiring_and_releasing_one_lock_get_the_lock_or_a_conflict_never_another_error() {
+    use std::sync::{Arc, Barrier};
+
+    let root = unique_temp_dir("lock-hammer");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    let start = Arc::new(Barrier::new(2));
+    let handles: Vec<_> = (0..2)
+        .map(|_| {
+            let layout = layout.clone();
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                let mut others = Vec::new();
+                let (mut held, mut refused) = (0_u32, 0_u32);
+                for _ in 0..300 {
+                    match acquire_container_locks(&layout, &[LockableContainer::ObjectStore]) {
+                        Ok(guard) => {
+                            held += 1;
+                            drop(guard);
+                        }
+                        Err(PrikkError::LockConflict(_)) => refused += 1,
+                        Err(other) => others.push(other.to_string()),
+                    }
+                }
+                (held, refused, others)
+            })
+        })
+        .collect();
+    let mut total_held = 0;
+    for handle in handles {
+        let (held, _refused, others) = handle.join().expect("racer thread");
+        assert!(
+            others.is_empty(),
+            "neither the lock nor a conflict: {others:?}"
+        );
+        total_held += held;
+    }
+    assert!(total_held > 0, "somebody must have got the lock");
+    let _ = std::fs::remove_dir_all(root);
+}

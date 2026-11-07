@@ -27,13 +27,15 @@
   reading the code; not run). In a repository that admitted one, `verify` and `doctor` fail
   (`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`, exit `1`), under 0.55.0 as well.
   `prikk received remove remotes/<ref>` takes the pointer away, but `verify` keeps failing and no
-  command deletes the block. To keep your own history, carry it to a new repository: `prikk setup
-  <new-dir>` under the same keys, then, for your branch, `prikk sync have heads/<branch>` in the new
-  one, `prikk sync build heads/<branch> --have <file> --output <file>` in the old one, and `prikk
-  sync accept` then `prikk sync seal heads/<branch> --claims <file>` in the new one. Block ids,
-  messages and files stay the same, and `verify` exits `0` there. Received refs and trust entries
-  other than your own key are not carried, and a second branch must be created in the new
-  repository (`prikk branch create heads/<other> --from heads/<branch>`) before it is carried.
+  command deletes the block. To keep your own history, carry it to a new repository under the
+  same user account, so that it holds the same keys: run `prikk setup <new-dir>`, then for each
+  branch run `prikk sync have heads/<branch> --output have.bin` in the new repository, `prikk sync
+  build heads/<branch> --have have.bin --output art.bin` in the old one, and `prikk sync accept
+  art.bin --claims-out claims.txt` followed by `prikk sync seal heads/<branch> --claims
+  claims.txt` in the new one. Block ids, messages and files stay the same, and `verify` exits `0`
+  there. Received refs and trust entries other than your own key are not carried. Before carrying
+  a second branch, create it in the new repository with `prikk branch create heads/<other> --from
+  heads/<branch>`.
 - **`extract --claim` extracted a claim whose MAINTAINER signature is forged or missing** (see
   "Fixed — `extract --claim` extracted a forged or unsigned claim, and anchored on a parent no
   branch reaches"). Affected: 0.55.0 (measured), and every earlier release that has `extract
@@ -136,6 +138,10 @@ stdout, with the same text on stderr and the same exit code (`1`) as without the
   container lock), `info [PRIKK-DOCTOR-HELD-LOCK]: a <kind> lock is held: <path> (recorded pid:
   <n>, liveness: <advisory>)`. Before, a crash during `bundle import`, which writes no journal,
   left `doctor` silent about its lock. `doctor`'s exit code is unchanged.
+- **Any command whose exclusive create of a file fails for a reason other than "already exists"**
+  (a lock file, a marker, a key index): the `i/o error` now begins with the file's path. Before,
+  `error: i/o error: Access is denied. (os error 5)`; after, `error: i/o error: <kind> lock:
+  <path>: Access is denied. (os error 5)` (for a lock; other files print their path first).
 
 **A path outside this version's rule (today: non-ASCII)**
 - **`verify`, `doctor`, `show`, `tree`, `extract`, `commit` replaying history, `bundle
@@ -414,6 +420,14 @@ of prikk accepts, and a newer version of prikk may have written it`; `"refusal":
 
 ### Fixed
 
+- **On Windows, two writers racing for one lock could fail with `Access is denied` instead of a
+  lock conflict.** A lock file one writer had just released could not be opened while its removal
+  was still pending, and Windows answers that with "access denied" rather than "already exists".
+  A denied create of a lock file is now retried for a short time (about 100 ms at most): a writer
+  either gets the lock or gets `lock conflict`, and nothing had been written when it failed. If the
+  denial persists and the lock file is there, it is reported as the lock conflict it is; if it
+  persists with no lock file, it is a real permission problem and is reported as itself, now naming
+  the file. Seen once in the Windows mutation suite's racing-append test (about one run in forty).
 - **`uninstall.sh --prefix <dir>` ignored `--prefix` and removed the binary at the default
   location instead** (found by an external consumer): `uninstall.sh` read only `$PRIKK_INSTALL_DIR`
   and never its own arguments. It now accepts `--prefix`, refuses an argument it does not

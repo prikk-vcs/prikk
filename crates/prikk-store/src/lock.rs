@@ -1,11 +1,12 @@
 //! Simple file locks for active-session and ref writers.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{
-    MutationRoot, create_new_file_required, remove_file_cleanup_best_effort,
+    MutationRoot, create_new_file_required, inspect_entry, remove_file_cleanup_best_effort,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 
@@ -305,7 +306,7 @@ fn acquire_lock_file(
     kind: &str,
 ) -> Result<()> {
     let body = lock_body(kind);
-    match create_new_file_required(mutation_root, relative, body.as_bytes()) {
+    match create_lock_file(mutation_root, relative, body.as_bytes()) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(PrikkError::LockConflict(format!(
@@ -315,7 +316,79 @@ fn acquire_lock_file(
                 path.display()
             )))
         }
-        Err(err) => Err(err.into()),
+        // `create_new_file_required` puts the file's path into every failure but "already exists".
+        Err(err) => Err(PrikkError::Io {
+            kind: Some(err.kind()),
+            context: format!("{kind} lock: {err}"),
+        }),
+    }
+}
+
+/// How often and how long a denied create of a lock file is retried (Windows only; see
+/// [`retry_denied_create`]).
+const DENIED_CREATE_RETRIES: u32 = 50;
+const DENIED_CREATE_PAUSE: Duration = Duration::from_millis(2);
+
+/// Create the lock file exclusively. On Windows a create that is denied is retried briefly first;
+/// everywhere else it is a single attempt, as before.
+fn create_lock_file(
+    mutation_root: &MutationRoot,
+    relative: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let create = || create_new_file_required(mutation_root, relative, bytes);
+    if cfg!(windows) {
+        retry_denied_create(
+            create,
+            || matches!(inspect_entry(mutation_root, relative), Ok(Some(_))),
+            DENIED_CREATE_RETRIES,
+            DENIED_CREATE_PAUSE,
+        )
+    } else {
+        create()
+    }
+}
+
+/// Windows answers `ERROR_ACCESS_DENIED` (os error 5), not "already exists", to a `CreateFile` that
+/// meets a lock file another process has just deleted but whose removal has not finished (a file
+/// marked for deletion cannot be opened until its last handle closes; `DeleteFile`'s remarks say
+/// so). Two writers racing for one lock hit exactly that window: one releases (deletes) as the other
+/// creates. The answer is transient, so a denied create is retried for a short, bounded time. If
+/// the create then succeeds, the writer simply got the lock; if it reports the name exists, that is
+/// the ordinary conflict. If it stays denied, the name decides: a lock name that is still there
+/// (another process holds it, or its removal is stuck) is reported as the conflict it is
+/// (`AlreadyExists`), and a name that is absent, or that cannot be inspected, is a real permission
+/// problem and is reported as itself, denied, never as a conflict.
+///
+/// Compiled everywhere so its decisions are tested on every platform; only the Windows build of
+/// [`create_lock_file`] calls it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn retry_denied_create(
+    mut create: impl FnMut() -> std::io::Result<()>,
+    mut lock_name_is_taken: impl FnMut() -> bool,
+    retries: u32,
+    pause: Duration,
+) -> std::io::Result<()> {
+    let mut attempts = 0;
+    loop {
+        match create() {
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                if attempts < retries {
+                    attempts += 1;
+                    std::thread::sleep(pause);
+                    continue;
+                }
+                return if lock_name_is_taken() {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!("the lock file is held or still being removed ({err})"),
+                    ))
+                } else {
+                    Err(err)
+                };
+            }
+            other => return other,
+        }
     }
 }
 

@@ -213,6 +213,13 @@ append objects at the same moment no longer both proceed: one gets `lock conflic
 Before, they both usually succeeded — and sometimes left the index wrong instead. A refusal you can
 see and retry replaces a corruption you cannot.
 
+On Windows a lock file that another writer has just released can be impossible to open for a moment
+while its removal finishes, and the system answers that with "access denied" instead of "already
+exists". A denied create of a lock file is therefore retried for a short time (about 100 ms at most),
+so the outcome is the same as everywhere else: the writer gets the lock, or gets `lock conflict`. A
+denial that persists while no lock file is there is a real permission problem and is reported as
+itself, naming the file.
+
 **A failed acquisition leaves the lock file behind.** If the lock file's own creation fails partway —
 a sync error, a full disk — the file can remain while the acquisition reports failure, and every
 later object write meets `lock conflict` until an operator clears it with `prikk unlock`. This is the
