@@ -76,3 +76,26 @@ Follow `release-prep-handoff-template.md`. This file fills in the blanks and spl
   - **planeter:** what 0.56.0 changes for a forge, confirming the 2026-10-31 letter against the shipped binary;
   - **stikk:** the new refusal ids and `trust-add-v1`;
   - **inklkunn:** that the Unicode paths implementation and their two asks are scheduled in 0.57.0.
+
+**P1 ACCEPTED 2026-11-07** (`ec042439` … `7df69576`, pushed; review `release-0.56.0-prep-P1-review-v1`). The architect
+reran Security (b) on both binaries and measured a real 0.55.0 repository upgrading on the candidate ("no migration
+is needed" holds). **Next: P2,** as above, plus:
+- **the two costs, stated in the CHANGELOG** (ruling 9): one line each, in user words, measured on a release build;
+- **smoke lines for Security (a), (b) and (d)** on both binaries. (c) needs a perturbed build, so the smoke says so.
+
+**P3 carries these rulings first:**
+- **R1: `### Security` gets four bullets, (a)–(d)**, each with:
+  - what was wrong, in one sentence, pointing to its Fixed story;
+  - **affected versions:** "0.55.0 (measured)". Add "and every earlier release that has `<command>`" only if
+    `git log -S` on the refusal's code finds no earlier equivalent check;
+  - **what a user should do,** with every sentence measured on the candidate: (a) `verify`'s
+    `PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE` and the command that removes the forged history; (b) how to see that
+    a received pointer was replaced, and how to re-import the right tip; (c) what to do once `verify` or `doctor`
+    names it; (d) re-run `extract --claim` under 0.56.0 for claims from a source you don't control.
+  - (d)'s narrower reach is stated in its bullet.
+- **R2: B1–B7 `#[non_exhaustive]` confirmed;** help text unchanged; "no migration is needed" stays.
+- **R3: remove the two older step labels** (`durability-recovery.md:350`, `integrity-recovery.md:239`).
+- **R4: one sentence in `commands.md`'s `archive import` section.** With a local branch of that name already
+  present, `--adopt` lands the delivery as `remotes/<name>`, classified against the received pointer only (often
+  `no-local-history`). The local branch is neither compared nor moved. The class id is unchanged.
+- **`log --ref` versus `tree`/`checkout` wording and exit code:** a ROADMAP candidate, not this release.
