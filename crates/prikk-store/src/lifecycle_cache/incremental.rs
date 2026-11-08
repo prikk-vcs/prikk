@@ -55,6 +55,18 @@ pub struct LifecycleCacheDivergence {
     pub detail: String,
 }
 
+/// What `doctor` says about a [`LifecycleCacheDivergence`]: the cache is derived state and holds no
+/// history. (0.57.0 step 1a: no command rebuilds it yet -- a verb is proposed in that part's report,
+/// so this sentence states what is true today and names none.)
+#[must_use]
+pub fn lifecycle_cache_divergence_advice() -> String {
+    format!(
+        "the lifecycle-state cache is derived state and holds no history, so nothing recorded in the \
+         repository is wrong: `verify` replays history independently of it, and a commit replaces it \
+         with a full replay at least every {CHECKPOINT_CADENCE} incremental steps"
+    )
+}
+
 /// Check the persisted cache, if any, against an independent full replay of the block it claims to
 /// represent. Never errors: a replay failure is itself reported as a divergence rather than
 /// propagated, so `verify` always completes with a full picture rather than aborting on this check.

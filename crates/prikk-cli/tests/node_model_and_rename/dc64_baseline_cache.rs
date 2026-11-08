@@ -277,6 +277,48 @@ fn verify_reports_a_deliberately_stale_lifecycle_cache_as_divergence() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
+/// 0.57.0 step 1a: the same stale lifecycle cache, read by `doctor`. `verify` fails on it, and
+/// `doctor` used to say nothing; it now reports `PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE` as a
+/// **warning** (derived state, no history: exit stays 0, so no `--repair-*` is refused over it) and
+/// says what is true of the cache.
+///
+/// **Perturb (red control):** drop the `lifecycle_cache_divergences` loop from `doctor_repository`.
+#[test]
+fn doctor_reports_a_deliberately_stale_lifecycle_cache_as_a_warning() {
+    let repo = unique_repo("doctor-stale-lifecycle-cache");
+    init(&repo);
+    write_two_files(&repo, "alpha\n", "bravo\n");
+    ok(&commit(&repo, "genesis"), "genesis commit");
+    seal(&repo);
+    std::fs::write(repo.join("a.txt"), "alpha, edited\n").unwrap();
+    ok(&commit(&repo, "second"), "second commit");
+
+    let cache_path = lifecycle_cache_path(&repo);
+    let mut bytes = std::fs::read(&cache_path).unwrap();
+    const MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    let body = bytes[MAGIC.len() + 32..].to_vec();
+    let checksum = prikk_hash::sha256(&body);
+    bytes[MAGIC.len()..MAGIC.len() + 32].copy_from_slice(&checksum);
+    std::fs::write(&cache_path, &bytes).unwrap();
+
+    fail(
+        &prikk(&repo).arg("verify").output().unwrap(),
+        "verify with a stale lifecycle cache",
+    );
+    let doctor = prikk(&repo).arg("doctor").output().unwrap();
+    ok(&doctor, "doctor: a derived-state warning keeps exit 0");
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        stdout.contains("warning [PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE]"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("holds no history"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// DC-95 Stage 1, round 12: `lifecycle_cache::incremental::verify_divergence`'s "could not be
 /// independently verified" arm -- the deliberate inversion (prerequisite report §3.3) that converts
 /// what would otherwise be a replay `Err` into a `Vec` divergence entry instead of propagating it,

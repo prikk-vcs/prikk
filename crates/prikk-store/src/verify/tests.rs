@@ -4,6 +4,7 @@ mod acknowledged_damage_is_not_a_tail;
 mod checkpoint_manifest_blobs;
 mod connectivity;
 mod current_branch_warning;
+mod doctor_reports_every_finding;
 mod every_signature;
 mod generation_log_deduction;
 mod local_tag_trust;

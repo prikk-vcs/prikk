@@ -34,6 +34,15 @@ pub use restore_queue_target::{
     CommitSummary, RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
 };
 
+/// The way out `doctor` names for damage to signed history that no command rewrites (0.57.0 step 1a):
+/// a signed block or the chain behind an acknowledged commit is not repaired in place, because a
+/// repair that rewrote it could not tell damage from tampering. What the user can type is to restore
+/// a sound copy of the sealed history.
+const SIGNED_HISTORY_DAMAGE_WAY_OUT: &str = "preserve this repository and do not repair it in place: \
+no command rewrites signed history. Restore a sound copy of the sealed history into a fresh directory \
+(`prikk archive verify <backup>`, then `prikk archive import <backup>`, or `prikk bundle import --input \
+<bundle>`; see the Backup and Restore guide), then run `prikk verify` on the copy";
+
 /// Severity assigned to a doctor diagnostic issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoctorSeverity {
@@ -1185,6 +1194,83 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     ),
                     crate::COMMIT_INDEX_DIVERGENCE_ADVICE,
                 ));
+            }
+            // 0.57.0 step 1a (the rule over the class): `doctor` reports every finding `verify` fails
+            // on, each with a way out. The five below were silent. Severity follows the owner's
+            // split: `warning` for derived or received state that holds no local history, `error`
+            // when history (the sealed blocks, or the queue's own record of acknowledged work) is
+            // affected -- and an error scoped to the one active session it is about, so it refuses
+            // that session's repair and not every other one's.
+            for divergence in &verification.lifecycle_cache_divergences {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE",
+                    format!(
+                        "the lifecycle-state cache (.prikk/cache/lifecycle-state.v1), which claims to \
+                         represent block {}, disagrees with an independent replay: {}",
+                        divergence.baseline_block_id, divergence.detail
+                    ),
+                    crate::lifecycle_cache_divergence_advice(),
+                ));
+            }
+            for divergence in &verification.merge_baseline_divergences {
+                issues.push(DoctorIssue::error(
+                    "PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE",
+                    format!(
+                        "merge block {} records baseline {}, which is not a common ancestor of its \
+                         parents {} and {}",
+                        divergence.block_id,
+                        divergence.recorded_baseline,
+                        divergence.mainline_parent_id,
+                        divergence.secondary_parent_id
+                    ),
+                    SIGNED_HISTORY_DAMAGE_WAY_OUT,
+                ));
+            }
+            for violation in &verification.active_wal_ordering_issues {
+                issues.push(
+                    DoctorIssue::error(
+                        "PRIKK-DOCTOR-ACTIVE-WAL-ORDERING",
+                        format!(
+                            "the active WAL's record {} has sequence {}, not greater than the \
+                             preceding sequence {}",
+                            violation.index, violation.seq, violation.previous_seq
+                        ),
+                        "preserve the repository: the sealed history is not affected, but the queued \
+                         work is out of order and no repair rewrites it (`prikk doctor \
+                         --discard-damaged-commits` acts only on acknowledged damage and refuses \
+                         here). Restore a sound copy of the sealed history into a fresh directory \
+                         (`prikk archive import <backup>`; only sealed history travels in a backup, \
+                         so the queued commits are re-made there), then run `prikk verify` on the copy",
+                    )
+                    .for_active_session(DEFAULT_ACTIVE_NAME),
+                );
+            }
+            if verification.has_commit_witness_substituted_earlier_record() {
+                issues.push(
+                    DoctorIssue::error(
+                        "PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD",
+                        "a record before the last acknowledged one in the active WAL was substituted \
+                         for a different one after the fact: the last record is itself sound, but the \
+                         chain behind it disagrees with the acknowledgment history's running hash \
+                         (RFC 166 D4)",
+                        SIGNED_HISTORY_DAMAGE_WAY_OUT,
+                    )
+                    .for_active_session(DEFAULT_ACTIVE_NAME),
+                );
+            }
+            for outcome in &verification.received_ref_item_outcomes {
+                if let RefItemStatus::Failed { message } = &outcome.status {
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-RECEIVED-REF-DAMAGED",
+                        format!("received ref {} failed verification: {message}", outcome.ref_name),
+                        format!(
+                            "a received ref is a pointer to what another repository sent, not local \
+                             history: run `prikk received remove {0} --plan-only`, then `prikk \
+                             received remove {0}`, and receive it again if you still want it",
+                            outcome.ref_name
+                        ),
+                    ));
+                }
             }
             // Handoff 165 Q1b review, the one item for Q2: `PRIKK-TRUST-POLICY-INVALID` is always
             // and only `load_maintainer_trust_policy` failing (`verify/trust.rs`'s own `Publication

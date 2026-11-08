@@ -141,6 +141,25 @@ This happened when two commands that both write objects ran at the same moment �
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
+## `doctor` reports a finding `verify` fails on (0.57.0)
+
+`prikk verify` exits non-zero on eleven conditions, and `prikk doctor` reports every one of them. The
+five it used to pass over, with what to do:
+
+- `warning [PRIKK-DOCTOR-RECEIVED-REF-DAMAGED]` — a `remotes/…` pointer failed verification. It is what
+  another repository sent, not local history: `prikk received remove <ref> --plan-only`, then
+  `prikk received remove <ref>`; receive it again if you still want it.
+- `warning [PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE]` — a derived cache disagrees with a replay. Nothing
+  recorded is wrong, and `doctor` keeps exit `0`; a commit replaces the cache with a full replay at least
+  every 64 incremental steps.
+- `error [PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE]` — a merge block's signed baseline claim is false. No
+  command rewrites signed history; restore a sound copy (`prikk archive import <backup>`).
+- `error [PRIKK-DOCTOR-ACTIVE-WAL-ORDERING]` and
+  `error [PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD]` — the active WAL's records are out of
+  order, or an earlier record was substituted. Each is scoped to the `default` session, so it refuses
+  that session's repair and no other's. Sealed history is not affected; the queued commits are, and only
+  sealed history travels in a backup.
+
 ## `error: commit-index cache disagrees with the worktree for at least one path`
 
 `prikk verify` exits `1` with this line, and `prikk doctor` prints

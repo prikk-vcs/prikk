@@ -21,6 +21,18 @@ exists to detect. **New:** `doctor` now reports the same disagreement as a warni
 `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
 over a file that holds no history), and both `verify` and `doctor` print what to do about it.
 
+### Fixed — `doctor` read clean over five findings `verify` fails on
+
+`verify` exits non-zero on eleven conditions; `doctor` was silent on five of them (measured by reading
+every field `verify`'s verdict reads against every field `doctor` reads). `doctor` now reports each under
+its own code, with the severity the finding deserves — a `warning` where only derived or received state
+is affected (the repository-wide `error` that would refuse every `doctor --repair-*` is kept for history):
+`PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE` (warning), `PRIKK-DOCTOR-RECEIVED-REF-DAMAGED` (warning; the way
+out is `prikk received remove <ref>`), `PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE` (error),
+`PRIKK-DOCTOR-ACTIVE-WAL-ORDERING` and `PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD` (errors,
+scoped to the `default` active session). A rule now holds over the class: `doctor` reports every finding
+`verify` fails on.
+
 ### Added — `prikk doctor --rebuild-commit-index [--plan-only]`, and git's racy-entry rule for the commit-index
 
 `verify` and `doctor` now name one command for a commit-index divergence: **`prikk doctor

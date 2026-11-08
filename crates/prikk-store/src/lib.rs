@@ -233,12 +233,14 @@ pub use foundation::layout::{
 pub use history::{
     DEFAULT_HISTORY_LIMIT, HistoryEntry, RefHistory, load_received_ref_history, load_ref_history,
 };
-pub use lifecycle_cache::incremental::LifecycleCacheDivergence;
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::incremental::{
     BaselineCacheRung, LadderTip, LifecycleCacheHeader, LifecycleStateShape,
     lifecycle_cache_header_for_test_support, lifecycle_cache_state_digest_for_test_support,
     poison_lifecycle_cache_for_test_support,
+};
+pub use lifecycle_cache::incremental::{
+    LifecycleCacheDivergence, lifecycle_cache_divergence_advice,
 };
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::replay::{IdOnlyHistory, ReplayTimeSplit};
