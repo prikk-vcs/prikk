@@ -805,7 +805,7 @@ pub fn import_archive<R: Read + Seek>(
     // any other mid-type kill this module's own journal/cancel mechanism already handles.
     for object_type in object_types {
         let entry = find_entry(&manifest, ArchiveSectionKind::ObjectContainer(object_type))?;
-        let admitter = CarriedSignatureAdmitter::new(layout)?;
+        let admitter = CarriedSignatureAdmitter::new(layout, "archive-import")?;
         let mut written = 0usize;
         let mut type_merged_count = 0usize;
         for_each_object_record(source, entry, object_type, |envelope| {

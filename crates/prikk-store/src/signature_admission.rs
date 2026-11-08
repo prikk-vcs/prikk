@@ -168,6 +168,7 @@ pub(crate) fn admit_signatures(
     stored: ObjectEnvelope,
     incoming: &ObjectEnvelope,
     policy: &MaintainerTrustPolicy,
+    command: &'static str,
     mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
 ) -> Result<Admission> {
     if stored.object_type != incoming.object_type
@@ -205,6 +206,21 @@ pub(crate) fn admit_signatures(
                 } else {
                     verify_trusted_signature(policy, incoming, signature, object_id).map_err(
                         |err| {
+                            // 0.57.0 step 1b3: a failing adopted-MAINTAINER signature on a Block or
+                            // RefState is the one condition `forged-publication-signature` names,
+                            // whether the object arrived new or is already held -- one condition, one
+                            // id, one sentence (with its route). The same function the new-object
+                            // check calls raises it; any other object type keeps this sentence.
+                            if matches!(
+                                incoming.object_type,
+                                ObjectType::Block | ObjectType::RefState
+                            ) {
+                                if let Err(forged) = crate::trust::refuse_forged_publication_signature(
+                                    command, policy, incoming,
+                                ) {
+                                    return forged;
+                                }
+                            }
                             PrikkError::InvalidSignature(format!(
                                 "{} {object_id} carries a MAINTAINER signature by adopted key {} \
                                  that does not verify ({err}) -- refusing the whole import, nothing \

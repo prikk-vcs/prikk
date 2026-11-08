@@ -39,18 +39,32 @@ restore the record.
 Measured on 0.56.0: a sound tip over a forged ancestor previewed with `tipk: sound (reported, not
 trusted)` and exit 0, while `bundle import` of the same file refused (`forged-publication-signature`).
 `sealed_by_signatures` covers the delivered tip's sealers only. `bundle preview` now also answers what the
-import will do about the delivery's class and its new-object maintainer signatures: a new
-`import_refusals` array, in the import's own order — the delivery-class refusal (`rollback`, `diverged`,
-`does-not-connect`; lifted by `--allow-non-fast-forward`), then the forged-publication-signature refusal
-over every new Block and RefState (lifted by nothing) — each entry produced by the import's own function.
-`[]` means neither refusal applies, not that the import will succeed: the list does not cover a
-held-object admission refusal, an author-key conflict, the signature-count bound, the store's write
-decision, AUTHOR-signature failures, or a structurally invalid delivery (which fails the preview itself);
-`commands.md` names each. Cost: one Ed25519 verification per signature of each unique Block and RefState,
-as the import's own check.
+import will do about the delivery's class and its maintainer signatures: a new `import_refusals` array,
+in the import's own order — a forged-publication-signature refusal on an object the repository already holds
+(met first, in signature admission), the delivery-class refusal (`rollback`, `diverged`, `does-not-connect`;
+lifted by `--allow-non-fast-forward`), then a forged-publication-signature refusal on a new Block or RefState
+(lifted by nothing), at most one signature entry — each entry produced by the import's own function. `[]`
+means neither applies, not that the import will succeed: the list does not cover the same condition on other
+object types, an author-key conflict, the signature-count bound, the store's write decision, AUTHOR-signature
+failures, or a structurally invalid delivery (which fails the preview itself); `commands.md` names each.
+Cost: one Ed25519 verification per signature of each unique Block and RefState, as the import's own check,
+plus one stored-envelope read per held Block and RefState.
 
 ### Output changes
 
+- **A forged signature on an object the repository already holds is now the same refusal as on a new one.**
+  `bundle import` of a delivery that re-sends a held Block or RefState with an extra MAINTAINER signature by
+  an adopted key that does not verify used to stop in signature admission with `invalid signature: <type>
+  <id> carries a MAINTAINER signature by adopted key <K> that does not verify (…) -- refusing the whole
+  import, nothing was written`, with no route out, and `--format json` printed nothing. It now raises
+  `forged-publication-signature` — the sentence names both possible causes and the route (`prikk key
+  generate`, `prikk trust maintainer add`), the error reads `precondition not met: …`, and `bundle import
+  --format json` and `archive import --format json` print the `refusal-v1` document with that id. `sync
+  accept` meets the same condition with the same sentence. The same condition on an object that is not a
+  Block or RefState, and an AUTHOR-signature failure, keep their own sentence and print no document.
+- `bundle preview` lists that held-object refusal, first, before a class refusal (the import's order);
+  at most one signature entry. Cost measured on a 130-block delivery already held: preview about 9 → 10
+  ms, the import of the same delivery about 18 ms.
 - `bundle preview --format json` gains `"import_refusals"` (additive; the schema stays
   `bundle-preview-v1`), and the text form prints `bundle import of this delivery would refuse: <id>` with
   the import's sentence for each entry, and nothing when there is none.

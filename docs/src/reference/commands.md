@@ -449,28 +449,36 @@ only, exactly like `"sealed_by"` itself — `bundle import` is still the only th
 The outcomes are for the signatures on the delivered tip, so a `sound` here does not by itself mean
 the import will admit the delivery; the next paragraph is what answers that.
 
-**`bundle preview` lists the refusals for the delivery's class and its new-object maintainer signatures, in the import's own order.** An
+**`bundle preview` lists the refusals for the delivery's class and its maintainer signatures, in the import's own order.** An
 additive `"import_refusals"` array (the schema stays `bundle-preview-v1`) is `[]` when the import,
 run without flags, would admit the delivery. Otherwise each entry is `{"id", "message",
-"object_type", "object_id"}`: first the delivery-class refusal (`id` is `rollback`, `diverged` or
-`does-not-connect`; `object_type` and `object_id` are `null`, because the sentence names the received
-pointer), then `forged-publication-signature` with the first Block or RefState whose MAINTAINER
-signature by an adopted key does not verify, and its sentence. Each entry comes from the import's own
-function, not a restatement, and `message` is the sentence the import prints. It is a list because one
-refusal can hide another: **a class refusal is lifted by `--allow-non-fast-forward`, and a signature
-refusal by nothing**, so a user who passes the flag meets the second entry. The text form prints one
-`bundle import of this delivery would refuse: <id>` line per entry, the sentence indented under it, and
-nothing when the list is empty. The signature entry costs what the import's own check costs: one Ed25519
-verification per signature of each unique Block and RefState the delivery carries (about 26 µs each,
-measured at 0.56.0).
+"object_type", "object_id"}`, in the order the import meets them:
+1. **`forged-publication-signature`, on an object this repository already holds** (a delivery that
+   re-sends a held Block or RefState with an extra MAINTAINER signature by an adopted key that does not
+   verify). The import meets this first, in its signature admission (RFC 156), before the class check;
+2. the **delivery-class refusal** (`id` is `rollback`, `diverged` or `does-not-connect`; `object_type`
+   and `object_id` are `null`, because the sentence names the received pointer);
+3. **`forged-publication-signature`, on a new object** (a Block or RefState the repository does not hold).
+
+There is **at most one signature entry** — the first the import would meet — and it names the object.
+It is one condition with one id and one sentence, whether the object is held or new: an adopted key's
+signature on a Block or RefState does not verify. Each entry comes from the import's own function, not a
+restatement, and `message` is the sentence the import prints (it names both possible causes and the route
+out). It is a list because one refusal can hide another: **a class refusal is lifted by
+`--allow-non-fast-forward`, and a signature refusal by nothing**, so a user who passes the flag meets the
+signature entry. The text form prints one `bundle import of this delivery would refuse: <id>` line per
+entry, the sentence indented under it, and nothing when the list is empty. The signature check costs what
+the import's own check costs: one Ed25519 verification per signature of each unique Block and RefState
+the delivery carries (about 26 µs each, measured at 0.56.0); the held-object step adds one stored-envelope
+read per held Block and RefState (measured on a 130-block delivery the destination already holds:
+the preview took about 10 ms against about 9 ms before, and the import of the same delivery about 18 ms).
 
 **What the list does not cover.** The preview answers two of the import's decisions, and says nothing
-about the others, so an empty list means "no class refusal and no forged signature on a new object", not
-"the import will succeed":
-- **The held-object admission refusal.** The import first admits the signatures of objects it already
-  holds (RFC 156): a delivery that re-sends a held object with an extra MAINTAINER signature by an adopted
-  key that does not verify is refused there, with `invalid signature: … refusing the whole import, nothing
-  was written`, before the class check. `bundle preview` does not run that step.
+about the others, so an empty list means "no class refusal and no forged signature on a Block or
+RefState", not "the import will succeed":
+- **Other object types.** The same condition on an object that is not a Block or RefState (a Tag, a
+  RecognitionClaim, …) keeps its own sentence, `invalid signature: … refusing the whole import`, and
+  prints no `refusal-v1` document; the preview does not list it.
 - **An author-key conflict** (a key id the bundle carries that conflicts with one this repository has
   recorded), **the signature-count bound**, **the store's own write decision** (the same id with a
   different envelope), and **AUTHOR-signature failures.** The import refuses on each; the preview does not

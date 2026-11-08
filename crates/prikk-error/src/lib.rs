@@ -161,7 +161,8 @@ pub enum PrikkError {
     /// which command raised the refusal, already fully absorbed into `command` before this value
     /// is ever constructed.
     ForgedPublicationSignature {
-        /// Which command raised this refusal: `"bundle-import"` or `"archive-import"`.
+        /// Which command raised this refusal: `"bundle-import"`, `"archive-import"` or
+        /// `"sync-accept"` (0.57.0 step 1b3: the same condition on an object already held).
         command: &'static str,
         /// The fully rendered message, naming both possible causes.
         message: String,

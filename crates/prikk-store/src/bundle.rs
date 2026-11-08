@@ -812,13 +812,49 @@ pub fn preview_bundle_reporting_anchor(
         }
     };
 
-    // 0.57.0 step 1b2: every refusal `bundle import` of this exact delivery would raise without
-    // flags, in the import's own order, each from the import's own function -- the class refusal
-    // (`non_fast_forward_refusal`, with the option off) and then the signature refusal
-    // (`find_forged_publication_signature`) over every Block and RefState the delivery carries. A
-    // class refusal does not stop the signature check from running: the user who lifts the first with
-    // `--allow-non-fast-forward` would meet the second.
+    // 0.57.0 step 1b2/1b3: the refusals for the delivery's class and its maintainer signatures that
+    // `bundle import` of this exact delivery would raise without flags, **in the import's own order**,
+    // each from the import's own function:
+    //   1. pass 1's signature admission of an object this repository already holds
+    //      (`CarriedSignatureAdmitter::admit_one`, read-only), which refuses a forged extra signature
+    //      with the same `forged-publication-signature` as the new-object check;
+    //   2. the delivery-class refusal (`non_fast_forward_refusal`, with the option off);
+    //   3. the new-object check (`find_forged_publication_signature`).
+    // **At most one signature entry**: the first the import would meet (a held-object forgery is met
+    // before the class check, a new-object one after it). A class refusal does not stop the
+    // signature checks from running: the user who lifts it with `--allow-non-fast-forward` would meet
+    // the signature one.
+    let forged_entry = |forged: ForgedPublicationFinding| BundleImportRefusal {
+        id: "forged-publication-signature",
+        object_type: Some(forged.object_type),
+        object_id: Some(forged.object_id),
+        message: forged.error.to_string(),
+    };
+    let held_admission_forgery = {
+        let admitter = CarriedSignatureAdmitter::new(layout, "bundle-import")?;
+        let mut author_material = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
+            let mut entries = lookup_author_key_entries(layout, key_id)?;
+            entries.extend(
+                metadata
+                    .author_keys
+                    .iter()
+                    .filter(|entry| entry.key_id == key_id)
+                    .cloned(),
+            );
+            Ok(entries)
+        };
+        find_forged_in_held_admission(
+            &admitter,
+            &read_snapshot,
+            &bundle_only_reader,
+            &mut author_material,
+        )?
+    };
     let mut import_refusals: Vec<BundleImportRefusal> = Vec::new();
+    let signature_entry_found = held_admission_forgery.is_some();
+    if let Some(forged) = held_admission_forgery {
+        import_refusals.push(forged_entry(forged));
+    }
     if let Some(error) = non_fast_forward_refusal(
         import_received_pointer.is_some(),
         import_class,
@@ -836,15 +872,14 @@ pub fn preview_bundle_reporting_anchor(
             message: error.to_string(),
         });
     }
-    if let Some(forged) =
-        find_forged_publication_signature("bundle-import", &adopted_policy, &bundle_only_reader)?
-    {
-        import_refusals.push(BundleImportRefusal {
-            id: "forged-publication-signature",
-            object_type: Some(forged.object_type),
-            object_id: Some(forged.object_id),
-            message: forged.error.to_string(),
-        });
+    if !signature_entry_found {
+        if let Some(forged) = find_forged_publication_signature(
+            "bundle-import",
+            &adopted_policy,
+            &bundle_only_reader,
+        )? {
+            import_refusals.push(forged_entry(forged));
+        }
     }
 
     let connectivity = match preview.connectivity {
@@ -2234,7 +2269,7 @@ pub fn import_bundle(
         })?;
 
     let mut object_store = ObjectWriteSession::open(layout)?;
-    let admitter = CarriedSignatureAdmitter::new(layout)?;
+    let admitter = CarriedSignatureAdmitter::new(layout, "bundle-import")?;
     let mut author_material_closure = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
         let mut entries = lookup_author_key_entries(layout, key_id)?;
         entries.extend(
@@ -3118,13 +3153,18 @@ pub(crate) struct AdmittedOne {
 pub(crate) struct CarriedSignatureAdmitter {
     policy: crate::trust::MaintainerTrustPolicy,
     several_records: bool,
+    /// Which command's refusal a forged publication signature raises (`"bundle-import"`,
+    /// `"archive-import"`, `"sync-accept"`), so the one sentence and the one `refusal-v1` id are the
+    /// same wherever the condition is met (0.57.0 step 1b3).
+    command: &'static str,
 }
 
 impl CarriedSignatureAdmitter {
-    pub(crate) fn new(layout: &RepositoryLayout) -> Result<Self> {
+    pub(crate) fn new(layout: &RepositoryLayout, command: &'static str) -> Result<Self> {
         Ok(Self {
             policy: crate::trust::load_maintainer_trust_policy_or_empty(layout)?,
             several_records: layout.format().holds_several_records_per_id(),
+            command,
         })
     }
 
@@ -3166,6 +3206,7 @@ impl CarriedSignatureAdmitter {
             stored,
             &envelope,
             &self.policy,
+            self.command,
             &mut author_material,
         )?;
         if decided.adds_signatures {
@@ -3193,9 +3234,10 @@ pub(crate) fn admit_carried_signatures(
     layout: &RepositoryLayout,
     stored_objects: &impl ObjectReader,
     carried: &[ObjectEnvelope],
+    command: &'static str,
     mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
 ) -> Result<CarriedAdmission> {
-    let admitter = CarriedSignatureAdmitter::new(layout)?;
+    let admitter = CarriedSignatureAdmitter::new(layout, command)?;
     let mut admission = CarriedAdmission {
         envelopes: Vec::with_capacity(carried.len()),
         merged_object_count: 0,
@@ -3414,6 +3456,41 @@ pub(crate) fn non_fast_forward_refusal(
         });
     }
     None
+}
+
+/// The first Block or RefState in a delivery that `bundle import`'s pass-1 signature admission would
+/// refuse as a forged publication signature: an object this repository already holds, re-sent with an
+/// extra MAINTAINER signature by an adopted key that does not verify (0.57.0 step 1b3). Runs the
+/// import's own [`CarriedSignatureAdmitter::admit_one`] read-only, over Blocks and RefStates only (the
+/// only types the forged-publication id names); any other admission refusal on them is not a forgery
+/// and propagates as the preview's own failure with the import's sentence, except `InvalidSignature`
+/// (an AUTHOR signature that does not verify), which this list does not cover and skips.
+fn find_forged_in_held_admission(
+    admitter: &CarriedSignatureAdmitter,
+    stored: &impl ObjectReader,
+    reader: &BundleAndLocalReader<'_>,
+    author_material: &mut dyn FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
+) -> Result<Option<ForgedPublicationFinding>> {
+    for object in reader.prepared {
+        if !matches!(object.object_type, ObjectType::Block | ObjectType::RefState) {
+            continue;
+        }
+        let Some(envelope) = reader.read_object(object.object_id)? else {
+            continue;
+        };
+        match admitter.admit_one(stored, envelope, &mut *author_material) {
+            Ok(_) | Err(PrikkError::InvalidSignature(_)) => {}
+            Err(error @ PrikkError::ForgedPublicationSignature { .. }) => {
+                return Ok(Some(ForgedPublicationFinding {
+                    object_type: object.object_type,
+                    object_id: object.object_id,
+                    error,
+                }));
+            }
+            Err(other) => return Err(other),
+        }
+    }
+    Ok(None)
 }
 
 /// The first Block or RefState a delivery carries whose MAINTAINER signature is by an adopted key and

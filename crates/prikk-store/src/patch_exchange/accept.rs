@@ -360,8 +360,12 @@ pub fn accept_exchange_artifact(
         .chain(decoded.tags.iter())
         .cloned()
         .collect();
-    let admission =
-        crate::bundle::admit_carried_signatures(layout, &object_store, &ordered, |key_id| {
+    let admission = crate::bundle::admit_carried_signatures(
+        layout,
+        &object_store,
+        &ordered,
+        "sync-accept",
+        |key_id| {
             let mut entries = lookup_author_key_entries(layout, key_id)?;
             entries.extend(
                 decoded
@@ -371,7 +375,8 @@ pub fn accept_exchange_artifact(
                     .cloned(),
             );
             Ok(entries)
-        })?;
+        },
+    )?;
     for envelope in &admission.envelopes {
         object_store.check_write(envelope)?;
     }

@@ -1251,3 +1251,120 @@ fn preview_lists_every_refusal_the_import_would_raise_in_the_imports_order() {
         let _ = std::fs::remove_file(path);
     }
 }
+
+/// **0.57.0 step 1b3: one condition, one id -- a forged signature on an object this repository already
+/// holds.** A rollback delivery is made only of objects the destination holds, so a forged extra
+/// signature on one of them is met by the import's pass-1 signature admission, *before* the class
+/// check. Before this part that refusal was `invalid signature: … refusing the whole import` (no route,
+/// and `--format json` printed nothing); the preview did not run that step and read `[rollback, …]`.
+/// Now, through the binary:
+/// - the preview lists `[forged-publication-signature, rollback]`, the import's order, and at most one
+///   signature entry;
+/// - the real import, **with and without** `--allow-non-fast-forward`, refuses with the first entry's
+///   sentence (which carries the route), and `--format json` prints its `refusal-v1` document with the
+///   id the new-object case already had;
+/// - the destination is unchanged by the refused imports.
+///
+/// **Perturb (red controls):** make the preview skip the held-object admission -- the first entry
+/// disappears and the order assertion goes red; move the held-object entry after the class entry -- the
+/// order assertion goes red; make admission raise `InvalidSignature` again -- the sentence, route and JSON
+/// assertions go red.
+#[test]
+fn a_forged_signature_on_a_held_object_is_one_refusal_in_the_imports_order() {
+    // The destination holds the honest two-generation chain (received pointer at block 2).
+    let honest = build_source_with_two_generations(
+        "step1b3-honest",
+        support::MAINTAINER_KEY_ID,
+        &support::MAINTAINER_SEED,
+        &support::MAINTAINER_SEED,
+    );
+    let honest_bundle = temp_bundle("step1b3-honest");
+    export_bundle_to(&honest, &honest_bundle);
+    let dest = support::unique_repo("step1b3-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    assert!(
+        import_attempt(&dest, &honest_bundle, false)
+            .status
+            .success()
+    );
+
+    // The delivery: block 1 again (held), with a forged signature under the adopted key id -- a rollback.
+    let forged = build_source_signed_by("step1b3-forged", &FORGER_SEED, support::MAINTAINER_KEY_ID);
+    let forged_bundle = temp_bundle("step1b3-forged");
+    export_bundle_to(&forged, &forged_bundle);
+
+    let value = preview_json(&dest, &forged_bundle);
+    let refusals = value.get("import_refusals").as_array();
+    assert_eq!(refusals.len(), 2, "{value:?}");
+    assert_eq!(
+        refusals[0].get("id").as_str(),
+        "forged-publication-signature",
+        "the held-object admission is met before the class check"
+    );
+    assert!(!refusals[0].get("object_id").is_null());
+    assert_eq!(refusals[1].get("id").as_str(), "rollback");
+    let text = support::prikk(&dest)
+        .args([
+            "bundle",
+            "preview",
+            "--input",
+            forged_bundle.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let text = stdout_of(&text);
+    let signature_at = text
+        .find("would refuse: forged-publication-signature")
+        .expect("signature line");
+    let class_at = text.find("would refuse: rollback").expect("class line");
+    assert!(signature_at < class_at, "{text}");
+
+    let before = support::store_bytes(&dest);
+    for allow in [false, true] {
+        let import = import_attempt(&dest, &forged_bundle, allow);
+        assert_eq!(import.status.code(), Some(1), "allow={allow}: {import:?}");
+        let stderr = stderr_of(&import);
+        assert!(
+            stderr.contains(refusals[0].get("message").as_str()),
+            "allow={allow}: the import refuses with the first entry's sentence: {stderr}"
+        );
+        assert!(
+            stderr.contains("prikk trust maintainer add"),
+            "allow={allow}: the sentence carries the route: {stderr}"
+        );
+        assert!(
+            !stderr.contains("refusing the whole import"),
+            "allow={allow}: the old routeless sentence is gone: {stderr}"
+        );
+    }
+    let json = support::prikk(&dest)
+        .args([
+            "bundle",
+            "import",
+            "--input",
+            forged_bundle.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let document = assert_valid_json(&stdout_of(&json));
+    assert_eq!(document.get("schema_version").as_str(), "refusal-v1");
+    assert_eq!(document.get("command").as_str(), "bundle-import");
+    assert_eq!(
+        document.get("refusal").as_str(),
+        "forged-publication-signature",
+        "was an empty stdout before this part"
+    );
+    assert_eq!(
+        support::store_bytes(&dest),
+        before,
+        "a refused import writes nothing"
+    );
+
+    cleanup(&[honest.root(), forged.root(), &dest]);
+    let _ = std::fs::remove_file(honest_bundle);
+    let _ = std::fs::remove_file(forged_bundle);
+}
