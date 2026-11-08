@@ -278,3 +278,9 @@ reached. `archive/verify.rs` uses the same walk.
 objects: 0`, and the full smoke gives 1074 ok. Letter 047 to the external architect is drafted, and the owner sends
 it. **For the dev team, only on the tag day:** the CHANGELOG heading says 2026-11-07, so a one-line re-date commit
 comes last. The architect pushes it and reads its CI before the tag.
+
+**External review 047 (2026-11-08): nothing blocks the tag** (reading `external-047-reading-v1`). Their build of
+`7fe71628` is byte-identical to ours, and 046 §0 is gone in every shape. **Not live yet; it waits for the owner's
+word on the tag:** the tag-day re-date commit. One line, `## 0.56.0 — 2026-11-07` → the tag day, `CHANGELOG.md`
+only, one-line message. Then `cargo test --workspace` and the 14 gates on it, and the release binary's sha256 (it
+must equal `e0a4208e02d0…`, since only the CHANGELOG changed). The architect pushes it, reads its CI, and tags it.
