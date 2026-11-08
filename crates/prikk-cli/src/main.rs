@@ -1420,46 +1420,66 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // (`plan_pointer_index_rebuild`/`rebuild_pointer_index` each call the same internal function
     // under one lock), so the plan printed here is always the plan a real run would also print
     // before writing.
-    if doctor_args.rebuild_commit_index {
+    if doctor_args.rebuild_caches {
         let branch = current_branch::resolve_ref(&layout, None)?;
         let report = if doctor_args.plan_only {
-            prikk_store::plan_commit_index_rebuild(&layout, &branch)
+            prikk_store::plan_caches_rebuild(&layout, &branch)
         } else {
-            prikk_store::rebuild_commit_index(&layout, &branch)
+            prikk_store::rebuild_caches(&layout, &branch)
         }
         .map_err(|err| err.to_string())?;
         println!("doctor repository: {}", layout.prikk_dir().display());
+        let plural = |count: usize, one: &'static str, many: &'static str| {
+            if count == 1 { one } else { many }
+        };
+        let index = &report.commit_index;
         println!(
-            "commit-index: {} entr{} before, {} file{} {}",
-            report.entries_before,
-            if report.entries_before == 1 {
-                "y"
-            } else {
-                "ies"
-            },
-            report.paths_read,
-            if report.paths_read == 1 { "" } else { "s" },
-            if report.written {
+            "commit-index: {} {} before, {} {} {}",
+            index.entries_before,
+            plural(index.entries_before, "entry", "entries"),
+            index.paths_read,
+            plural(index.paths_read, "file", "files"),
+            if index.written {
                 "read"
             } else {
                 "would be read"
             },
         );
-        if report.written {
+        if index.written {
             println!(
-                "commit-index rebuilt: {} entr{} written, {} file{} left out (written too recently to trust, changed while being read, or content `commit` refuses)",
-                report.entries_written,
-                if report.entries_written == 1 {
-                    "y"
+                "commit-index rebuilt: {} {} written, {} {} left out (written too recently to trust, changed while being read, or content `commit` refuses)",
+                index.entries_written,
+                plural(index.entries_written, "entry", "entries"),
+                index.left_out,
+                plural(index.left_out, "file", "files"),
+            );
+        }
+        let lifecycle = &report.lifecycle;
+        if !lifecycle.published {
+            println!(
+                "lifecycle-state cache: {branch} has no published history, so there is nothing to rebuild; the file is left as it is"
+            );
+        } else {
+            println!(
+                "lifecycle-state cache: {} {} {}",
+                lifecycle.blocks_replayed,
+                plural(lifecycle.blocks_replayed, "block", "blocks"),
+                if lifecycle.written {
+                    "replayed from scratch"
                 } else {
-                    "ies"
+                    "would be replayed from scratch"
                 },
-                report.left_out,
-                if report.left_out == 1 { "" } else { "s" },
             );
-            println!(
-                "The commit-index is a cache and holds no history: nothing was recorded in the recovery log."
-            );
+            if lifecycle.written {
+                println!(
+                    "lifecycle-state cache rebuilt: {} {} written; it now represents the tip of {branch}",
+                    lifecycle.nodes_written,
+                    plural(lifecycle.nodes_written, "node", "nodes"),
+                );
+            }
+        }
+        if index.written || lifecycle.written {
+            println!("These caches hold no history: nothing was recorded in the recovery log.");
         } else {
             println!("plan only -- nothing written");
         }

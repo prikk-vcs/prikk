@@ -1,7 +1,8 @@
-//! `prikk doctor --rebuild-commit-index` (0.57.0 step 0c): rebuild the commit-index from the worktree.
+//! `prikk doctor --rebuild-caches` (0.57.0 step 0c, one verb for every derived cache from step 1d):
+//! rebuild the commit-index from the worktree and the lifecycle-state cache from a full replay.
 //!
-//! The index is a cache and holds no history, so this needs no recovery-log entry. It **rebuilds in
-//! fact**: every file `commit` would scan is read once, hashed under the kind `commit` would compare
+//! Both are caches that hold no history, so this needs no recovery-log entry. The commit-index half
+//! **rebuilds in fact**: every file `commit` would scan is read once, hashed under the kind `commit` would compare
 //! it in (the baseline node's kind for a tracked path, [`classify_new`] for a new one), and the
 //! resulting index replaces the old one -- including every entry that was wrong. It is built from the
 //! same parts `commit` and `prikk diff` use (the folded baseline, the worktree walk with its ignore
@@ -19,7 +20,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use prikk_error::{PrikkError, Result};
-use prikk_object::{BlobKind, NodeKind};
+use prikk_object::{BlobKind, NodeKind, ObjectId};
 
 use crate::commit_index::{
     self, CommitIndex, CommitIndexEntry, CommitIndexRebuildReport, file_system_horizon,
@@ -37,18 +38,106 @@ use super::{
     split_baseline,
 };
 
-/// Rebuild (or, with `plan_only`, count) the commit-index against `ref_name`'s folded baseline.
-pub(crate) fn rebuild_commit_index_for(
+/// What `prikk doctor --rebuild-caches` did to the lifecycle-state cache (0.57.0 step 1d).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleCacheRebuildReport {
+    /// The block the cache claimed to represent before, if a cache loaded.
+    pub claimed_block_before: Option<ObjectId>,
+    /// `false` when the current branch has no published history: there is nothing to cache and the
+    /// cache is left as it is.
+    pub published: bool,
+    /// Blocks a replay from scratch reads (the current branch's lineage length); for a plan, how many
+    /// it would read.
+    pub blocks_replayed: usize,
+    /// Nodes (live and tombstoned) in the rebuilt cache; `0` for a plan.
+    pub nodes_written: usize,
+    /// The block the rebuilt cache represents (the current branch's tip).
+    pub represents_block: Option<ObjectId>,
+    /// Whether the cache file was written (false for a plan).
+    pub written: bool,
+}
+
+/// What `--rebuild-caches` did, cache by cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CachesRebuildReport {
+    /// The commit-index (`.prikk/cache/commit-index.v1`).
+    pub commit_index: CommitIndexRebuildReport,
+    /// The lifecycle-state cache (`.prikk/cache/lifecycle-state.v1`).
+    pub lifecycle: LifecycleCacheRebuildReport,
+}
+
+/// Rebuild (or, with `plan_only`, count) every derived cache that has a divergence check, under **one**
+/// lock: the one `commit` takes, acquired before the first read (a plan takes none and writes nothing).
+pub(crate) fn rebuild_caches_for(
     layout: &RepositoryLayout,
     ref_name: &str,
     plan_only: bool,
-) -> Result<CommitIndexRebuildReport> {
-    // Before anything is read: the lock `commit` takes. A plan takes none and writes nothing.
+) -> Result<CachesRebuildReport> {
     let lock = if plan_only {
         None
     } else {
         Some(ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?)
     };
+    let commit_index = rebuild_commit_index_inner(layout, ref_name, lock.as_ref())?;
+    let lifecycle = rebuild_lifecycle_cache_inner(layout, ref_name, lock.is_some())?;
+    drop(lock);
+    Ok(CachesRebuildReport {
+        commit_index,
+        lifecycle,
+    })
+}
+
+/// The lifecycle-state cache: a **full replay from scratch** of the current branch's lineage (never an
+/// incremental step, never an anchored derivation, never the old cache), written with the step count
+/// reset. A branch with no published history has nothing to cache and the file is left alone.
+fn rebuild_lifecycle_cache_inner(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    write: bool,
+) -> Result<LifecycleCacheRebuildReport> {
+    let claimed_block_before = crate::lifecycle_cache::claimed_block(layout);
+    let Some((baseline, horizon, blocks)) =
+        crate::patch_replay::lineage_for_cache_rebuild(layout, ref_name)?
+    else {
+        return Ok(LifecycleCacheRebuildReport {
+            claimed_block_before,
+            published: false,
+            blocks_replayed: 0,
+            nodes_written: 0,
+            represents_block: None,
+            written: false,
+        });
+    };
+    if !write {
+        return Ok(LifecycleCacheRebuildReport {
+            claimed_block_before,
+            published: true,
+            blocks_replayed: blocks,
+            nodes_written: 0,
+            represents_block: Some(baseline),
+            written: false,
+        });
+    }
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let nodes_written =
+        crate::lifecycle_cache::rebuild_from_full_replay(layout, &object_store, baseline, horizon)?;
+    Ok(LifecycleCacheRebuildReport {
+        claimed_block_before,
+        published: true,
+        blocks_replayed: blocks,
+        nodes_written,
+        represents_block: Some(baseline),
+        written: true,
+    })
+}
+
+/// The commit-index half, under the caller's lock (`None`: a plan).
+fn rebuild_commit_index_inner(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    lock: Option<&ActiveLock>,
+) -> Result<CommitIndexRebuildReport> {
     let entries_before = CommitIndex::load(layout)?.entries().len();
 
     let object_store = ObjectReadSnapshot::open(layout)?;
@@ -137,7 +226,6 @@ pub(crate) fn rebuild_commit_index_for(
         );
     }
     index.save(layout)?;
-    drop(lock);
     let entries_written = index.entries().len();
     Ok(CommitIndexRebuildReport {
         entries_before,

@@ -13,7 +13,6 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
 use crate::author::author_signing::AuthorSigner;
-use crate::commit_index::CommitIndexRebuildReport;
 use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_id_gen::NodeIdGenerator;
 
@@ -25,7 +24,8 @@ mod node_authoring;
 /// rendered, so no caller outside can reconstruct or diverge from the rule.
 pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
 
-use node_authoring::rebuild_commit_index_for;
+use node_authoring::rebuild_caches_for;
+pub use node_authoring::{CachesRebuildReport, LifecycleCacheRebuildReport};
 /// The read-only view of what `commit` would author, for `prikk diff` (RFC 153 §6.2). Built from `commit`'s own
 /// parts inside `node_authoring`, so the private module stays private and what crosses is the result.
 pub(crate) use node_authoring::{Retain, read_worktree_for_diff};
@@ -341,27 +341,25 @@ mod ref_name_once_per_session_tests;
 #[cfg(test)]
 mod step1_merged_decode_tests;
 
-/// Count what `prikk doctor --rebuild-commit-index` would read, against `ref_name`'s baseline. Takes no
-/// lock and writes nothing.
+/// Count what `prikk doctor --rebuild-caches` would read, against `ref_name`'s baseline: the commit-index's
+/// worktree files and the lifecycle-state cache's lineage blocks. Takes no lock and writes nothing.
 ///
 /// # Errors
 /// An unreadable baseline, worktree or active WAL.
-pub fn plan_commit_index_rebuild(
+pub fn plan_caches_rebuild(
     layout: &RepositoryLayout,
     ref_name: &str,
-) -> Result<CommitIndexRebuildReport> {
-    rebuild_commit_index_for(layout, ref_name, true)
+) -> Result<CachesRebuildReport> {
+    rebuild_caches_for(layout, ref_name, true)
 }
 
-/// Rebuild `.prikk/cache/commit-index.v1` from the worktree: every file `commit` would scan is read
-/// once and the index is replaced by a correct one. Holds the lock `commit` takes, so a `commit`
-/// running meanwhile fails with `lock conflict` instead of racing it. A cache: no recovery-log entry.
+/// Rebuild every derived cache that has a divergence check: `.prikk/cache/commit-index.v1` from the
+/// worktree (every file `commit` would scan, read once) and `.prikk/cache/lifecycle-state.v1` from a full
+/// replay of `ref_name`'s lineage from scratch. One lock, the one `commit` takes, so a `commit` running
+/// meanwhile fails with `lock conflict` instead of racing it. Caches: no recovery-log entry.
 ///
 /// # Errors
-/// A lock conflict, an unreadable baseline, worktree or active WAL, or a failed write.
-pub fn rebuild_commit_index(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-) -> Result<CommitIndexRebuildReport> {
-    rebuild_commit_index_for(layout, ref_name, false)
+/// A lock conflict, an unreadable baseline, worktree, lineage or active WAL, or a failed write.
+pub fn rebuild_caches(layout: &RepositoryLayout, ref_name: &str) -> Result<CachesRebuildReport> {
+    rebuild_caches_for(layout, ref_name, false)
 }

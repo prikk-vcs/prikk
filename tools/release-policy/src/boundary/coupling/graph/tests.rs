@@ -178,7 +178,7 @@ fn walk_finds_the_confirmed_production_module_count() {
     // through the verified path" sequence R3's ruling gives, used by `branch_switch` and by the
     // producers moving the current branch): 172 -> 173.
     // 0.57.0 step 0c added `commit_boundary::worktree_patch::node_authoring::index_rebuild`
-    // (`doctor --rebuild-commit-index`, built from the same parts `commit` and `diff` use): 173 -> 174.
+    // (`doctor --rebuild-caches`, built from the same parts `commit` and `diff` use; named `index_rebuild` until 0.57.0 step 1d): 173 -> 174.
     assert_eq!(modules.len(), 174, "modules: {modules:?}");
     assert!(
         !modules

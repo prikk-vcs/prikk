@@ -68,6 +68,9 @@ pub(crate) mod anchored_text;
 
 /// Incremental baseline lifecycle-state cache, scoped to the commit path (DC-64).
 pub(crate) mod incremental;
+// `prikk doctor --rebuild-caches` (0.57.0 step 1d) reaches the cache through this module's root, not
+// through `incremental`, so the commit boundary keeps one edge into the lifecycle cache.
+pub(crate) use incremental::{claimed_block, rebuild_from_full_replay};
 
 /// Authoritative replay-derived lifecycle state for a specific baseline (rung 3). It must be
 /// produced **only** by authoritative replay over the actual walked single-parent chain; the

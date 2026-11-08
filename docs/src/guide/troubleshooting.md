@@ -162,8 +162,10 @@ five it used to pass over, with what to do:
   another repository sent, not local history: `prikk received remove <ref> --plan-only`, then
   `prikk received remove <ref>`; receive it again if you still want it.
 - `warning [PRIKK-DOCTOR-LIFECYCLE-CACHE-DIVERGENCE]` — a derived cache disagrees with a replay. Nothing
-  recorded is wrong, and `doctor` keeps exit `0`; a commit replaces the cache with a full replay at least
-  every 64 incremental steps.
+  recorded is wrong, and `doctor` keeps exit `0`, but `commit` trusts this cache for an incremental step and
+  replaces it with a full replay only every 64 steps, so **run `prikk doctor --rebuild-caches` before your
+  next commit** (`--plan-only` first): it replays the current branch's lineage from scratch and writes the
+  cache, under the lock `commit` takes, and `verify` is clean afterwards.
 - `error [PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE]` — a merge block's signed baseline claim is false. No
   command rewrites signed history; restore a sound copy (`prikk archive import <backup>`).
 - `error [PRIKK-DOCTOR-ACTIVE-WAL-ORDERING]` and
@@ -180,9 +182,9 @@ five it used to pass over, with what to do:
 another, although the entry's size and modification time still match the file. The index is a cache
 that only saves `commit` a read; it holds no history, so nothing recorded in the repository is wrong.
 
-Run `prikk doctor --rebuild-commit-index` (`--plan-only` first to see how many files it reads): it
-reads every file `commit` would scan once and writes a correct index, under the lock `commit` takes, and
-`verify` is clean afterwards. Two shapes, both cured by it:
+Run `prikk doctor --rebuild-caches` (`--plan-only` first to see what it reads): it reads every file
+`commit` would scan once and writes a correct index, under the lock `commit` takes (and rebuilds the
+lifecycle-state cache too, see below), and `verify` is clean afterwards. Two shapes, both cured by it:
 
 - **The entry says the file differs from the last committed content, but it does not** (a damaged
   entry). `prikk commit` re-reads the path, corrects the entry and authors nothing for that file — an

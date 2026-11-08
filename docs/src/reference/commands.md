@@ -81,7 +81,7 @@ prikk doctor [path] --repair-pointer-index-tail
 prikk doctor [path] --repair-tails [--plan-only]
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
-prikk doctor [path] --rebuild-commit-index [--plan-only]
+prikk doctor [path] --rebuild-caches [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]
 prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]
 prikk doctor [path] --recovery-list
@@ -98,14 +98,24 @@ prikk received remove <remotes/…> [--plan-only]
 prikk --version
 ```
 
-**`doctor --rebuild-commit-index` rebuilds a cache.** `.prikk/cache/commit-index.v1` only saves `commit` a
-read; it holds no history, so the verb writes no recovery-log entry. It reads every file `commit` would
-scan once (the current branch's baseline decides each file's kind) and writes a correct index, under the
-active lock `commit` takes: a `commit` running meanwhile fails with `lock conflict` instead of racing it.
-A file written too recently to trust (see below), changed while being read, or holding content `commit`
-refuses is read but left out. `--plan-only` counts the files, takes no lock and writes nothing. It runs
-alone (only `--plan-only` goes with it). `verify` and `doctor` name it when they find a commit-index
-divergence.
+**`doctor --rebuild-caches` rebuilds every derived cache that has a divergence check.** There are two,
+`.prikk/cache/commit-index.v1` and `.prikk/cache/lifecycle-state.v1`; both only save `commit` work and hold
+no history, so the verb writes no recovery-log entry. It names each cache and the count it read:
+- **the commit-index** is rebuilt from the worktree: every file `commit` would scan is read once (the
+  current branch's baseline decides each file's kind) and a correct index is written. A file written too
+  recently to trust (see below), changed while being read, or holding content `commit` refuses is read but
+  left out;
+- **the lifecycle-state cache** is rebuilt by **a full replay of the current branch's lineage from scratch**
+  — never an incremental step, never the old cache — and written with its step count reset. It prints how
+  many blocks it replayed and how many nodes it wrote. A branch with no published history has nothing to
+  cache; the verb says so and leaves the file alone.
+
+Both run under one lock, the active lock `commit` takes: a `commit` running meanwhile fails with `lock
+conflict` instead of racing it. `--plan-only` takes no lock, counts what it would read (files; blocks) and
+writes nothing. It runs alone (only `--plan-only` goes with it). `verify` and `doctor` name it when they
+find either divergence; for the lifecycle cache they say **before your next commit**, because `commit`
+trusts that cache for an incremental step (a full replay replaces it only every 64 steps), so a divergent one
+can make the next commits wrong. `doctor`'s severity stays a warning, so no repair is blocked.
 
 **`commit` does not record an entry for a file written inside the file system's current timestamp tick.**
 An entry is left out when the file's mtime is not older than the file system's own clock at the moment

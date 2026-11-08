@@ -21,13 +21,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
-mod index_rebuild;
+mod cache_rebuild;
 mod worktree_files;
 mod worktree_read;
 
 // The read-only view `prikk diff` reads the worktree through (RFC 153 §6.2): built from the same parts
 // `author_inner` uses, and it writes nothing.
-pub(crate) use index_rebuild::rebuild_commit_index_for;
+pub(crate) use cache_rebuild::rebuild_caches_for;
+pub use cache_rebuild::{CachesRebuildReport, LifecycleCacheRebuildReport};
 pub(crate) use worktree_read::{Retain, read_worktree_for_diff};
 
 use prikk_error::{PrikkError, Result};

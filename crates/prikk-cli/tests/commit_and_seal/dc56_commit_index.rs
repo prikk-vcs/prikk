@@ -405,7 +405,7 @@ fn a_damaged_hash_digit_is_a_miss_for_commit_and_a_finding_for_verify_and_doctor
 /// The other half of §5, stated and held: an entry that wrongly says "unchanged" (the file was
 /// rewritten with the same size and modification time -- an mtime put back by a tool: class 2) is the
 /// accepted residual risk of the stat heuristic. `commit` does not see the change; `verify` and
-/// `doctor` do, and both name `prikk doctor --rebuild-commit-index`, which cures it: `--plan-only`
+/// `doctor` do, and both name `prikk doctor --rebuild-caches`, which cures it: `--plan-only`
 /// writes nothing, the real run rebuilds, `verify` is clean, and the next `commit` authors the edit.
 ///
 /// **Perturb (red control):** remove the warning push in `doctor_repository` -- the `doctor`
@@ -450,7 +450,7 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_the_
         "{stdout}"
     );
     assert!(
-        stdout.contains("prikk doctor --rebuild-commit-index"),
+        stdout.contains("prikk doctor --rebuild-caches"),
         "verify names the verb: {stdout}"
     );
     let doctor = prikk(&repo).arg("doctor").output().unwrap();
@@ -460,14 +460,14 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_the_
         "{stdout}"
     );
     assert!(
-        stdout.contains("prikk doctor --rebuild-commit-index"),
+        stdout.contains("prikk doctor --rebuild-caches"),
         "doctor names the verb: {stdout}"
     );
 
     // --plan-only: counts, writes nothing.
     let before = std::fs::read(commit_index_path(&repo)).unwrap();
     let plan = prikk(&repo)
-        .args(["doctor", "--rebuild-commit-index", "--plan-only"])
+        .args(["doctor", "--rebuild-caches", "--plan-only"])
         .output()
         .unwrap();
     ok(&plan, "rebuild --plan-only");
@@ -481,7 +481,7 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_the_
     );
 
     let rebuild = prikk(&repo)
-        .args(["doctor", "--rebuild-commit-index"])
+        .args(["doctor", "--rebuild-caches"])
         .output()
         .unwrap();
     ok(&rebuild, "rebuild");
@@ -491,7 +491,7 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_the_
         "{stdout}"
     );
     assert!(
-        stdout.contains("holds no history"),
+        stdout.contains("hold no history"),
         "a cache, said in its output: {stdout}"
     );
 
@@ -523,13 +523,12 @@ fn the_rebuild_verb_runs_alone() {
         "--recovery-list",
     ] {
         let out = prikk(&repo)
-            .args(["doctor", "--rebuild-commit-index", other])
+            .args(["doctor", "--rebuild-caches", other])
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(2), "{other}");
         assert!(
-            String::from_utf8_lossy(&out.stderr)
-                .contains("--rebuild-commit-index cannot be combined"),
+            String::from_utf8_lossy(&out.stderr).contains("--rebuild-caches cannot be combined"),
             "{other}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
@@ -591,11 +590,11 @@ fn an_entry_recorded_inside_the_current_tick_is_not_trusted_and_the_rewrite_is_s
 }
 
 /// **The rebuild verb takes the lock `commit` takes** -- the deterministic half of the race. While
-/// another process holds the active lock, `doctor --rebuild-commit-index` fails with `lock conflict`
+/// another process holds the active lock, `doctor --rebuild-caches` fails with `lock conflict`
 /// and leaves the index byte-identical; `--plan-only` (a read) still answers; once the lock is
 /// released the rebuild runs.
 ///
-/// **Perturb (red control):** have `rebuild_commit_index_for` take a differently named lock -- the
+/// **Perturb (red control):** have `rebuild_caches_for` take a differently named lock -- the
 /// rebuild succeeds while the active lock is held and the first assertion goes red.
 #[test]
 fn the_rebuild_verb_conflicts_with_a_held_active_lock_and_a_plan_does_not() {
@@ -609,7 +608,7 @@ fn the_rebuild_verb_conflicts_with_a_held_active_lock_and_a_plan_does_not() {
     let layout = prikk_store::RepositoryLayout::open(&repo).unwrap();
     let held = prikk_store::ActiveLock::acquire(&layout, prikk_store::DEFAULT_ACTIVE_NAME).unwrap();
     let blocked = prikk(&repo)
-        .args(["doctor", "--rebuild-commit-index"])
+        .args(["doctor", "--rebuild-caches"])
         .output()
         .unwrap();
     assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
@@ -624,13 +623,13 @@ fn the_rebuild_verb_conflicts_with_a_held_active_lock_and_a_plan_does_not() {
         "a refused rebuild writes nothing"
     );
     let plan = prikk(&repo)
-        .args(["doctor", "--rebuild-commit-index", "--plan-only"])
+        .args(["doctor", "--rebuild-caches", "--plan-only"])
         .output()
         .unwrap();
     ok(&plan, "a plan takes no lock");
     drop(held);
     let rebuild = prikk(&repo)
-        .args(["doctor", "--rebuild-commit-index"])
+        .args(["doctor", "--rebuild-caches"])
         .output()
         .unwrap();
     ok(&rebuild, "the rebuild runs once the lock is free");
@@ -639,7 +638,7 @@ fn the_rebuild_verb_conflicts_with_a_held_active_lock_and_a_plan_does_not() {
 }
 
 /// **The rebuild verb is a writer, so it is raced against an ordinary `commit`.** Each round writes a
-/// new (aged) file and starts `commit` and `doctor --rebuild-commit-index` together. The rebuild takes
+/// new (aged) file and starts `commit` and `doctor --rebuild-caches` together. The rebuild takes
 /// the lock `commit` takes, so one of them wins and the other either runs after it or fails cleanly with
 /// `lock conflict` -- never a torn index, never a lost or duplicated commit. After every round the
 /// loser is re-run, then: both succeeded, the worktree has nothing left to commit, `verify` is clean
@@ -673,7 +672,7 @@ fn the_rebuild_verb_raced_against_commit_loses_cleanly_or_follows_it() {
             .stderr(std::process::Stdio::piped());
         let mut rebuild_cmd = prikk(&repo);
         rebuild_cmd
-            .args(["doctor", "--rebuild-commit-index"])
+            .args(["doctor", "--rebuild-caches"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         let commit_child = commit_cmd.spawn().unwrap();
@@ -700,7 +699,7 @@ fn the_rebuild_verb_raced_against_commit_loses_cleanly_or_follows_it() {
         }
         if !rebuild_out.status.success() {
             let again = prikk(&repo)
-                .args(["doctor", "--rebuild-commit-index"])
+                .args(["doctor", "--rebuild-caches"])
                 .output()
                 .unwrap();
             ok(&again, "rebuild re-run");

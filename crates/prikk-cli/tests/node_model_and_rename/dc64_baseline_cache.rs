@@ -400,3 +400,217 @@ fn verify_reports_a_lifecycle_cache_with_a_horizon_not_in_its_own_lineage_as_div
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Damage the lifecycle cache so it stays structurally valid and checksum-correct but disagrees with a
+/// replay (the persistence fault `verify` exists to catch, as `verify_reports_a_deliberately_stale_…`).
+fn corrupt_lifecycle_cache(repo: &Path) {
+    let cache_path = lifecycle_cache_path(repo);
+    let mut bytes = std::fs::read(&cache_path).unwrap();
+    const MAGIC: &[u8] = b"PRIKK-LIFECYCLE-INCREMENTAL-CACHE-v1\0";
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xFF;
+    let body = bytes[MAGIC.len() + 32..].to_vec();
+    let checksum = prikk_hash::sha256(&body);
+    bytes[MAGIC.len()..MAGIC.len() + 32].copy_from_slice(&checksum);
+    std::fs::write(&cache_path, &bytes).unwrap();
+}
+
+fn rebuild(repo: &Path, extra: &[&str]) -> Output {
+    prikk(repo)
+        .args(["doctor", "--rebuild-caches"])
+        .args(extra)
+        .output()
+        .unwrap()
+}
+
+/// **0.57.0 step 1d: one verb rebuilds every derived cache.** A stale lifecycle cache makes `verify`
+/// fail, and both `verify` and `doctor` now say what to do **before the next commit** (a divergent cache
+/// feeds `commit`'s incremental step) and name the verb. `--plan-only` names the cache and the count it
+/// would read and leaves the file byte-identical; the real run replays the lineage from scratch, names the
+/// cache and the count it read and wrote, leaves `verify` clean, and the next `commit` goes through and
+/// leaves `verify` clean.
+///
+/// **Perturb (red controls):** skip the lifecycle rebuild's write -- the cure assertions go red; let the
+/// plan write (`rebuild_lifecycle_cache_inner(.., true)` always) -- the byte-identical assertion goes red;
+/// drop "before your next commit" from the advice -- the advice assertions go red.
+#[test]
+fn rebuild_caches_cures_a_stale_lifecycle_cache_and_names_what_it_read() {
+    let repo = unique_repo("rebuild-caches-lifecycle");
+    init(&repo);
+    write_two_files(&repo, "alpha\n", "bravo\n");
+    ok(&commit(&repo, "genesis"), "genesis commit");
+    seal(&repo);
+    std::fs::write(repo.join("a.txt"), "alpha, edited\n").unwrap();
+    ok(&commit(&repo, "second"), "second commit");
+    corrupt_lifecycle_cache(&repo);
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    fail(&verify, "verify with a stale lifecycle cache");
+    let advice_marks = ["before your next commit", "prikk doctor --rebuild-caches"];
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    for mark in advice_marks {
+        assert!(stdout.contains(mark), "verify names {mark:?}: {stdout}");
+    }
+    let doctor = prikk(&repo).arg("doctor").output().unwrap();
+    ok(&doctor, "doctor: a derived-state warning keeps exit 0");
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    for mark in advice_marks {
+        assert!(stdout.contains(mark), "doctor names {mark:?}: {stdout}");
+    }
+
+    let before = std::fs::read(lifecycle_cache_path(&repo)).unwrap();
+    let plan = rebuild(&repo, &["--plan-only"]);
+    ok(&plan, "plan");
+    let stdout = String::from_utf8_lossy(&plan.stdout);
+    assert!(stdout.contains("commit-index:"), "{stdout}");
+    assert!(
+        stdout.contains("lifecycle-state cache: 1 block would be replayed from scratch"),
+        "names the cache and the count: {stdout}"
+    );
+    assert!(stdout.contains("plan only -- nothing written"), "{stdout}");
+    assert_eq!(
+        std::fs::read(lifecycle_cache_path(&repo)).unwrap(),
+        before,
+        "a plan writes nothing"
+    );
+
+    let run = rebuild(&repo, &[]);
+    ok(&run, "rebuild");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("lifecycle-state cache: 1 block replayed from scratch"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("lifecycle-state cache rebuilt:") && stdout.contains("nodes written"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("hold no history"), "{stdout}");
+    assert_ne!(std::fs::read(lifecycle_cache_path(&repo)).unwrap(), before);
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    ok(&verify, "verify after the rebuild");
+    assert!(
+        String::from_utf8_lossy(&verify.stdout).contains("lifecycle-cache divergences: 0"),
+        "clean after the rebuild"
+    );
+    std::fs::write(repo.join("b.txt"), "bravo, edited\n").unwrap();
+    ok(&commit(&repo, "third"), "the next commit goes through");
+    ok(
+        &prikk(&repo).arg("verify").output().unwrap(),
+        "verify after the next commit",
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Both caches damaged at once: one run cures both, and `verify` is clean. (The commit-index is damaged by
+/// a fabricated hash with its stat untouched, as `dc56_commit_index` does.)
+#[test]
+fn one_rebuild_caches_run_cures_both_caches() {
+    let repo = unique_repo("rebuild-caches-both");
+    init(&repo);
+    write_two_files(&repo, "alpha\n", "bravo\n");
+    support::backdate_mtime(&repo.join("a.txt"));
+    support::backdate_mtime(&repo.join("b.txt"));
+    ok(&commit(&repo, "genesis"), "genesis commit");
+    seal(&repo);
+    support::backdate_mtime(&repo.join("a.txt"));
+    std::fs::write(repo.join("a.txt"), "alpha, edited\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
+    ok(&commit(&repo, "second"), "second commit");
+    corrupt_lifecycle_cache(&repo);
+    let index_path = repo.join(".prikk").join("cache").join("commit-index.v1");
+    let original = std::fs::read_to_string(&index_path).unwrap();
+    let damaged: String = original
+        .lines()
+        .enumerate()
+        .map(|(i, line)| {
+            if i == 0 {
+                format!("{line}\n")
+            } else {
+                let mut fields: Vec<&str> = line.split('\t').collect();
+                let zeros = "0".repeat(64);
+                *fields.last_mut().unwrap() = &zeros;
+                format!("{}\n", fields.join("\t"))
+            }
+        })
+        .collect();
+    std::fs::write(&index_path, damaged).unwrap();
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    fail(&verify, "verify with both caches damaged");
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(
+        stdout.contains("lifecycle-cache divergences: 1"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("commit-index divergences: "), "{stdout}");
+    assert!(!stdout.contains("commit-index divergences: 0"), "{stdout}");
+
+    ok(&rebuild(&repo, &[]), "one run");
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    ok(&verify, "verify after the single rebuild");
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(
+        stdout.contains("lifecycle-cache divergences: 0"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("commit-index divergences: 0"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A branch with no published history has no lifecycle cache to rebuild: the verb says so plainly, leaves
+/// the file alone, and still rebuilds the commit-index. The old flag name is gone (it never shipped).
+#[test]
+fn rebuild_caches_on_an_unborn_branch_and_the_old_flag_name() {
+    let repo = unique_repo("rebuild-caches-unborn");
+    init(&repo);
+    let run = rebuild(&repo, &[]);
+    ok(&run, "rebuild on an unborn branch");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        stdout.contains("has no published history, so there is nothing to rebuild"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("commit-index rebuilt:"), "{stdout}");
+    let old = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index"])
+        .output()
+        .unwrap();
+    assert_eq!(old.status.code(), Some(2), "{old:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The lifecycle half is under the lock `commit` takes too: with the active lock held elsewhere, the
+/// verb exits 1 with `lock conflict` and **neither** cache file changes; a plan still answers.
+#[test]
+fn rebuild_caches_conflicts_with_a_held_lock_and_changes_neither_cache() {
+    let repo = unique_repo("rebuild-caches-lock");
+    init(&repo);
+    write_two_files(&repo, "alpha\n", "bravo\n");
+    ok(&commit(&repo, "genesis"), "genesis commit");
+    seal(&repo);
+    std::fs::write(repo.join("a.txt"), "alpha, edited\n").unwrap();
+    ok(&commit(&repo, "second"), "second commit");
+    corrupt_lifecycle_cache(&repo);
+    let cache = std::fs::read(lifecycle_cache_path(&repo)).unwrap();
+    let index_path = repo.join(".prikk").join("cache").join("commit-index.v1");
+    let index = std::fs::read(&index_path).ok();
+
+    let layout = prikk_store::RepositoryLayout::open(&repo).unwrap();
+    let held = prikk_store::ActiveLock::acquire(&layout, prikk_store::DEFAULT_ACTIVE_NAME).unwrap();
+    let blocked = rebuild(&repo, &[]);
+    assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("lock conflict"));
+    assert_eq!(std::fs::read(lifecycle_cache_path(&repo)).unwrap(), cache);
+    assert_eq!(std::fs::read(&index_path).ok(), index);
+    ok(&rebuild(&repo, &["--plan-only"]), "a plan takes no lock");
+    drop(held);
+    ok(
+        &rebuild(&repo, &[]),
+        "the rebuild runs once the lock is free",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}

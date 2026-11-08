@@ -297,9 +297,11 @@ fn an_inline_test_module_is_not_production() {
         // only to say "unchanged" (it now takes the baseline node and compares the recorded hash
         // with the baseline blob; a doc comment states why), 1912 -> 1926. 0.57.0 step 0c: git's
         // racy-entry rule arms the index at the one place `commit` loads it (a comment plus the call),
-        // and the new `index_rebuild` child module is declared and re-exported, 1926 -> 1932.
+        // and the new `index_rebuild` child module is declared and re-exported, 1926 -> 1932. 0.57.0
+        // step 1d: that module is renamed `cache_rebuild` and re-exports its public report type
+        // beside the crate-private entry point, 1932 -> 1933.
         physical,
-        1932,
+        1933,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -309,7 +311,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1883);
+    assert_eq!(counted.production_lines, 1884);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -395,7 +397,7 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.56.0 step W3b added `worktree_materialize.rs` (its own tests are an inline `#[cfg(test)]
     // mod tests;` pointing at `worktree_materialize/tests.rs`, `cfg(test)`-invisible, not a
     // separate production file): 173 -> 174.
-    // 0.57.0 step 0c added `node_authoring/index_rebuild.rs` (`doctor --rebuild-commit-index`): 174 -> 175.
+    // 0.57.0 step 0c added `node_authoring/cache_rebuild.rs` (`doctor --rebuild-caches`; `index_rebuild.rs` until 0.57.0 step 1d): 174 -> 175.
     assert_eq!(store.production_files, 175);
 }
 

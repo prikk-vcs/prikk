@@ -16,7 +16,7 @@
 //! only to say a file is *unchanged* (a disagreeing "differs" is a miss, re-read and corrected --
 //! `resolve_existing_file`), and records none for a file whose mtime is not older than the file
 //! system's clock at the moment the commit took its lock ([`CommitIndex::set_racy_horizon`], git's
-//! racy-entry rule). `prikk doctor --rebuild-commit-index` rebuilds the whole file.
+//! racy-entry rule). `prikk doctor --rebuild-caches` rebuilds the whole file.
 //!
 //! The validity rule this module implements — when an entry is trusted, what invalidates it, and
 //! what bounds how often a rebuild occurs — is specified as a first-class document at
@@ -161,7 +161,7 @@ pub(crate) fn file_system_horizon(held_lock: &Path) -> (i64, u32) {
         .unwrap_or((i64::MIN, 0))
 }
 
-/// What `prikk doctor --rebuild-commit-index` read and wrote (0.57.0 step 0c).
+/// What `prikk doctor --rebuild-caches` read and wrote for the commit-index (0.57.0 step 0c/1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitIndexRebuildReport {
     /// Entries the index held before.
@@ -194,8 +194,8 @@ pub struct CommitIndexDivergence {
 /// What to do about a [`CommitIndexDivergence`], in the words `verify` and `doctor` both print: one
 /// sentence, naming the one command that cures every shape of it.
 pub const COMMIT_INDEX_DIVERGENCE_ADVICE: &str = "the commit-index is a cache and holds no \
-history, so nothing recorded in the repository is wrong; run `prikk doctor --rebuild-commit-index` \
-to rebuild it from the worktree (`--plan-only` first to see how many files it reads)";
+history, so nothing recorded in the repository is wrong; run `prikk doctor --rebuild-caches` to \
+rebuild it from the worktree (`--plan-only` first to see what it reads)";
 
 /// Check every commit-index entry whose recorded stat still matches the worktree against the file's
 /// actual current content. An entry whose stat no longer matches is not re-read here: that is the

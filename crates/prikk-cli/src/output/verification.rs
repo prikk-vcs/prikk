@@ -783,6 +783,12 @@ pub(crate) fn print_verify_report(
             divergence.baseline_block_id, divergence.detail
         );
     }
+    if !report.lifecycle_cache_divergences.is_empty() {
+        println!(
+            "lifecycle-cache: {}",
+            prikk_store::lifecycle_cache_divergence_advice()
+        );
+    }
     println!(
         "merge-baseline divergences: {}",
         report.merge_baseline_divergences.len()

@@ -722,6 +722,28 @@ pub(crate) fn resolve_node_lineage_bounds(
     Ok((baseline, horizon))
 }
 
+/// `prikk doctor --rebuild-caches` (0.57.0 step 1d): `ref_name`'s lineage as the lifecycle-state cache
+/// keys it -- the sealed tip (baseline), the lineage's first block (horizon) and how many blocks a replay
+/// from scratch reads -- or `None` for a ref with no published `RefState` (nothing to cache).
+pub(crate) fn lineage_for_cache_rebuild(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<Option<(ObjectId, ObjectId, usize)>> {
+    if RefStore::new(layout.clone())
+        .read_current_ref_state_id(ref_name)?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let baseline = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
+    let chain = single_parent_chain(&object_store, baseline)?;
+    let horizon = *chain
+        .first()
+        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} lineage is empty")))?;
+    Ok(Some((baseline, horizon, chain.len())))
+}
+
 /// Baseline context for worktree authoring: either a published node-addressed lineage, or a genesis
 /// (first-commit) context with no baseline at all.
 pub(crate) enum WorktreeBaseline {

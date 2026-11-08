@@ -81,14 +81,20 @@ out is `prikk received remove <ref>`), `PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE` 
 scoped to the `default` active session). A rule now holds over the class: `doctor` reports every finding
 `verify` fails on.
 
-### Added — `prikk doctor --rebuild-commit-index [--plan-only]`, and git's racy-entry rule for the commit-index
+### Added — `prikk doctor --rebuild-caches [--plan-only]`, and git's racy-entry rule for the commit-index
 
-`verify` and `doctor` now name one command for a commit-index divergence: **`prikk doctor
---rebuild-commit-index`** reads every file `commit` would scan once (the current branch's baseline decides
-each file's kind) and writes a correct index, under the active lock `commit` takes, so a `commit` running
-meanwhile fails with `lock conflict` instead of racing it. `--plan-only` counts the files and writes
-nothing. The index is a cache and holds no history: no recovery-log entry. This is the way out for the
-case `commit` cannot see on its own, an entry that hides a same-size rewrite whose mtime a tool put back.
+`verify` and `doctor` now name one command for a divergence of either derived cache: **`prikk doctor
+--rebuild-caches`** rebuilds every derived cache that has a divergence check, under the active lock `commit`
+takes (a `commit` running meanwhile fails with `lock conflict` instead of racing it), names each cache and the
+count it read, and `--plan-only` counts what it would read and writes nothing. The caches hold no history: no
+recovery-log entry.
+- the **commit-index** is rebuilt from the worktree: every file `commit` would scan is read once (the current
+  branch's baseline decides each file's kind). This is the way out for the case `commit` cannot see on its own,
+  an entry that hides a same-size rewrite whose mtime a tool put back;
+- the **lifecycle-state cache** is rebuilt by a full replay of the current branch's lineage from scratch (never an
+  incremental step). `verify` and `doctor` say "before your next commit" for it, because `commit` trusts it for an
+  incremental step and a divergent one can make the next commits wrong until a full replay replaces it (every 64
+  steps otherwise). `doctor` stays a warning.
 
 `commit` no longer records an entry for a file whose mtime is not older than the file system's own
 clock when `commit` took its lock (git's racy-entry rule), so a rewrite inside one timestamp tick can no

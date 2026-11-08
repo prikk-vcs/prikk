@@ -55,15 +55,47 @@ pub struct LifecycleCacheDivergence {
     pub detail: String,
 }
 
-/// What `doctor` says about a [`LifecycleCacheDivergence`]: the cache is derived state and holds no
-/// history. (0.57.0 step 1a: no command rebuilds it yet -- a verb is proposed in that part's report,
-/// so this sentence states what is true today and names none.)
+/// The block the persisted cache claims to represent, if a cache loads.
+pub(crate) fn claimed_block(layout: &RepositoryLayout) -> Option<ObjectId> {
+    load(layout).map(|cache| cache.baseline_block_id)
+}
+
+/// Rebuild the persisted cache from **a full replay from scratch** of `baseline_block_id`'s lineage --
+/// never an incremental step, never an anchored derivation, never the old cache -- and write it with the
+/// step count reset to `0`. Unlike [`persist`], a failed write is an error: the rebuild verb must not
+/// claim a cache it did not write. Returns the number of nodes written.
+pub(crate) fn rebuild_from_full_replay(
+    layout: &RepositoryLayout,
+    reader: &impl ObjectReader,
+    baseline_block_id: ObjectId,
+    horizon_id: ObjectId,
+) -> Result<usize> {
+    let result = replay_derived_state(reader, baseline_block_id, horizon_id)?;
+    let state = result.state();
+    let nodes = state.live_nodes().count() + state.tombstones().count();
+    save(
+        layout,
+        &IncrementalCache {
+            baseline_block_id,
+            horizon_id,
+            steps_since_reanchor: 0,
+            state: state.clone(),
+        },
+    )?;
+    Ok(nodes)
+}
+
+/// What `doctor` and `verify` say about a [`LifecycleCacheDivergence`]. The cache is derived state and
+/// holds no history, **but `commit` trusts it for an incremental step**, so a divergent one can make the
+/// next commits wrong until a full replay replaces it; hence the urgency and the one command that
+/// rebuilds it (0.57.0 step 1d).
 #[must_use]
 pub fn lifecycle_cache_divergence_advice() -> String {
     format!(
         "the lifecycle-state cache is derived state and holds no history, so nothing recorded in the \
-         repository is wrong: `verify` replays history independently of it, and a commit replaces it \
-         with a full replay at least every {CHECKPOINT_CADENCE} incremental steps"
+         repository is wrong, but `commit` trusts it for an incremental step (a full replay replaces it \
+         only every {CHECKPOINT_CADENCE} steps): run `prikk doctor --rebuild-caches` before your next \
+         commit (`--plan-only` first to see what it reads)"
     )
 }
 
