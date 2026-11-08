@@ -176,7 +176,10 @@ fn an_unrelated_stage_failure_still_says_inspect() -> Result<()> {
             .issues
             .iter()
             .any(|issue| issue.code == "PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE"
-                && issue.recommendation.contains("inspect the failing stage")),
+                && issue
+                    .recommendation
+                    .contains("no command repairs the damage in place")
+                && issue.recommendation.contains("prikk setup <new-dir>")),
         "{report:?}"
     );
     assert!(

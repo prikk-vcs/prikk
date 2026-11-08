@@ -767,12 +767,6 @@ pub(crate) fn print_verify_report(
             divergence.path, divergence.recorded_hash, divergence.actual_hash
         );
     }
-    if !report.commit_index_divergences.is_empty() {
-        println!(
-            "commit-index: {}",
-            prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE
-        );
-    }
     println!(
         "lifecycle-cache divergences: {}",
         report.lifecycle_cache_divergences.len()
@@ -781,12 +775,6 @@ pub(crate) fn print_verify_report(
         println!(
             "lifecycle-cache [divergence] block {}: {}",
             divergence.baseline_block_id, divergence.detail
-        );
-    }
-    if !report.lifecycle_cache_divergences.is_empty() {
-        println!(
-            "lifecycle-cache: {}",
-            prikk_store::lifecycle_cache_divergence_advice()
         );
     }
     println!(
@@ -813,6 +801,12 @@ pub(crate) fn print_verify_report(
              preceding sequence {}",
             issue.index, issue.seq, issue.previous_seq
         );
+    }
+    // 0.57.0 step 1e: the way out of every kind of finding above that `verify` fails on, one line each,
+    // in the words `doctor` recommends for the same finding (`prikk_store::WayOut::sentence`, the one
+    // function both readers call). A finding with no command says so and names the sound-copy sequence.
+    for (finding, way_out) in prikk_store::ways_out(report) {
+        println!("way out [{finding}]: {}", way_out.sentence());
     }
     // RFC 151 §2.1, 0.50.0 step 1 A4: a warning, never a failure -- the same recommendation
     // `doctor`'s own `PRIKK-DOCTOR-CURRENT-BRANCH` issue gives, so the two reports never disagree

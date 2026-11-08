@@ -153,6 +153,43 @@ that command would do so. If you have uncommitted changes the warning is not sho
 writes nothing: commit or restore them first (`prikk worktree-status` lists them), and `commit`'s own
 refusals protect the worktree meanwhile.
 
+## The way out of a failing finding (0.57.0)
+
+`prikk verify` prints, under what it fails on, a line `way out [<finding>]: …`, and `prikk doctor` carries the
+same sentence as the recommendation of the same finding — both read it from one function, so they cannot
+disagree. A sentence is always one of three things:
+
+1. **A command that clears the finding** — typed against the damage, after which `verify` exits `0`:
+   - an acknowledged commit that is damaged or gone, or a queue tail nothing can explain: `prikk doctor
+     --discard-damaged-commits --plan-only`, then without `--plan-only` (it saves what it removes to the recovery
+     log);
+   - queue metadata that is missing, malformed, or names an owner the acknowledgment history does not recognize:
+     `prikk doctor --restore-queue-target --ref <the branch the queued commits belong to>`;
+   - a damaged ref pointer index: `prikk doctor --rebuild-pointer-index` (the ref log decides);
+   - a derived cache that disagrees with its source: `prikk doctor --rebuild-caches`;
+   - a received ref that failed: `prikk received remove <ref>`.
+2. **The sound-copy sequence**, for damage no command repairs in place (a damaged stored object or block, a
+   damaged ref log or other appended file, a false merge baseline, a substituted or out-of-order queue record).
+   Make it from a backup taken while the repository was sound (`prikk archive export <backup>`):
+
+   ```text
+   prikk setup <new-dir>
+   cd <new-dir>
+   prikk archive verify <backup>
+   prikk archive import <backup> --adopt
+   prikk verify
+   ```
+
+   `setup` makes `<new-dir>` a repository and adopts this installation's maintainer key; the key that sealed
+   the history must be adopted there too, which `archive verify` reports. `archive import --adopt` makes the
+   backup's branch a local branch and writes its files (`prikk bundle import --input <bundle>` does the same for
+   one branch, as a received ref). **Only sealed history travels in a backup:** a commit still waiting for a
+   `prikk seal` is made again in `<new-dir>`.
+3. **The honest sentence** that no command repairs it in place, followed by (2) — and where a command that
+   looks relevant is known to refuse, the sentence says so (`--rebuild-pointer-index` over a damaged ref log,
+   `--discard-damaged-commits` over an earlier damaged record or an out-of-order queue, `--repair-tails` over
+   interior damage).
+
 ## `doctor` reports a finding `verify` fails on (0.57.0)
 
 `prikk verify` exits non-zero on eleven conditions, and `prikk doctor` reports every one of them. The
@@ -167,7 +204,8 @@ five it used to pass over, with what to do:
   next commit** (`--plan-only` first): it replays the current branch's lineage from scratch and writes the
   cache, under the lock `commit` takes, and `verify` is clean afterwards.
 - `error [PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE]` — a merge block's signed baseline claim is false. No
-  command rewrites signed history; restore a sound copy (`prikk archive import <backup>`).
+  command rewrites signed history; restore a sound copy (the full sequence is under
+  [The way out of a failing finding](#the-way-out-of-a-failing-finding-0570)).
 - `error [PRIKK-DOCTOR-ACTIVE-WAL-ORDERING]` and
   `error [PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD]` — the active WAL's records are out of
   order, or an earlier record was substituted. Each is scoped to the `default` session, so it refuses
@@ -215,9 +253,10 @@ this needs a file deliberately packed with fake frame headers; an honest crash d
 (random bytes following an accidental magic match almost never also claim a plausible length).
 
 A scan this long is damage, not a torn tail, and the tail repairs refuse damage. For a WAL, `prikk doctor` reports
-a failed record and recommends "preserve the repository and inspect the failing WAL record before attempting repair"
-(`doctor.rs`, `PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE`). No command repairs this in 0.49.0, so restore the
-repository from a backup or a clone. For the other files, the diagnosis is again `prikk doctor`:
+a failed record (`PRIKK-DOCTOR-VERIFY-WAL-RECORD-INCOMPLETE`) and, since 0.57.0, says what is true: `prikk doctor
+--discard-damaged-commits --plan-only` shows whether the damaged record is an acknowledged commit it can remove or
+declare lost, and when it refuses no command repairs the queue in place, so restore a sound copy (see
+[The way out of a failing finding](#the-way-out-of-a-failing-finding-0570)). For the other files, the diagnosis is again `prikk doctor`:
 
 - the pointer index: diagnose with `prikk doctor`; `--repair-pointer-index-tail` refuses damage;
 - trust policy or the received index: diagnose with `prikk doctor`; `--repair-tails` refuses damage;
@@ -644,7 +683,7 @@ reads this exact container the exact same way and so answers with the identical 
 rebuild is what actually clears it. `doctor`'s own `PRIKK-DOCTOR-POINTER-INDEX-INTERIOR-DAMAGE`
 issue prints first, before the current-branch warning and any `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE`
 error the identical damage also causes — each of those now names this issue instead of the generic
-"inspect the failing stage."
+stage-incomplete sentence (which, since 0.57.0, says what is true instead of "inspect the failing stage").
 
 ## `error: integrity error: received-ref index has a damaged entry; no repair exists -- preserve the repository; the way out is a copy of this repository's own \`.prikk/\` directory from a backup taken before the damage` (or the identical shape for the trust policy container, which adds re-applying every trust change made since)
 

@@ -398,7 +398,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // mod tests;` pointing at `worktree_materialize/tests.rs`, `cfg(test)`-invisible, not a
     // separate production file): 173 -> 174.
     // 0.57.0 step 0c added `node_authoring/cache_rebuild.rs` (`doctor --rebuild-caches`; `index_rebuild.rs` until 0.57.0 step 1d): 174 -> 175.
-    assert_eq!(store.production_files, 175);
+    // 0.57.0 step 1e added `way_out.rs`: 175 -> 176.
+    assert_eq!(store.production_files, 176);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

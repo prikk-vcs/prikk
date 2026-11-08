@@ -44,8 +44,7 @@
 //! pin both facts against the real repository.
 
 mod cfg_expr;
-// RFC 130 §8: the size gate reads the same production-file walk this graph does, so that "a
-// production file" means one thing in this tool.
+// RFC 130 §8: the size gate reads this graph's production-file walk, so "a production file" means one thing.
 pub(crate) mod graph;
 
 use std::collections::BTreeSet;
@@ -63,7 +62,7 @@ use super::{BoundaryError, push};
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-const UPPER_LAYER: [&str; 31] = [
+const UPPER_LAYER: [&str; 32] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
@@ -104,6 +103,7 @@ const UPPER_LAYER: [&str; 31] = [
     "pointer_rebuild",
     "received",
     "recognition_claim",
+    "way_out", // 0.57.0 step 1e: doctor and verify print each finding's way out from here
     // RFC 165 R4: `prikk ref complete`'s own rule (`plan_ref_completion`/`complete_ref_publication`)
     // -- built on `refs`, `trust`, `wal`, `object_store`, `maintainer_signing` and
     // `commit_boundary::active`, the same "operation over the lower layer" shape as

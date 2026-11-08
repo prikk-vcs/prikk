@@ -84,7 +84,7 @@ rebuilds this index.
 
 ## Verify Output and Exit Behavior
 
-The current CLI prints, among other lines: stage outcomes; object, block-state, ref-file, and ref item
+The current CLI prints, among other lines (0.57.0: and, for each kind of finding it fails on, one `way out [<finding>]: …` line, the same sentence `doctor` recommends for that finding): stage outcomes; object, block-state, ref-file, and ref item
 counts; checked objects, Blocks, rollback Blocks, sealed rollback Patches, refs, ref-log records, WAL
 records, persisted WAL Patches, and rollback draft WAL records; ref-publication issues; publication
 trust records and issues; sealed Blocks; object temp warnings; connectivity issues; interrupted appends;
@@ -203,7 +203,7 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-MISSING-REQUIRED-DIRECTORY` | `error` | A directory the repository layout requires is missing. |
 | `PRIKK-DOCTOR-REQUIRED-DIRECTORY-WRONG-TYPE` | `error` | A required directory name is occupied by something that is not a directory. |
 | `PRIKK-DOCTOR-REQUIRED-DIRECTORY-UNREADABLE` | `error` | A required directory could not be read. |
-| `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE` | `error` | A verification stage failed, or was not attempted because an earlier stage failed under `--stop-on-first-error`. 0.50.0 P3c: when one of the three `*-INTERIOR-DAMAGE` issues above is also present, the recommendation names its code instead of the plain "preserve the repository and inspect the failing stage" — decided by that issue's own typed field, never by this stage's own message text. Handoff 165 Q1b: `GENERATION-LOG-AMBIGUOUS` above gets the same treatment. |
+| `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE` | `error` | A verification stage failed, or was not attempted because an earlier stage failed under `--stop-on-first-error`. 0.50.0 P3c: when one of the three `*-INTERIOR-DAMAGE` issues above is also present, the recommendation names its code instead of the generic stage sentence (0.57.0: that sentence says what is true — the issues listed with it name the cause and its command, and when none does no command repairs it in place, followed by the sound-copy sequence) — decided by that issue's own typed field, never by this stage's own message text. Handoff 165 Q1b: `GENERATION-LOG-AMBIGUOUS` above gets the same treatment. |
 | `PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE`, `-BLOCK-STATE-INCOMPLETE`, `-REF-FILE-INCOMPLETE`, `-REF-ITEM-INCOMPLETE` | `error` | One item of that kind failed verification. |
 | `PRIKK-DOCTOR-VERIFY-OBJECT-OUTSIDE-VERSION-RULE`, `-BLOCK-STATE-OUTSIDE-VERSION-RULE` | `error` | An object, or a block's state, failed verification because a path in it is outside what this version of `prikk` accepts (today: non-ASCII) — not damage. The recommendation says no repair is needed and to read the repository with a newer version of `prikk`, in place of `preserve the repository and inspect the failing object` that the `-INCOMPLETE` codes give for real corruption. |
 | `PRIKK-DOCTOR-CURRENT-BRANCH` | `warning` | `.prikk/current-branch` is malformed or names a branch that does not exist or is closed; every `--ref` default refuses until it is fixed, while an explicit `--ref` still works. |

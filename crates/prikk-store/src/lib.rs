@@ -43,6 +43,7 @@ mod claim_chain;
 mod commit_boundary;
 mod commit_index;
 mod compact;
+mod way_out;
 // RFC 147 §2f: what commit will do with each live rename declaration, shared with worktree-status.
 mod declaration_resolution;
 mod diff;
@@ -362,6 +363,7 @@ pub use rollback::preview::{
     RollbackPreviewChange, RollbackPreviewChangeKind, RollbackPreviewPlan, prepare_rollback_preview,
 };
 pub use rollback::verify::{RollbackDraftVerification, verify_active_rollback_draft};
+pub use way_out::{SOUND_COPY, WayOut, ways_out};
 // 0.56.0 step W3c-4: `seal_from_accepted_claim_in_batch` and
 // `require_nothing_in_the_way_for_seal_batch` join this export for the same reason
 // `require_nothing_in_the_way_for_published_ref` joins `worktree_materialize`'s own group below --

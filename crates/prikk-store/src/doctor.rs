@@ -34,15 +34,6 @@ pub use restore_queue_target::{
     CommitSummary, RestoreQueueTargetPlan, plan_restore_queue_target, restore_queue_target,
 };
 
-/// The way out `doctor` names for damage to signed history that no command rewrites (0.57.0 step 1a):
-/// a signed block or the chain behind an acknowledged commit is not repaired in place, because a
-/// repair that rewrote it could not tell damage from tampering. What the user can type is to restore
-/// a sound copy of the sealed history.
-const SIGNED_HISTORY_DAMAGE_WAY_OUT: &str = "preserve this repository and do not repair it in place: \
-no command rewrites signed history. Restore a sound copy of the sealed history into a fresh directory \
-(`prikk archive verify <backup>`, then `prikk archive import <backup>`, or `prikk bundle import --input \
-<bundle>`; see the Backup and Restore guide), then run `prikk verify` on the copy";
-
 /// Severity assigned to a doctor diagnostic issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoctorSeverity {
@@ -981,13 +972,13 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             .filter_map(|(present, code)| present.then_some(code))
             .collect();
             let stage_incomplete_recommendation = if damaged_container_codes.is_empty() {
-                "preserve the repository and inspect the failing stage before attempting repair"
-                    .to_string()
+                crate::way_out::WayOut::StageIncomplete.sentence()
             } else {
                 format!(
                     "first resolve {} (above), then run `prikk doctor` again; if this stage \
-                     still fails, preserve the repository and inspect it",
-                    damaged_container_codes.join(" and ")
+                     still fails: {}",
+                    damaged_container_codes.join(" and "),
+                    crate::way_out::WayOut::StageIncomplete.sentence()
                 )
             };
             for outcome in &verification.stage_outcomes {
@@ -1040,9 +1031,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         // `Corrupt`, and any kind added later: treated as damage, the safe default.
                         _ => (
                             "PRIKK-DOCTOR-VERIFY-OBJECT-INCOMPLETE",
-                            "preserve the repository and inspect the failing object before \
-                             attempting repair"
-                                .to_string(),
+                            crate::way_out::WayOut::StoredObject.sentence().to_string(),
                         ),
                     };
                     issues.push(DoctorIssue::error(
@@ -1082,9 +1071,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                             "Block {} state-root verification failed: {message}",
                             outcome.block_id
                         ),
-                        "preserve the repository and inspect the failing block before attempting \
-                         repair"
-                            .to_string(),
+                        crate::way_out::WayOut::BlockState.sentence().to_string(),
                     ),
                     BlockStateStatus::NotEvaluated { blocked_by } => (
                         "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-INCOMPLETE",
@@ -1093,9 +1080,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                              parent {blocked_by} did not evaluate",
                             outcome.block_id
                         ),
-                        "preserve the repository and inspect the failing block before attempting \
-                         repair"
-                            .to_string(),
+                        crate::way_out::WayOut::BlockState.sentence().to_string(),
                     ),
                 };
                 issues.push(DoctorIssue::error(code, message, recommendation));
@@ -1111,8 +1096,11 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 if let RefFileStatus::Failed { message } = &outcome.status {
                     issues.push(DoctorIssue::error(
                         "PRIKK-DOCTOR-VERIFY-REF-FILE-INCOMPLETE",
-                        format!("ref file {} failed verification: {message}", outcome.path.display()),
-                        "preserve the repository and inspect the failing ref file before attempting repair",
+                        format!(
+                            "ref file {} failed verification: {message}",
+                            outcome.path.display()
+                        ),
+                        crate::way_out::WayOut::RefFile.sentence(),
                     ));
                 }
             }
@@ -1121,7 +1109,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     issues.push(DoctorIssue::error(
                         "PRIKK-DOCTOR-VERIFY-REF-ITEM-INCOMPLETE",
                         format!("ref {} failed verification: {message}", outcome.ref_name),
-                        "preserve the repository and inspect the failing ref before attempting repair",
+                        crate::way_out::WayOut::RefFile.sentence(),
                     ));
                 }
             }
@@ -1145,8 +1133,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                                     outcome.offset
                                 )
                             ),
-                            "preserve the repository and inspect the failing WAL record before \
-                             attempting repair",
+                            crate::way_out::WayOut::WalRecord.sentence(),
                         )
                         .for_active_session(DEFAULT_ACTIVE_NAME),
                     );
@@ -1192,7 +1179,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          entry)",
                         divergence.path, divergence.recorded_hash, divergence.actual_hash
                     ),
-                    crate::COMMIT_INDEX_DIVERGENCE_ADVICE,
+                    crate::way_out::WayOut::CommitIndex.sentence(),
                 ));
             }
             // 0.57.0 step 1c: the worktree's recorded baseline is absent or ignored (empty, unreadable,
@@ -1235,7 +1222,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          represent block {}, disagrees with an independent replay: {}",
                         divergence.baseline_block_id, divergence.detail
                     ),
-                    crate::lifecycle_cache_divergence_advice(),
+                    crate::way_out::WayOut::LifecycleCache.sentence(),
                 ));
             }
             for divergence in &verification.merge_baseline_divergences {
@@ -1249,7 +1236,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         divergence.mainline_parent_id,
                         divergence.secondary_parent_id
                     ),
-                    SIGNED_HISTORY_DAMAGE_WAY_OUT,
+                    crate::way_out::WayOut::MergeBaseline.sentence(),
                 ));
             }
             for violation in &verification.active_wal_ordering_issues {
@@ -1261,12 +1248,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                              preceding sequence {}",
                             violation.index, violation.seq, violation.previous_seq
                         ),
-                        "preserve the repository: the sealed history is not affected, but the queued \
-                         work is out of order and no repair rewrites it (`prikk doctor \
-                         --discard-damaged-commits` acts only on acknowledged damage and refuses \
-                         here). Restore a sound copy of the sealed history into a fresh directory \
-                         (`prikk archive import <backup>`; only sealed history travels in a backup, \
-                         so the queued commits are re-made there), then run `prikk verify` on the copy",
+                        crate::way_out::WayOut::WalOrdering.sentence(),
                     )
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );
@@ -1279,7 +1261,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                          for a different one after the fact: the last record is itself sound, but the \
                          chain behind it disagrees with the acknowledgment history's running hash \
                          (RFC 166 D4)",
-                        SIGNED_HISTORY_DAMAGE_WAY_OUT,
+                        crate::way_out::WayOut::SubstitutedRecord.sentence(),
                     )
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );
@@ -1288,13 +1270,11 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 if let RefItemStatus::Failed { message } = &outcome.status {
                     issues.push(DoctorIssue::warning(
                         "PRIKK-DOCTOR-RECEIVED-REF-DAMAGED",
-                        format!("received ref {} failed verification: {message}", outcome.ref_name),
                         format!(
-                            "a received ref is a pointer to what another repository sent, not local \
-                             history: run `prikk received remove {0} --plan-only`, then `prikk \
-                             received remove {0}`, and receive it again if you still want it",
+                            "received ref {} failed verification: {message}",
                             outcome.ref_name
                         ),
+                        crate::way_out::WayOut::ReceivedRef(outcome.ref_name.clone()).sentence(),
                     ));
                 }
             }
@@ -1318,9 +1298,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         "first resolve {code} (above), then re-run verification; doctor will not \
                          auto-trust keys or repair signatures"
                     ),
-                    None => "configure trusted MAINTAINER keys and re-run verification; doctor \
-                             will not auto-trust keys or repair signatures"
-                        .to_string(),
+                    None => crate::way_out::WayOut::PublicationTrust.sentence(),
                 };
                 issues.push(DoctorIssue::error(
                     issue.code,
@@ -1349,8 +1327,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                             issue.problem,
                             issue.referencing_work
                         ),
-                        "preserve the repository and inspect the referenced object before \
-                         attempting repair; doctor does not repair a missing or unreadable object",
+                        crate::way_out::WayOut::Connectivity.sentence(),
                     )
                     .for_active_session(issue.active_session.clone()),
                 );
@@ -1467,8 +1444,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     issues.push(DoctorIssue::error(
                         "PRIKK-DOCTOR-APPENDED-FILE-INTERIOR-DAMAGE",
                         format!("{}: {message}", status.label),
-                        "preserve the repository for manual recovery; `--repair-tails` refuses on \
-                         interior damage rather than guessing which bytes are safe to remove",
+                        crate::way_out::WayOut::AppendedFileInterior.sentence(),
                     ));
                 }
             }
@@ -1603,29 +1579,11 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 // --rebuild-pointer-index`): the rebuild re-derives the pointer index from the ref
                 // log, and a divergence is a conflict in the ref log itself -- the rebuild would
                 // only reproduce it, not resolve it.
-                let recommendation = match issue.code {
-                    "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" => match issue.ref_name.as_deref() {
-                        Some(ref_name) => format!(
-                            "run `prikk ref complete {ref_name}`; doctor does not sign or append"
-                        ),
-                        None => "run `prikk ref complete <ref>` for the affected ref; doctor does not sign or append".to_string(),
-                    },
-                    "PRIKK-VERIFY-REF-LEGACY-LOG-LEADS" | "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" => {
-                        "run signer-backed `prikk seal --allow-no-audit` for the affected ref; doctor does not sign or append".to_string()
-                    }
-                    "PRIKK-VERIFY-REF-POINTER-MISSING" => {
-                        "preserve the repository; use signer-backed seal retry only with matching retained active state, otherwise restore from backup".to_string()
-                    }
-                    "PRIKK-VERIFY-REF-LEGACY-TIMESTAMP" => {
-                        "treat the value as non-authoritative legacy data; do not normalize signed bytes in place".to_string()
-                    }
-                    "PRIKK-VERIFY-REF-DIVERGENCE" => {
-                        "preserve the repository for manual recovery; signer-backed retry is not authorized without exact retained evidence".to_string()
-                    }
-                    _ => {
-                        "preserve the candidate for inspection; doctor does not infer ownership or remove it".to_string()
-                    }
-                };
+                let recommendation = crate::way_out::WayOut::RefPublication {
+                    code: issue.code.to_string(),
+                    ref_name: issue.ref_name.clone(),
+                }
+                .sentence();
                 let doctor_issue = if issue.blocking {
                     DoctorIssue::error(issue.code, issue.message.clone(), recommendation)
                 } else {
@@ -1882,8 +1840,7 @@ fn add_active_wal_metadata_issues(
             DoctorIssue::error(
                 "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING",
                 "active WAL has records but active ref metadata is missing",
-                "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue its \
-                 owner back",
+                crate::way_out::WayOut::ActiveMetadata.sentence(),
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1892,8 +1849,7 @@ fn add_active_wal_metadata_issues(
                 DoctorIssue::error(
                     "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED",
                     format!("active WAL has records but active ref metadata is malformed: {reason}"),
-                    "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue its \
-                     owner back",
+                    crate::way_out::WayOut::ActiveMetadata.sentence(),
                 )
                 .for_active_session(DEFAULT_ACTIVE_NAME),
             );
@@ -1954,7 +1910,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-DAMAGE",
                 format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is damaged"),
-                "run `prikk doctor --discard-damaged-commits` to remove it; it was already acknowledged, so it cannot be removed as a crash leftover",
+                crate::way_out::WayOut::AcknowledgedCommit.sentence(),
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1962,7 +1918,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-ACKNOWLEDGED-LOSS",
                 format!("a queued commit you were told had succeeded (sequence {witnessed_seq}) is no longer present at all"),
-                "run `prikk doctor --discard-damaged-commits` to declare it lost; it was already acknowledged, so it cannot be removed as a crash leftover",
+                crate::way_out::WayOut::AcknowledgedCommit.sentence(),
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1970,7 +1926,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-RECORD",
                 format!("sequence {witnessed_seq} does not match the queued commit you were told had succeeded"),
-                "preserve the repository; this is not a crash shape, and a copy is the way out",
+                crate::way_out::WayOut::SubstitutedRecord.sentence(),
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -1978,7 +1934,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
             DoctorIssue::error(
                 "PRIKK-DOCTOR-COMMIT-WITNESS-UNKNOWN",
                 "the queue has an unexplained tail, and this session's own acknowledgment history is unreadable, so the tail cannot be shown to be a crash leftover",
-                "run `prikk doctor --discard-damaged-commits` to discard it; it cannot be removed as a crash leftover without being able to confirm whether it was acknowledged",
+                crate::way_out::WayOut::AcknowledgedCommit.sentence(),
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
@@ -2007,8 +1963,7 @@ fn add_commit_witness_issues(verification: &RepositoryVerification, issues: &mut
                         "PRIKK-DOCTOR-COMMIT-WITNESS-OWNERSHIP-MISSING",
                         "the active ref metadata names an owner this session's own acknowledgment \
                          history does not recognize as its own",
-                        "run `prikk doctor --restore-queue-target --ref <ref>` to give the queue \
-                         its owner back",
+                        crate::way_out::WayOut::OwnershipMismatch.sentence(),
                     )
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );

@@ -21,6 +21,30 @@ exists to detect. **New:** `doctor` now reports the same disagreement as a warni
 `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
 over a file that holds no history), and both `verify` and `doctor` print what to do about it.
 
+### Fixed — findings that named no way out now name one that is true
+
+`verify` failed on damage and `doctor` recommended "preserve the repository and inspect …", which names nothing to
+type. Every finding `verify` fails on now carries a sentence that is one of three things, each typed against the
+damage in a test: **a command that clears it** (`prikk doctor --discard-damaged-commits` for an acknowledged commit
+that is damaged, gone, or an unexplained queue tail; `--restore-queue-target --ref <ref>` for missing, malformed or
+mismatched queue metadata; `--rebuild-pointer-index` for a damaged ref pointer index), **the sound-copy sequence in
+full** (`prikk setup <new-dir>`, then in it `prikk archive verify <backup>` and `prikk archive import <backup>
+--adopt`; typed once in a test, the new repository verifies clean), or **the honest sentence that no command
+repairs it in place** — which also says when a command that looks relevant refuses (`--rebuild-pointer-index` over a
+damaged ref log, `--discard-damaged-commits` over an earlier damaged record or an out-of-order queue,
+`--repair-tails` over interior damage). The three history rows added in this release (merge baseline, substituted
+earlier record, queue ordering) get the same correction: their text named a "fresh directory" but not the `setup`
+that makes it a repository.
+
+### Output changes (way out)
+
+- **`verify` prints a `way out [<finding>]: <sentence>` line for each kind of finding it fails on**, after the
+  divergence counts. The sentence is the one `doctor` recommends for the same finding: both read it from one
+  function (`prikk_store::WayOut::sentence`), so they cannot disagree. The commit-index and lifecycle-cache lines
+  (`commit-index: …`, `lifecycle-cache: …`) added earlier in this release are now two of these lines.
+- `doctor`'s recommendations for the findings above changed from "preserve the repository and inspect …" to the
+  sentences described under Fixed.
+
 ### Fixed — an ignored worktree record could not be restored, and nothing said it was ignored
 
 `.prikk/worktree.baseline` is what lets `commit` refuse a worktree that is behind its branch. When it is

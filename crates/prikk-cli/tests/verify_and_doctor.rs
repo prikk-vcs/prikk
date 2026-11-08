@@ -63,5 +63,7 @@ mod rfc166_a6_item3_no_witness_classification_named;
 mod rfc166_round2_refusals_speak_first;
 #[path = "verify_and_doctor/rfc168_recovery_log.rs"]
 mod rfc168_recovery_log;
+#[path = "verify_and_doctor/step1e_every_finding_names_a_true_way_out.rs"]
+mod step1e_every_finding_names_a_true_way_out;
 #[path = "verify_and_doctor/torn_tail_is_one_frame.rs"]
 mod torn_tail_is_one_frame;

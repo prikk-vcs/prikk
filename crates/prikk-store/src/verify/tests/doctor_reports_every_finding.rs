@@ -107,9 +107,20 @@ fn doctor_reports_a_merge_block_whose_baseline_is_not_a_common_ancestor() -> Res
         "{}",
         found.message
     );
+    assert_eq!(
+        found.recommendation,
+        crate::WayOut::MergeBaseline.sentence(),
+        "doctor says the shared sentence"
+    );
     assert!(
-        found.recommendation.contains("prikk archive import"),
-        "{}",
+        crate::ways_out(&verify_repository(&layout).unwrap())
+            .iter()
+            .any(|(_, kind)| *kind == crate::WayOut::MergeBaseline),
+        "verify's way-out list carries the same kind"
+    );
+    assert!(
+        found.recommendation.contains("prikk setup <new-dir>"),
+        "the sound-copy sequence starts with `setup`: {}",
         found.recommendation
     );
     assert!(
@@ -168,9 +179,20 @@ fn doctor_reports_a_substituted_earlier_record_that_only_the_running_hash_sees()
         Some(std::ffi::OsStr::new(DEFAULT_ACTIVE_NAME)),
         "scoped to the one session it is about"
     );
+    assert_eq!(
+        found.recommendation,
+        crate::WayOut::SubstitutedRecord.sentence(),
+        "doctor says the shared sentence"
+    );
     assert!(
-        found.recommendation.contains("prikk archive import"),
-        "{}",
+        crate::ways_out(&verify_repository(&layout).unwrap())
+            .iter()
+            .any(|(_, kind)| *kind == crate::WayOut::SubstitutedRecord),
+        "verify's way-out list carries the same kind"
+    );
+    assert!(
+        found.recommendation.contains("prikk setup <new-dir>"),
+        "the sound-copy sequence starts with `setup`: {}",
         found.recommendation
     );
     let _ = std::fs::remove_dir_all(layout.root());
@@ -199,9 +221,20 @@ fn doctor_reports_an_active_wal_whose_sequence_does_not_increase() {
         Some(std::ffi::OsStr::new(DEFAULT_ACTIVE_NAME))
     );
     assert!(found.message.contains("sequence 2"), "{}", found.message);
+    assert_eq!(
+        found.recommendation,
+        crate::WayOut::WalOrdering.sentence(),
+        "doctor says the shared sentence"
+    );
     assert!(
-        found.recommendation.contains("prikk archive import"),
-        "{}",
+        crate::ways_out(&verify_repository(&layout).unwrap())
+            .iter()
+            .any(|(_, kind)| *kind == crate::WayOut::WalOrdering),
+        "verify's way-out list carries the same kind"
+    );
+    assert!(
+        found.recommendation.contains("prikk setup <new-dir>"),
+        "the sound-copy sequence starts with `setup`: {}",
         found.recommendation
     );
     // The one WAL verb that could look relevant does not clear it: the recommendation does not send
@@ -251,12 +284,22 @@ fn doctor_reports_a_failed_received_ref_and_received_remove_clears_it() -> Resul
     let report = doctor_repository(&layout);
     let found = issue(&report.issues, "PRIKK-DOCTOR-RECEIVED-REF-DAMAGED");
     assert_eq!(found.severity, DoctorSeverity::Warning);
+    assert_eq!(
+        found.recommendation,
+        crate::WayOut::ReceivedRef("remotes/heads/main".to_string()).sentence()
+    );
     assert!(
         found
             .recommendation
             .contains("prikk received remove remotes/heads/main --plan-only"),
         "{}",
         found.recommendation
+    );
+    assert!(
+        crate::ways_out(&verify_repository(&layout)?)
+            .iter()
+            .any(|(_, kind)| matches!(kind, crate::WayOut::ReceivedRef(_))),
+        "verify's way-out list carries the same kind"
     );
 
     // The named commands: the plan writes nothing, the real run clears the failure.

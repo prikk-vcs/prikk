@@ -55,7 +55,7 @@ const CASES: &[StateCase] = &[
         },
         doctor_code: "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS",
         doctor_severity: DoctorSeverity::Warning,
-        recommendation: "preserve the candidate",
+        recommendation: "the candidate is kept for inspection",
         retry: RetryExpectation::Completes { log_records: 1 },
         mutation_succeeds: false,
     },
@@ -103,7 +103,7 @@ const CASES: &[StateCase] = &[
         },
         doctor_code: "PRIKK-VERIFY-REF-DIVERGENCE",
         doctor_severity: DoctorSeverity::Error,
-        recommendation: "preserve the repository",
+        recommendation: "no command resolves a pointer/log divergence in place",
         retry: RetryExpectation::Refuses,
         mutation_succeeds: false,
     },
@@ -114,7 +114,7 @@ const CASES: &[StateCase] = &[
         },
         doctor_code: "PRIKK-DOCTOR-VERIFY-REF-FILE-INCOMPLETE",
         doctor_severity: DoctorSeverity::Error,
-        recommendation: "preserve the repository",
+        recommendation: "no command repairs it in place",
         retry: RetryExpectation::Refuses,
         mutation_succeeds: false,
     },
@@ -183,7 +183,13 @@ fn every_state_has_explicit_verify_and_doctor_read_only_outcomes() -> prikk_erro
                 ))
             })?;
         assert_eq!(issue.severity, case.doctor_severity);
-        assert!(issue.recommendation.contains(case.recommendation));
+        assert!(
+            issue.recommendation.contains(case.recommendation),
+            "{:?}: {:?} does not contain {:?}",
+            case.state,
+            issue.recommendation,
+            case.recommendation
+        );
         assert_eq!(fixture.state_bytes()?, before);
         fixture.remove();
     }
