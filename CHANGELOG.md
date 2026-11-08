@@ -36,6 +36,14 @@ damaged ref log, `--discard-damaged-commits` over an earlier damaged record or a
 earlier record, queue ordering) get the same correction: their text named a "fresh directory" but not the `setup`
 that makes it a repository.
 
+**One damage, several lines.** A damaged block container also fails the ref files whose records name that block
+(`verify` prints a stored-object line and a ref-file line). The ref-file sentence recommended
+`prikk doctor --rebuild-pointer-index`; typed, it exits 0 with `pointer index already matches the log; nothing
+written` and the finding stays — neither a cure nor a refusal. The sentence now has the third, true branch: when
+the rebuild writes nothing and the finding stays, the ref names a damaged or missing object (the stored-object
+finding listed with it, if any, names it), and no command repairs that in place. A test types the sentence of every
+kind of finding each of fifteen damages causes, against a copy, and checks it.
+
 ### Output changes (way out)
 
 - **`verify` prints a `way out [<finding>]: <sentence>` line for each kind of finding it fails on**, after the

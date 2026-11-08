@@ -165,7 +165,11 @@ disagree. A sentence is always one of three things:
      log);
    - queue metadata that is missing, malformed, or names an owner the acknowledgment history does not recognize:
      `prikk doctor --restore-queue-target --ref <the branch the queued commits belong to>`;
-   - a damaged ref pointer index: `prikk doctor --rebuild-pointer-index` (the ref log decides);
+   - a damaged ref pointer index: `prikk doctor --rebuild-pointer-index` (the ref log decides). **One damage can
+     fail several things at once:** a damaged block container also fails the ref files whose records name that
+     block, so `verify` prints two lines. The rebuild is the way out of the *ref file* only when the pointer
+     index is what is wrong; when it says `nothing written` and the finding stays, the ref names an object
+     that is damaged or missing, and the stored-object line is the one that applies;
    - a derived cache that disagrees with its source: `prikk doctor --rebuild-caches`;
    - a received ref that failed: `prikk received remove <ref>`.
 2. **The sound-copy sequence**, for damage no command repairs in place (a damaged stored object or block, a

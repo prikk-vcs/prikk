@@ -94,9 +94,12 @@ impl WayOut {
                 "no command repairs a block whose state root does not verify in place: {SOUND_COPY}"
             ),
             Self::RefFile => format!(
-                "run `prikk doctor --rebuild-pointer-index --plan-only`: when the ref log is sound it re-derives \
-                 the pointer index, and the same command without `--plan-only` clears this; when it refuses, the \
-                 ref log itself is damaged and no command repairs it in place: {SOUND_COPY}"
+                "run `prikk doctor --rebuild-pointer-index --plan-only`: when the ref log is sound and the pointer \
+                 index is what is wrong, it re-derives the pointer index, and the same command without \
+                 `--plan-only` clears this. When it says `nothing written` and this stays, the ref names an object \
+                 that is damaged or missing (the stored-object finding listed with this one, if any, names it); \
+                 when it refuses, the ref log itself is damaged. In both of those cases no command repairs it in \
+                 place: {SOUND_COPY}"
             ),
             Self::WalRecord => format!(
                 "run `prikk doctor --discard-damaged-commits --plan-only`: when the damaged record is a commit you \

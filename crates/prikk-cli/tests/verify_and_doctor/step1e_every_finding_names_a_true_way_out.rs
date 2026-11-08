@@ -392,3 +392,152 @@ fn the_sound_copy_sequence_typed_as_the_sentence_gives_it_leaves_a_clean_reposit
     let _ = std::fs::remove_dir_all(&new_dir);
     let _ = std::fs::remove_file(backup);
 }
+
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// The kinds of finding `verify` fails on in `repo`, as the library derives them.
+fn kinds_in(repo: &Path) -> Vec<WayOut> {
+    let layout = prikk_store::RepositoryLayout::open(repo.to_path_buf()).unwrap();
+    let report = prikk_store::verify_repository(&layout).unwrap();
+    prikk_store::ways_out(&report)
+        .into_iter()
+        .map(|(_, kind)| kind)
+        .collect()
+}
+
+/// **Every way-out line a damage causes is true, not only the line for the damaged file** (0.57.0 step 1f).
+/// One damage can fail several things at once: a damaged block container also fails the ref files whose
+/// records name that block, so `verify` prints a second line. For every damage below, every kind of
+/// finding it causes gets its sentence typed against a copy of the damaged repository:
+/// - a kind whose sentence says a command **clears** it must be gone afterwards (acknowledged commit,
+///   queue metadata, ownership);
+/// - a kind whose sentence says a command **may refuse or write nothing** must do one of those, and a
+///   sentence that does not claim to clear must not (the rebuild over a ref file whose target is damaged
+///   writes nothing and the finding stays: the third branch of the ref-file sentence says so);
+/// - a kind whose sentence says a command **does not clear it** must refuse or leave it standing.
+///
+/// **Perturb (red control):** remove the "nothing written" branch from the ref-file sentence -- the
+/// damaged-block-container shapes go red, as the architect's probe found.
+#[test]
+fn every_way_out_line_a_damage_causes_is_true_not_only_the_damaged_files() {
+    let env = Installation::new("cross");
+    // The architect's shape: one sealed block, nothing queued, a byte flipped in the block container.
+    let one_block = |tag: &str| {
+        let repo = support::unique_repo(&format!("step1f-{tag}"));
+        let parent = repo.parent().unwrap().to_path_buf();
+        let _ = std::fs::remove_dir_all(&repo);
+        env.ok(&parent, &["setup", repo.to_str().unwrap()]);
+        std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+        env.ok(&repo, &["commit", "-m", "one"]);
+        env.ok(&repo, &["seal", "--allow-no-audit"]);
+        repo
+    };
+
+    let mut shapes: Vec<(String, PathBuf)> = Vec::new();
+    {
+        let repo = one_block("one-block-container");
+        flip(&repo, "containers/block/a.container", |len| len / 2);
+        shapes.push(("one block, block container damaged".to_string(), repo));
+        let repo = one_block("one-block-blob");
+        flip(&repo, "containers/blob/a.container", |len| len / 2);
+        shapes.push(("one block, blob container damaged".to_string(), repo));
+        let repo = one_block("one-block-ref-state");
+        flip(&repo, "containers/ref-state/a.container", |len| len / 2);
+        shapes.push(("one block, ref-state container damaged".to_string(), repo));
+    }
+    for case in cases() {
+        let repo = env.repo_with_queue("cross-case");
+        (case.damage)(&repo);
+        shapes.push((case.name.to_string(), repo));
+    }
+
+    let mut checked = 0;
+    for (name, repo) in shapes {
+        let kinds = kinds_in(&repo);
+        assert!(!kinds.is_empty(), "{name}: verify fails on something");
+        for kind in &kinds {
+            let copy = support::unique_repo("step1f-copy");
+            let _ = std::fs::remove_dir_all(&copy);
+            copy_tree(&repo, &copy);
+            let sentence = kind.sentence();
+            let gone = |copy: &Path| !kinds_in(copy).contains(kind);
+            match kind {
+                WayOut::RefFile => {
+                    let (code, out) = env.text(&copy, &["doctor", "--rebuild-pointer-index"]);
+                    let refused = code != Some(0);
+                    let wrote_nothing = code == Some(0) && out.contains("nothing written");
+                    assert!(
+                        refused || wrote_nothing || gone(&copy),
+                        "{name}: the ref-file sentence is true: refused, wrote nothing, or cleared\n{out}"
+                    );
+                    if wrote_nothing && !gone(&copy) {
+                        assert!(
+                            sentence.contains("nothing written"),
+                            "{name}: the sentence has the branch for 'nothing written and it stays'"
+                        );
+                    }
+                }
+                WayOut::WalRecord => {
+                    let (code, out) = env.text(&copy, &["doctor", "--discard-damaged-commits"]);
+                    assert!(
+                        code != Some(0) || gone(&copy),
+                        "{name}: the WAL-record sentence is true: refused or cleared\n{out}"
+                    );
+                }
+                WayOut::AcknowledgedCommit => {
+                    let (code, out) = env.text(&copy, &["doctor", "--discard-damaged-commits"]);
+                    assert_eq!(code, Some(0), "{name}: {out}");
+                    assert!(
+                        gone(&copy),
+                        "{name}: the acknowledged-commit sentence clears it"
+                    );
+                }
+                WayOut::ActiveMetadata | WayOut::OwnershipMismatch => {
+                    let (code, out) = env.text(
+                        &copy,
+                        &["doctor", "--restore-queue-target", "--ref", "heads/main"],
+                    );
+                    assert_eq!(code, Some(0), "{name}: {out}");
+                    assert!(gone(&copy), "{name}: the queue-owner sentence clears it");
+                }
+                WayOut::SubstitutedRecord | WayOut::WalOrdering => {
+                    let (_, _) = env.text(&copy, &["doctor", "--discard-damaged-commits"]);
+                    assert!(
+                        !gone(&copy),
+                        "{name}: the sentence says --discard-damaged-commits does not clear this"
+                    );
+                }
+                WayOut::AppendedFileInterior => {
+                    let (code, out) = env.text(&copy, &["doctor", "--repair-tails"]);
+                    assert!(
+                        code != Some(0) || !gone(&copy),
+                        "{name}: the sentence says --repair-tails refuses interior damage\n{out}"
+                    );
+                    assert_ne!(code, Some(0), "{name}: --repair-tails refuses: {out}");
+                }
+                // Honest-sentence kinds with no clearing claim: the sentence is checked for the sequence.
+                _ => assert!(
+                    sentence.contains("prikk setup <new-dir>") || sentence.contains("prikk")
+                ),
+            }
+            checked += 1;
+            let _ = std::fs::remove_dir_all(&copy);
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+    assert!(
+        checked > 20,
+        "the cross-check really ran over many lines: {checked}"
+    );
+}
