@@ -523,6 +523,22 @@ pub struct BundlePreviewSealerSignature {
     pub outcome: crate::trust::PublicationSignatureOutcome,
 }
 
+/// A refusal `bundle import` of this exact delivery would raise (0.57.0 step 1b), found by the same
+/// function the importer calls, never a second implementation of the check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BundleImportRefusal {
+    /// The stable `refusal-v1` id `bundle import --format json` would print, e.g.
+    /// `"forged-publication-signature"`.
+    pub id: &'static str,
+    /// The type of the first object the import would refuse on.
+    pub object_type: ObjectType,
+    /// That object's id.
+    pub object_id: ObjectId,
+    /// The sentence `bundle import` would print.
+    pub message: String,
+}
+
 /// Full report of previewing a bundle's impact on a local ref (RFC 144 §4m), never mutating
 /// anything -- see [`preview_bundle`]'s own doc comment for the write-nothing guarantee and its
 /// control.
@@ -576,6 +592,12 @@ pub struct BundlePreviewReport {
     /// 0.56.0 step 3c2 (R3): the `RefState`-chain relation `import_class` was computed against.
     /// `None` exactly when `import_class` is `NoLocalHistory`.
     pub import_ref_state_chain: Option<RefStateChainRelation>,
+    /// 0.57.0 step 1b: the publication-signature refusal `bundle import` of this exact delivery would
+    /// raise, or `None` when it would not. Unlike `sealed_by_signatures` (the delivered tip's sealers
+    /// only, reported and not trusted), this covers **every** Block and RefState the delivery carries,
+    /// because it is the importer's own admission check, called here. Costs what the import's own
+    /// check costs: one Ed25519 verification per signature of each unique Block and RefState.
+    pub import_refusal: Option<BundleImportRefusal>,
 }
 
 /// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
@@ -673,6 +695,18 @@ pub fn preview_bundle_reporting_anchor(
         .into_iter()
         .map(|(key_id, outcome)| BundlePreviewSealerSignature { key_id, outcome })
         .collect();
+
+    // 0.57.0 step 1b: what `bundle import` of this exact delivery would refuse on, by the importer's
+    // own check (`find_forged_publication_signature`), over every Block and RefState the delivery
+    // carries -- not only the tip's sealers `sealed_by_signatures` lists.
+    let import_refusal =
+        find_forged_publication_signature("bundle-import", &adopted_policy, &bundle_only_reader)?
+            .map(|forged| BundleImportRefusal {
+                id: "forged-publication-signature",
+                object_type: forged.object_type,
+                object_id: forged.object_id,
+                message: forged.error.to_string(),
+            });
 
     // 0.56.0 step 3c2 (R3): a `remotes/…` argument resolves the received pointer of that exact
     // name, not `RefStore`'s own `heads/`/`tags/`-only lookup -- `RefStore::read_current_ref_
@@ -841,6 +875,7 @@ pub fn preview_bundle_reporting_anchor(
             ref_state_chain,
             import_class,
             import_ref_state_chain,
+            import_refusal,
         },
         anchor_fallbacks,
     ))
@@ -2391,23 +2426,14 @@ pub fn import_bundle(
             cache: &cache,
             local: None,
         };
-        for object in &prepared {
-            if !matches!(object.object_type, ObjectType::Block | ObjectType::RefState) {
-                continue;
-            }
-            let envelope = bundle_only_reader
-                .read_object(object.object_id)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "bundle import: {} {} is not among this bundle's own carried objects",
-                        object.object_type, object.object_id
-                    ))
-                })?;
-            crate::trust::refuse_forged_publication_signature(
-                "bundle-import",
-                &adopted_policy,
-                &envelope,
-            )?;
+        // 0.57.0 step 1b: the one check, shared with `bundle preview` (which reports what it
+        // finds instead of refusing).
+        if let Some(forged) = find_forged_publication_signature(
+            "bundle-import",
+            &adopted_policy,
+            &bundle_only_reader,
+        )? {
+            return Err(forged.error);
         }
     }
 
@@ -3337,6 +3363,47 @@ fn read_required(
     object_store
         .read_typed(id, object_type)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing {object_type} object: {id}")))
+}
+
+/// The first Block or RefState a delivery carries whose MAINTAINER signature is by an adopted key and
+/// does not verify -- a forgery, or another maintainer using the same key id (0.56.0 step F).
+/// **The one implementation of `bundle import`'s publication-signature admission**, called by the
+/// import (which refuses with `error`) and by `bundle preview` (which reports it as its
+/// `import_refusal`), so the two can never disagree about a delivery (0.57.0 step 1b). One Ed25519
+/// verification per signature of each unique Block and RefState, linear in the delivery.
+pub(crate) struct ForgedPublicationFinding {
+    pub(crate) object_type: ObjectType,
+    pub(crate) object_id: ObjectId,
+    pub(crate) error: PrikkError,
+}
+
+/// See [`ForgedPublicationFinding`]. `Err` only for a failure to read the delivery itself.
+pub(crate) fn find_forged_publication_signature(
+    command: &'static str,
+    policy: &crate::trust::MaintainerTrustPolicy,
+    reader: &BundleAndLocalReader<'_>,
+) -> Result<Option<ForgedPublicationFinding>> {
+    for object in reader.prepared {
+        if !matches!(object.object_type, ObjectType::Block | ObjectType::RefState) {
+            continue;
+        }
+        let envelope = reader.read_object(object.object_id)?.ok_or_else(|| {
+            PrikkError::Integrity(format!(
+                "bundle import: {} {} is not among this bundle's own carried objects",
+                object.object_type, object.object_id
+            ))
+        })?;
+        if let Err(error) =
+            crate::trust::refuse_forged_publication_signature(command, policy, &envelope)
+        {
+            return Ok(Some(ForgedPublicationFinding {
+                object_type: object.object_type,
+                object_id: object.object_id,
+                error,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// `preview_bundle_reporting_anchor`'s own "present" definition: carried by this bundle, or

@@ -994,3 +994,151 @@ fn bundle_preview_reports_invalid_and_unverifiable_sealers_by_outcome() {
     let _ = std::fs::remove_file(&forged_bundle);
     let _ = std::fs::remove_file(&unverifiable_bundle);
 }
+
+/// In-process `bundle preview` of a bundle file against `dest`, returning the store's report.
+fn preview_in_process(dest: &Path, bundle: &Path) -> prikk_store::BundlePreviewReport {
+    let layout = RepositoryLayout::open(dest.to_path_buf()).unwrap();
+    let bytes = std::fs::read(bundle).unwrap();
+    let mut source = prikk_store::BundleSource::Buffered(std::io::Cursor::new(bytes));
+    prikk_store::preview_bundle(
+        &layout,
+        &mut source,
+        &prikk_store::BundleImportOptions::default_limits(),
+        "heads/main",
+    )
+    .unwrap()
+}
+
+/// **0.57.0 step 1b: `bundle preview` answers what `bundle import` will do about signatures.**
+/// Before, a sound tip over a forged ancestor previewed as `sound` (`sealed_by_signatures` names the
+/// delivered tip's sealers only) while `bundle import` refused it (0.56.0 P2, external 046/049). The
+/// store's report now carries `import_refusal`, found by the importer's own function
+/// (`find_forged_publication_signature`) over every Block and RefState:
+/// - a forged tip, and a sound tip over a forged ancestor: `Some(forged-publication-signature)`,
+///   naming the object, and the sentence is the one the real import prints;
+/// - a sound delivery and a delivery by a sealer the destination never adopted: `None`, and the
+///   import accepts both.
+///
+/// **Perturb (red control):** make `preview_bundle_reporting_anchor` report `import_refusal: None`
+/// -- the two refusing cases go red. (The CLI's text and JSON output for the field is held for the
+/// architect's ruling on its shape; this is the store's report.)
+#[test]
+fn preview_reports_the_refusal_the_import_would_raise_for_every_block_not_only_the_tip() {
+    let dest = support::unique_repo("step1b-preview-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest); // adopts the real key under MAINTAINER_KEY_ID
+
+    // A sound tip over a forged ancestor.
+    let ancestor = build_source_with_two_generations(
+        "step1b-ancestor",
+        support::MAINTAINER_KEY_ID,
+        &ANCESTOR_FORGER_SEED,
+        &support::MAINTAINER_SEED,
+    );
+    let ancestor_bundle = std::env::temp_dir().join(format!(
+        "prikk-step1b-ancestor-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&ancestor, &ancestor_bundle);
+    let report = preview_in_process(&dest, &ancestor_bundle);
+    assert!(
+        report
+            .sealed_by_signatures
+            .iter()
+            .all(|signature| signature.outcome == prikk_store::PublicationSignatureOutcome::Sound),
+        "the gap this closes: the tip's sealers read sound ({:?})",
+        report.sealed_by_signatures
+    );
+    let refusal = report
+        .import_refusal
+        .as_ref()
+        .expect("the import would refuse the forged ancestor");
+    assert_eq!(refusal.id, "forged-publication-signature");
+    assert!(matches!(
+        refusal.object_type,
+        ObjectType::Block | ObjectType::RefState
+    ));
+    let import = support::prikk(&dest)
+        .args([
+            "bundle",
+            "import",
+            "--input",
+            ancestor_bundle.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(import.status.code(), Some(1), "{import:?}");
+    assert!(
+        stderr_of(&import).contains(&refusal.message),
+        "the preview's sentence is the import's: {:?} vs {}",
+        refusal.message,
+        stderr_of(&import)
+    );
+
+    // A forged tip.
+    let forged = build_source_signed_by("step1b-forged", &FORGER_SEED, support::MAINTAINER_KEY_ID);
+    let forged_bundle = std::env::temp_dir().join(format!(
+        "prikk-step1b-forged-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&forged, &forged_bundle);
+    let report = preview_in_process(&dest, &forged_bundle);
+    assert_eq!(
+        report.import_refusal.as_ref().map(|r| r.id),
+        Some("forged-publication-signature")
+    );
+
+    // A sound delivery, and a sealer this repository never adopted: the import accepts both, so the
+    // preview reports no refusal.
+    let sound = build_source_signed_by(
+        "step1b-sound",
+        &support::MAINTAINER_SEED,
+        support::MAINTAINER_KEY_ID,
+    );
+    let sound_bundle = std::env::temp_dir().join(format!(
+        "prikk-step1b-sound-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&sound, &sound_bundle);
+    assert_eq!(
+        preview_in_process(&dest, &sound_bundle).import_refusal,
+        None
+    );
+    let unadopted =
+        build_source_signed_by("step1b-unadopted", &UNVERIFIABLE_SEED, UNVERIFIABLE_KEY_ID);
+    let unadopted_bundle = std::env::temp_dir().join(format!(
+        "prikk-step1b-unadopted-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&unadopted, &unadopted_bundle);
+    assert_eq!(
+        preview_in_process(&dest, &unadopted_bundle).import_refusal,
+        None
+    );
+    let import = support::prikk(&dest)
+        .args([
+            "bundle",
+            "import",
+            "--input",
+            unadopted_bundle.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(import.status.success(), "{import:?}");
+
+    cleanup(&[
+        ancestor.root(),
+        forged.root(),
+        sound.root(),
+        unadopted.root(),
+        &dest,
+    ]);
+    for path in [
+        ancestor_bundle,
+        forged_bundle,
+        sound_bundle,
+        unadopted_bundle,
+    ] {
+        let _ = std::fs::remove_file(path);
+    }
+}
