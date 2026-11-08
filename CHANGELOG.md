@@ -20,8 +20,9 @@ sealed does not count. And a claim that builds on a block the ref's tip does not
 before anything is written, with `error: precondition not met: sync seal <ref>: claim <id> builds on
 block <id>, which <ref> does not reach (<ref> has no history yet | is at block <id>) …`, exit `1`,
 `.prikk` unchanged, and a way out you can type: `prikk branch create <ref> --from <branch>` when a
-local branch holds that history, or the `sync have` / `build` / `accept` / `seal` commands that carry
-the branch it belongs to first when none does. There is no new `refusal-v1` id (`sync seal` has no
+local branch holds that history, or, when none does but the claims for that history are already accepted here, those
+claims in lineage order, one `prikk sync seal <ref> --claim <id>` each, or the `sync have` / `build` /
+`accept` / `seal` commands that carry the branch it belongs to first when they are not held. There is no new `refusal-v1` id (`sync seal` has no
 `--format json`). A claims file that carries a branch's whole chain, root first, onto an unborn ref
 still seals it claim by claim and now builds the complete branch; creating the branch first
 (`prikk branch create heads/feature --from heads/main`) gives the same block ids and tree as the

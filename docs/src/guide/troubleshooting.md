@@ -989,7 +989,11 @@ another line. Sealing it there would drop the history the claim was made on (a b
 its earlier files), so nothing was written. The message names the next step. When a local branch
 already holds that history, create the ref from it (`prikk branch create <ref> --from <branch>`; for a
 ref that exists, create a new branch from it and seal onto that) and run the same `sync seal` again.
-When no local branch holds it, carry the branch it belongs to first (`sync have`, `sync build`,
+When no local branch holds it but the claims for that history are already accepted here (`prikk sync
+pending` lists them), the message names those claims in lineage order, one
+`prikk sync seal <ref> --claim <id>` per claim; run them in that order, then the refused command again
+(a claims file that `sync accept --claims-out` wrote seals them in order too). When neither a branch
+nor the claims are held, carry the branch it belongs to first (`sync have`, `sync build`,
 `sync accept`, `sync seal` for that branch), then create `<ref>` from it. See [Sync](sync.md).
 
 ## `error: lock conflict: active lock already exists: <path> -- run prikk unlock to list held locks, …`

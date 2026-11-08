@@ -299,9 +299,11 @@ made on. The refusal is `error: precondition not met: sync seal <ref>: claim <id
 `refusal-v1` document (`sync seal` has no `--format json`), `.prikk` unchanged, and a way out: when a
 local branch reaches that block, `prikk branch create <ref> --from <branch>` (for an unborn `<ref>`)
 or `prikk branch create <new-branch> --from <branch>` and seal onto it (for a `<ref>` that exists but
-is behind that history or on another line); when no local branch does, the commands that carry the
-branch it belongs to first (`sync have`, `sync build`, `sync accept`, `sync seal`), then `prikk branch
-create <ref> --from <that-branch>`. "Reaches" is judged by patch, because block ids differ between
+is behind that history or on another line); when no local branch does but the claims for that history are
+already accepted here, those claims in lineage order, one `prikk sync seal <ref> --claim <id>` per
+claim, then the refused command again; when neither is held, the commands that carry the branch it
+belongs to first (`sync have`, `sync build`, `sync accept`, `sync seal`), then `prikk branch create
+<ref> --from <that-branch>`. "Reaches" is judged by patch, because block ids differ between
 repositories by design: a parent counts as reached when its id is in the tip's history, or when every
 patch of its own ancestry that this repository can name (from the block when held, else from the
 claims held for it) is already in the tip's history. A parent that is neither a held block nor the

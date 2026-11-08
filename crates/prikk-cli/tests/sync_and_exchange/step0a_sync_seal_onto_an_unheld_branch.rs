@@ -456,28 +456,47 @@ fn row_e_an_existing_target_behind_the_parent_is_refused() {
 }
 
 #[test]
-fn row_f_no_local_branch_holds_the_parent_so_the_refusal_names_the_carry_commands() {
+fn row_f_the_missing_ancestry_is_held_as_claims_so_the_refusal_names_them_in_lineage_order() {
     let old = old_repository("s0a-f-old");
     let new = new_repository("s0a-f-new");
     // heads/feature's four claims are accepted, but nothing is sealed anywhere.
     let feature_ids = carry(&old, &new, "heads/feature", "ff");
-    let feature_claim = lineage_order(&new, &feature_ids).pop().unwrap();
-    let file = claims_file("f-one", &[feature_claim]);
+    let mut ordered = lineage_order(&new, &feature_ids);
+    let feature_claim = ordered.pop().unwrap();
+    let file = claims_file("f-one", std::slice::from_ref(&feature_claim));
     let before = store_without_cache(&new);
     let message = assert_refused_and_unchanged(&new, "heads/feature", &file, &before);
+    // The way out is the held claims, root first, one `--claim` per command: no carry.
     assert!(
-        message.contains("is not held on any local branch here"),
-        "{message}"
+        !message.contains("sync have") && !message.contains("is not held on any local branch"),
+        "the ancestry is held, so no carry is named: {message}"
     );
-    for command in [
-        "prikk sync have <that-branch> --output have.bin",
-        "prikk sync build <that-branch> --have have.bin --output art.bin",
-        "prikk sync accept art.bin --claims-out claims.txt",
-        "prikk sync seal <that-branch> --claims claims.txt",
-        "prikk branch create heads/feature --from <that-branch>",
-    ] {
-        assert!(message.contains(command), "missing `{command}`: {message}");
+    let mut from = 0;
+    for claim in &ordered {
+        let command = format!("prikk sync seal heads/feature --claim {claim}");
+        let at = message[from..]
+            .find(&command)
+            .unwrap_or_else(|| panic!("missing or out of order `{command}`: {message}"));
+        from += at + command.len();
     }
+    assert!(
+        !message.contains(&format!("--claim {feature_claim}")),
+        "the refused claim is not part of its own ancestry: {message}"
+    );
+    // Typing exactly what the message says works, and the result is the sender's feature branch.
+    for claim in &ordered {
+        let output = with_maintainer(support::prikk(&new))
+            .args(["sync", "seal", "heads/feature", "--claim", claim])
+            .output()
+            .unwrap();
+        support::ok(&output, "sync seal --claim (named by the refusal)");
+    }
+    seal_ok(&new, "heads/feature", &[feature_claim], "f-after");
+    assert_eq!(
+        tree_files(&new, "heads/feature"),
+        tree_files(&old, "heads/feature")
+    );
+    assert_verify_clean(&new);
 }
 
 #[test]

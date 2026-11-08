@@ -106,10 +106,20 @@ fn write_claim(
     block_id: ObjectId,
     patch_ids: Vec<ObjectId>,
 ) -> Result<ObjectId> {
+    write_claim_with_parents(objects, signer, block_id, patch_ids, Vec::new())
+}
+
+fn write_claim_with_parents(
+    objects: &mut FileObjectStore,
+    signer: &Ed25519MaintainerSigner,
+    block_id: ObjectId,
+    patch_ids: Vec<ObjectId>,
+    parent_block_ids: Vec<ObjectId>,
+) -> Result<ObjectId> {
     let payload = RecognitionClaimPayload {
         block_id,
         patch_ids,
-        parent_block_ids: Vec::new(),
+        parent_block_ids,
     };
     let mut envelope = ObjectEnvelope::unsigned(
         ObjectType::RecognitionClaim,
@@ -932,5 +942,188 @@ fn a_claim_held_as_several_records_is_enumerated_once() -> Result<()> {
         "one claim, two records"
     );
     let _ = std::fs::remove_dir_all(layout.root());
+    Ok(())
+}
+
+/// The fixture the patch-level reach tests share: three patches `p1`, `p2`, `p3` (files `a`, `b`,
+/// `c`), the sender's grouping as claims -- `X1 = {p1, p2}` (root) and `X2 = {p3}` built on `X1` --
+/// and a receiver that sealed `p1` and `p2` itself as two separate blocks, one claim each, so the
+/// receiver's history holds both patches but no block named `X1`.
+struct GroupingFixture {
+    layout: RepositoryLayout,
+    signer: Ed25519MaintainerSigner,
+    x1: ObjectId,
+    claim_x1: ObjectId,
+    claim_x2: ObjectId,
+}
+
+fn divergent_grouping_fixture(name: &str, seal_p2: bool) -> Result<GroupingFixture> {
+    let layout = fresh_repo(name)?;
+    let signer = maintainer_signer(0x80)?;
+    adopt(&layout, &signer)?;
+    let author = author_signer(0x81)?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let mut patch = |path: &str, seed: u8| -> Result<ObjectId> {
+        let blob = write_blob(&mut objects, path.as_bytes())?;
+        write_create_file_patch(&mut objects, &author, path, seed, blob)
+    };
+    let p1 = patch("grouping-a.txt", 0x82)?;
+    let p2 = patch("grouping-b.txt", 0x83)?;
+    let p3 = patch("grouping-c.txt", 0x84)?;
+    let x1 = ObjectId::from_bytes([0xE1; 32]);
+    let x2 = ObjectId::from_bytes([0xE2; 32]);
+    // The sender's grouping.
+    let claim_x1 = write_claim(&mut objects, &signer, x1, vec![p1, p2])?;
+    let claim_x2 = write_claim_with_parents(&mut objects, &signer, x2, vec![p3], vec![x1])?;
+    // The receiver's own grouping: one block per patch (ids that are not X1, by construction).
+    let own_1 = write_claim(
+        &mut objects,
+        &signer,
+        ObjectId::from_bytes([0xE3; 32]),
+        vec![p1],
+    )?;
+    seal_from_accepted_claim(&layout, TARGET_REF, own_1, &signer)?;
+    if seal_p2 {
+        let own_2 = write_claim(
+            &mut objects,
+            &signer,
+            ObjectId::from_bytes([0xE4; 32]),
+            vec![p2],
+        )?;
+        seal_from_accepted_claim(&layout, TARGET_REF, own_2, &signer)?;
+    }
+    Ok(GroupingFixture {
+        layout,
+        signer,
+        x1,
+        claim_x1,
+        claim_x2,
+    })
+}
+
+fn tree_paths(layout: &RepositoryLayout) -> Result<Vec<String>> {
+    let point = crate::resolve_point(layout, TARGET_REF, crate::ReceivedRefs::Read)?;
+    let (listing, _) = crate::list_tree_at_point_reporting_anchor(layout, &point, None)?;
+    let mut paths: Vec<String> = listing.entries.into_iter().map(|e| e.path).collect();
+    paths.sort();
+    Ok(paths)
+}
+
+/// **RFC 115 D7 / 0.57.0 step 0a, ruling 2.** The receiver groups the same patches differently
+/// from the sender (`{p1}`, `{p2}` against `X1 = {p1, p2}`), so the sender's parent block `X1` is
+/// not a block of the receiver's history. A literal block-id test would refuse; the patch-level
+/// rule does not, because every patch of `X1` is in the history. The claim for `{p3}` seals, and
+/// the tree is the sender's (`a`, `b`, `c`).
+/// **Perturb:** make `parent_reached` answer only `history.blocks.contains(&parent)` -- this test
+/// (and the CLI rows that need a held-claim parent) goes red.
+#[test]
+fn divergent_grouping_a_parent_whose_patches_are_all_in_the_history_is_reached() -> Result<()> {
+    let f = divergent_grouping_fixture("seal-from-accepted-grouping-reached", true)?;
+    let tip_before = current_tip(&f.layout)?.expect("the receiver has a tip");
+    let outcome = seal_from_accepted_claim(&f.layout, TARGET_REF, f.claim_x2, &f.signer)?;
+    let SealFromAcceptedOutcome::Sealed {
+        block_id,
+        patch_count,
+        ..
+    } = outcome
+    else {
+        panic!("expected Sealed, got {outcome:?}");
+    };
+    assert_eq!(patch_count, 1, "only p3 is new work");
+    assert_ne!(Some(block_id), Some(tip_before));
+    assert_eq!(current_tip(&f.layout)?, Some(block_id));
+    assert_eq!(
+        tree_paths(&f.layout)?,
+        ["grouping-a.txt", "grouping-b.txt", "grouping-c.txt"],
+        "the tree is the sender's"
+    );
+    cleanup(&f.layout);
+    Ok(())
+}
+
+/// **The rule does not widen.** The same shape, but `p2` is not in the history: `X1`'s ancestry is
+/// only partly there, so `X1` is not reached and the claim for `{p3}` refuses, writing nothing.
+/// **Perturb:** make `parent_reached` answer `true` when *any* patch of the parent is in the
+/// history (`any` for `all`) -- this test goes red.
+#[test]
+fn a_parent_with_only_some_of_its_patches_in_the_history_is_not_reached() -> Result<()> {
+    let f = divergent_grouping_fixture("seal-from-accepted-grouping-partial", false)?;
+    let tip_before = current_tip(&f.layout)?;
+    let blocks_before = block_container_bytes(&f.layout)?;
+    let err = seal_from_accepted_claim(&f.layout, TARGET_REF, f.claim_x2, &f.signer)
+        .expect_err("a half-reached parent must refuse");
+    let PrikkError::Precondition(message) = err else {
+        panic!("expected a precondition refusal, got {err:?}");
+    };
+    assert!(
+        message.contains(&format!("builds on block {}", f.x1)),
+        "{message}"
+    );
+    assert!(message.contains("nothing was written"), "{message}");
+    assert_eq!(current_tip(&f.layout)?, tip_before);
+    assert_eq!(block_container_bytes(&f.layout)?, blocks_before);
+    cleanup(&f.layout);
+    Ok(())
+}
+
+/// **Ruling 3, at store level.** `X1`'s claim is held but its patches are not all in the history,
+/// and no local branch holds `X1`: the refusal names the held claim, in the form `sync seal`
+/// takes. With nothing held for the parent it names the carry instead.
+/// **Perturb:** drop the `held_ancestry` arm from `parent_not_reached_refusal` -- the first half
+/// goes red; make `held_unsealed_ancestry` answer `Some` for an unheld parent -- the second does.
+#[test]
+fn the_refusal_names_a_held_claim_for_the_parent_and_the_carry_when_none_is_held() -> Result<()> {
+    let f = divergent_grouping_fixture("seal-from-accepted-grouping-names", false)?;
+    let err = seal_from_accepted_claim(&f.layout, TARGET_REF, f.claim_x2, &f.signer)
+        .expect_err("refuses");
+    let PrikkError::Precondition(message) = err else {
+        panic!("{err:?}")
+    };
+    assert!(
+        message.contains(&format!(
+            "prikk sync seal {TARGET_REF} --claim {}",
+            f.claim_x1
+        )),
+        "the held claim for X1 is named: {message}"
+    );
+    assert!(
+        !message.contains("sync have"),
+        "no carry when the claim is held: {message}"
+    );
+    cleanup(&f.layout);
+
+    // Nothing held for the parent: a claim whose parent block no claim or block here describes.
+    let layout = fresh_repo("seal-from-accepted-grouping-unheld")?;
+    let signer = maintainer_signer(0x85)?;
+    adopt(&layout, &signer)?;
+    let author = author_signer(0x86)?;
+    let mut objects = FileObjectStore::new(layout.clone());
+    let blob = write_blob(&mut objects, b"unheld")?;
+    let patch = write_create_file_patch(&mut objects, &author, "unheld.txt", 0x87, blob)?;
+    let unknown = ObjectId::from_bytes([0xE9; 32]);
+    let claim = write_claim_with_parents(
+        &mut objects,
+        &signer,
+        ObjectId::from_bytes([0xEA; 32]),
+        vec![patch],
+        vec![unknown],
+    )?;
+    let err = seal_from_accepted_claim(&layout, TARGET_REF, claim, &signer).expect_err("refuses");
+    let PrikkError::Precondition(message) = err else {
+        panic!("{err:?}")
+    };
+    assert!(
+        message.contains("is not held on any local branch here"),
+        "{message}"
+    );
+    assert!(
+        message.contains("prikk sync have <that-branch> --output have.bin"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("--claim "),
+        "no held claim to name: {message}"
+    );
+    cleanup(&layout);
     Ok(())
 }

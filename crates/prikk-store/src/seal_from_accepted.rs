@@ -813,15 +813,16 @@ fn ref_history(object_store: &impl ObjectReader, tip: Option<ObjectId>) -> Resul
 
 /// The held claims keyed by the block they are about (the first claim for a block is kept: claims
 /// about one block carry the same patches and parents).
-fn claims_by_block(
-    claims: &[(ObjectId, RecognitionClaimPayload)],
-) -> BTreeMap<ObjectId, &RecognitionClaimPayload> {
+fn claims_by_block(claims: &[(ObjectId, RecognitionClaimPayload)]) -> ClaimsByBlock<'_> {
     let mut by_block = BTreeMap::new();
-    for (_, claim) in claims {
-        by_block.entry(claim.block_id).or_insert(claim);
+    for (claim_id, claim) in claims {
+        by_block.entry(claim.block_id).or_insert((*claim_id, claim));
     }
     by_block
 }
+
+/// A block id -> (the id of a held claim about it, that claim's payload).
+type ClaimsByBlock<'a> = BTreeMap<ObjectId, (ObjectId, &'a RecognitionClaimPayload)>;
 
 /// Whether `parent` -- a block id a claim names -- is reached by `history`. See the module doc:
 /// its id is in the history, or every patch of its own ancestry this repository can name is
@@ -830,7 +831,7 @@ fn claims_by_block(
 /// judged, and is not reached.
 fn parent_reached(
     object_store: &impl ObjectReader,
-    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    by_block: &ClaimsByBlock<'_>,
     history: &RefHistory,
     parent: ObjectId,
 ) -> Result<bool> {
@@ -845,7 +846,7 @@ fn parent_reached(
 
 fn parent_reached_visiting(
     object_store: &impl ObjectReader,
-    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    by_block: &ClaimsByBlock<'_>,
     history: &RefHistory,
     parent: ObjectId,
     visiting: &mut BTreeSet<ObjectId>,
@@ -862,7 +863,7 @@ fn parent_reached_visiting(
                 .all(|id| history.patches.contains(id))
         }));
     }
-    let Some(claim) = by_block.get(&parent) else {
+    let Some((_, claim)) = by_block.get(&parent) else {
         return Ok(false);
     };
     if !visiting.insert(parent) {
@@ -894,7 +895,7 @@ fn parent_not_reached_refusal(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     ref_store: &RefStore,
-    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    by_block: &ClaimsByBlock<'_>,
     target_ref: &str,
     tip: Option<ObjectId>,
     claim_id: ObjectId,
@@ -906,6 +907,14 @@ fn parent_not_reached_refusal(
         None => "has no history yet".to_string(),
     };
     let carrier = local_branch_reaching(object_store, ref_store, by_block, target_ref, parent_id);
+    // When no local branch holds the history but the claims for it are already accepted here, the
+    // cheaper way out is to seal those claims first, in lineage order.
+    let held_ancestry = match (&carrier, tip) {
+        (None, tip) => ref_history(object_store, tip).ok().and_then(|history| {
+            held_unsealed_ancestry(object_store, by_block, &history, parent_id)
+        }),
+        _ => None,
+    };
     let way_out = match (&carrier, tip) {
         (Some(branch), None) => {
             format!("run `prikk branch create {target_ref} --from {branch}`, then seal again")
@@ -915,6 +924,21 @@ fn parent_not_reached_refusal(
              to carry this claim on the history it was made on, run `prikk branch create \
              <new-branch> --from {branch}` and seal onto <new-branch>"
         ),
+        (None, _) if held_ancestry.is_some() => {
+            let ancestry = held_ancestry.unwrap_or_default();
+            let steps: Vec<String> = ancestry
+                .iter()
+                .map(|claim| format!("`prikk sync seal {target_ref} --claim {claim}`"))
+                .collect();
+            format!(
+                "the claims for the history it builds on are accepted here but not sealed on \
+                 {target_ref}: seal them first, in this order: {}; then run this command again \
+                 (or, if you still have the claims file `sync accept --claims-out` wrote, `prikk \
+                 sync seal {target_ref} --claims <that file>` seals them in order along with this \
+                 one)",
+                steps.join(", then ")
+            )
+        }
         (None, _) => format!(
             "block {parent_id} is not held on any local branch here. Carry the branch it \
              belongs to first: in this repository run `prikk sync have <that-branch> --output \
@@ -932,11 +956,56 @@ fn parent_not_reached_refusal(
     ))
 }
 
+/// The held claims, root first, whose sealing onto a ref with `history` would make `parent` reached:
+/// the claim about `parent` and, before it, the claims about each of its ancestors that `history`
+/// does not reach (a depth-first walk over the claims' own `parent_block_ids`, ancestors pushed
+/// before the claim that builds on them). `None` when some block of that ancestry is neither
+/// reached nor the subject of a held claim: the claims alone cannot supply it, and the caller falls
+/// back to naming the carry.
+fn held_unsealed_ancestry(
+    object_store: &impl ObjectReader,
+    by_block: &ClaimsByBlock<'_>,
+    history: &RefHistory,
+    parent: ObjectId,
+) -> Option<Vec<ObjectId>> {
+    fn visit(
+        object_store: &impl ObjectReader,
+        by_block: &ClaimsByBlock<'_>,
+        history: &RefHistory,
+        block: ObjectId,
+        seen: &mut BTreeSet<ObjectId>,
+        out: &mut Vec<ObjectId>,
+    ) -> Option<()> {
+        if parent_reached(object_store, by_block, history, block).ok()? {
+            return Some(());
+        }
+        if !seen.insert(block) {
+            return Some(());
+        }
+        let (claim_id, claim) = by_block.get(&block)?;
+        for &ancestor in &claim.parent_block_ids {
+            visit(object_store, by_block, history, ancestor, seen, out)?;
+        }
+        out.push(*claim_id);
+        Some(())
+    }
+    let mut out = Vec::new();
+    visit(
+        object_store,
+        by_block,
+        history,
+        parent,
+        &mut BTreeSet::new(),
+        &mut out,
+    )?;
+    Some(out)
+}
+
 /// The first local branch (other than `target_ref`) whose history reaches `parent_id`, if any.
 fn local_branch_reaching(
     object_store: &impl ObjectReader,
     ref_store: &RefStore,
-    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    by_block: &ClaimsByBlock<'_>,
     target_ref: &str,
     parent_id: ObjectId,
 ) -> Option<String> {
