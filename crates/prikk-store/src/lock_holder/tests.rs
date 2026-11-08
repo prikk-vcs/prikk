@@ -359,6 +359,48 @@ fn row_c_off_linux_gone_and_reused_need_an_equal_machine_identity() {
     );
 }
 
+/// L2 item 0(b): the positive answer rests on the start time and needs no machine identity, so a
+/// live holder is never withheld from the refusal because an identity could not be read. Only the
+/// negative answers (gone, reused) wait for it; a DIFFERING identity is still unknown first.
+#[test]
+fn row_c_off_linux_a_missing_identity_withholds_only_the_negative_answers() {
+    let live = windows_facts().start;
+    let mut missing = windows_facts();
+    missing.machine = None;
+    // Either side's identity missing: a live holder with an equal start time still appears running.
+    assert_eq!(
+        judged(
+            missing.clone(),
+            windows_facts(),
+            ProcessRead::Alive(live.clone())
+        ),
+        LivenessReason::SameProcess
+    );
+    assert_eq!(
+        judged(
+            windows_facts(),
+            missing.clone(),
+            ProcessRead::Alive(live.clone())
+        ),
+        LivenessReason::SameProcess
+    );
+    assert_eq!(
+        judged(missing.clone(), missing.clone(), ProcessRead::Alive(live)),
+        LivenessReason::SameProcess
+    );
+    // A differing identity is unknown, first, even for an equal start time.
+    let mut other = windows_facts();
+    other.machine = Some("machine-X".to_string());
+    assert_eq!(
+        judged(
+            other,
+            windows_facts(),
+            ProcessRead::Alive(windows_facts().start)
+        ),
+        LivenessReason::OtherMachine
+    );
+}
+
 /// D: a live holder in another time namespace reads a shifted start time, so its namespace is
 /// compared before any start time is.
 #[test]

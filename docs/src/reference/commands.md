@@ -91,7 +91,7 @@ prikk doctor [path] --cancel-import <id> [--plan-only]
 prikk ref complete <ref> [--plan-only]
 prikk format upgrade [path]
 prikk unlock
-prikk unlock --lock <path> [--yes|--force]
+prikk unlock --lock <path> [--yes] [--force]
 prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]
 prikk compact --received-index|--trust-policy --keep-slot a|b [--plan-only]
 prikk received remove <remotes/…> [--plan-only]

@@ -33,8 +33,17 @@ is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-t
   the 0.56.0 binary.
 - Internal: `prikk-ffi` gains a macOS process-start-time call and a direct `libc` dependency under
   `cfg(target_os = "macos")` (already in the lockfile through `rustix`); no `unsafe` enters `prikk-store`.
-- `unlock --lock` still clears whatever the answer; refusing a holder that appears running is the next
-  change (step 2, part L2).
+### Changed — `prikk unlock --lock` refuses a holder that appears running unless `--force`
+
+With the holder recorded (above), "appears running" now means the process that took the lock is still the
+one running, so it is safe to refuse on. `prikk unlock --lock <path>` on such a lock exits `1` with a
+precondition naming the pid and the start time, whether the lock is cleared by `--yes`, by a typed `yes`, or
+not at all; `--force` clears it anyway, without asking, at the risk of corrupting what that process is
+writing. `--yes` keeps its meaning for a holder that does not appear to be running or is unknown (an older
+prikk's lock, a cut body, another namespace or machine). `--yes` and `--force` are no longer synonyms. The help
+line and [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean)
+define the flags and the three words once.
+
 
 ### Fixed — a damaged commit-index entry made `commit` refuse with `EditText requested for unchanged text`
 
@@ -198,6 +207,17 @@ claims in lineage order, one `prikk sync seal <ref> --claim <id>` each, or the `
 still seals it claim by claim and now builds the complete branch; creating the branch first
 (`prikk branch create heads/feature --from heads/main`) gives the same block ids and tree as the
 sender's. The sync guide states the step.
+
+### Upgrading
+
+- **`prikk unlock --lock <path> --yes` and `--force` are no longer synonyms.** A script that passes `--yes`
+  or `--force` against a lock whose holder **appears running** now fails with exit `1` and a precondition
+  instead of clearing it; before 0.57.0 either flag cleared a live holder's lock. A script that means to
+  clear a live holder's lock (rare, and at the risk of corrupting what that process is writing) must pass
+  `--force`; a script clearing the lock of a crashed writer needs no change, because a dead holder, an
+  older prikk's lock and an unknown holder are all still cleared by `--yes`.
+- **A lock written by 0.56.0 or earlier lists as `unknown`** ("written by an older prikk") until it is
+  cleared or its holder finishes; `--yes` clears it as before.
 
 ## 0.56.0 — 2026-11-08
 

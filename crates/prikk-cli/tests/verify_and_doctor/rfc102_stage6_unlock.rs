@@ -252,3 +252,159 @@ fn the_listing_and_doctor_say_why_a_lock_is_unknown() {
         "the advisory line must not restate what `appears running` means: {stdout}"
     );
 }
+
+// 0.57.0 step 2, L2: `--lock` refuses a holder that appears running unless `--force`; `--yes` and
+// `--force` are no longer synonyms.
+
+/// Hold the repository's active lock the real way: this test process is the live holder, and the
+/// lock body is written by the real writer (`ActiveLock::acquire`), naming this process.
+fn hold_the_active_lock(repo: &Path) -> prikk_store::ActiveLock {
+    let layout = prikk_store::RepositoryLayout::open(repo).unwrap();
+    prikk_store::ActiveLock::acquire(&layout, prikk_store::DEFAULT_ACTIVE_NAME).unwrap()
+}
+
+#[test]
+fn a_live_holder_is_refused_with_yes_and_with_a_typed_yes_and_the_lock_stays() {
+    let repo = unique_repo("unlock-live-yes");
+    init(&repo);
+    let _held = hold_the_active_lock(&repo);
+    let path = active_lock_path(&repo);
+
+    let output = prikk(&repo)
+        .args(["unlock", "--lock", path.to_str().unwrap(), "--yes"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("precondition not met"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("pid {}", std::process::id())),
+        "the refusal names the pid: {stderr}"
+    );
+    assert!(
+        stderr.contains("start time"),
+        "the refusal names the start time: {stderr}"
+    );
+    assert!(
+        stderr.contains("--force") && stderr.contains("corrupting"),
+        "the refusal says what --force does and its risk: {stderr}"
+    );
+    assert!(
+        stderr.contains("docs/src/reference/concurrency-locking.md"),
+        "the refusal points at the one definition: {stderr}"
+    );
+    assert!(
+        path.is_file(),
+        "a refused unlock must leave the lock in place"
+    );
+
+    // The interactive path: a typed `yes` does not clear a live holder either.
+    let output = unlock_with_stdin(&repo, &["--lock", path.to_str().unwrap()], "yes\n");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("precondition not met"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(path.is_file());
+}
+
+#[test]
+fn force_clears_a_live_holder_without_asking() {
+    let repo = unique_repo("unlock-live-force");
+    init(&repo);
+    let held = hold_the_active_lock(&repo);
+    let path = active_lock_path(&repo);
+
+    let output = prikk(&repo)
+        .args(["unlock", "--lock", path.to_str().unwrap(), "--force"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    ok(&output, "unlock --lock --force");
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("cleared:"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!path.is_file(), "--force clears a live holder's lock");
+    drop(held);
+}
+
+#[test]
+fn a_dead_holder_is_cleared_by_yes_and_by_force() {
+    for flag in ["--yes", "--force"] {
+        let repo = unique_repo("unlock-dead-flags");
+        init(&repo);
+        plant_stale_active_lock(&repo);
+        let path = active_lock_path(&repo);
+        let output = prikk(&repo)
+            .args(["unlock", "--lock", path.to_str().unwrap(), flag])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        ok(&output, &format!("unlock --lock {flag} (dead holder)"));
+        assert!(
+            !path.is_file(),
+            "{flag} clears a holder that does not appear to be running"
+        );
+    }
+}
+
+/// An older prikk's body (no start time to check) and a cut one are `unknown`: `--yes` still clears
+/// them, as it did. The old body names a pid that IS alive (this test process); only the missing
+/// start time keeps it from `appears running`.
+#[test]
+fn an_unknown_holder_is_still_cleared_by_yes() {
+    let bodies = [
+        format!(
+            "pid={}\nkind=active\nnote=PR-007 lock has no stale-lock stealing yet\n",
+            std::process::id()
+        ),
+        "prikk-lock-v2\npid=1".to_string(),
+    ];
+    for (n, body) in bodies.iter().enumerate() {
+        let repo = unique_repo("unlock-unknown-yes");
+        init(&repo);
+        std::fs::write(active_lock_path(&repo), body).unwrap();
+        let path = active_lock_path(&repo);
+        let output = prikk(&repo)
+            .args(["unlock", "--lock", path.to_str().unwrap(), "--yes"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        ok(&output, &format!("unlock --lock --yes (unknown body {n})"));
+        assert!(!path.is_file(), "--yes clears an unknown holder (body {n})");
+    }
+}
+
+#[test]
+fn yes_and_force_may_be_given_together_and_each_only_once() {
+    let repo = unique_repo("unlock-yes-and-force");
+    init(&repo);
+    plant_stale_active_lock(&repo);
+    let path = active_lock_path(&repo);
+    let both = prikk(&repo)
+        .args([
+            "unlock",
+            "--lock",
+            path.to_str().unwrap(),
+            "--yes",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    ok(&both, "unlock --yes --force");
+    let twice = prikk(&repo)
+        .args([
+            "unlock",
+            "--lock",
+            path.to_str().unwrap(),
+            "--force",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(twice.status.code(), Some(2), "{twice:?}");
+}

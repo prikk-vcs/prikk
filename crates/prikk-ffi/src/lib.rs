@@ -739,19 +739,23 @@ pub fn process_start_time(pid: u32) -> ProcessStart {
 /// macOS: this machine's hardware UUID, from `gethostuuid` (0.57.0 step 2, L1b). A lock taken on a
 /// repository on a shared drive may come from another machine, whose boot id, process table and
 /// start times mean nothing here; the machine identity is what says "the same machine" before a
-/// lock is called "not running". `None` if the call fails or is refused (a sandbox may), never a
-/// guess. Read once per process by the caller.
+/// lock is called "not running". `None` if the call fails, is refused (a sandbox may), or does not
+/// finish within about a second (`EWOULDBLOCK`), never a guess. Read once per process by the caller,
+/// before its first lock, so the wait is **bounded**: a zero `timespec` means "wait indefinitely until
+/// it completes" (the man page), which would hang every write on a stalled lookup instead of reading
+/// "unknown".
 #[cfg(target_os = "macos")]
 pub fn machine_uuid() -> Option<String> {
     let mut id = [0u8; 16];
-    let no_wait = libc::timespec {
-        tv_sec: 0,
+    let bounded_wait = libc::timespec {
+        tv_sec: 1,
         tv_nsec: 0,
     };
     // SAFETY: `id` is a live, writable 16-byte buffer, the size `gethostuuid` documents for its
-    // `uuid_t` out-parameter, and `no_wait` is a live `timespec` that outlives the call. The result
+    // `uuid_t` out-parameter, and `bounded_wait` is a live `timespec` that outlives the call; a
+    // non-zero value bounds the call (it returns -1 with `EWOULDBLOCK` when it expires). The result
     // is 0 on success; the buffer is read only then.
-    let status = unsafe { libc::gethostuuid(id.as_mut_ptr(), &raw const no_wait) };
+    let status = unsafe { libc::gethostuuid(id.as_mut_ptr(), &raw const bounded_wait) };
     if status != 0 {
         return None;
     }

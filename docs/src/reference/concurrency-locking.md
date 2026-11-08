@@ -20,8 +20,8 @@ see the [trust and threat model](./trust-threat-model.md) and the
 - Lock conflicts and stale-baseline ref publication conflicts both surface as `LockConflict`, but they
   have different causes and operator responses.
 - Stale lock cleanup after a crash is manual today, through `prikk unlock` — not automatic, not a
-  doctor repair, and not gated on the tool's own PID check, which is advisory only. There is no lock
-  timeout or automatic lock stealing.
+  doctor repair. `prikk unlock --lock` refuses a holder that appears running unless `--force`; every
+  other answer is advisory only. There is no lock timeout or automatic lock stealing.
 - The active-session model uses one default active WAL and active ref metadata. It is not a
   multi-active-session model.
 - Durability and recovery claims are supported by current unit and integration tests, not by a
@@ -245,9 +245,15 @@ path is `prikk unlock` alone.
 `prikk unlock` is the supported recovery path. A bare invocation lists every currently held lock, its
 recorded process id and start time, and a best-effort advisory on whether the process that took the
 lock is still running. `prikk unlock --lock <path>` clears one specific lock, after printing its
-details, and requires typing `yes` at an interactive prompt unless `--yes` is passed for scripting
-(`--force` is a synonym today). The tool never decides a lock is stale on its own; it reports what it
-can check and lets the operator supply the fact it cannot.
+details, and requires typing `yes` at an interactive prompt unless `--yes` is passed for scripting.
+
+**A holder that appears running is refused** (exit 1, a precondition naming the pid and the start time),
+whatever `--yes` or a typed `yes` says; only `--force` clears it, without asking, at the risk of
+corrupting what that process is writing. `--yes` and `--force` are two flags with two meanings (they were
+synonyms before 0.57.0): `--yes` answers the prompt for a lock whose holder *does not appear to be running*
+or is *unknown*; `--force` clears the lock whatever the holder is. The tool never decides a lock is stale on
+its own; it reports what it can check and lets the operator supply the fact it cannot. The three words are
+defined next.
 
 ### What the three liveness words mean
 
@@ -261,10 +267,10 @@ running, not whether some process has that number. A pid, a start time and a boo
 meaningful on the machine and in the namespaces they were read in, so "does not appear to be running" is
 said only of a lock known to come from this machine.
 
-- **appears running** — the lock comes from this machine, the pid is alive, **and** its start time equals
+- **appears running** — the pid is alive, **and** its start time equals
   the recorded one, **and** (Linux) the boot id, the PID namespace and the time namespace equal the
-  recorded ones. This is the only answer that says the holder is probably still working; treat the lock
-  as held.
+  recorded ones. It needs no machine identity: a start time equal to the microsecond cannot coincide across
+  machines. This is the only answer `prikk unlock` refuses on; treat the lock as held.
 - **does not appear to be running** — of a lock known to come from this machine: the pid is gone, or it
   is alive with a different start time (the number was reused by another process), or the boot id
   differs (this machine restarted since). Not proof the lock is safe to clear: confirm that no prikk
@@ -273,15 +279,15 @@ said only of a lock known to come from this machine.
   prikk (0.56.0 and earlier record no start time), its body is incomplete (still being written, or
   damaged: its pid is never read), it was taken in another PID or time namespace, on another operating
   system, or **on another machine** (a repository on a shared drive holds other machines' locks, and a
-  lock from another machine is never read as running or as not running from here), a field of the
+  lock whose machine identity differs from this one's is never read as running or as not running from here), a field of the
   record is missing or cannot be read (including a machine identity that cannot be compared), or the
   operating system would not say whether the pid exists.
 
 | Platform | The holder record | What decides "appears running" |
 |---|---|---|
 | Linux | pid, start time (`/proc/<pid>/stat`, field 22, clock ticks since boot), boot id (`/proc/sys/kernel/random/boot_id`), PID namespace (`/proc/self/ns/pid`), time namespace (`/proc/self/ns/time`, when the kernel has it), machine identity (`/etc/machine-id`, else D-Bus's `/var/lib/dbus/machine-id`) | pid alive and not a zombie whose threads are all gone, start time equal, boot id equal (which already establishes the same machine), PID namespace equal, time namespace equal (absent on both sides counts as equal; on one side only is unknown). A differing boot id is "restarted" only when the machine identity is present and equal on both sides; otherwise unknown |
-| macOS | pid, start time (`proc_pidinfo`, microseconds since the epoch), machine identity (`gethostuuid`) | machine identity present and equal, pid alive and not a zombie, start time equal. No boot time is recorded: it moves when the clock is stepped, and an absolute start time already cannot repeat across a restart |
-| Windows | pid, start time (`GetProcessTimes`, the creation `FILETIME`), machine identity (`MachineGuid`, `HKLM\SOFTWARE\Microsoft\Cryptography`) | machine identity present and equal, process exists and has not exited, start time equal |
+| macOS | pid, start time (`proc_pidinfo`, microseconds since the epoch), machine identity (`gethostuuid`) | pid alive and not a zombie, start time equal (no machine identity needed); *gone* and *reused* need the identity present and equal, else unknown. No boot time is recorded: it moves when the clock is stepped, and an absolute start time already cannot repeat across a restart |
+| Windows | pid, start time (`GetProcessTimes`, the creation `FILETIME`), machine identity (`MachineGuid`, `HKLM\SOFTWARE\Microsoft\Cryptography`) | process exists and has not exited, start time equal (no machine identity needed); *gone* and *reused* need the identity present and equal, else unknown |
 | Other | pid only; nothing can be checked | always unknown |
 
 Why those facts: since Linux 5.6, `/proc/<pid>/stat` field 22 is reported with the *reader's* time-namespace
@@ -365,7 +371,7 @@ every lock it clears.
 | Doctor's `--repair-main-ref` input is recognized but always refused and performs no repair; exact interrupted publication completion is done by `seal`'s retry or by `prikk ref complete` under the active and ref locks. | [`seal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/seal.rs), [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [DC-38](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-38-REF-PUBLICATION-CRASH-RECOVERY.md) |
 | Doctor repairs are opt-in and do not clear unsafe active sessions or define stale-lock cleanup. | [`doctor.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/doctor.rs), [integrity and recovery diagnostics](./integrity-recovery.md), [DC-29](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-29-VERIFY-DOCTOR-INTEGRITY-RECOVERY-REFERENCE.md) |
 | Four container locks (ref-pointer index, ref log, received-ref index, trust policy) are acquired by writers and `prikk compact` alike, sorted into one fixed order by a single acquisition helper before any lock is taken. | [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs), [`compact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/compact.rs) |
-| `prikk unlock` lists every held lock with an advisory (not authoritative) liveness check of the process that took it (pid and start time; Linux also boot id and PID namespace), and clears one named lock only after explicit confirmation or `--yes`. | [`unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/unlock.rs), [`prikk-cli/src/unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/unlock.rs) |
+| `prikk unlock` lists every held lock with an advisory (not authoritative) liveness check of the process that took it (pid and start time; Linux also boot id and PID namespace), and clears one named lock only after explicit confirmation or `--yes`; a holder that appears running is refused unless `--force`. | [`unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/unlock.rs), [`prikk-cli/src/unlock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-cli/src/unlock.rs) |
 | Repository path and durability claims for *mutation* remain limited by current test evidence and gates exercised on Linux, macOS, and Windows (DC-87 Stage 2); read-only commands are CI-gated cross-platform as of DC-71. | [durability and crash recovery](./durability-recovery.md), [path and worktree safety](./path-safety.md), [platform support](./platform-support.md), [DC-28](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-28-DURABILITY-CRASH-RECOVERY-REFERENCE.md), [DC-32](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-32-PATH-WORKTREE-SAFETY-REFERENCE.md) |
 
 ## Provenance

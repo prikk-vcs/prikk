@@ -372,7 +372,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_unlock,
         help_lines: &[
             "  prikk unlock                              List every currently held lock",
-            "  prikk unlock --lock <path> [--yes|--force]  Clear one stale lock (asks to confirm unless --yes/--force)",
+            "  prikk unlock --lock <path> [--yes] [--force]  Clear one stale lock: asks to confirm unless --yes; a holder that appears",
+            "                                            running is refused unless --force (docs: concurrency-locking, \"liveness words\")",
         ],
     },
     Command {

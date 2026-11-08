@@ -584,8 +584,8 @@ recover missing key material, or clear unsafe active sessions.
 can remain, and clearing it is the operator's decision, made with `prikk unlock`. A bare `prikk unlock`
 lists every held lock with its recorded process id and an advisory check of whether that process still
 appears to be running; `prikk unlock --lock <path>` clears one lock after a typed `yes`, or with
-`--yes`. The check only advises: a lock whose process appears to be running is marked "do not clear",
-and prikk does not decide for the operator either way. `prikk doctor` names every held lock too
+`--yes`. A lock whose holder appears to be running is marked "do not clear" and refused unless `--force`;
+every other answer only advises, and prikk does not decide for the operator. `prikk doctor` names every held lock too
 (`PRIKK-DOCTOR-HELD-LOCK`, informational; it does not change `doctor`'s exit code), and the
 `lock conflict` error names `prikk unlock`. DC-28 does not define lock stealing, lock expiry, or
 automatic stale-lock repair, and they remain deliberately absent: clearing a lock whose process is

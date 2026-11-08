@@ -1100,7 +1100,8 @@ file. The message is the same for the active-session lock, a ref lock and a cont
 the file. `prikk unlock` lists every held lock with the recorded process id and start time and whether the process
 that took it still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
 live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after you have confirmed the
-process that held it is gone: treat a lock that `appears running` as held, and note that `does not appear to be running` and
+process that held it is gone: a lock that `appears running` is refused by `prikk unlock --lock <path>` unless you pass `--force`, which
+clears it anyway and can corrupt what that process is writing; note that `does not appear to be running` and
 `unknown` are not proof, and clearing a live holder's lock can corrupt the repository. The three words
 are defined once, with what each platform records, in
 [Concurrency and locking](../reference/concurrency-locking.md#what-the-three-liveness-words-mean).

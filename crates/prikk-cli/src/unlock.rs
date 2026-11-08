@@ -1,11 +1,14 @@
 //! `prikk unlock` — stale-lock recovery (RFC 102 Stage 6 Step 2, design-v1.md §15.7 decision 3).
 //!
 //! Bare invocation only lists what is currently held — it never clears anything. Clearing one
-//! specific lock (`--lock <path>`) always requires either an interactive `yes` confirmation or the
-//! scripting escape `--yes`; there is no default that removes a lock. The tool never decides a lock
-//! is safe to clear on its own -- see `prikk_store::unlock`'s own module doc for why (PID-based
-//! auto-stealing was considered and rejected: a false positive there means two writers on one
-//! container simultaneously, the exact race Step 2 exists to close).
+//! specific lock (`--lock <path>`) requires either an interactive `yes` confirmation or the scripting
+//! escape `--yes`; there is no default that removes a lock. **Since 0.57.0 (step 2, L2) a holder that
+//! `appears running` is refused unless `--force`**: `--yes` answers the prompt for a lock whose holder
+//! does not appear to be running or is unknown, and `--force` alone clears a live holder's lock, at the
+//! risk of corrupting what that process is writing. The two flags were synonyms before. The tool never
+//! decides a lock is safe to clear on its own -- see `prikk_store::unlock`'s own module doc for why
+//! (PID-based auto-stealing was considered and rejected: a false positive there means two writers on
+//! one container simultaneously, the exact race Step 2 exists to close).
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -14,19 +17,21 @@ use std::path::PathBuf;
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::stdout::{print, println};
-use prikk_store::{HeldLock, clear_lock, find_held_lock, list_held_locks};
+use prikk_store::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
 
 pub(crate) fn run_unlock(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut args = args.into_iter();
     let mut target: Option<String> = None;
-    let mut skip_confirmation = false;
+    let mut yes = false;
+    let mut force = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--lock" => {
                 let value = flag_value(&mut args, "--lock")?;
                 target.set_once("--lock", value)?;
             }
-            "--yes" | "--force" => mark_seen(&mut skip_confirmation, "--yes/--force")?,
+            "--yes" => mark_seen(&mut yes, "--yes")?,
+            "--force" => mark_seen(&mut force, "--force")?,
             other => return Err(unknown_argument("unlock", other)),
         }
     }
@@ -66,12 +71,19 @@ pub(crate) fn run_unlock(root: PathBuf, args: Vec<String>) -> std::result::Resul
     };
 
     print_locks(std::slice::from_ref(lock));
+    // L2: a holder that appears running is refused, whatever `--yes` or a typed `yes` says. Only
+    // `--force` clears it. The refusal is an operational failure (exit 1), before anything is asked
+    // or written, so a script chaining `prikk unlock --lock X --yes && proceed` never proceeds past a
+    // live writer's lock.
+    if lock.liveness == PidLiveness::AppearsRunning && !force {
+        return Err(refuse_live_holder(lock).into());
+    }
     // RFC 121 §6a: declining -- interactively, or via EOF on a non-interactive stdin, which
     // `confirm_interactively` cannot tell apart from a "no" -- must not exit `0`. A script running
     // `prikk unlock --lock X && proceed` with no input attached would otherwise be told the lock is
     // gone when it is not: uniform across both paths, not special-cased on whether a human was
-    // watching.
-    if !skip_confirmation && !confirm_interactively(lock) {
+    // watching. `--force` is an explicit "clear it whatever the holder says" and asks nothing.
+    if !(yes || force) && !confirm_interactively(lock) {
         return Err("lock not cleared: confirmation was not given"
             .to_string()
             .into());
@@ -109,10 +121,31 @@ fn print_locks(locks: &[HeldLock]) {
     );
 }
 
+/// The refusal for a holder that appears running: the pid, the start time, what `--force` does, and
+/// where the words are defined (the help line and `concurrency-locking.md` define them; this does not).
+fn refuse_live_holder(lock: &HeldLock) -> String {
+    let pid = lock
+        .recorded_pid
+        .map_or_else(|| "?".to_string(), |pid| pid.to_string());
+    let started = lock
+        .recorded_start
+        .as_deref()
+        .map_or_else(String::new, |start| format!(", start time {start}"));
+    format!(
+        "precondition not met: the process that took {} appears running (pid {pid}{started}) -- \
+         refusing to clear its lock. --yes does not clear a lock whose holder appears running. \
+         `--force` clears it anyway, at the risk of corrupting what that process is writing. What \
+         \"appears running\" means: docs/src/reference/concurrency-locking.md, \"What the three \
+         liveness words mean\"",
+        lock.path.display()
+    )
+}
+
 fn confirm_interactively(lock: &HeldLock) -> bool {
     print!(
-        "Clearing this lock while its process is still running can corrupt this repository. \
-         Type 'yes' to confirm clearing {}: ",
+        "Clearing a lock whose process is still running can corrupt this repository; this \
+         holder is {}. Type 'yes' to confirm clearing {}: ",
+        lock.liveness_words(),
         lock.path.display()
     );
     if std::io::stdout().flush().is_err() {

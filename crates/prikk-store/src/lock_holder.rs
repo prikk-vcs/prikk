@@ -35,9 +35,10 @@
 //!
 //! # The answers
 //!
-//! **appears running** -- the lock is known to come from this machine, the pid is alive, its start
-//! time equals the recorded one, and (Linux) the boot id, the pid namespace and the time namespace
-//! match. **does not appear running** -- *of a lock known to come from this machine*: the pid is gone,
+//! **appears running** -- the pid is alive, its start time equals the recorded one, and (Linux) the boot
+//! id, the pid namespace and the time namespace match. (It needs no machine identity: a start time
+//! equal to the microsecond cannot coincide across machines, and the refusal of `prikk unlock` is made
+//! of this answer, so it must not wait for an identity that could not be read.) **does not appear running** -- *of a lock known to come from this machine*: the pid is gone,
 //! or its start time differs (the number was reused), or the boot id differs (this machine
 //! restarted). **unknown** -- the record is from an older prikk, or incomplete, or from another pid or
 //! time namespace, another operating system or another machine, or a field cannot be read, or the
@@ -60,8 +61,8 @@
 //!   gone.
 //! - **Another machine.** A repository on a shared drive holds other machines' locks. A differing boot
 //!   id is a restart only of this machine, and a pid or start time of another machine says nothing
-//!   about this one. So "gone", "reused" and "rebooted" need the machine identity to be equal, and a
-//!   lock from a different machine reads unknown. On Linux an equal boot id already establishes the
+//!   about this one. So the *negative* answers -- "gone", "reused" and "rebooted" -- need the machine
+//!   identity to be equal, and a lock from a different machine reads unknown. On Linux an equal boot id already establishes the
 //!   same machine (boot ids are random per boot); elsewhere, and on Linux when the boot id differs, the
 //!   identity must be present on both sides and equal. The identity is `/etc/machine-id` (fallback
 //!   D-Bus's copy) on Linux, `gethostuuid` on macOS, `MachineGuid` on Windows; the hostname is not
@@ -423,18 +424,30 @@ pub(crate) fn judge(record: &Record, probe: &dyn Probe) -> LivenessReason {
             (Some(_), Some(_)) => return LivenessReason::OtherNamespace,
             _ => return LivenessReason::FieldUnreadable,
         }
-    } else if !same_machine_known {
-        return LivenessReason::MachineNotEstablished;
     }
     let Some(recorded_start) = &record.facts.start else {
         return LivenessReason::FieldUnreadable;
     };
+    // The two kinds of answer rest on different things. "Appears running" rests on the start time:
+    // a start time equal to the microsecond (100 ns on Windows) cannot coincide across machines, so
+    // it needs no machine identity -- and it must not wait for one, because the refusal (L2) is made
+    // of this answer. "Gone" and "reused" are negative: they are said only of a lock known to come
+    // from this machine, else unknown. On Linux an equal boot id (checked above) already established
+    // it; elsewhere the identity must be present and equal.
+    let negative_is_known = record.facts.os == "linux" || same_machine_known;
+    let negative = |reason: LivenessReason| {
+        if negative_is_known {
+            reason
+        } else {
+            LivenessReason::MachineNotEstablished
+        }
+    };
     match probe.read(record.pid) {
-        ProcessRead::Gone => LivenessReason::ProcessGone,
+        ProcessRead::Gone => negative(LivenessReason::ProcessGone),
         ProcessRead::Unreadable => LivenessReason::CouldNotCheck,
         ProcessRead::Alive(None) => LivenessReason::FieldUnreadable,
         ProcessRead::Alive(Some(now)) if now == *recorded_start => LivenessReason::SameProcess,
-        ProcessRead::Alive(Some(_)) => LivenessReason::PidReused,
+        ProcessRead::Alive(Some(_)) => negative(LivenessReason::PidReused),
     }
 }
 
