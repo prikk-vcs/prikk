@@ -528,13 +528,14 @@ pub struct BundlePreviewSealerSignature {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BundleImportRefusal {
-    /// The stable `refusal-v1` id `bundle import --format json` would print, e.g.
-    /// `"forged-publication-signature"`.
+    /// The stable `refusal-v1` id `bundle import --format json` would print: `rollback`, `diverged`,
+    /// `does-not-connect` or `forged-publication-signature`.
     pub id: &'static str,
-    /// The type of the first object the import would refuse on.
-    pub object_type: ObjectType,
-    /// That object's id.
-    pub object_id: ObjectId,
+    /// The type of the object the import would refuse on. `None` for a class refusal, whose sentence
+    /// names the received pointer instead.
+    pub object_type: Option<ObjectType>,
+    /// That object's id. `None` exactly when `object_type` is.
+    pub object_id: Option<ObjectId>,
     /// The sentence `bundle import` would print.
     pub message: String,
 }
@@ -592,12 +593,17 @@ pub struct BundlePreviewReport {
     /// 0.56.0 step 3c2 (R3): the `RefState`-chain relation `import_class` was computed against.
     /// `None` exactly when `import_class` is `NoLocalHistory`.
     pub import_ref_state_chain: Option<RefStateChainRelation>,
-    /// 0.57.0 step 1b: the publication-signature refusal `bundle import` of this exact delivery would
-    /// raise, or `None` when it would not. Unlike `sealed_by_signatures` (the delivered tip's sealers
-    /// only, reported and not trusted), this covers **every** Block and RefState the delivery carries,
-    /// because it is the importer's own admission check, called here. Costs what the import's own
-    /// check costs: one Ed25519 verification per signature of each unique Block and RefState.
-    pub import_refusal: Option<BundleImportRefusal>,
+    /// 0.57.0 step 1b2: every refusal `bundle import` of this exact delivery would raise, **without
+    /// flags**, in the order the import checks: the delivery-class refusal first (`rollback`,
+    /// `diverged`, `does-not-connect`, which `--allow-non-fast-forward` lifts), then the
+    /// publication-signature refusal (which nothing lifts). Empty when the import would admit it. An
+    /// array because one refusal can hide another: a user who passes the flag to get past the class
+    /// refusal meets the signature one. Unlike `sealed_by_signatures` (the delivered tip's sealers
+    /// only, reported and not trusted), the signature entry covers **every** Block and RefState the
+    /// delivery carries, because each entry is the importer's own function, called here. Costs what
+    /// the import's own check costs: one Ed25519 verification per signature of each unique Block and
+    /// RefState.
+    pub import_refusals: Vec<BundleImportRefusal>,
 }
 
 /// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
@@ -695,18 +701,6 @@ pub fn preview_bundle_reporting_anchor(
         .into_iter()
         .map(|(key_id, outcome)| BundlePreviewSealerSignature { key_id, outcome })
         .collect();
-
-    // 0.57.0 step 1b: what `bundle import` of this exact delivery would refuse on, by the importer's
-    // own check (`find_forged_publication_signature`), over every Block and RefState the delivery
-    // carries -- not only the tip's sealers `sealed_by_signatures` lists.
-    let import_refusal =
-        find_forged_publication_signature("bundle-import", &adopted_policy, &bundle_only_reader)?
-            .map(|forged| BundleImportRefusal {
-                id: "forged-publication-signature",
-                object_type: forged.object_type,
-                object_id: forged.object_id,
-                message: forged.error.to_string(),
-            });
 
     // 0.56.0 step 3c2 (R3): a `remotes/…` argument resolves the received pointer of that exact
     // name, not `RefStore`'s own `heads/`/`tags/`-only lookup -- `RefStore::read_current_ref_
@@ -816,6 +810,41 @@ pub fn preview_bundle_reporting_anchor(
         }
     };
 
+    // 0.57.0 step 1b2: every refusal `bundle import` of this exact delivery would raise without
+    // flags, in the import's own order, each from the import's own function -- the class refusal
+    // (`non_fast_forward_refusal`, with the option off) and then the signature refusal
+    // (`find_forged_publication_signature`) over every Block and RefState the delivery carries. A
+    // class refusal does not stop the signature check from running: the user who lifts the first with
+    // `--allow-non-fast-forward` would meet the second.
+    let mut import_refusals: Vec<BundleImportRefusal> = Vec::new();
+    if let Some(error) = non_fast_forward_refusal(
+        import_received_pointer.is_some(),
+        import_class,
+        &import_received_ref_name,
+        false,
+    ) {
+        let id = match &error {
+            PrikkError::BundleNonFastForward { class, .. } => *class,
+            _ => import_class.as_str(),
+        };
+        import_refusals.push(BundleImportRefusal {
+            id,
+            object_type: None,
+            object_id: None,
+            message: error.to_string(),
+        });
+    }
+    if let Some(forged) =
+        find_forged_publication_signature("bundle-import", &adopted_policy, &bundle_only_reader)?
+    {
+        import_refusals.push(BundleImportRefusal {
+            id: "forged-publication-signature",
+            object_type: Some(forged.object_type),
+            object_id: Some(forged.object_id),
+            message: forged.error.to_string(),
+        });
+    }
+
     let connectivity = match preview.connectivity {
         preview::BundleConnectivity::NoLocalHistory => BundlePreviewConnectivity::NoLocalHistory,
         preview::BundleConnectivity::DoesNotConnect => BundlePreviewConnectivity::DoesNotConnect,
@@ -875,7 +904,7 @@ pub fn preview_bundle_reporting_anchor(
             ref_state_chain,
             import_class,
             import_ref_state_chain,
-            import_refusal,
+            import_refusals,
         },
         anchor_fallbacks,
     ))
@@ -2372,30 +2401,13 @@ pub fn import_bundle(
     // A3: when a pointer already existed, a rollback, a divergent rewrite, or an unrelated history
     // all refuse by default -- naming the class, as its own `refusal-v1` id would once `bundle
     // import --format json` exists (0.56.0 step 3b, not this round).
-    if received_pointer.is_some()
-        && matches!(
-            connectivity_class,
-            BundleConnectivityClass::Rollback
-                | BundleConnectivityClass::Diverged
-                | BundleConnectivityClass::DoesNotConnect
-        )
-        && !options.allow_non_fast_forward
-    {
-        // 0.56.0 step 3b (A4): `BundleNonFastForward`, not `Precondition`, so `bundle import
-        // --format json`'s own `refusal-v1` document can name the class structurally, never by
-        // matching this message's own words. `Display` renders identically to what `Precondition`
-        // would have for this same message -- stderr's own text is unchanged by this round.
-        return Err(PrikkError::BundleNonFastForward {
-            command: "bundle-import",
-            class: connectivity_class.as_str(),
-            message: format!(
-                "bundle import: this delivery classifies as `{}` against {received_ref_name}'s \
-                 current pointer -- refusing rather than silently rewriting received history; pass \
-                 --allow-non-fast-forward to accept a delivery that does not simply extend the \
-                 pointer it would replace",
-                connectivity_class.as_str()
-            ),
-        });
+    if let Some(refusal) = non_fast_forward_refusal(
+        received_pointer.is_some(),
+        connectivity_class,
+        &received_ref_name,
+        options.allow_non_fast_forward,
+    ) {
+        return Err(refusal);
     }
 
     // 0.56.0 F2 item 1 (stikk's part-6 finding, one block back): refuse a forged MAINTAINER
@@ -3363,6 +3375,43 @@ fn read_required(
     object_store
         .read_typed(id, object_type)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing {object_type} object: {id}")))
+}
+
+/// The refusal `bundle import` raises for a delivery that does not simply extend the received pointer it
+/// would replace (0.56.0 step 3a/3b): when a pointer exists and the delivery classifies as `rollback`,
+/// `diverged` or `does-not-connect`, unless `--allow-non-fast-forward` was passed. **The one
+/// implementation**, called by the import (with its option) and by `bundle preview` (with the
+/// option off: what the import does without flags), so the sentence and the class id are never
+/// restated (0.57.0 step 1b2). `BundleNonFastForward`, not `Precondition`, so `bundle import --format
+/// json` names the class structurally.
+pub(crate) fn non_fast_forward_refusal(
+    pointer_exists: bool,
+    class: BundleConnectivityClass,
+    received_ref_name: &str,
+    allow_non_fast_forward: bool,
+) -> Option<PrikkError> {
+    if pointer_exists
+        && matches!(
+            class,
+            BundleConnectivityClass::Rollback
+                | BundleConnectivityClass::Diverged
+                | BundleConnectivityClass::DoesNotConnect
+        )
+        && !allow_non_fast_forward
+    {
+        return Some(PrikkError::BundleNonFastForward {
+            command: "bundle-import",
+            class: class.as_str(),
+            message: format!(
+                "bundle import: this delivery classifies as `{}` against {received_ref_name}'s \
+                 current pointer -- refusing rather than silently rewriting received history; pass \
+                 --allow-non-fast-forward to accept a delivery that does not simply extend the \
+                 pointer it would replace",
+                class.as_str()
+            ),
+        });
+    }
+    None
 }
 
 /// The first Block or RefState a delivery carries whose MAINTAINER signature is by an adopted key and

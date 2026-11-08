@@ -436,8 +436,28 @@ unchanged by this), an additive `"sealed_by_signatures"` field lists the same si
 (the key is not adopted by this repository at all), or `"invalid"` (the key is adopted, but the
 signature does not verify — the same condition `bundle import` refuses on). This is reporting
 only, exactly like `"sealed_by"` itself — `bundle import` is still the only thing that acts on it.
-The outcomes are for the signatures on the delivered tip: `bundle import` checks every Block and
-RefState it would admit, so a `sound` here does not mean the import will admit the delivery.
+The outcomes are for the signatures on the delivered tip, so a `sound` here does not by itself mean
+the import will admit the delivery; the next paragraph is what answers that.
+
+**`bundle preview` lists every refusal `bundle import` would raise, in the import's own order.** An
+additive `"import_refusals"` array (the schema stays `bundle-preview-v1`) is `[]` when the import,
+run without flags, would admit the delivery. Otherwise each entry is `{"id", "message",
+"object_type", "object_id"}`: first the delivery-class refusal (`id` is `rollback`, `diverged` or
+`does-not-connect`; `object_type` and `object_id` are `null`, because the sentence names the received
+pointer), then `forged-publication-signature` with the first Block or RefState whose MAINTAINER
+signature by an adopted key does not verify, and its sentence. Each entry comes from the import's own
+function, not a restatement, and `message` is the sentence the import prints. It is a list because one
+refusal can hide another: **a class refusal is lifted by `--allow-non-fast-forward`, and a signature
+refusal by nothing**, so a user who passes the flag meets the second entry. The text form prints one
+`bundle import of this delivery would refuse: <id>` line per entry, the sentence indented under it, and
+nothing when the list is empty. The signature entry costs what the import's own check costs: one Ed25519
+verification per signature of each unique Block and RefState the delivery carries (about 26 µs each,
+measured at 0.56.0). It covers the publication-signature check only; see the limit below.
+
+**One refusal the list does not name.** The import first admits the signatures of objects it already
+holds (RFC 156): a delivery that re-sends a held object with an extra MAINTAINER signature by an adopted
+key that does not verify is refused there, with `invalid signature: … refusing the whole import, nothing
+was written`, before the class check. `bundle preview` does not run that step.
 
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
 `remotes/…` name answers against the received pointer held under that exact name; if none is held

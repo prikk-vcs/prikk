@@ -21,6 +21,23 @@ exists to detect. **New:** `doctor` now reports the same disagreement as a warni
 `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
 over a file that holds no history), and both `verify` and `doctor` print what to do about it.
 
+### Fixed — `bundle preview` could read `sound` for a delivery `bundle import` refused
+
+Measured on 0.56.0: a sound tip over a forged ancestor previewed with `tipk: sound (reported, not
+trusted)` and exit 0, while `bundle import` of the same file refused (`forged-publication-signature`).
+`sealed_by_signatures` covers the delivered tip's sealers only. `bundle preview` now also answers what the
+import will do, whole: a new `import_refusals` array, in the import's own order — the delivery-class
+refusal (`rollback`, `diverged`, `does-not-connect`; lifted by `--allow-non-fast-forward`), then the
+forged-publication-signature refusal over every Block and RefState (lifted by nothing) — each entry
+produced by the import's own function. `[]` when the import would admit the delivery. Cost: one Ed25519
+verification per signature of each unique Block and RefState, as the import's own check.
+
+### Output changes
+
+- `bundle preview --format json` gains `"import_refusals"` (additive; the schema stays
+  `bundle-preview-v1`), and the text form prints `bundle import of this delivery would refuse: <id>` with
+  the import's sentence for each entry, and nothing when there is none.
+
 ### Fixed — `doctor` read clean over five findings `verify` fails on
 
 `verify` exits non-zero on eleven conditions; `doctor` was silent on five of them (measured by reading

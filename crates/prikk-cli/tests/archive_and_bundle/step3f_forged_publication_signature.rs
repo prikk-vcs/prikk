@@ -370,6 +370,25 @@ fn build_source_with_two_generations(
     ancestor_seed: &[u8; 32],
     tip_seed: &[u8; 32],
 ) -> RepositoryLayout {
+    build_two_generations_with_tip_root(
+        tag,
+        key_id,
+        ancestor_seed,
+        tip_seed,
+        prikk_store::compute_state_root(&[]).unwrap_or(MerkleRoot([0u8; 32])),
+    )
+}
+
+/// [`build_source_with_two_generations`], with block 2's state root chosen by the caller: a different
+/// root makes block 2 a different object from the honest chain's block 2 over the same block 1, so a
+/// delivery of it is a `diverged` one (0.57.0 step 1b2).
+fn build_two_generations_with_tip_root(
+    tag: &str,
+    key_id: &str,
+    ancestor_seed: &[u8; 32],
+    tip_seed: &[u8; 32],
+    tip_root: MerkleRoot,
+) -> RepositoryLayout {
     let dir = support::unique_repo(&format!("step3f-{tag}-src"));
     let layout = RepositoryLayout::init(dir.clone()).expect("init layout");
     let mut store = FileObjectStore::new(layout.clone());
@@ -457,7 +476,7 @@ fn build_source_with_two_generations(
         parent_block_ids: vec![block1_id],
         kind: BlockKind::Normal,
         patch_ids: Vec::new(),
-        state_merkle_root: prikk_store::compute_state_root(&[]).unwrap_or(MerkleRoot([0u8; 32])),
+        state_merkle_root: tip_root,
         snapshot_blob_ref: None,
         mainline_parent_id: None,
         merge_baseline_block_id: None,
@@ -995,149 +1014,239 @@ fn bundle_preview_reports_invalid_and_unverifiable_sealers_by_outcome() {
     let _ = std::fs::remove_file(&unverifiable_bundle);
 }
 
-/// In-process `bundle preview` of a bundle file against `dest`, returning the store's report.
-fn preview_in_process(dest: &Path, bundle: &Path) -> prikk_store::BundlePreviewReport {
-    let layout = RepositoryLayout::open(dest.to_path_buf()).unwrap();
-    let bytes = std::fs::read(bundle).unwrap();
-    let mut source = prikk_store::BundleSource::Buffered(std::io::Cursor::new(bytes));
-    prikk_store::preview_bundle(
-        &layout,
-        &mut source,
-        &prikk_store::BundleImportOptions::default_limits(),
-        "heads/main",
-    )
-    .unwrap()
+fn temp_bundle(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "prikk-step1b2-{tag}-{}.pbndl",
+        support::unique_suffix()
+    ))
 }
 
-/// **0.57.0 step 1b: `bundle preview` answers what `bundle import` will do about signatures.**
-/// Before, a sound tip over a forged ancestor previewed as `sound` (`sealed_by_signatures` names the
-/// delivered tip's sealers only) while `bundle import` refused it (0.56.0 P2, external 046/049). The
-/// store's report now carries `import_refusal`, found by the importer's own function
-/// (`find_forged_publication_signature`) over every Block and RefState:
-/// - a forged tip, and a sound tip over a forged ancestor: `Some(forged-publication-signature)`,
-///   naming the object, and the sentence is the one the real import prints;
-/// - a sound delivery and a delivery by a sealer the destination never adopted: `None`, and the
-///   import accepts both.
-///
-/// **Perturb (red control):** make `preview_bundle_reporting_anchor` report `import_refusal: None`
-/// -- the two refusing cases go red. (The CLI's text and JSON output for the field is held for the
-/// architect's ruling on its shape; this is the store's report.)
-#[test]
-fn preview_reports_the_refusal_the_import_would_raise_for_every_block_not_only_the_tip() {
-    let dest = support::unique_repo("step1b-preview-dest");
-    support::init(&dest);
-    support::trust_maintainer(&dest); // adopts the real key under MAINTAINER_KEY_ID
+/// `prikk bundle preview --format json` of `bundle` in `dest`, as the document it prints.
+fn preview_json(dest: &Path, bundle: &Path) -> serde_json_like::Value {
+    let output = support::prikk(dest)
+        .args([
+            "bundle",
+            "preview",
+            "--input",
+            bundle.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_valid_json(&stdout_of(&output))
+}
 
-    // A sound tip over a forged ancestor.
+fn import_attempt(dest: &Path, bundle: &Path, allow_non_fast_forward: bool) -> Output {
+    let mut command = support::prikk(dest);
+    command.args(["bundle", "import", "--input", bundle.to_str().unwrap()]);
+    if allow_non_fast_forward {
+        command.arg("--allow-non-fast-forward");
+    }
+    command.output().unwrap()
+}
+
+/// **0.57.0 step 1b2: `bundle preview` answers what `bundle import` will do, whole.** The preview's
+/// `import_refusals` lists every refusal the import raises without flags, in the import's own order
+/// -- the delivery-class refusal first (`rollback`, `diverged`, `does-not-connect`: lifted by
+/// `--allow-non-fast-forward`), then the publication-signature refusal (lifted by nothing) -- each
+/// from the import's own function. One refusal can hide another: a user who passes the flag to get past
+/// the class refusal meets the signature one, which a single-valued field would not have told them.
+/// Four deliveries, through the binary:
+/// 1. an honest one: `[]`, and the text form prints no `would refuse` line;
+/// 2. a sound tip over a forged ancestor (the tip's `sealed_by_signatures` read `sound`): one entry,
+///    `forged-publication-signature`, naming a Block or RefState, the import's own sentence;
+/// 3. a rollback alone: one entry, `rollback`, with `null` object fields;
+/// 4. a diverged delivery whose new tip is forged: two entries in that order; the real import refuses
+///    with the first's sentence, and with `--allow-non-fast-forward` refuses with the **second's**.
+///
+/// **Perturb (red control, the order):** push the signature entry before the class entry in
+/// `preview_bundle_reporting_anchor` -- case 4's order assertion goes red; drop the signature entry
+/// -- cases 2 and 4 go red; drop the class entry -- cases 3 and 4.
+#[test]
+fn preview_lists_every_refusal_the_import_would_raise_in_the_imports_order() {
+    // The honest two-generation chain, signed throughout by the real key.
+    let honest = build_source_with_two_generations(
+        "step1b2-honest",
+        support::MAINTAINER_KEY_ID,
+        &support::MAINTAINER_SEED,
+        &support::MAINTAINER_SEED,
+    );
+    let honest_bundle = temp_bundle("honest");
+    export_bundle_to(&honest, &honest_bundle);
+
+    // 1. an honest delivery to a repository that holds nothing of it.
+    let fresh = support::unique_repo("step1b2-fresh");
+    support::init(&fresh);
+    support::trust_maintainer(&fresh);
+    let value = preview_json(&fresh, &honest_bundle);
+    assert!(
+        value.get("import_refusals").as_array().is_empty(),
+        "{value:?}"
+    );
+    let text = support::prikk(&fresh)
+        .args([
+            "bundle",
+            "preview",
+            "--input",
+            honest_bundle.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !stdout_of(&text).contains("would refuse"),
+        "nothing is printed when the import would admit it: {}",
+        stdout_of(&text)
+    );
+
+    // 2. a forged ancestor under a sound tip.
     let ancestor = build_source_with_two_generations(
-        "step1b-ancestor",
+        "step1b2-ancestor",
         support::MAINTAINER_KEY_ID,
         &ANCESTOR_FORGER_SEED,
         &support::MAINTAINER_SEED,
     );
-    let ancestor_bundle = std::env::temp_dir().join(format!(
-        "prikk-step1b-ancestor-{}.pbndl",
-        support::unique_suffix()
-    ));
+    let ancestor_bundle = temp_bundle("ancestor");
     export_bundle_to(&ancestor, &ancestor_bundle);
-    let report = preview_in_process(&dest, &ancestor_bundle);
+    let value = preview_json(&fresh, &ancestor_bundle);
     assert!(
-        report
-            .sealed_by_signatures
+        value
+            .get("sealed_by_signatures")
+            .as_array()
             .iter()
-            .all(|signature| signature.outcome == prikk_store::PublicationSignatureOutcome::Sound),
-        "the gap this closes: the tip's sealers read sound ({:?})",
-        report.sealed_by_signatures
+            .all(|signature| signature.get("outcome").as_str() == "sound"),
+        "the gap this closes: the tip's sealers read sound: {value:?}"
     );
-    let refusal = report
-        .import_refusal
-        .as_ref()
-        .expect("the import would refuse the forged ancestor");
-    assert_eq!(refusal.id, "forged-publication-signature");
-    assert!(matches!(
-        refusal.object_type,
-        ObjectType::Block | ObjectType::RefState
-    ));
-    let import = support::prikk(&dest)
+    let refusals = value.get("import_refusals").as_array();
+    assert_eq!(refusals.len(), 1, "{value:?}");
+    assert_eq!(
+        refusals[0].get("id").as_str(),
+        "forged-publication-signature"
+    );
+    assert!(!refusals[0].get("object_type").is_null());
+    assert!(!refusals[0].get("object_id").is_null());
+    let text = support::prikk(&fresh)
         .args([
             "bundle",
-            "import",
+            "preview",
             "--input",
             ancestor_bundle.to_str().unwrap(),
         ])
         .output()
         .unwrap();
+    assert!(
+        stdout_of(&text)
+            .contains("bundle import of this delivery would refuse: forged-publication-signature"),
+        "{}",
+        stdout_of(&text)
+    );
+    let import = import_attempt(&fresh, &ancestor_bundle, false);
     assert_eq!(import.status.code(), Some(1), "{import:?}");
     assert!(
-        stderr_of(&import).contains(&refusal.message),
-        "the preview's sentence is the import's: {:?} vs {}",
-        refusal.message,
-        stderr_of(&import)
+        stderr_of(&import).contains(refusals[0].get("message").as_str()),
+        "the entry's sentence is the import's"
     );
 
-    // A forged tip.
-    let forged = build_source_signed_by("step1b-forged", &FORGER_SEED, support::MAINTAINER_KEY_ID);
-    let forged_bundle = std::env::temp_dir().join(format!(
-        "prikk-step1b-forged-{}.pbndl",
-        support::unique_suffix()
-    ));
-    export_bundle_to(&forged, &forged_bundle);
-    let report = preview_in_process(&dest, &forged_bundle);
-    assert_eq!(
-        report.import_refusal.as_ref().map(|r| r.id),
-        Some("forged-publication-signature")
-    );
+    // The destination for cases 3 and 4 holds the honest chain's received pointer (at block 2).
+    let dest = support::unique_repo("step1b2-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest);
+    let first = import_attempt(&dest, &honest_bundle, false);
+    assert!(first.status.success(), "{first:?}");
 
-    // A sound delivery, and a sealer this repository never adopted: the import accepts both, so the
-    // preview reports no refusal.
-    let sound = build_source_signed_by(
-        "step1b-sound",
+    // 3. a rollback alone: block 1 only, signed honestly -- an ancestor of the pointer.
+    let rollback = build_source_signed_by(
+        "step1b2-rollback",
         &support::MAINTAINER_SEED,
         support::MAINTAINER_KEY_ID,
     );
-    let sound_bundle = std::env::temp_dir().join(format!(
-        "prikk-step1b-sound-{}.pbndl",
-        support::unique_suffix()
-    ));
-    export_bundle_to(&sound, &sound_bundle);
-    assert_eq!(
-        preview_in_process(&dest, &sound_bundle).import_refusal,
-        None
+    let rollback_bundle = temp_bundle("rollback");
+    export_bundle_to(&rollback, &rollback_bundle);
+    let value = preview_json(&dest, &rollback_bundle);
+    let refusals = value.get("import_refusals").as_array();
+    assert_eq!(refusals.len(), 1, "{value:?}");
+    assert_eq!(refusals[0].get("id").as_str(), "rollback");
+    assert!(refusals[0].get("object_type").is_null());
+    assert!(refusals[0].get("object_id").is_null());
+    assert!(
+        refusals[0]
+            .get("message")
+            .as_str()
+            .contains("--allow-non-fast-forward"),
+        "the class sentence already names the flag that lifts it"
     );
-    let unadopted =
-        build_source_signed_by("step1b-unadopted", &UNVERIFIABLE_SEED, UNVERIFIABLE_KEY_ID);
-    let unadopted_bundle = std::env::temp_dir().join(format!(
-        "prikk-step1b-unadopted-{}.pbndl",
-        support::unique_suffix()
-    ));
-    export_bundle_to(&unadopted, &unadopted_bundle);
-    assert_eq!(
-        preview_in_process(&dest, &unadopted_bundle).import_refusal,
-        None
+
+    // 4. a diverged delivery whose new tip carries a forged signature: the honest chain's block 1,
+    //    then a *different* block 2, signed by the forger under the adopted key id. Two entries, class
+    //    first. (A rollback cannot carry a forged object this destination does not already hold; one
+    //    that re-sends a held object with a forged extra signature is refused earlier still, by the
+    //    import's own signature admission -- see the report.)
+    let forged_diverged = build_two_generations_with_tip_root(
+        "step1b2-forged-diverged",
+        support::MAINTAINER_KEY_ID,
+        &support::MAINTAINER_SEED,
+        &FORGER_SEED,
+        MerkleRoot([0x42; 32]),
     );
-    let import = support::prikk(&dest)
+    let forged_diverged_bundle = temp_bundle("forged-diverged");
+    export_bundle_to(&forged_diverged, &forged_diverged_bundle);
+    let value = preview_json(&dest, &forged_diverged_bundle);
+    let refusals = value.get("import_refusals").as_array();
+    assert_eq!(refusals.len(), 2, "{value:?}");
+    assert_eq!(
+        refusals[0].get("id").as_str(),
+        "diverged",
+        "the import's order"
+    );
+    assert_eq!(
+        refusals[1].get("id").as_str(),
+        "forged-publication-signature"
+    );
+    let text = support::prikk(&dest)
         .args([
             "bundle",
-            "import",
+            "preview",
             "--input",
-            unadopted_bundle.to_str().unwrap(),
+            forged_diverged_bundle.to_str().unwrap(),
         ])
         .output()
         .unwrap();
-    assert!(import.status.success(), "{import:?}");
+    let text = stdout_of(&text);
+    let class_at = text.find("would refuse: diverged").expect("class line");
+    let signature_at = text
+        .find("would refuse: forged-publication-signature")
+        .expect("signature line");
+    assert!(class_at < signature_at, "{text}");
+    // The real import: the class refusal first; past it with the flag, the signature refusal.
+    let without_flag = import_attempt(&dest, &forged_diverged_bundle, false);
+    assert_eq!(without_flag.status.code(), Some(1), "{without_flag:?}");
+    assert!(
+        stderr_of(&without_flag).contains(refusals[0].get("message").as_str()),
+        "{}",
+        stderr_of(&without_flag)
+    );
+    let with_flag = import_attempt(&dest, &forged_diverged_bundle, true);
+    assert_eq!(with_flag.status.code(), Some(1), "{with_flag:?}");
+    assert!(
+        stderr_of(&with_flag).contains(refusals[1].get("message").as_str()),
+        "past the class refusal the user meets the second entry's sentence: {}",
+        stderr_of(&with_flag)
+    );
 
     cleanup(&[
+        honest.root(),
         ancestor.root(),
-        forged.root(),
-        sound.root(),
-        unadopted.root(),
+        rollback.root(),
+        forged_diverged.root(),
+        &fresh,
         &dest,
     ]);
     for path in [
+        honest_bundle,
         ancestor_bundle,
-        forged_bundle,
-        sound_bundle,
-        unadopted_bundle,
+        rollback_bundle,
+        forged_diverged_bundle,
     ] {
         let _ = std::fs::remove_file(path);
     }

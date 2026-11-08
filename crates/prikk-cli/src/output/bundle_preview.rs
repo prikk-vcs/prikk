@@ -47,6 +47,35 @@ pub(crate) fn print_bundle_preview_json(report: &BundlePreviewReport) {
         None => json.push_str("null"),
     }
 
+    // 0.57.0 step 1b2: additive. Every refusal `bundle import` of this exact delivery would raise
+    // without flags, in the import's own order (the class refusal, then the signature refusal);
+    // `[]` when it would admit the delivery. Each entry comes from the import's own function.
+    json.push_str(",\n  \"import_refusals\": [");
+    for (index, refusal) in report.import_refusals.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"id\": ");
+        json.push_str(&escape_json_string(refusal.id));
+        json.push_str(", \"message\": ");
+        json.push_str(&escape_json_string(&refusal.message));
+        json.push_str(", \"object_type\": ");
+        match &refusal.object_type {
+            Some(object_type) => json.push_str(&escape_json_string(&object_type.to_string())),
+            None => json.push_str("null"),
+        }
+        json.push_str(", \"object_id\": ");
+        match &refusal.object_id {
+            Some(object_id) => json.push_str(&escape_json_string(&object_id.to_string())),
+            None => json.push_str("null"),
+        }
+        json.push('}');
+    }
+    if !report.import_refusals.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push(']');
+
     json.push_str(",\n  \"conflict\": ");
     match &report.conflict {
         Some(conflict) => json.push_str(&escape_json_string(conflict.as_str())),
@@ -157,6 +186,15 @@ pub(crate) fn print_bundle_preview_plain(report: &BundlePreviewReport) {
     );
     if let Some(chain) = report.import_ref_state_chain {
         println!("  ref state chain: {}", chain.as_str());
+    }
+    // 0.57.0 step 1b2: one labelled line per refusal `bundle import` would raise without flags, in
+    // the import's order, with the import's own sentence indented. Nothing when it would admit it.
+    for refusal in &report.import_refusals {
+        println!(
+            "bundle import of this delivery would refuse: {}",
+            refusal.id
+        );
+        println!("  {}", refusal.message);
     }
     match &report.conflict {
         Some(BundlePreviewConflict::AppliesCleanly) => println!("conflict: none, applies cleanly"),
