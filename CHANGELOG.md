@@ -39,11 +39,15 @@ restore the record.
 Measured on 0.56.0: a sound tip over a forged ancestor previewed with `tipk: sound (reported, not
 trusted)` and exit 0, while `bundle import` of the same file refused (`forged-publication-signature`).
 `sealed_by_signatures` covers the delivered tip's sealers only. `bundle preview` now also answers what the
-import will do, whole: a new `import_refusals` array, in the import's own order — the delivery-class
-refusal (`rollback`, `diverged`, `does-not-connect`; lifted by `--allow-non-fast-forward`), then the
-forged-publication-signature refusal over every Block and RefState (lifted by nothing) — each entry
-produced by the import's own function. `[]` when the import would admit the delivery. Cost: one Ed25519
-verification per signature of each unique Block and RefState, as the import's own check.
+import will do about the delivery's class and its new-object maintainer signatures: a new
+`import_refusals` array, in the import's own order — the delivery-class refusal (`rollback`, `diverged`,
+`does-not-connect`; lifted by `--allow-non-fast-forward`), then the forged-publication-signature refusal
+over every new Block and RefState (lifted by nothing) — each entry produced by the import's own function.
+`[]` means neither refusal applies, not that the import will succeed: the list does not cover a
+held-object admission refusal, an author-key conflict, the signature-count bound, the store's write
+decision, AUTHOR-signature failures, or a structurally invalid delivery (which fails the preview itself);
+`commands.md` names each. Cost: one Ed25519 verification per signature of each unique Block and RefState,
+as the import's own check.
 
 ### Output changes
 

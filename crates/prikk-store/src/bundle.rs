@@ -593,8 +593,10 @@ pub struct BundlePreviewReport {
     /// 0.56.0 step 3c2 (R3): the `RefState`-chain relation `import_class` was computed against.
     /// `None` exactly when `import_class` is `NoLocalHistory`.
     pub import_ref_state_chain: Option<RefStateChainRelation>,
-    /// 0.57.0 step 1b2: every refusal `bundle import` of this exact delivery would raise, **without
-    /// flags**, in the order the import checks: the delivery-class refusal first (`rollback`,
+    /// 0.57.0 step 1b2: the refusals for the delivery's class and its new-object maintainer signatures
+    /// that `bundle import` of this exact delivery would raise, **without flags**, in the order the import
+    /// checks them (it does not cover the held-object admission refusal, an author-key conflict, the
+    /// signature bound, the store's write decision or AUTHOR failures -- see `commands.md`): the delivery-class refusal first (`rollback`,
     /// `diverged`, `does-not-connect`, which `--allow-non-fast-forward` lifts), then the
     /// publication-signature refusal (which nothing lifts). Empty when the import would admit it. An
     /// array because one refusal can hide another: a user who passes the flag to get past the class

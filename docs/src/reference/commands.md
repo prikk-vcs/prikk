@@ -449,7 +449,7 @@ only, exactly like `"sealed_by"` itself — `bundle import` is still the only th
 The outcomes are for the signatures on the delivered tip, so a `sound` here does not by itself mean
 the import will admit the delivery; the next paragraph is what answers that.
 
-**`bundle preview` lists every refusal `bundle import` would raise, in the import's own order.** An
+**`bundle preview` lists the refusals for the delivery's class and its new-object maintainer signatures, in the import's own order.** An
 additive `"import_refusals"` array (the schema stays `bundle-preview-v1`) is `[]` when the import,
 run without flags, would admit the delivery. Otherwise each entry is `{"id", "message",
 "object_type", "object_id"}`: first the delivery-class refusal (`id` is `rollback`, `diverged` or
@@ -462,12 +462,23 @@ refusal by nothing**, so a user who passes the flag meets the second entry. The 
 `bundle import of this delivery would refuse: <id>` line per entry, the sentence indented under it, and
 nothing when the list is empty. The signature entry costs what the import's own check costs: one Ed25519
 verification per signature of each unique Block and RefState the delivery carries (about 26 µs each,
-measured at 0.56.0). It covers the publication-signature check only; see the limit below.
+measured at 0.56.0).
 
-**One refusal the list does not name.** The import first admits the signatures of objects it already
-holds (RFC 156): a delivery that re-sends a held object with an extra MAINTAINER signature by an adopted
-key that does not verify is refused there, with `invalid signature: … refusing the whole import, nothing
-was written`, before the class check. `bundle preview` does not run that step.
+**What the list does not cover.** The preview answers two of the import's decisions, and says nothing
+about the others, so an empty list means "no class refusal and no forged signature on a new object", not
+"the import will succeed":
+- **The held-object admission refusal.** The import first admits the signatures of objects it already
+  holds (RFC 156): a delivery that re-sends a held object with an extra MAINTAINER signature by an adopted
+  key that does not verify is refused there, with `invalid signature: … refusing the whole import, nothing
+  was written`, before the class check. `bundle preview` does not run that step.
+- **An author-key conflict** (a key id the bundle carries that conflicts with one this repository has
+  recorded), **the signature-count bound**, **the store's own write decision** (the same id with a
+  different envelope), and **AUTHOR-signature failures.** The import refuses on each; the preview does not
+  run them.
+- **A structurally invalid delivery** (a malformed bundle, a missing object, an object over a bound)
+  makes the preview itself fail, with the import's own sentence and a non-zero exit, rather than appear
+  as an entry.
+- **Lock and I/O failures** at import time.
 
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
 `remotes/…` name answers against the received pointer held under that exact name; if none is held
