@@ -294,3 +294,173 @@ fn verify_reports_a_deliberately_stale_index_entry_as_divergence() {
 
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// The two-digit hex string at `needle`'s hash field in the index text, with one digit of the
+/// recorded hash replaced by its neighbour -- the damage external review 046 §4 measured.
+fn flip_one_hash_digit(index_path: &Path, path_in_repo: &str) {
+    let original = std::fs::read_to_string(index_path).unwrap();
+    let mut flipped = String::new();
+    let mut done = false;
+    for line in original.split_inclusive('\n') {
+        if !done && line.starts_with(&format!("{path_in_repo}\t")) {
+            let mut fields: Vec<String> = line.trim_end().split('\t').map(str::to_string).collect();
+            let hash = fields.last_mut().unwrap();
+            let at = 10;
+            let digit = hash.as_bytes()[at];
+            let next = b"0123456789abcdef"[(b"0123456789abcdef"
+                .iter()
+                .position(|d| *d == digit)
+                .unwrap()
+                + 1)
+                % 16];
+            hash.replace_range(at..=at, &(next as char).to_string());
+            flipped.push_str(&fields.join("\t"));
+            flipped.push('\n');
+            done = true;
+        } else {
+            flipped.push_str(line);
+        }
+    }
+    assert!(done, "the index has an entry for {path_in_repo}");
+    std::fs::write(index_path, flipped).unwrap();
+}
+
+/// **0.57.0 step 0b (external review 046 §4).** One wrong hex digit of a recorded content hash, size
+/// and mtime untouched, used to make `commit` of an unrelated new file refuse with `integrity error:
+/// EditText requested for unchanged text`. Now:
+/// - `verify` still fails (exit 1) and names the path and a way out;
+/// - `doctor` reports the same divergence as a warning, with the same way out (it stays exit 0: an
+///   error would refuse every `doctor --repair-*` over a file that is only a cache);
+/// - `commit` succeeds and authors **only** the new file (the unchanged file gets no operation);
+/// - afterwards the entry is corrected and `verify` is clean.
+///
+/// **Perturb (red control):** drop `&& cached.content_hash == base.blob_id` from
+/// `resolve_existing_file` -- the `commit` assertion goes red with the 046 message.
+#[test]
+fn a_damaged_hash_digit_is_a_miss_for_commit_and_a_finding_for_verify_and_doctor() {
+    let repo = unique_repo("damaged-digit");
+    init(&repo);
+    std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    ok(&commit(&repo, "genesis"), "genesis commit");
+
+    flip_one_hash_digit(&commit_index_path(&repo), "a.txt");
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    fail(&verify, "verify with a damaged commit-index hash");
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(stdout.contains("commit-index divergences: 1"), "{stdout}");
+    assert!(
+        stdout.contains("commit-index [divergence] a.txt"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE),
+        "verify names the way out: {stdout}"
+    );
+
+    let doctor = prikk(&repo).arg("doctor").output().unwrap();
+    ok(
+        &doctor,
+        "doctor stays exit 0: a cache divergence is a warning",
+    );
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        stdout.contains("warning [PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE]"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("commit-index entry for a.txt"), "{stdout}");
+    assert!(
+        stdout.contains(prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE),
+        "doctor names the same way out: {stdout}"
+    );
+
+    std::fs::write(repo.join("b.txt"), "beta\n").unwrap();
+    let out = commit(&repo, "add b");
+    ok(
+        &out,
+        "commit of an unrelated new file despite the damaged entry",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("create-file b.txt"), "{stdout}");
+    assert!(
+        stdout.contains("operations: 1"),
+        "only the new file: {stdout}"
+    );
+    assert!(
+        !stdout.contains("a.txt"),
+        "the unchanged file gets no operation: {stdout}"
+    );
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    ok(&verify, "verify after the commit corrected the entry");
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(stdout.contains("commit-index divergences: 0"), "{stdout}");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The other half of §5, stated and held: an entry that wrongly says "unchanged" (the file was
+/// rewritten with the same size and modification time) is the accepted residual risk of the stat
+/// heuristic. `commit` does not see the change; `verify` and `doctor` do, name the way out, and
+/// saving the file again (a new modification time) lets `commit` author the edit.
+///
+/// **Perturb (red control):** remove the warning push in `doctor_repository` -- the `doctor`
+/// assertion goes red; remove the advice print in `output/verification.rs` -- the `verify`
+/// assertion goes red.
+#[test]
+fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_saving_the_file() {
+    let repo = unique_repo("hidden-rewrite");
+    init(&repo);
+    let file = repo.join("a.txt");
+    std::fs::write(&file, "alpha\n").unwrap();
+    ok(&commit(&repo, "genesis"), "genesis commit");
+
+    let mtime = std::fs::metadata(&file).unwrap().modified().unwrap();
+    std::fs::write(&file, "omega\n").unwrap(); // same size, new bytes
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+
+    let diff = prikk(&repo).arg("diff").output().unwrap();
+    ok(&diff, "diff");
+    assert!(
+        String::from_utf8_lossy(&diff.stdout).contains("modified a.txt"),
+        "diff re-reads the file and shows the change"
+    );
+    let blind = commit(&repo, "blind");
+    fail(
+        &blind,
+        "commit trusts the entry that says unchanged (accepted residual risk)",
+    );
+
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    fail(&verify, "verify finds the hidden rewrite");
+    let stdout = String::from_utf8_lossy(&verify.stdout);
+    assert!(
+        stdout.contains("commit-index [divergence] a.txt"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE),
+        "{stdout}"
+    );
+    let doctor = prikk(&repo).arg("doctor").output().unwrap();
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        stdout.contains("PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE"),
+        "{stdout}"
+    );
+
+    // The way out the message names: save the file again.
+    std::fs::write(&file, "omega\n").unwrap();
+    let out = commit(&repo, "the rewrite");
+    ok(&out, "commit after saving the file again");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("operations: 1"));
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    ok(&verify, "verify after");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}

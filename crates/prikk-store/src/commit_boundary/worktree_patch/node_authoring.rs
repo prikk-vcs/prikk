@@ -865,7 +865,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                         &mut commit_index,
                         path,
                         meta,
-                        base.mode,
+                        base,
                         BlobKind::Text,
                     )?;
                     if resolved.content_hash != base.blob_id {
@@ -894,7 +894,7 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                         &mut commit_index,
                         path,
                         meta,
-                        base.mode,
+                        base,
                         BlobKind::Binary,
                     )?;
                     if resolved.content_hash != base.blob_id {
@@ -1677,14 +1677,25 @@ struct ExistingFileResolution {
 /// Resolve an existing node's current content hash against the commit-index cache, reading the file
 /// only when the cache cannot vouch for it unread. See the cache-validity specification for the
 /// trust condition this implements (`CommitIndexEntry::matches_stat`).
+///
+/// **An entry is trusted unread only to say "unchanged".** A stat-matching entry whose recorded hash
+/// equals the node's baseline blob is the cache's whole purpose and costs no read. A stat-matching
+/// entry that says the file *differs* from the baseline is treated as a miss: this path is about to
+/// be read to author an edit anyway, so the file is read here, re-hashed, and the entry rewritten
+/// from what it actually holds. A cache entry therefore never makes `commit` fail or author a change
+/// the file does not have -- a damaged hash (one wrong digit) used to send an unchanged file to the
+/// edit planner, which refused with `EditText requested for unchanged text`. The opposite damage (an
+/// entry that wrongly says "unchanged") is the accepted residual risk of the stat heuristic
+/// (specification §5) and stays `verify`'s to detect (§6).
 fn resolve_existing_file(
     layout: &RepositoryLayout,
     commit_index: &mut CommitIndex,
     path: &str,
     meta: &WorktreeFileMeta,
-    base_mode: u32,
+    base: &BaselineFile,
     blob_kind: BlobKind,
 ) -> std::result::Result<ExistingFileResolution, AuthorError> {
+    let base_mode = base.mode;
     let stat = RootFileStat {
         size: meta.size,
         mtime_secs: meta.mtime_secs,
@@ -1692,7 +1703,10 @@ fn resolve_existing_file(
         mode: meta.mode,
     };
     if let Some(cached) = commit_index.get(path) {
-        if cached.kind == blob_kind && cached.matches_stat(&stat) {
+        if cached.kind == blob_kind
+            && cached.matches_stat(&stat)
+            && cached.content_hash == base.blob_id
+        {
             return Ok(ExistingFileResolution {
                 content_hash: cached.content_hash,
                 bytes: None,

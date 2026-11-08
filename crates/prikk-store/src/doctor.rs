@@ -1168,6 +1168,24 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     .for_active_session(DEFAULT_ACTIVE_NAME),
                 );
             }
+            // 0.57.0 step 0b: a commit-index entry whose stat still matches the file but whose
+            // recorded hash disagrees with the file's bytes -- the divergence `verify` already
+            // fails on (`commit-index-divergence`), reported here too so a repository `verify`
+            // fails is not one `doctor` calls healthy. A **warning**, not an error: the index is a
+            // cache and holds no history, and a repository-wide error would refuse every
+            // `doctor --repair-*` (`repair_repository`'s gate) over a file that is only a cache.
+            for divergence in &verification.commit_index_divergences {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE",
+                    format!(
+                        "commit-index entry for {} records content hash {}, but the file's \
+                         content hashes to {} (its size and modification time still match the \
+                         entry)",
+                        divergence.path, divergence.recorded_hash, divergence.actual_hash
+                    ),
+                    crate::COMMIT_INDEX_DIVERGENCE_ADVICE,
+                ));
+            }
             // Handoff 165 Q1b review, the one item for Q2: `PRIKK-TRUST-POLICY-INVALID` is always
             // and only `load_maintainer_trust_policy` failing (`verify/trust.rs`'s own `Publication
             // TrustVerifier`), so when that failure is the trust policy's own ambiguity or damage --

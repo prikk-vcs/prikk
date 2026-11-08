@@ -71,6 +71,8 @@ parents are supported** (DC-75) and record both parents, a mainline pointer, and
 which `verify` re-derives rather than trusts. **Repair and Import Blocks remain unauthorized** until a
 later design defines their state derivation.
 
+**No block, patch or ref record carries a time.** Signatures and RefUpdates have a `created_at` field, and every current writer sets it to 0 (and the current ref log refuses any other value at write time), so a record says what happened and in what order, never when.
+
 The state root commits to the complete replay-derived live-node set in canonical path order.
 Each leaf binds the exact repository path, nonzero NodeId, node kind, normalized mode, and either the
 file Blob ObjectId or opaque UTF-8 symlink target. Binary Merkle reduction promotes an odd final hash

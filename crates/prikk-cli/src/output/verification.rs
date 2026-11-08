@@ -767,6 +767,12 @@ pub(crate) fn print_verify_report(
             divergence.path, divergence.recorded_hash, divergence.actual_hash
         );
     }
+    if !report.commit_index_divergences.is_empty() {
+        println!(
+            "commit-index: {}",
+            prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE
+        );
+    }
     println!(
         "lifecycle-cache divergences: {}",
         report.lifecycle_cache_divergences.len()

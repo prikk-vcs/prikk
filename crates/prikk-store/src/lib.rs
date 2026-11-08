@@ -192,7 +192,7 @@ pub use commit_boundary::worktree_patch::{
     WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
     commit_worktree_changes_signed,
 };
-pub use commit_index::CommitIndexDivergence;
+pub use commit_index::{COMMIT_INDEX_DIVERGENCE_ADVICE, CommitIndexDivergence};
 pub use compact::{
     CompactionReport, KeepSlotReport, compact_received_index, compact_received_index_keep_slot,
     compact_ref_pointer_index, compact_trust_policy, compact_trust_policy_keep_slot,

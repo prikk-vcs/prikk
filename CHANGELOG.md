@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed — a damaged commit-index entry made `commit` refuse with `EditText requested for unchanged text`
+
+Measured on 0.55.0 and 0.56.0 (external review 046 §4, reproduced on the 0.56.0 release binary): one
+wrong hex digit of a recorded content hash in `.prikk/cache/commit-index.v1`, with the entry's size and
+modification time untouched, made `prikk commit` of an **unrelated new file** refuse with `integrity
+error: EditText requested for unchanged text`, naming no path and no way out. `verify` exited `1`
+(naming the path), `doctor` exited `0` and said nothing, and `status` and `diff` showed nothing;
+deleting the cache file cured it.
+
+`commit` now treats an entry that says a file differs from the last committed content as a miss: the
+path (which it is about to read to author an edit anyway) is read, re-hashed and the entry rewritten, so
+a cache entry no longer makes `commit` fail or author a change the file does not have. The same commit
+authors only the new file and leaves `verify` clean. **Unchanged:** `verify` still exits `1` for an
+entry that disagrees with the file, because the opposite damage (an entry that wrongly says
+"unchanged") is the stat heuristic's accepted residual risk, which `commit` cannot see and `verify`
+exists to detect. **New:** `doctor` now reports the same disagreement as a warning,
+`PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
+over a file that holds no history), and both `verify` and `doctor` print what to do about it.
+
+### Documented — signatures and RefUpdates carry no time
+
+`created_at` is `0` at every current signing and ref-update writer, so no block, patch or ref record
+carries a time. The sentence is in the data-model reference and the history guide (it was promised for
+0.56.0).
+
 ### Fixed — `sync seal` onto a branch the receiver does not hold sealed the branch without its earlier files
 
 Measured on 0.56.0: carry `heads/main` (three sealed commits) into a fresh repository with `sync

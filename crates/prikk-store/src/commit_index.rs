@@ -127,6 +127,16 @@ pub struct CommitIndexDivergence {
     pub actual_hash: ObjectId,
 }
 
+/// What to do about a [`CommitIndexDivergence`], in the words `verify` and `doctor` both print. The
+/// index is a cache and holds no history, so nothing recorded in the repository is wrong; this
+/// names what `commit` does with such an entry and the one case it cannot see on its own.
+pub const COMMIT_INDEX_DIVERGENCE_ADVICE: &str = "the commit-index is a cache and holds no \
+history, so nothing recorded in the repository is wrong. `prikk commit` re-reads a path and \
+corrects its entry whenever the entry says the file differs from the last committed content. When \
+the entry instead hides a real change (the file was rewritten with the same size and modification \
+time: `prikk diff` shows it, `prikk commit` does not), save the file again (any new modification \
+time) and commit";
+
 /// Check every commit-index entry whose recorded stat still matches the worktree against the file's
 /// actual current content. An entry whose stat no longer matches is not re-read here: that is the
 /// ordinary, expected "edited but not yet committed" case, not divergence — the next `commit` will

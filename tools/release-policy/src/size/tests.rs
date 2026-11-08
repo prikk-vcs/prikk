@@ -293,9 +293,11 @@ fn an_inline_test_module_is_not_production() {
         // above are no-ops there), a second match on the current branch plus its doc comment,
         // 1881 -> 1897. 0.56.0 P3b: a record naming a Block the repository does not hold reads as
         // no record (a filter at the one place `commit` reads the record, plus its comment),
-        // 1897 -> 1912.
+        // 1897 -> 1912. 0.57.0 step 0b: `resolve_existing_file` trusts a commit-index entry unread
+        // only to say "unchanged" (it now takes the baseline node and compares the recorded hash
+        // with the baseline blob; a doc comment states why), 1912 -> 1926.
         physical,
-        1912,
+        1926,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -305,7 +307,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1863);
+    assert_eq!(counted.production_lines, 1877);
     assert_eq!(
         physical - counted.production_lines,
         49,

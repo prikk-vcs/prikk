@@ -141,6 +141,23 @@ This happened when two commands that both write objects ran at the same moment �
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
+## `error: commit-index cache disagrees with the worktree for at least one path`
+
+`prikk verify` exits `1` with this line, and `prikk doctor` prints
+`warning [PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE]`, when an entry of the commit-index
+(`.prikk/cache/commit-index.v1`) says a file has one content hash while the file's bytes produce
+another, although the entry's size and modification time still match the file. The index is a cache
+that only saves `commit` a read; it holds no history, so nothing recorded in the repository is wrong.
+
+- **The entry says the file differs from the last committed content, but it does not** (a damaged
+  entry). `prikk commit` re-reads the path, corrects the entry and authors nothing for that file — an
+  unrelated new file commits as usual. Before 0.57.0 this shape refused the commit with `integrity
+  error: EditText requested for unchanged text`.
+- **The entry says the file is unchanged, but it was rewritten** with the same size and modification
+  time (a restored or backdated timestamp, or two writes in one clock tick). `prikk diff` and
+  `prikk worktree-status` show the change; `prikk commit` does not, because it trusts the entry.
+  Save the file again (any new modification time) and commit; `verify` is clean afterwards.
+
 ## `error: integrity error: active WAL has a damaged record (damaged record at byte offset N; K sound record(s) follow it); …`
 
 A record in the queue of unsealed commits is damaged, and **K intact records stand behind it**. `prikk verify` and `prikk doctor` name

@@ -27,6 +27,8 @@ For each entry, the CLI reports:
 - required attestation count;
 - previous RefState ID.
 
+Nothing in that list is a time: signatures and RefUpdates have a `created_at` field, every current writer sets it to 0, and so no block, patch or ref record carries one. The entries are ordered by update sequence, not by date.
+
 A Block is classified as a rollback Block when it references at least one Patch envelope carrying the current development rollback marker and that Patch payload decodes under the supported replay subset.
 
 History inspection does not yet perform full block-DAG traversal, path-aware history queries, rollback authorization checks, or patch algebra.
