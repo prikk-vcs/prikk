@@ -442,7 +442,15 @@ fn doctor_reports_an_unreached_untrusted_signature_as_a_warning_not_an_error() {
                 report.issues
             );
             assert_eq!(report.count_by_severity(DoctorSeverity::Error), 0);
-            assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 2);
+            // The unreached-object warning, the untrusted-signature warning, and (0.57.0 step 1c) the
+            // ignored worktree record a store-level `init` leaves absent.
+            assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 3);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.code == "PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED")
+            );
             assert!(
                 report
                     .issues
@@ -560,7 +568,16 @@ fn doctor_reports_empty_active_metadata_debris_as_warning() {
 
         let report = doctor_repository(&layout);
         assert!(report.is_healthy());
-        assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 1);
+        // Two warnings: the debris this test is about, and (0.57.0 step 1c) the ignored worktree record --
+        // a store-level `init` writes none (the CLI's `init`/`setup` does), the worktree is clean, and
+        // `branch switch` would restore it.
+        assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 2);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.code == "PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED")
+        );
         assert!(
             report
                 .issues

@@ -24,5 +24,7 @@ mod rfc147_tag_ref_resolution;
 mod rfc151_branch_switch;
 #[path = "branch_and_tag/rfc151_current_branch.rs"]
 mod rfc151_current_branch;
+#[path = "branch_and_tag/step1c_worktree_record_restore.rs"]
+mod step1c_worktree_record_restore;
 #[path = "support/mod.rs"]
 mod support;

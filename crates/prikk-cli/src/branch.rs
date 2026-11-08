@@ -456,6 +456,14 @@ fn run_switch(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         } else {
             println!("already on {}", report.to);
         }
+        // 0.57.0 step 1c: the one write this no-op makes, said plainly.
+        if report.worktree_record_restored {
+            println!(
+                "recorded the worktree's baseline for {} (`.prikk/worktree.baseline` was absent or \
+                 unreadable; the worktree matches the branch, and no file changed)",
+                report.to
+            );
+        }
         return Ok(());
     }
     match &report.from {

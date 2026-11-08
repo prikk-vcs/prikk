@@ -141,6 +141,18 @@ This happened when two commands that both write objects ran at the same moment â
 refused with `lock conflict` instead, so a repository cannot reach this state any more. The repair
 exists for repositories damaged before that.
 
+## `warning [PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED]: .prikk/worktree.baseline is absent or unreadable â€¦` (0.57.0)
+
+`.prikk/worktree.baseline` records which state this worktree was last made to match, and it is what lets
+`commit` refuse a worktree that is behind its branch. When it is absent, empty, unreadable, or names a
+Block this repository does not hold, it is ignored and that check is off until the next `commit`, `seal`
+or `branch switch` rewrites it. Run the command the warning names, `prikk branch switch <current
+branch>`: when the worktree matches the branch it writes the record, prints `recorded the worktree's
+baseline for <ref>` beside `already on <ref>`, and changes no file. `doctor` shows the warning only when
+that command would do so. If you have uncommitted changes the warning is not shown and the command
+writes nothing: commit or restore them first (`prikk worktree-status` lists them), and `commit`'s own
+refusals protect the worktree meanwhile.
+
 ## `doctor` reports a finding `verify` fails on (0.57.0)
 
 `prikk verify` exits non-zero on eleven conditions, and `prikk doctor` reports every one of them. The

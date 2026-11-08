@@ -78,6 +78,10 @@ pub struct BranchSwitchReport {
     pub deleted_files: usize,
     /// `true` when `to` was already the current branch and nothing was done.
     pub already_current: bool,
+    /// 0.57.0 step 1c: `true` when `to` was already the current branch, the worktree's recorded
+    /// baseline was absent or ignored, and the worktree is clean against the branch -- so the switch
+    /// wrote the record (and nothing else). `false` otherwise.
+    pub worktree_record_restored: bool,
     /// The replay-verified snapshot the switch could not anchor at, if any (RFC 136 increment 2b). The
     /// switch replayed from genesis instead; the worktree is the same either way.
     pub anchor_fallback: Option<SnapshotAnchorFallback>,
@@ -110,12 +114,33 @@ pub fn switch_branch(
     // refusal 2's job, just below, not this check's.
     if from == Some(target.as_str()) && !worktree_is_dirty(layout)? {
         let probe_replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+        let comparison =
+            crate::worktree_baseline::compare_worktree_baseline(layout, &target, &probe_replay)?;
         let current = matches!(
-            crate::worktree_baseline::compare_worktree_baseline(layout, &target, &probe_replay)?,
+            comparison,
             crate::worktree_baseline::WorktreeBaselineComparison::NoRecord
                 | crate::worktree_baseline::WorktreeBaselineComparison::Current
         );
         if current {
+            // 0.57.0 step 1c: an absent or ignored record is restored here, but only when the
+            // worktree is clean against the branch -- the one condition under which "last written
+            // from this tip" is true. Otherwise nothing is written, as before.
+            let worktree_record_restored = if matches!(
+                comparison,
+                crate::worktree_baseline::WorktreeBaselineComparison::NoRecord
+            ) {
+                match plan_worktree_record_restore(layout, &target, &probe_replay)? {
+                    WorktreeRecordRestore::Restorable(identity) => {
+                        crate::worktree_baseline::write_worktree_baseline_identity(
+                            &identity, layout,
+                        )?;
+                        true
+                    }
+                    WorktreeRecordRestore::NotClean => false,
+                }
+            } else {
+                false
+            };
             return Ok(BranchSwitchReport {
                 from: Some(target.clone()),
                 to: target,
@@ -123,6 +148,7 @@ pub fn switch_branch(
                 unchanged_files: 0,
                 deleted_files: 0,
                 already_current: true,
+                worktree_record_restored,
                 anchor_fallback: None,
             });
         }
@@ -354,6 +380,7 @@ pub fn switch_branch(
         unchanged_files: unchanged.len(),
         deleted_files: deletes.len(),
         already_current: false,
+        worktree_record_restored: false,
         anchor_fallback,
     })
 }
@@ -455,6 +482,64 @@ fn write_current_branch(layout: &RepositoryLayout, branch: &str) -> Result<()> {
         &relative,
         format!("{branch}\n").as_bytes(),
     )
+}
+
+/// What `branch switch <the current branch>` can do about a worktree record that is absent or ignored
+/// (0.57.0 step 1c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorktreeRecordRestore {
+    /// The worktree is clean against the branch, so "last written from this tip" is true: the switch
+    /// writes this identity (the branch's live one) and changes no file.
+    Restorable(crate::worktree_baseline::WorktreeBaselineIdentity),
+    /// The worktree differs from the branch (a modified, missing or unsupported path, or a live rename
+    /// declaration): the switch writes nothing, and `commit`'s own refusals cover the guard's state.
+    NotClean,
+}
+
+/// The one predicate behind both the restoring switch and `doctor`'s notice, so the notice appears
+/// exactly when the command it names would restore the record: the caller has found the record absent
+/// or ignored; this scans the worktree (the same report and the same dirty classification the switch's
+/// own refusal 3 uses) and answers whether the live identity may be written.
+pub(crate) fn plan_worktree_record_restore(
+    layout: &RepositoryLayout,
+    branch: &str,
+    active_replay: &crate::wal::WalReplay,
+) -> Result<WorktreeRecordRestore> {
+    if worktree_is_dirty(layout)? {
+        return Ok(WorktreeRecordRestore::NotClean);
+    }
+    let report =
+        crate::worktree_status::worktree_status_over_sound_replay(layout, branch, active_replay)?;
+    if !crate::worktree_materialize::dirty_worktree_entries(&report, |_| false).is_empty() {
+        return Ok(WorktreeRecordRestore::NotClean);
+    }
+    Ok(WorktreeRecordRestore::Restorable(
+        crate::worktree_baseline::live_baseline_identity(layout, branch, active_replay)?,
+    ))
+}
+
+/// `doctor`'s question: is the current branch's worktree record absent or ignored **and** would
+/// `prikk branch switch <it>` restore it? `Ok(false)` for a present record, for a worktree that is not
+/// clean (no notice: a warning with nothing to type is noise), and for a WAL that is not sound (that is
+/// reported elsewhere).
+pub(crate) fn worktree_record_restorable_by_switch(
+    layout: &RepositoryLayout,
+    branch: &str,
+) -> Result<bool> {
+    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    if replay.trailing_partial_bytes != 0 || replay.has_item_failure() {
+        return Ok(false);
+    }
+    if !matches!(
+        crate::worktree_baseline::compare_worktree_baseline(layout, branch, &replay)?,
+        crate::worktree_baseline::WorktreeBaselineComparison::NoRecord
+    ) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        plan_worktree_record_restore(layout, branch, &replay)?,
+        WorktreeRecordRestore::Restorable(_)
+    ))
 }
 
 // Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); tests that

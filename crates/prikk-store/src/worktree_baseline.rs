@@ -53,6 +53,12 @@
 //! as it was before this round; this round adds no new `doctor`/`verify` check over it, matching the
 //! ruling's own "probably ignore it" expectation -- a stale record is cleared by the ordinary resync, not
 //! something `doctor` needs to repair.
+//!
+//! **0.57.0 step 1c amends that for one state:** a record that is *absent or ignored* leaves the commit
+//! guard off, and `branch switch <the current branch>` used to be a no-op there, so no command could turn
+//! it back on. It now writes the record when the worktree is clean against the branch
+//! (`branch_switch::plan_worktree_record_restore`), and `doctor` warns -- only when that command would
+//! restore the record, by the same predicate. `verify` still does not look at the file.
 
 use prikk_error::Result;
 use prikk_object::{ObjectId, ObjectType};
@@ -203,16 +209,36 @@ pub fn record_worktree_baseline(
     queued_patch_ids: &[ObjectId],
 ) -> Result<()> {
     let canonical = validate_local_branch_ref(ref_name)?;
-    let baseline_field = baseline.map_or_else(|| GENESIS_MARKER.to_string(), |id| id.to_string());
-    let digest = queued_fold_digest(queued_patch_ids);
+    write_worktree_baseline_identity(
+        &WorktreeBaselineIdentity {
+            ref_name: canonical,
+            baseline,
+            wal_sequence,
+            queued_fold: queued_fold_digest(queued_patch_ids),
+        },
+        layout,
+    )
+}
+
+/// Write `identity` as the worktree's one record, in place. The single writer of the file's bytes:
+/// [`record_worktree_baseline`] (from what a caller just did) and `branch switch <the current
+/// branch>` restoring an absent or ignored record (0.57.0 step 1c, from the live identity) both end here.
+pub(crate) fn write_worktree_baseline_identity(
+    identity: &WorktreeBaselineIdentity,
+    layout: &RepositoryLayout,
+) -> Result<()> {
+    let baseline_field = identity
+        .baseline
+        .map_or_else(|| GENESIS_MARKER.to_string(), |id| id.to_string());
     let record = format!(
-        "{RECORD_MAGIC} {canonical} {baseline_field} {wal_sequence} {}\n",
-        digest_to_hex(&digest)
+        "{RECORD_MAGIC} {} {baseline_field} {} {}\n",
+        identity.ref_name,
+        identity.wal_sequence,
+        digest_to_hex(&identity.queued_fold)
     );
-    let relative = baseline_record_path();
     rewrite_in_place_or_create_required(
         layout.repository_mutation_root(),
-        relative,
+        baseline_record_path(),
         record.as_bytes(),
     )
 }

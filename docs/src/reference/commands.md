@@ -167,7 +167,17 @@ told apart from an identical commit retried after a crash. `seal` advances the r
 worktree already matched the fold it sealed; a fold the worktree was never written to match (the one
 `rollback-draft --append-inverse` queues) leaves the record where it was. This is worktree-local
 operational state, like the unclean-shutdown marker beside it — never part of any versioned object,
-and `verify`/`doctor` do not look at it.
+and `verify` does not look at it. **A record that is absent or ignored** (empty, unreadable, or naming a
+Block this repository does not hold) leaves `commit`'s guard off until something rewrites it. `prikk
+branch switch <the current branch>` rewrites it when the worktree is clean against the branch — no
+tracked file modified, missing or unsupported, and no live rename declaration; untracked files do not
+count — and prints `recorded the worktree's baseline for <ref>` beside its usual `already on <ref>`; it
+changes no file. When the worktree is not clean it writes nothing, as before. `doctor` warns
+(`PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED`, exit 0) naming that command **only when it would restore the
+record**, by the same predicate the command uses; a worktree that is not clean gets no notice, because
+`commit`'s own refusals already cover that state and a warning with nothing to type is noise. A record
+whose line is still readable (zero or random bytes after it, its final newline missing) is not ignored
+and is not reported.
 - **`commit` (and `commit --ref <x>`) refuses to author over a path that is stale against this
   worktree's own record — content, mode, kind, presence, or the node it belongs to — unless the
   worktree already holds the live state for it, and this holds in exactly the same way whichever

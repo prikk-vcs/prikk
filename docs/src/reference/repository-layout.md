@@ -55,7 +55,9 @@ commands compare the worktree against the ref's live state as before. The same h
 is absent, empty or unreadable, or that names a Block this repository does not hold (a damaged copy of
 the file can still parse): it is ignored, and the next `commit`, `seal` or `branch switch` rewrites it.
 Until then `commit` cannot tell a branch that moved from the user's own change, exactly as before 0.56.0.
-`verify` and `doctor` do not check the file.
+`verify` does not check the file. `doctor` warns when it is absent or ignored and `prikk branch switch
+<the current branch>` would restore it (the worktree is clean against the branch), and `branch switch`
+then writes it and changes no file.
 
 ```text
 .prikk/

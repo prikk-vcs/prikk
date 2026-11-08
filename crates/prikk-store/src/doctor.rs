@@ -1195,6 +1195,32 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     crate::COMMIT_INDEX_DIVERGENCE_ADVICE,
                 ));
             }
+            // 0.57.0 step 1c: the worktree's recorded baseline is absent or ignored (empty, unreadable,
+            // or naming a Block this repository does not hold), so `commit`'s guard against a worktree
+            // that is behind its branch is off until something rewrites it. Shown **only when
+            // `prikk branch switch <current branch>` would restore it** -- the same predicate that
+            // command uses (`worktree_record_restorable_by_switch`), so the notice never names a
+            // command that would write nothing. A worktree that is not clean gets no notice: a warning
+            // with nothing to type is noise, and `commit`'s own refusals already cover that state.
+            // Costs one worktree scan, and only when the record is already absent or ignored.
+            if let Ok(branch) = crate::refs::current_branch(layout) {
+                if crate::branch_switch::worktree_record_restorable_by_switch(layout, &branch)
+                    .unwrap_or(false)
+                {
+                    issues.push(DoctorIssue::warning(
+                        "PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED",
+                        format!(
+                            ".prikk/worktree.baseline is absent or unreadable, so the check that \
+                             refuses a commit onto a worktree that is behind {branch} is off until \
+                             the next commit, seal or branch switch rewrites it"
+                        ),
+                        format!(
+                            "run `prikk branch switch {branch}`: the worktree matches {branch}, so \
+                             it writes the record and changes no file"
+                        ),
+                    ));
+                }
+            }
             // 0.57.0 step 1a (the rule over the class): `doctor` reports every finding `verify` fails
             // on, each with a way out. The five below were silent. Severity follows the owner's
             // split: `warning` for derived or received state that holds no local history, `error`

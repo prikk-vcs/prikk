@@ -21,6 +21,19 @@ exists to detect. **New:** `doctor` now reports the same disagreement as a warni
 `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
 over a file that holds no history), and both `verify` and `doctor` print what to do about it.
 
+### Fixed — an ignored worktree record could not be restored, and nothing said it was ignored
+
+`.prikk/worktree.baseline` is what lets `commit` refuse a worktree that is behind its branch. When it is
+absent, empty, unreadable, or names a Block this repository does not hold, it reads as no record and
+that guard is off; `prikk branch switch <the current branch>` was a no-op there, so no command could
+turn it back on, and `verify` and `doctor` said nothing (nine silent cells in the architect's crash and
+corruption matrix; four of them make the record ignored). Now `prikk branch switch <the current
+branch>` writes the record when the worktree is clean against the branch (no tracked file modified,
+missing or unsupported, no live rename declaration) and prints `recorded the worktree's baseline for
+<ref>`; it changes no file, and when the worktree is not clean it writes nothing, as before. `doctor`
+warns with `PRIKK-DOCTOR-WORKTREE-RECORD-IGNORED` (exit 0) naming that command, only when it would
+restore the record.
+
 ### Fixed — `bundle preview` could read `sound` for a delivery `bundle import` refused
 
 Measured on 0.56.0: a sound tip over a forged ancestor previewed with `tipk: sound (reported, not
