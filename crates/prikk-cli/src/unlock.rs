@@ -115,14 +115,19 @@ fn print_locks(locks: &[HeldLock]) {
     println!(
         "liveness is advisory only: \"does not appear to be running\" and \"unknown\" are NOT proof \
          it is safe to clear. What each word means, and what each platform records to decide it, is \
-         defined in one place: docs/src/reference/concurrency-locking.md, \"What the three liveness \
-         words mean\". Clear a lock only if you have independently confirmed the process that \
-         created it is gone."
+         defined in one place ({LIVENESS_WORDS_URL}). \
+         Clear a lock only if you have independently confirmed the process that created it is gone."
     );
 }
 
+/// The URL of the one place the three liveness words are defined: published, so a release installed
+/// from a package or an archive can open it (the source-tree path would not exist there).
+const LIVENESS_WORDS_URL: &str =
+    "https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean";
+
 /// The refusal for a holder that appears running: the pid, the start time, what `--force` does, and
-/// where the words are defined (the help line and `concurrency-locking.md` define them; this does not).
+/// where the words are defined (the help line and the page at [`LIVENESS_WORDS_URL`] define them;
+/// this does not).
 fn refuse_live_holder(lock: &HeldLock) -> String {
     let pid = lock
         .recorded_pid
@@ -134,9 +139,8 @@ fn refuse_live_holder(lock: &HeldLock) -> String {
     format!(
         "precondition not met: the process that took {} appears running (pid {pid}{started}) -- \
          refusing to clear its lock. --yes does not clear a lock whose holder appears running. \
-         `--force` clears it anyway, at the risk of corrupting what that process is writing. What \
-         \"appears running\" means: docs/src/reference/concurrency-locking.md, \"What the three \
-         liveness words mean\"",
+         --force clears it anyway, at the risk of corrupting what that process is writing. What \
+         \"appears running\" means: {LIVENESS_WORDS_URL}",
         lock.path.display()
     )
 }

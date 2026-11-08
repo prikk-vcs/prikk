@@ -244,7 +244,7 @@ fn the_listing_and_doctor_say_why_a_lock_is_unknown() {
     );
     // One definition of the words: the listing's closing line names the doc, it does not restate them.
     assert!(
-        stdout.contains("docs/src/reference/concurrency-locking.md"),
+        stdout.contains("https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean"),
         "stdout: {stdout}"
     );
     assert!(
@@ -291,8 +291,13 @@ fn a_live_holder_is_refused_with_yes_and_with_a_typed_yes_and_the_lock_stays() {
         "the refusal says what --force does and its risk: {stderr}"
     );
     assert!(
-        stderr.contains("docs/src/reference/concurrency-locking.md"),
+        stderr.contains("https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean"),
         "the refusal points at the one definition: {stderr}"
+    );
+    // An installed release has no source tree to open, and the message quotes flags in one style.
+    assert!(
+        !stderr.contains("docs/src") && !stderr.contains('`'),
+        "no source-tree path, no backticks in the refusal: {stderr}"
     );
     assert!(
         path.is_file(),
@@ -407,4 +412,22 @@ fn yes_and_force_may_be_given_together_and_each_only_once() {
         .output()
         .unwrap();
     assert_eq!(twice.status.code(), Some(2), "{twice:?}");
+}
+
+/// The help line defines the two flags and names the published page, not a source-tree path.
+#[test]
+fn the_help_line_names_the_published_page_for_the_liveness_words() {
+    let repo = unique_repo("unlock-help-url");
+    init(&repo);
+    let output = prikk(&repo).arg("--help").output().unwrap();
+    ok(&output, "--help");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("docs/src/reference/concurrency-locking.md"),
+        "{stdout}"
+    );
 }

@@ -37,8 +37,8 @@ is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-t
 
 With the holder recorded (above), "appears running" now means the process that took the lock is still the
 one running, so it is safe to refuse on. `prikk unlock --lock <path>` on such a lock exits `1` with a
-precondition naming the pid and the start time, whether the lock is cleared by `--yes`, by a typed `yes`, or
-not at all; `--force` clears it anyway, without asking, at the risk of corrupting what that process is
+precondition naming the pid and the start time, whether it is given `--yes`, a typed `yes`, or no flag;
+`--force` clears it anyway, without asking, at the risk of corrupting what that process is
 writing. `--yes` keeps its meaning for a holder that does not appear to be running or is unknown (an older
 prikk's lock, a cut body, another namespace or machine). `--yes` and `--force` are no longer synonyms. The help
 line and [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean)
@@ -210,12 +210,13 @@ sender's. The sync guide states the step.
 
 ### Upgrading
 
-- **`prikk unlock --lock <path> --yes` and `--force` are no longer synonyms.** A script that passes `--yes`
-  or `--force` against a lock whose holder **appears running** now fails with exit `1` and a precondition
-  instead of clearing it; before 0.57.0 either flag cleared a live holder's lock. A script that means to
-  clear a live holder's lock (rare, and at the risk of corrupting what that process is writing) must pass
-  `--force`; a script clearing the lock of a crashed writer needs no change, because a dead holder, an
-  older prikk's lock and an unknown holder are all still cleared by `--yes`.
+- **`prikk unlock --lock <path> --yes` against a lock whose holder appears running now exits `1`** with a
+  precondition naming the pid and the start time, and leaves the lock; before 0.57.0 it cleared that
+  lock. `--yes` and `--force` are no longer synonyms. **`--force` is unchanged:** it clears a live holder's
+  lock without asking, exactly as 0.56.0 did. A script that means to clear a live holder's lock (rare, and
+  at the risk of corrupting what that process is writing) passes `--force`. A script clearing the lock of a
+  crashed writer needs no change: a dead holder, an older prikk's lock and an unknown holder are all still
+  cleared by `--yes`.
 - **A lock written by 0.56.0 or earlier lists as `unknown`** ("written by an older prikk") until it is
   cleared or its holder finishes; `--yes` clears it as before.
 
