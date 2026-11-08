@@ -30,9 +30,20 @@ An entry for path `P` may be trusted, and `P`'s content read skipped, if and onl
    `size`, `mtime_secs`, and `mtime_nanos`.
 2. The entry's `kind` equals the `BlobKind` the current comparison needs (`Text` for an existing
    `TextFile` node, `Binary` for an existing `BinaryFile` node).
+3. **(0.57.0 step 0b, 2026-11-08) The entry's recorded `content_hash` equals the node's baseline blob.**
+   An entry is trusted unread only to say "unchanged". An entry that says the file differs is a miss:
+   the file is read, as it would be anyway to author the edit, re-hashed, and the entry rewritten. So a
+   damaged or stale hash can never send an unchanged file to the edit planner, which was the 0.55.0
+   and 0.56.0 `integrity error: EditText requested for unchanged text` (external review 046 §4). The hot
+   path is unchanged: an unchanged file's entry equals its baseline blob.
 
-Implemented as `CommitIndexEntry::matches_stat` (condition 1) plus a direct `kind` equality check at
-the call site (condition 2), in `commit_index.rs`'s `resolve_existing_file`.
+Implemented as `CommitIndexEntry::matches_stat` (condition 1), plus a direct `kind` equality check
+(condition 2) and the baseline comparison (condition 3) at the call site, in `node_authoring.rs`'s
+`resolve_existing_file`.
+
+**What condition 3 does not cover** is an entry that hides a real rewrite (same size and mtime, and a
+recorded hash that still equals the baseline). That remains §5's accepted residual, detected by
+`verify` (§6) and now reported by `doctor` (`PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE`).
 
 **Mode is deliberately excluded from the trust condition.** A `chmod` with no content change (e.g.
 `chmod +x`) does not update `mtime` on Linux — only `ctime`, which this cache does not track. Making
@@ -40,7 +51,7 @@ mode part of the trust gate would force an unnecessary content read on every per
 Mode is instead compared directly, every commit, from the cheap stat already taken for path `P` —
 never from the cache — so a permission change is always detected regardless of cache state.
 
-If either condition fails, the path is treated exactly as if it had no cache entry at all: the file
+If any condition fails, the path is treated exactly as if it had no cache entry at all: the file
 is read, its hash recomputed, and the entry is replaced with the freshly observed `(size, mtime,
 mode, kind, content_hash)`.
 
