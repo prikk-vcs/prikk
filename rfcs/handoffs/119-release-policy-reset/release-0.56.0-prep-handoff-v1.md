@@ -297,3 +297,14 @@ must equal `e0a4208e02d0…`, since only the CHANGELOG changed). The architect p
    - `git show --stat`: one file, one line.
 3. **Nothing else.** The architect pushes it, reads its CI, tags it (signed), watches the release run, and publishes
    to crates.io. If the push slips past that day, the heading is re-dated again on the tag day.
+
+**0.56.0 RELEASED 2026-11-08.** P5 (`808126bd`) is accepted (review `release-0.56.0-prep-P5-review-v1`).
+- **CI:** 42430753311, 17/17.
+- **The tag:** signed `0.56.0` on `808126bd`.
+- **Release run:** 42432039825, 12/12 (four builds, publish, AUR build and push, four Windows install cells).
+- **Release notes:** byte-identical to the CHANGELOG section.
+- **crates.io:** all eight crates at 0.56.0.
+- **AUR:** both `.SRCINFO` files at 0.56.0-1.
+
+**This handoff is complete.** Still the architect's: the ack letter to the external architect and the consumer
+letters (planeter, stikk, inklkunn), which the owner sends.
