@@ -284,3 +284,16 @@ comes last. The architect pushes it and reads its CI before the tag.
 word on the tag:** the tag-day re-date commit. One line, `## 0.56.0 — 2026-11-07` → the tag day, `CHANGELOG.md`
 only, one-line message. Then `cargo test --workspace` and the 14 gates on it, and the release binary's sha256 (it
 must equal `e0a4208e02d0…`, since only the CHANGELOG changed). The architect pushes it, reads its CI, and tags it.
+
+**2026-11-08: the owner authorized the tag ("Authorized.") and crates.io ("Authorized.").**
+
+**Next, and live: P5, the tag-day date** (one sitting, 15 min, stop at 30; report `release-0.56.0-prep-P5-report.md`):
+1. **In `CHANGELOG.md` only:** `## 0.56.0 — 2026-11-07` → `## 0.56.0 — <the day you do this>`. Keep the em-dash
+   (U+2014), because `release-notes` extracts the section by that shape. One commit, one-line message.
+2. **On it:**
+   - `cargo test --workspace`;
+   - the 14 gates;
+   - the release binary's sha256, which must equal `e0a4208e02d0…` (only the CHANGELOG changed);
+   - `git show --stat`: one file, one line.
+3. **Nothing else.** The architect pushes it, reads its CI, tags it (signed), watches the release run, and publishes
+   to crates.io. If the push slips past that day, the heading is re-dated again on the tag day.
