@@ -41,6 +41,12 @@ Implemented as `CommitIndexEntry::matches_stat` (condition 1), plus a direct `ki
 (condition 2) and the baseline comparison (condition 3) at the call site, in `node_authoring.rs`'s
 `resolve_existing_file`.
 
+4. **(0.57.0 step 0c, 2026-11-08) The entry was recorded for a file whose mtime was older than the file system's
+   clock at the moment the recording commit took its lock** (the creation stamp of the active lock file, read before any
+   content). This is enforced at record time, in `CommitIndex::record`: an entry for a file not older than that horizon
+   is not recorded, and an older entry for the same path is dropped. The comparison is between two stamps of one
+   file-system clock, so it holds on a coarse clock. If the lock's stamp cannot be read, nothing is recorded.
+
 **What condition 3 does not cover** is an entry that hides a real rewrite (same size and mtime, and a
 recorded hash that still equals the baseline). That remains §5's accepted residual, detected by
 `verify` (§6) and now reported by `doctor` (`PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE`).
@@ -110,7 +116,17 @@ in principle:
   file's true history (backdated mtime, etc.).
 
 In either case, `commit` would silently treat a genuinely changed file as unchanged, omitting a real
-change from the resulting patch. **This is exactly the risk RFC §5 (DC-56) identifies and is the
+change from the resulting patch.
+
+**Since 0.57.0 (step 0c):** the first mode (mtime granularity: two writes in one timestamp tick, at the same size) is
+closed by condition 4 for entries recorded from 0.57.0 on. The cost is one `stat` per commit, and one extra read, once,
+of a file written in the commit's own tick. It is not closed for an entry recorded by an earlier version, until a
+`commit` or `prikk doctor --rebuild-commit-index` rewrites it. **One residual of the first mode stays:** a worktree path
+on a different file system from `.prikk/` (a mount inside the worktree) whose timestamps are coarser, such as FAT's
+2 s, which rounds a stamp down so that it can look older than the horizon. The second mode is a stamp that does not
+describe the file's history: an mtime put back by `cp -p`, `rsync -t`, `tar x` or a build tool, or a backdating clock.
+Such a stamp is older than any horizon, so it stays the accepted risk. `verify` detects it (§6), and `prikk doctor
+--rebuild-commit-index` is its way out: the index is rebuilt from the bytes, so the next `commit` sees the change. **This is exactly the risk RFC §5 (DC-56) identifies and is the
 reason the index may not be silently wrong** — acceptance criterion 6 requires this be a *detectable,
 reported* condition, not an undetectable one.
 
