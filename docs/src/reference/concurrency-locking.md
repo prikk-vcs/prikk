@@ -254,37 +254,52 @@ can check and lets the operator supply the fact it cannot.
 This is the one place the words are defined; the `prikk unlock` listing and `prikk doctor` print the
 same words, with the reason beside them.
 
-A lock records, beside its pid, who took it: the holder's **start time** and, on Linux, the machine's
-**boot id** and the holder's **PID namespace** (what each platform records is in the table below). The
-check asks whether *the process that took the lock* is still the one running, not whether some process
-has that number.
+A lock records, beside its pid, who took it: the holder's **start time**, the **machine's identity**, and,
+on Linux, the **boot id**, the holder's **PID namespace** and its **time namespace** (what each platform
+records is in the table below). The check asks whether *the process that took the lock* is still the one
+running, not whether some process has that number. A pid, a start time and a boot id are each only
+meaningful on the machine and in the namespaces they were read in, so "does not appear to be running" is
+said only of a lock known to come from this machine.
 
-- **appears running** — the pid is alive, **and** its start time equals the recorded one, **and** (Linux)
-  the boot id and the PID namespace equal the recorded ones. This is the only answer that says the
-  holder is probably still working; treat the lock as held.
-- **does not appear to be running** — the pid is gone, or it is alive with a different start time (the
-  number was reused by another process), or the boot id differs (the machine restarted since). Not
-  proof the lock is safe to clear: confirm that no prikk process is writing the repository first.
+- **appears running** — the lock comes from this machine, the pid is alive, **and** its start time equals
+  the recorded one, **and** (Linux) the boot id, the PID namespace and the time namespace equal the
+  recorded ones. This is the only answer that says the holder is probably still working; treat the lock
+  as held.
+- **does not appear to be running** — of a lock known to come from this machine: the pid is gone, or it
+  is alive with a different start time (the number was reused by another process), or the boot id
+  differs (this machine restarted since). Not proof the lock is safe to clear: confirm that no prikk
+  process is writing the repository first.
 - **unknown** — the check cannot be made, and the listing says why: the lock was written by an older
   prikk (0.56.0 and earlier record no start time), its body is incomplete (still being written, or
-  damaged: its pid is never used), it was taken in another PID namespace or on another operating
-  system, a field of the record is missing or cannot be read, or the operating system would not say
-  whether the pid exists.
+  damaged: its pid is never read), it was taken in another PID or time namespace, on another operating
+  system, or **on another machine** (a repository on a shared drive holds other machines' locks, and a
+  lock from another machine is never read as running or as not running from here), a field of the
+  record is missing or cannot be read (including a machine identity that cannot be compared), or the
+  operating system would not say whether the pid exists.
 
 | Platform | The holder record | What decides "appears running" |
 |---|---|---|
-| Linux | pid, start time (`/proc/<pid>/stat`, field 22, clock ticks since boot), boot id (`/proc/sys/kernel/random/boot_id`), PID namespace (`/proc/self/ns/pid`) | pid alive and not a zombie, start time equal, boot id equal, namespace equal |
-| macOS | pid, start time (`proc_pidinfo`, microseconds since the epoch) | pid alive and not a zombie, start time equal. No boot time is recorded: it moves when the clock is stepped, and an absolute start time already cannot repeat across a restart |
-| Windows | pid, start time (`GetProcessTimes`, the creation `FILETIME`) | process exists and has not exited, start time equal |
+| Linux | pid, start time (`/proc/<pid>/stat`, field 22, clock ticks since boot), boot id (`/proc/sys/kernel/random/boot_id`), PID namespace (`/proc/self/ns/pid`), time namespace (`/proc/self/ns/time`, when the kernel has it), machine identity (`/etc/machine-id`, else D-Bus's `/var/lib/dbus/machine-id`) | pid alive and not a zombie whose threads are all gone, start time equal, boot id equal (which already establishes the same machine), PID namespace equal, time namespace equal (absent on both sides counts as equal; on one side only is unknown). A differing boot id is "restarted" only when the machine identity is present and equal on both sides; otherwise unknown |
+| macOS | pid, start time (`proc_pidinfo`, microseconds since the epoch), machine identity (`gethostuuid`) | machine identity present and equal, pid alive and not a zombie, start time equal. No boot time is recorded: it moves when the clock is stepped, and an absolute start time already cannot repeat across a restart |
+| Windows | pid, start time (`GetProcessTimes`, the creation `FILETIME`), machine identity (`MachineGuid`, `HKLM\SOFTWARE\Microsoft\Cryptography`) | machine identity present and equal, process exists and has not exited, start time equal |
 | Other | pid only; nothing can be checked | always unknown |
+
+Why those facts: since Linux 5.6, `/proc/<pid>/stat` field 22 is reported with the *reader's* time-namespace
+boot-time offset added, so a live holder in another time namespace reads a different start time (measured:
+156423 inside a namespace made with `--boottime 1000`, 56423 from outside), and is reported unknown, not
+"reused". A thread-group leader whose main thread has exited while other threads run shows state `Z` but is
+a live process, so a zombie is gone only when it has no other thread. The machine identity is read once per
+process; hostnames are not used, even as a fallback, because they repeat. An image cloned without
+regenerating `/etc/machine-id` shares an identity with its original; systemd documents that as a
+misconfiguration, and it matters here only for a repository shared between the clones.
 
 A lock file is created before its body is complete, and the body starts with a version line and ends
 with an end line, so a listing that catches a lock being written, or cut, reads it as *incomplete*
-(unknown) and never mistakes a half-written `pid=12` for process 12. A lock taken by 0.56.0 lists as
+(unknown), does not read its pid, and so never mistakes a half-written `pid=12` for process 12. A lock taken by 0.56.0 lists as
 unknown, "written by an older prikk", until it is cleared or its holder finishes.
 
 The check can still be wrong in a rare direction: a holder that appears running may in fact be hung,
-and a process in a PID namespace this check cannot see is reported unknown, never absent. A
+and a process in a PID or time namespace this check cannot see is reported unknown, never absent. A
 negative or unknown result is *not* evidence the lock is safe to clear.
 
 Manual cleanup remains an operator decision, now made through a supported command rather than deleting

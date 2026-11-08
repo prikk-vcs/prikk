@@ -8,7 +8,7 @@ A lock file recorded only `pid=<n>`, so `prikk unlock` could only ask whether *s
 number, which a reused pid, a reboot, or another container's PID namespace each answer wrongly. A lock
 now also records its holder's **start time** and, on Linux, the machine's **boot id** and the holder's
 **PID namespace**; `unlock` answers "appears running" only for the same pid with the same start time
-(and, on Linux, the same boot and namespace). The listing prints the reason beside each answer and the
+(and, on Linux, the same boot, PID namespace and time namespace), on the same machine. The listing prints the reason beside each answer and the
 recorded start time, and `doctor`'s held-lock finding prints the same words. What each platform records
 is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
 
@@ -18,7 +18,17 @@ is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-t
   with a version line and ends with an end line; a body cut anywhere lists as **unknown**, "still being
   written, or damaged", and its pid is not used or shown. Before, `pid=12` read from a half-written
   `pid=1234` was checked as process 12.
-- A holder that has exited but not been reaped (a zombie) no longer reads as running.
+- A holder that has exited but not been reaped (a zombie) no longer reads as running — but a thread-group
+  leader whose main thread has exited while other threads run (state `Z`, `Threads: 2`) is a live process
+  and reads as one.
+- Three answers that were false of a live holder in the first form of this change are true: a holder in
+  **another time namespace** (Linux 5.6+ reports `/proc/<pid>/stat` field 22 with the reader's time-namespace
+  offset: 156423 inside a namespace made with `--boottime 1000`, 56423 outside) reads unknown, not "reused";
+  a lock taken **on another machine** (a repository on a shared drive) reads unknown, never "the machine
+  restarted" or "no such process", because "does not appear to be running" is now said only of a lock known
+  to come from this machine (machine identity: `/etc/machine-id`, `gethostuuid`, `MachineGuid`).
+- `prikk-ffi` also gains `machine_uuid` (macOS) and `machine_guid` (Windows; `windows-sys` feature
+  `Win32_System_Registry`).
 - 0.56.0's `unlock` still lists a new lock (it keeps only the `pid=` and `kind=` lines); measured against
   the 0.56.0 binary.
 - Internal: `prikk-ffi` gains a macOS process-start-time call and a direct `libc` dependency under

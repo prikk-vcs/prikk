@@ -735,3 +735,68 @@ pub fn process_start_time(pid: u32) -> ProcessStart {
         (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
     )
 }
+
+/// macOS: this machine's hardware UUID, from `gethostuuid` (0.57.0 step 2, L1b). A lock taken on a
+/// repository on a shared drive may come from another machine, whose boot id, process table and
+/// start times mean nothing here; the machine identity is what says "the same machine" before a
+/// lock is called "not running". `None` if the call fails or is refused (a sandbox may), never a
+/// guess. Read once per process by the caller.
+#[cfg(target_os = "macos")]
+pub fn machine_uuid() -> Option<String> {
+    let mut id = [0u8; 16];
+    let no_wait = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `id` is a live, writable 16-byte buffer, the size `gethostuuid` documents for its
+    // `uuid_t` out-parameter, and `no_wait` is a live `timespec` that outlives the call. The result
+    // is 0 on success; the buffer is read only then.
+    let status = unsafe { libc::gethostuuid(id.as_mut_ptr(), &raw const no_wait) };
+    if status != 0 {
+        return None;
+    }
+    let mut text = String::with_capacity(32);
+    for byte in id {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    Some(text)
+}
+
+/// Windows: this machine's `MachineGuid` (`HKLM\SOFTWARE\Microsoft\Cryptography`), read from the
+/// 64-bit registry view so a 32-bit process reads the same value (0.57.0 step 2, L1b). Created at
+/// install and unique per installation. `None` if absent or unreadable, never a guess. Read once per
+/// process by the caller.
+#[cfg(windows)]
+pub fn machine_guid() -> Option<String> {
+    use windows_sys::Win32::System::Registry::{
+        HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+    };
+
+    let subkey: Vec<u16> = "SOFTWARE\\Microsoft\\Cryptography\0"
+        .encode_utf16()
+        .collect();
+    let value: Vec<u16> = "MachineGuid\0".encode_utf16().collect();
+    let mut buffer = [0u16; 128];
+    let mut size = u32::try_from(std::mem::size_of_val(&buffer)).ok()?;
+    // SAFETY: `subkey` and `value` are live, NUL-terminated UTF-16 strings; `buffer` is a live
+    // writable buffer of exactly `size` bytes, and `size` is a live `u32` the call updates to the
+    // byte count written (including the terminating NUL). The type out-pointer is optional and
+    // passed null. `RRF_RT_REG_SZ` restricts the value to a string.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &raw mut size,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let units = (usize::try_from(size).ok()? / 2).checked_sub(1)?;
+    let guid = String::from_utf16(buffer.get(..units)?).ok()?;
+    (!guid.is_empty()).then_some(guid)
+}

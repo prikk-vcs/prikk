@@ -92,7 +92,7 @@ fn print_locks(locks: &[HeldLock]) {
         println!("  kind: {}", lock.kind);
         match lock.recorded_pid {
             Some(pid) => println!("  recorded pid: {pid}"),
-            None => println!("  recorded pid: (unparseable)"),
+            None => println!("  recorded pid: (not read: the lock body is incomplete)"),
         }
         if let Some(start) = &lock.recorded_start {
             println!("  recorded start: {start}");
@@ -101,11 +101,11 @@ fn print_locks(locks: &[HeldLock]) {
     }
     println!();
     println!(
-        "liveness is advisory only: \"appears running\" means the process that took the lock is \
-         still the one running (same pid and start time, and on Linux the same boot and pid \
-         namespace); \"does not appear to be running\" and \"unknown\" are NOT proof it is safe to \
-         clear. Clear a lock only if you have independently confirmed the process that created it is \
-         gone."
+        "liveness is advisory only: \"does not appear to be running\" and \"unknown\" are NOT proof \
+         it is safe to clear. What each word means, and what each platform records to decide it, is \
+         defined in one place: docs/src/reference/concurrency-locking.md, \"What the three liveness \
+         words mean\". Clear a lock only if you have independently confirmed the process that \
+         created it is gone."
     );
 }
 

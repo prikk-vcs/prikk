@@ -56,7 +56,7 @@ pub struct HeldLock {
     /// The `kind=` field recorded in the lock body (`"active"`, `"ref"`, or one of
     /// `lock::container_lock_kind`'s strings).
     pub kind: String,
-    /// The `pid=` field, if the body parsed cleanly.
+    /// The holder's pid; `None` when the body is incomplete (it is then neither read nor used).
     pub recorded_pid: Option<u32>,
     /// The holder's recorded start time (platform units, opaque beyond equality); `None` for an
     /// older prikk's body or an incomplete one.

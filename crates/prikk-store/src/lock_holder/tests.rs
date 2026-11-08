@@ -26,6 +26,8 @@ fn linux_facts() -> HolderFacts {
         start: Some("5000".to_string()),
         boot: Some("boot-A".to_string()),
         pidns: Some("pid:[4026531836]".to_string()),
+        timens: Some("time:[4026531834]".to_string()),
+        machine: Some("machine-A".to_string()),
     }
 }
 
@@ -35,6 +37,8 @@ fn windows_facts() -> HolderFacts {
         start: Some("133700000000000000".to_string()),
         boot: None,
         pidns: None,
+        timens: None,
+        machine: Some("machine-W".to_string()),
     }
 }
 
@@ -271,13 +275,195 @@ fn row_an_unreadable_field_is_unknown_never_does_not_appear_running() {
     assert_eq!(reason.liveness(), PidLiveness::Unknown);
 }
 
+// L1b: the three frames a recorded fact is relative to. Cases C, D and E of the architect's probe.
+
+/// C: a lock on a shared drive, taken on another machine.
+#[test]
+fn row_c_another_machine_is_unknown_never_not_running() {
+    let alive = || ProcessRead::Alive(Some("5000".into()));
+    // Another machine, whatever the pid, boot id or start time say here.
+    let mut theirs = linux_facts();
+    theirs.machine = Some("machine-B".to_string());
+    for process in [
+        ProcessRead::Gone,
+        alive(),
+        ProcessRead::Alive(Some("1".into())),
+    ] {
+        let reason = judged(theirs.clone(), linux_facts(), process);
+        assert_eq!(reason, LivenessReason::OtherMachine);
+        assert_eq!(reason.liveness(), PidLiveness::Unknown);
+    }
+    // A differing boot id is a restart only of THIS machine: another machine's boot id says nothing.
+    let mut theirs_booted = theirs.clone();
+    theirs_booted.boot = Some("boot-B".to_string());
+    assert_eq!(
+        judged(theirs_booted, linux_facts(), ProcessRead::Gone),
+        LivenessReason::OtherMachine
+    );
+    // The same machine, a different boot id: a restart.
+    let mut restarted = linux_facts();
+    restarted.boot = Some("boot-OLD".to_string());
+    assert_eq!(
+        judged(restarted.clone(), linux_facts(), ProcessRead::Gone),
+        LivenessReason::Rebooted
+    );
+    // A restart cannot be claimed when either side's machine identity is missing.
+    let mut no_theirs = restarted.clone();
+    no_theirs.machine = None;
+    let mut no_ours = linux_facts();
+    no_ours.machine = None;
+    assert_eq!(
+        judged(no_theirs, linux_facts(), ProcessRead::Gone),
+        LivenessReason::MachineNotEstablished
+    );
+    assert_eq!(
+        judged(restarted, no_ours.clone(), ProcessRead::Gone),
+        LivenessReason::MachineNotEstablished
+    );
+    // On Linux an equal boot id already establishes the same machine: no identity needed.
+    let mut recorded_without = linux_facts();
+    recorded_without.machine = None;
+    assert_eq!(
+        judged(recorded_without, no_ours, alive()),
+        LivenessReason::SameProcess
+    );
+}
+
+/// C, off Linux: "gone" and "reused" need an equal machine identity, present on both sides.
+#[test]
+fn row_c_off_linux_gone_and_reused_need_an_equal_machine_identity() {
+    let mut theirs = windows_facts();
+    theirs.machine = Some("machine-X".to_string());
+    for process in [ProcessRead::Gone, ProcessRead::Alive(Some("1".into()))] {
+        assert_eq!(
+            judged(theirs.clone(), windows_facts(), process),
+            LivenessReason::OtherMachine
+        );
+    }
+    let mut missing = windows_facts();
+    missing.machine = None;
+    for process in [ProcessRead::Gone, ProcessRead::Alive(Some("1".into()))] {
+        assert_eq!(
+            judged(missing.clone(), windows_facts(), process.clone()),
+            LivenessReason::MachineNotEstablished
+        );
+        assert_eq!(
+            judged(windows_facts(), missing.clone(), process),
+            LivenessReason::MachineNotEstablished
+        );
+    }
+    // The same machine: gone is gone, reused is reused.
+    assert_eq!(
+        judged(windows_facts(), windows_facts(), ProcessRead::Gone),
+        LivenessReason::ProcessGone
+    );
+}
+
+/// D: a live holder in another time namespace reads a shifted start time, so its namespace is
+/// compared before any start time is.
+#[test]
+fn row_d_another_time_namespace_is_unknown_even_when_the_start_time_reads_different() {
+    let mut theirs = linux_facts();
+    theirs.timens = Some("time:[4026533362]".to_string());
+    // Field 22 read from here differs from what the holder recorded inside its namespace: a live
+    // process. It must not be called "reused".
+    let reason = judged(
+        theirs,
+        linux_facts(),
+        ProcessRead::Alive(Some("4900".into())),
+    );
+    assert_eq!(reason, LivenessReason::OtherNamespace);
+    assert_eq!(reason.liveness(), PidLiveness::Unknown);
+    // A kernel without time namespaces has the link on neither side: equal, and judged as usual.
+    let mut neither = linux_facts();
+    neither.timens = None;
+    assert_eq!(
+        judged(
+            neither.clone(),
+            neither.clone(),
+            ProcessRead::Alive(Some("5000".into()))
+        ),
+        LivenessReason::SameProcess
+    );
+    // On one side only: a disagreement nothing here can interpret.
+    assert_eq!(
+        judged(
+            neither,
+            linux_facts(),
+            ProcessRead::Alive(Some("5000".into()))
+        ),
+        LivenessReason::FieldUnreadable
+    );
+    let mut ours_without = linux_facts();
+    ours_without.timens = None;
+    assert_eq!(
+        judged(
+            linux_facts(),
+            ours_without,
+            ProcessRead::Alive(Some("5000".into()))
+        ),
+        LivenessReason::FieldUnreadable
+    );
+}
+
+/// E: a thread-group leader whose main thread has exited while another thread runs shows `Z` and
+/// is alive. The stat texts are the shape `/proc/<pid>/stat` has (field 3, the state, after the
+/// command in parentheses; field 22 the start time).
+#[cfg(target_os = "linux")]
+#[test]
+fn row_e_a_zombie_leader_with_live_threads_is_alive_and_a_lone_zombie_is_gone() {
+    use super::platform::{classify_stat, parse_threads};
+    let stat = |state: char| {
+        format!(
+            "42 (a b) {state} 1 42 42 0 -1 4194304 100 0 0 0 1 2 0 0 20 0 2 0 987654 1000 200 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n"
+        )
+    };
+    let alive = ProcessRead::Alive(Some("987654".to_string()));
+    // The leader `Z` with a second thread: alive, judged by its start time.
+    assert_eq!(classify_stat(&stat('Z'), Some(2)), alive);
+    assert_eq!(classify_stat(&stat('Z'), Some(5)), alive);
+    // A lone zombie, reaped by nobody: gone.
+    assert_eq!(classify_stat(&stat('Z'), Some(1)), ProcessRead::Gone);
+    assert_eq!(classify_stat(&stat('Z'), Some(0)), ProcessRead::Gone);
+    // The thread count unreadable: not called gone.
+    assert_eq!(classify_stat(&stat('Z'), None), ProcessRead::Alive(None));
+    // Dead (`X`) is gone; every ordinary state is alive.
+    assert_eq!(classify_stat(&stat('X'), Some(1)), ProcessRead::Gone);
+    for state in ['R', 'S', 'D', 'T', 't'] {
+        assert_eq!(classify_stat(&stat(state), Some(1)), alive, "state {state}");
+    }
+    // An unparseable stat is "cannot read", never gone.
+    assert_eq!(classify_stat("", Some(1)), ProcessRead::Alive(None));
+    assert_eq!(
+        parse_threads("Name:\tx\nState:\tZ (zombie)\nThreads:\t2\nVmPeak:\t1 kB\n"),
+        Some(2)
+    );
+    assert_eq!(parse_threads("Name:\tx\n"), None);
+    assert_eq!(parse_threads("Threads:\tmany\n"), None);
+}
+
 // The real machine.
+
+/// macOS (`gethostuuid`) and Windows (`MachineGuid`) have an identity on any machine a test can run
+/// on; without it their "gone" and "reused" answers are all unknown, so its absence there is a
+/// failure to see, not a tolerated gap. Linux may lack `/etc/machine-id` (a container image): there
+/// the boot id alone establishes the same machine.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn assert_machine_identity_where_the_platform_has_one(facts: &HolderFacts) {
+    if cfg!(any(target_os = "macos", target_os = "windows")) {
+        assert!(
+            facts.machine.is_some(),
+            "the machine identity must be readable here"
+        );
+    }
+}
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn this_process_appears_running_from_a_body_it_wrote_about_itself() {
     let facts = own_facts();
     assert!(facts.start.is_some(), "this platform records a start time");
+    assert_machine_identity_where_the_platform_has_one(facts);
     let body = render_body("active", std::process::id(), facts);
     let seen = inspect(body.as_bytes(), &SystemProbe);
     assert_eq!(seen.reason, LivenessReason::SameProcess);
@@ -288,6 +474,7 @@ fn this_process_appears_running_from_a_body_it_wrote_about_itself() {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn this_pid_with_another_start_time_is_a_reused_pid_on_the_real_machine() {
+    assert_machine_identity_where_the_platform_has_one(own_facts());
     let mut facts = own_facts().clone();
     facts.start = facts.start.map(|start| format!("{start}0"));
     let body = render_body("active", std::process::id(), &facts);
@@ -299,6 +486,7 @@ fn this_pid_with_another_start_time_is_a_reused_pid_on_the_real_machine() {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
 fn a_complete_body_naming_pid_zero_is_unknown_not_absent() {
+    assert_machine_identity_where_the_platform_has_one(own_facts());
     let body = render_body("active", 0, own_facts());
     let seen = inspect(body.as_bytes(), &SystemProbe);
     assert_eq!(seen.reason, LivenessReason::CouldNotCheck);
@@ -320,9 +508,31 @@ fn linux_records_boot_id_and_namespace_and_a_foreign_one_is_unknown_on_the_real_
     let mut rebooted = facts.clone();
     rebooted.boot = Some("00000000-0000-0000-0000-000000000000".to_string());
     let body = render_body("active", std::process::id(), &rebooted);
+    // A restart is said only of this machine: with its identity unreadable (a container image with
+    // no /etc/machine-id) the answer is "cannot establish", never "restarted".
+    let expected = if facts.machine.is_some() {
+        LivenessReason::Rebooted
+    } else {
+        LivenessReason::MachineNotEstablished
+    };
+    assert_eq!(inspect(body.as_bytes(), &SystemProbe).reason, expected);
+    // A foreign machine's identity with the same (this) boot id is another machine.
+    let mut foreign = facts.clone();
+    foreign.machine = Some("some-other-machine".to_string());
+    let body = render_body("active", std::process::id(), &foreign);
+    let expected = if facts.machine.is_some() {
+        LivenessReason::OtherMachine
+    } else {
+        LivenessReason::SameProcess
+    };
+    assert_eq!(inspect(body.as_bytes(), &SystemProbe).reason, expected);
+    // A foreign time namespace.
+    let mut other_time = facts.clone();
+    other_time.timens = Some("time:[1]".to_string());
+    let body = render_body("active", std::process::id(), &other_time);
     assert_eq!(
         inspect(body.as_bytes(), &SystemProbe).reason,
-        LivenessReason::Rebooted
+        LivenessReason::OtherNamespace
     );
 }
 

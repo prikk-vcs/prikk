@@ -222,7 +222,7 @@ fn the_listing_and_doctor_say_why_a_lock_is_unknown() {
         "doctor must print the listing's words: {doctor_out}"
     );
 
-    std::fs::write(active_lock_path(&repo), "prikk-lock-v2\npid=12").unwrap();
+    std::fs::write(active_lock_path(&repo), "prikk-lock-v2\npid=1").unwrap();
     let output = prikk(&repo).arg("unlock").output().unwrap();
     ok(&output, "unlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -233,7 +233,22 @@ fn the_listing_and_doctor_say_why_a_lock_is_unknown() {
         "stdout: {stdout}"
     );
     assert!(
-        !stdout.contains("recorded pid: 12"),
+        !stdout.contains("recorded pid: 1"),
         "a cut body's pid must never be shown or used: {stdout}"
+    );
+    // `pid=1` of a body cut mid-write parses as a number, so "unparseable" would be false: say it
+    // is not read.
+    assert!(
+        stdout.contains("recorded pid: (not read: the lock body is incomplete)"),
+        "stdout: {stdout}"
+    );
+    // One definition of the words: the listing's closing line names the doc, it does not restate them.
+    assert!(
+        stdout.contains("docs/src/reference/concurrency-locking.md"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("same pid and start time, and on Linux"),
+        "the advisory line must not restate what `appears running` means: {stdout}"
     );
 }

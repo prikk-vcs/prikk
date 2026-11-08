@@ -184,9 +184,10 @@ failing with `ERROR_INVALID_PARAMETER` and a successfully-opened handle's `WaitF
 reporting it signaled both mean the process is gone; `ERROR_ACCESS_DENIED` on open means it exists but
 this caller cannot query it further, the same reasoning Linux/macOS's `EPERM` branch applies. The
 start time that makes "the same process" checkable comes from `/proc/<pid>/stat` on Linux (a plain
-file read; the boot id and PID namespace likewise), `proc_pidinfo` on macOS
-(`prikk_ffi::process_start_time`, `libc`) and `GetProcessTimes` on Windows
-(`prikk_ffi::process_start_time`). What each platform records, and the three words the check answers
+file read; the boot id, PID and time namespaces and `/etc/machine-id` likewise), `proc_pidinfo` on macOS
+(`prikk_ffi::process_start_time`, `libc`; machine identity from `gethostuuid`, `prikk_ffi::machine_uuid`) and
+`GetProcessTimes` on Windows (`prikk_ffi::process_start_time`; machine identity from the registry's
+`MachineGuid`, `prikk_ffi::machine_guid`, `windows-sys` feature `Win32_System_Registry`). What each platform records, and the three words the check answers
 with, are defined once in [Concurrency and locking](./concurrency-locking.md#what-the-three-liveness-words-mean).
 The advisory contract is unchanged: a real primitive makes the answer better informed, it does not
 make clearing safe. One platform-specific guard: PID 0 names the Windows System Idle Process, a real

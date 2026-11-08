@@ -900,9 +900,10 @@ fn push_held_lock_issues(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue
     };
     for lock in locks {
         let liveness = lock.liveness_words();
-        let pid = lock
-            .recorded_pid
-            .map_or_else(|| "(unparseable)".to_string(), |pid| pid.to_string());
+        let pid = lock.recorded_pid.map_or_else(
+            || "(not read: the lock body is incomplete)".to_string(),
+            |pid| pid.to_string(),
+        );
         issues.push(DoctorIssue::info(
             "PRIKK-DOCTOR-HELD-LOCK",
             format!(

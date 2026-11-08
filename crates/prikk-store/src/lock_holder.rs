@@ -16,6 +16,8 @@
 //! start=98765              <- the holder's start time (platform units, opaque beyond equality)
 //! boot=<boot id>           <- Linux only
 //! pidns=pid:[4026531836]   <- Linux only
+//! timens=time:[4026531834] <- Linux only, when the kernel has time namespaces
+//! machine=<machine id>     <- the machine's identity, where the platform has one
 //! end-of-lock-v2           <- end line, always last
 //! ```
 //!
@@ -33,18 +35,42 @@
 //!
 //! # The answers
 //!
-//! **appears running** -- the pid is alive *and* its start time equals the recorded one *and* (Linux)
-//! the boot id and the pid namespace match. **does not appear running** -- the pid is gone, or its
-//! start time differs (the number was reused), or the boot id differs (the machine restarted).
-//! **unknown** -- the record is from an older prikk, or incomplete, or from another pid namespace or
-//! operating system, or a field cannot be read. Each answer carries a [`LivenessReason`] that says
+//! **appears running** -- the lock is known to come from this machine, the pid is alive, its start
+//! time equals the recorded one, and (Linux) the boot id, the pid namespace and the time namespace
+//! match. **does not appear running** -- *of a lock known to come from this machine*: the pid is gone,
+//! or its start time differs (the number was reused), or the boot id differs (this machine
+//! restarted). **unknown** -- the record is from an older prikk, or incomplete, or from another pid or
+//! time namespace, another operating system or another machine, or a field cannot be read, or the
+//! machine it came from cannot be established. Each answer carries a [`LivenessReason`] that says
 //! which. "Appears running" is the one answer a refusal rests on (L2), so every path that can reach
 //! it requires every field the platform records to be present and equal.
+//!
+//! # Facts are relative to their reader (0.57.0 step 2, L1b)
+//!
+//! A value one process recorded and another re-reads is comparable only when both read it in the same
+//! frame. Three frames made L1 say "does not appear running" of a live holder, each measured:
+//!
+//! - **Time namespace.** Since Linux 5.6, `/proc/<pid>/stat` field 22 is reported with the *reader's*
+//!   time-namespace boot-time offset added: the same live process read 139487 from inside a
+//!   namespace unshared with `--boottime 1000` and 39487 from outside, in one PID namespace. So the
+//!   time namespace is recorded and compared like the PID namespace.
+//! - **A zombie leader with live threads.** A process whose main thread has exited while other
+//!   threads run shows state `Z` and answers `kill(pid, 0)`. `Z` is gone only when the process has no
+//!   other thread (`Threads:` in `/proc/<pid>/status`); with the count unreadable it is not called
+//!   gone.
+//! - **Another machine.** A repository on a shared drive holds other machines' locks. A differing boot
+//!   id is a restart only of this machine, and a pid or start time of another machine says nothing
+//!   about this one. So "gone", "reused" and "rebooted" need the machine identity to be equal, and a
+//!   lock from a different machine reads unknown. On Linux an equal boot id already establishes the
+//!   same machine (boot ids are random per boot); elsewhere, and on Linux when the boot id differs, the
+//!   identity must be present on both sides and equal. The identity is `/etc/machine-id` (fallback
+//!   D-Bus's copy) on Linux, `gethostuuid` on macOS, `MachineGuid` on Windows; the hostname is not
+//!   used, even as a fallback, because hostnames repeat. Each is read once per process.
 //!
 //! The boot time of macOS is deliberately not recorded: it moves when the wall clock is stepped, so a
 //! mismatch could be false, and "does not appear running" is the dangerous direction to be wrong in.
 //! macOS and Windows start times are absolute instants, so unlike Linux's since-boot count they do
-//! not repeat across a reboot and need no boot id.
+//! not repeat across a restart and need no boot id.
 
 use std::sync::OnceLock;
 
@@ -87,10 +113,17 @@ pub enum LivenessReason {
     OlderPrikk,
     /// The body is empty, cut, or damaged.
     IncompleteBody,
-    /// Taken in a pid namespace other than this one: the pid number means something else here.
+    /// Taken in a pid or time namespace other than this one: the pid number, or the start time read
+    /// for it, means something else here.
     OtherNamespace,
     /// Taken on another operating system.
     OtherOs,
+    /// Taken on another machine (a shared drive): its pids, boot id and start times mean nothing
+    /// here.
+    OtherMachine,
+    /// Whether the lock was taken on this machine cannot be established: the machine identity is
+    /// missing or unreadable on one side, and nothing else (an equal boot id) settles it.
+    MachineNotEstablished,
     /// A field the platform records is missing from the body, or cannot be read here.
     FieldUnreadable,
     /// The operating system would not say whether the pid exists, or this platform has no way to ask.
@@ -115,9 +148,15 @@ impl LivenessReason {
             }
             Self::IncompleteBody => "the lock body is incomplete: still being written, or damaged",
             Self::OtherNamespace => {
-                "taken in another pid namespace, where this pid number means something else"
+                "taken in another pid or time namespace, where this pid number or start time means something else"
             }
             Self::OtherOs => "taken on another operating system",
+            Self::OtherMachine => {
+                "taken on another machine, whose processes and boot say nothing about this one"
+            }
+            Self::MachineNotEstablished => {
+                "cannot tell whether this lock was taken on this machine: a machine identity is missing or unreadable"
+            }
             Self::FieldUnreadable => {
                 "a field of the holder record is missing or could not be read here"
             }
@@ -139,6 +178,8 @@ impl LivenessReason {
             | Self::IncompleteBody
             | Self::OtherNamespace
             | Self::OtherOs
+            | Self::OtherMachine
+            | Self::MachineNotEstablished
             | Self::FieldUnreadable
             | Self::CouldNotCheck => PidLiveness::Unknown,
         }
@@ -175,6 +216,13 @@ pub(crate) struct HolderFacts {
     pub(crate) start: Option<String>,
     pub(crate) boot: Option<String>,
     pub(crate) pidns: Option<String>,
+    /// Linux: `/proc/self/ns/time`. `/proc/<pid>/stat` field 22 carries the *reader's* time-namespace
+    /// boot-time offset (Linux 5.6+), so a start time is comparable only between processes that read
+    /// it in the same time namespace.
+    pub(crate) timens: Option<String>,
+    /// The machine's identity (see `platform::machine_id`): "the same machine" is what lets a
+    /// boot id, a pid and a start time be compared at all.
+    pub(crate) machine: Option<String>,
 }
 
 /// This process's own facts, read once per process (a lock taken is a hot path; the facts cannot
@@ -186,6 +234,8 @@ pub(crate) fn own_facts() -> &'static HolderFacts {
         start: platform::own_start(),
         boot: platform::boot_id(),
         pidns: platform::pid_namespace(),
+        timens: platform::time_namespace(),
+        machine: platform::machine_id(),
     })
 }
 
@@ -196,6 +246,8 @@ pub(crate) fn render_body(kind: &str, pid: u32, facts: &HolderFacts) -> String {
         ("start", &facts.start),
         ("boot", &facts.boot),
         ("pidns", &facts.pidns),
+        ("timens", &facts.timens),
+        ("machine", &facts.machine),
     ] {
         if let Some(value) = value {
             body.push_str(&format!("{key}={value}\n"));
@@ -266,6 +318,8 @@ fn parse_complete(lines: &[&str]) -> Body {
         start: None,
         boot: None,
         pidns: None,
+        timens: None,
+        machine: None,
     };
     for line in lines {
         if let Some(value) = line.strip_prefix("pid=") {
@@ -280,6 +334,10 @@ fn parse_complete(lines: &[&str]) -> Body {
             facts.boot = Some(value.to_string());
         } else if let Some(value) = line.strip_prefix("pidns=") {
             facts.pidns = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("timens=") {
+            facts.timens = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("machine=") {
+            facts.machine = Some(value.to_string());
         }
     }
     match (pid, kind) {
@@ -323,6 +381,14 @@ pub(crate) fn judge(record: &Record, probe: &dyn Probe) -> LivenessReason {
     if record.facts.os != ours.os {
         return LivenessReason::OtherOs;
     }
+    // Every fact below -- a pid, a start time, a boot id -- is relative to a machine. "Does not
+    // appear running" is said only of a lock known to come from this one: a repository on a shared
+    // drive holds locks of machines whose process tables mean nothing here.
+    let same_machine_known = match (&record.facts.machine, &ours.machine) {
+        (Some(theirs), Some(mine)) if theirs != mine => return LivenessReason::OtherMachine,
+        (Some(_), Some(_)) => true,
+        _ => false,
+    };
     if record.facts.os == "linux" {
         let (Some(rec_boot), Some(our_boot), Some(rec_ns), Some(our_ns)) = (
             &record.facts.boot,
@@ -333,13 +399,32 @@ pub(crate) fn judge(record: &Record, probe: &dyn Probe) -> LivenessReason {
             return LivenessReason::FieldUnreadable;
         };
         // A restart is settled first: nothing that held a lock before it can hold it now, whatever
-        // namespace it was in. The boot id is not namespaced, so a container sees the host's.
+        // namespace it was in. The boot id is not namespaced, so a container sees the host's. A
+        // differing boot id means a restart only of *this* machine; of another machine's lock it
+        // says nothing about this one. (An equal boot id already establishes the same machine: boot
+        // ids are random per boot.)
         if rec_boot != our_boot {
-            return LivenessReason::Rebooted;
+            return if same_machine_known {
+                LivenessReason::Rebooted
+            } else {
+                LivenessReason::MachineNotEstablished
+            };
         }
         if rec_ns != our_ns {
             return LivenessReason::OtherNamespace;
         }
+        // `/proc/<pid>/stat` field 22 is reported with the reader's time-namespace offset added, so
+        // a holder in another time namespace reads as a "different" start time while running. A
+        // kernel without time namespaces has the link on neither side; the link on one side only is
+        // a disagreement we cannot interpret.
+        match (&record.facts.timens, &ours.timens) {
+            (None, None) => {}
+            (Some(theirs), Some(mine)) if theirs == mine => {}
+            (Some(_), Some(_)) => return LivenessReason::OtherNamespace,
+            _ => return LivenessReason::FieldUnreadable,
+        }
+    } else if !same_machine_known {
+        return LivenessReason::MachineNotEstablished;
     }
     let Some(recorded_start) = &record.facts.start else {
         return LivenessReason::FieldUnreadable;
@@ -421,6 +506,57 @@ mod platform {
         Some(link.to_string_lossy().into_owned())
     }
 
+    /// The decision for one process's `/proc/<pid>/stat` text and its thread count. `threads` is the
+    /// `Threads:` line of `/proc/<pid>/status`, `None` if it could not be read.
+    ///
+    /// State `Z` ("zombie") is *gone* only when no other thread of the process runs: a thread-group
+    /// leader whose main thread has exited while other threads continue shows `Z` and is a live
+    /// process (`kill(pid, 0)` succeeds on it, and the lock's holder may be one of those threads --
+    /// a host program using the published library can hold a lock from a thread). A `Z` whose
+    /// thread count is unknown is not called gone.
+    pub(super) fn classify_stat(text: &str, threads: Option<u32>) -> ProcessRead {
+        match parse_stat(text) {
+            Some(('X', _)) => ProcessRead::Gone,
+            Some(('Z', start)) => match threads {
+                Some(0 | 1) => ProcessRead::Gone,
+                Some(_) => ProcessRead::Alive(Some(start)),
+                None => ProcessRead::Alive(None),
+            },
+            Some((_, start)) => ProcessRead::Alive(Some(start)),
+            None => ProcessRead::Alive(None),
+        }
+    }
+
+    /// The `Threads:` count in the text of `/proc/<pid>/status`.
+    pub(super) fn parse_threads(status: &str) -> Option<u32> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("Threads:"))
+            .and_then(|value| value.trim().parse().ok())
+    }
+
+    pub(super) fn time_namespace() -> Option<String> {
+        let link = std::fs::read_link("/proc/self/ns/time").ok()?;
+        Some(link.to_string_lossy().into_owned())
+    }
+
+    /// `/etc/machine-id` (systemd's per-installation random id; fallback D-Bus's copy). Two machines
+    /// differ unless an image was cloned without regenerating it, which systemd documents as a
+    /// misconfiguration; a clone also needs a different boot id *and* a shared repository to matter.
+    /// The hostname is not used, even as a fallback: hostnames repeat (`localhost`), and a wrong
+    /// "same machine" is the dangerous direction. A machine with neither file reads unknown.
+    pub(super) fn machine_id() -> Option<String> {
+        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                let id = text.trim();
+                if !id.is_empty() && id != "uninitialized" {
+                    return Some(id.to_string());
+                }
+            }
+        }
+        None
+    }
+
     pub(super) fn read_process(pid: u32) -> ProcessRead {
         match super::pid_exists(pid) {
             Some(false) => return ProcessRead::Gone,
@@ -428,12 +564,12 @@ mod platform {
             Some(true) => {}
         }
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(text) => match parse_stat(&text) {
-                // A zombie has exited and can never run again, though `kill(pid, 0)` still succeeds.
-                Some(('Z' | 'X', _)) => ProcessRead::Gone,
-                Some((_, start)) => ProcessRead::Alive(Some(start)),
-                None => ProcessRead::Alive(None),
-            },
+            Ok(text) => {
+                let threads = std::fs::read_to_string(format!("/proc/{pid}/status"))
+                    .ok()
+                    .and_then(|status| parse_threads(&status));
+                classify_stat(&text, threads)
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => ProcessRead::Gone,
             Err(_) => ProcessRead::Alive(None),
         }
@@ -465,6 +601,15 @@ mod platform {
 
     pub(super) fn pid_namespace() -> Option<String> {
         None
+    }
+
+    pub(super) fn time_namespace() -> Option<String> {
+        None
+    }
+
+    /// The hardware UUID (`gethostuuid`, through `prikk-ffi`).
+    pub(super) fn machine_id() -> Option<String> {
+        prikk_ffi::machine_uuid()
     }
 
     pub(super) fn read_process(pid: u32) -> ProcessRead {
@@ -503,6 +648,15 @@ mod platform {
         None
     }
 
+    pub(super) fn time_namespace() -> Option<String> {
+        None
+    }
+
+    /// `MachineGuid` (`HKLM\SOFTWARE\Microsoft\Cryptography`, through `prikk-ffi`).
+    pub(super) fn machine_id() -> Option<String> {
+        prikk_ffi::machine_guid()
+    }
+
     pub(super) fn read_process(pid: u32) -> ProcessRead {
         match super::pid_exists(pid) {
             Some(false) => ProcessRead::Gone,
@@ -525,6 +679,14 @@ mod platform {
     }
 
     pub(super) fn pid_namespace() -> Option<String> {
+        None
+    }
+
+    pub(super) fn time_namespace() -> Option<String> {
+        None
+    }
+
+    pub(super) fn machine_id() -> Option<String> {
         None
     }
 
