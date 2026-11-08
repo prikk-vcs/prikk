@@ -179,8 +179,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // producers moving the current branch): 172 -> 173.
     // 0.57.0 step 0c added `commit_boundary::worktree_patch::node_authoring::index_rebuild`
     // (`doctor --rebuild-caches`, built from the same parts `commit` and `diff` use; named `index_rebuild` until 0.57.0 step 1d): 173 -> 174. 0.57.0 step 1e added `way_out` (the one
-    // function `doctor` and `verify` both print each finding's way out from): 174 -> 175.
-    assert_eq!(modules.len(), 175, "modules: {modules:?}");
+    // function `doctor` and `verify` both print each finding's way out from): 174 -> 175. 0.57.0 step 2 (L1) added `lock_holder` (a lock names its holder): 175 -> 176.
+    assert_eq!(modules.len(), 176, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

@@ -61,6 +61,7 @@ mod ignore;
 mod lifecycle_cache;
 mod line_diff;
 mod lock;
+mod lock_holder;
 mod maintainer_signing;
 mod memory_store;
 mod merge;
@@ -370,6 +371,8 @@ pub use way_out::{SOUND_COPY, WayOut, ways_out};
 // `sync seal`'s own batch orchestration (the clean check, the in-the-way check, the marker, the
 // materialize call) lives in `prikk-cli`'s `run_seal`, per this round's own ruling, so the CLI
 // needs both named here.
+#[cfg(feature = "test-support")]
+pub use lock_holder::lock_body_naming_pid_for_test;
 pub use seal_from_accepted::{
     SealFromAcceptedOutcome, require_nothing_in_the_way_for_seal_batch,
     require_seal_batch_parents_reached, seal_from_accepted_claim,
@@ -406,7 +409,9 @@ pub use trust::{
     refuse_forged_publication_signature, remove_trusted_maintainer, verify_signer_trusted,
     verify_trusted_publication_envelope,
 };
-pub use unlock::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
+pub use unlock::{
+    HeldLock, LivenessReason, PidLiveness, clear_lock, find_held_lock, list_held_locks,
+};
 pub use verify::{
     ActiveWalMetadataStatus, ActiveWalOrderingIssue, AppendedFileTailStatus,
     AuthorSignatureVerification, BlockSealVerification, ConnectivityIssue, ContainerInteriorDamage,

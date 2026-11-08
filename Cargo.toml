@@ -58,6 +58,9 @@ prikk-test-support          = { path = "tools/test-support" }
 ed25519-dalek               = "3"
 getrandom                   = "0.4"
 rustix                      = { version = "1", features = ["fs", "process"] }
+# 0.57.0 step 2 (L1): already resolved in the graph (rustix, getrandom); a direct entry only for prikk-ffi's macOS
+# process-start-time and boot-time calls, the macOS counterpart of windows-sys below.
+libc                        = "0.2"
 sha2                        = "0.11"
 # DC-96: pinned to the version already resolved in the dependency graph (via rustix->errno and
 # tempfile) so this direct edge does not add a second copy. Verify against Cargo.lock before

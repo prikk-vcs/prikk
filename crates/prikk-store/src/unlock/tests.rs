@@ -4,7 +4,9 @@ use std::path::PathBuf;
 
 use prikk_error::Result;
 
-use super::{PidLiveness, clear_lock, find_held_lock, list_held_locks, read_lock_if_present};
+use super::{
+    LivenessReason, PidLiveness, clear_lock, find_held_lock, list_held_locks, read_lock_if_present,
+};
 use crate::RepositoryLayout;
 use crate::foundation::fsutil::{EntryKind, list_directory};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer};
@@ -62,7 +64,8 @@ fn a_lock_recording_a_nonexistent_pid_is_reported_as_not_appearing_to_run() -> R
     // A PID within the valid range but astronomically unlikely to name a real process in a test
     // environment -- `test_kill_process` returns `ESRCH` for it on Linux/macOS, and `OpenProcess`
     // fails with `ERROR_INVALID_PARAMETER` for it on Windows.
-    std::fs::write(&path, "pid=999999\nkind=active\nnote=test\n")?;
+    let body = crate::lock_holder::render_body("active", 999_999, crate::lock_holder::own_facts());
+    std::fs::write(&path, body)?;
 
     let locks = list_held_locks(&layout)?;
     assert_eq!(locks.len(), 1);
@@ -230,7 +233,7 @@ fn list_held_locks_matches_the_prior_single_active_read_exactly() -> Result<()> 
 
 /// RFC 108 increment 2 control 2: nothing in the codebase creates a second active session yet, so
 /// this test constructs `active/second/` and its lock file directly, matching `lock.rs::lock_body`'s
-/// own on-disk format (`pid=`/`kind=`/`note=` lines). Fails if `list_held_locks` is ever reverted to
+/// own on-disk format (`lock_holder::render_body`). Fails if `list_held_locks` is ever reverted to
 /// the old hardcoded single-active read, because the hand-planted second lock would then simply be
 /// absent from its output.
 #[test]
@@ -243,7 +246,11 @@ fn list_held_locks_reports_a_hand_planted_second_active() -> Result<()> {
     std::fs::create_dir_all(layout.active_session_dir("second"))?;
     std::fs::write(
         &second_lock_path,
-        format!("pid={}\nkind=active\nnote=test\n", std::process::id()),
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
     )?;
 
     let locks = list_held_locks(&layout)?;
@@ -295,7 +302,11 @@ fn list_held_locks_reports_a_lock_under_a_non_utf8_session_name() -> Result<()> 
     std::fs::create_dir_all(layout.active_session_dir(bad_name))?;
     std::fs::write(
         &bad_lock_path,
-        format!("pid={}\nkind=active\nnote=test\n", std::process::id()),
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
     )?;
 
     let locks = list_held_locks(&layout)?;
@@ -349,7 +360,11 @@ fn list_held_locks_reports_a_lock_under_a_non_utf8_session_name() -> Result<()> 
     std::fs::create_dir_all(layout.active_session_dir(&bad_name))?;
     std::fs::write(
         &bad_lock_path,
-        format!("pid={}\nkind=active\nnote=test\n", std::process::id()),
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
     )?;
 
     let locks = list_held_locks(&layout)?;
@@ -430,7 +445,11 @@ fn list_held_locks_reports_per_ref_locks_in_sorted_order() -> Result<()> {
     for name in ["mmm", "zzz", "aaa"] {
         std::fs::write(
             locks_dir.join(format!("{name}.lock")),
-            format!("pid={}\nkind=ref\nnote=test\n", std::process::id()),
+            crate::lock_holder::render_body(
+                "ref",
+                std::process::id(),
+                crate::lock_holder::own_facts(),
+            ),
         )?;
     }
 
@@ -466,6 +485,60 @@ fn find_held_lock_returns_none_for_a_target_that_does_not_exist() -> Result<()> 
     let bogus = root.join("this-path-was-never-created").join("active.lock");
     assert!(find_held_lock(&locks, &bogus).is_none());
 
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// L1: an old (0.56.0) body, on disk, with this very process's pid in it -- a live holder -- lists
+/// `Unknown` "written by an older prikk", not `AppearsRunning` and never `DoesNotAppearRunning`.
+#[test]
+fn an_old_lock_body_on_disk_lists_unknown_written_by_an_older_prikk() -> Result<()> {
+    let root = unique_temp_dir("unlock-old-body");
+    let layout = RepositoryLayout::init(root.clone())?;
+    std::fs::write(
+        layout.default_active_lock_path(),
+        format!(
+            "pid={}\nkind=active\nnote=PR-007 lock has no stale-lock stealing yet\n",
+            std::process::id()
+        ),
+    )?;
+    let locks = list_held_locks(&layout)?;
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].recorded_pid, Some(std::process::id()));
+    assert_eq!(locks[0].liveness, PidLiveness::Unknown);
+    assert_eq!(locks[0].liveness_reason, LivenessReason::OlderPrikk);
+    assert!(
+        locks[0]
+            .liveness_words()
+            .contains("written by an older prikk")
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// L1: a new body caught while being written -- cut at every byte -- lists `Unknown`, incomplete, with
+/// no pid, whatever the cut. `pid=12` of `pid=1234` is never asked about as process 12.
+#[test]
+fn a_lock_body_cut_anywhere_on_disk_lists_unknown_incomplete_with_no_pid() -> Result<()> {
+    let root = unique_temp_dir("unlock-cut-body");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let full = crate::lock_holder::render_body(
+        "active",
+        std::process::id(),
+        crate::lock_holder::own_facts(),
+    );
+    for cut in 0..full.len() {
+        std::fs::write(layout.default_active_lock_path(), &full.as_bytes()[..cut])?;
+        let locks = list_held_locks(&layout)?;
+        assert_eq!(locks.len(), 1, "cut at {cut}");
+        assert_eq!(locks[0].recorded_pid, None, "cut at {cut}");
+        assert_eq!(locks[0].liveness, PidLiveness::Unknown, "cut at {cut}");
+        assert_eq!(
+            locks[0].liveness_reason,
+            LivenessReason::IncompleteBody,
+            "cut at {cut}"
+        );
+    }
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

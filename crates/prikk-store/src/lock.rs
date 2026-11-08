@@ -393,10 +393,7 @@ fn retry_denied_create(
 }
 
 fn lock_body(kind: &str) -> String {
-    format!(
-        "pid={}\nkind={kind}\nnote=PR-007 lock has no stale-lock stealing yet\n",
-        std::process::id()
-    )
+    crate::lock_holder::render_body(kind, std::process::id(), crate::lock_holder::own_facts())
 }
 
 // Repository mutation is implemented on Linux, macOS and Windows (`platform-support.md`); the

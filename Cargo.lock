@@ -1017,6 +1017,7 @@ version = "0.56.0"
 name = "prikk-ffi"
 version = "0.56.0"
 dependencies = [
+ "libc",
  "windows-sys",
 ]
 

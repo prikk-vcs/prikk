@@ -899,13 +899,7 @@ fn push_held_lock_issues(layout: &RepositoryLayout, issues: &mut Vec<DoctorIssue
         return;
     };
     for lock in locks {
-        let liveness = match lock.liveness {
-            crate::unlock::PidLiveness::AppearsRunning => "appears running -- do not clear",
-            crate::unlock::PidLiveness::DoesNotAppearRunning => {
-                "does not appear to be running (not proof it is safe to clear)"
-            }
-            crate::unlock::PidLiveness::Unknown => "unknown (not proof it is safe to clear)",
-        };
+        let liveness = lock.liveness_words();
         let pid = lock
             .recorded_pid
             .map_or_else(|| "(unparseable)".to_string(), |pid| pid.to_string());

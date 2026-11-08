@@ -174,20 +174,24 @@ its three siblings in the same module, which use a no-follow stat. That last one
 one file rather than a platform limitation, and it is stated here rather than left implicit because the
 guarantee is otherwise described per-function.
 
-**`prikk unlock`'s PID liveness check now has a real primitive on all three platforms (DC-99 Stage
-1)** — the same shape as `set_permission_bits`/`durable_directory_entry` above, outside the
-`DurabilityContract` table because it lives in a different module
-(`crates/prikk-store/src/unlock.rs`). Linux/macOS use `kill(pid, 0)` via
-`rustix::process::test_kill_process`; Windows uses `OpenProcess`/`WaitForSingleObject`
-(`prikk_ffi::process_liveness`) — `OpenProcess` failing with `ERROR_INVALID_PARAMETER` and a
-successfully-opened handle's `WaitForSingleObject` reporting it signaled both mean the process is
-gone; `ERROR_ACCESS_DENIED` on open means it exists but this caller cannot query it further, the
-same reasoning Linux/macOS's `EPERM` branch already applies. Both platforms trust a positive result
-(`AppearsRunning`) and never a negative or unknown one — `PidLiveness`'s own advisory contract is
-unchanged; a real primitive makes the refusal better informed, it does not make clearing safe. One
-platform-specific guard: PID 0 names the Windows System Idle Process, a real but never
-lock-file-legitimate PID, and is rejected before the OS call so a malformed `pid=0` lock body
-produces `Unknown` on Windows the same way `rustix::process::Pid::from_raw(0)` already makes it
+**`prikk unlock`'s liveness check has a real primitive on all three platforms (DC-99 Stage
+1), and since 0.57.0 asks about the holder, not just the pid** — the same shape as
+`set_permission_bits`/`durable_directory_entry` above, outside the `DurabilityContract` table because
+it lives in a different module (`crates/prikk-store/src/lock_holder.rs`, listed by `unlock.rs`). Linux
+and macOS ask whether the pid exists with `kill(pid, 0)` via `rustix::process::test_kill_process`;
+Windows uses `OpenProcess`/`WaitForSingleObject` (`prikk_ffi::process_liveness`) — `OpenProcess`
+failing with `ERROR_INVALID_PARAMETER` and a successfully-opened handle's `WaitForSingleObject`
+reporting it signaled both mean the process is gone; `ERROR_ACCESS_DENIED` on open means it exists but
+this caller cannot query it further, the same reasoning Linux/macOS's `EPERM` branch applies. The
+start time that makes "the same process" checkable comes from `/proc/<pid>/stat` on Linux (a plain
+file read; the boot id and PID namespace likewise), `proc_pidinfo` on macOS
+(`prikk_ffi::process_start_time`, `libc`) and `GetProcessTimes` on Windows
+(`prikk_ffi::process_start_time`). What each platform records, and the three words the check answers
+with, are defined once in [Concurrency and locking](./concurrency-locking.md#what-the-three-liveness-words-mean).
+The advisory contract is unchanged: a real primitive makes the answer better informed, it does not
+make clearing safe. One platform-specific guard: PID 0 names the Windows System Idle Process, a real
+but never lock-file-legitimate PID, and is rejected before the OS call so a malformed `pid=0` lock
+body produces `Unknown` on Windows the same way `rustix::process::Pid::from_raw(0)` makes it
 produce `Unknown` on Linux/macOS.
 
 **Read-only commands build and run everywhere.** They never reach a mutation primitive — verified by

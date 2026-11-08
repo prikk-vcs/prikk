@@ -773,7 +773,7 @@ fn doctor_names_unlock_first_only_when_a_lock_from_the_import_appears_abandoned(
     // running process -- the same fabricated-dead-pid technique `unlock`'s own tests use.
     std::fs::write(
         dest_layout.default_active_lock_path(),
-        "pid=999999\nkind=active\nnote=test\n",
+        crate::lock_holder::render_body("active", 999_999, crate::lock_holder::own_facts()),
     )
     .expect("write a fabricated stale lock");
 

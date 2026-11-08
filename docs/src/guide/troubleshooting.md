@@ -1097,12 +1097,13 @@ nor the claims are held, carry the branch it belongs to first (`sync have`, `syn
 
 Another prikk process is writing this repository, or one that was writing it died and left its lock
 file. The message is the same for the active-session lock, a ref lock and a container lock, and names
-the file. `prikk unlock` lists every held lock with the recorded process id and whether that process
-still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
+the file. `prikk unlock` lists every held lock with the recorded process id and start time and whether the process
+that took it still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
 live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after you have confirmed the
-process that held it is gone: treat a lock that `appears running` as held (the check can be wrong
-after PID reuse, but only in the direction of not clearing it), and `does not appear to be running` is
-not proof, and clearing a live holder's lock can corrupt the repository.
+process that held it is gone: treat a lock that `appears running` as held, and note that `does not appear to be running` and
+`unknown` are not proof, and clearing a live holder's lock can corrupt the repository. The three words
+are defined once, with what each platform records, in
+[Concurrency and locking](../reference/concurrency-locking.md#what-the-three-liveness-words-mean).
 
 ## ``error: precondition not met: bundle import: this delivery classifies as `rollback` against remotes/<name>'s current pointer -- refusing …``
 

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed — a lock names its holder, not just a pid; `prikk unlock` says what it knows and why
+
+A lock file recorded only `pid=<n>`, so `prikk unlock` could only ask whether *some* process had that
+number, which a reused pid, a reboot, or another container's PID namespace each answer wrongly. A lock
+now also records its holder's **start time** and, on Linux, the machine's **boot id** and the holder's
+**PID namespace**; `unlock` answers "appears running" only for the same pid with the same start time
+(and, on Linux, the same boot and namespace). The listing prints the reason beside each answer and the
+recorded start time, and `doctor`'s held-lock finding prints the same words. What each platform records
+is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
+
+- A lock written by 0.56.0 or earlier lists as **unknown**, "written by an older prikk" — never "does
+  not appear to be running", because it records no start time to check.
+- A lock body is visible before it is complete (it is created, then written), so the new body starts
+  with a version line and ends with an end line; a body cut anywhere lists as **unknown**, "still being
+  written, or damaged", and its pid is not used or shown. Before, `pid=12` read from a half-written
+  `pid=1234` was checked as process 12.
+- A holder that has exited but not been reaped (a zombie) no longer reads as running.
+- 0.56.0's `unlock` still lists a new lock (it keeps only the `pid=` and `kind=` lines); measured against
+  the 0.56.0 binary.
+- Internal: `prikk-ffi` gains a macOS process-start-time call and a direct `libc` dependency under
+  `cfg(target_os = "macos")` (already in the lockfile through `rustix`); no `unsafe` enters `prikk-store`.
+- `unlock --lock` still clears whatever the answer; refusing a holder that appears running is the next
+  change (step 2, part L2).
+
 ### Fixed — a damaged commit-index entry made `commit` refuse with `EditText requested for unchanged text`
 
 Measured on 0.55.0 and 0.56.0 (external review 046 §4, reproduced on the 0.56.0 release binary): one

@@ -18,7 +18,7 @@ fn active_lock_path(repo: &Path) -> std::path::PathBuf {
 fn plant_stale_active_lock(repo: &Path) {
     std::fs::write(
         active_lock_path(repo),
-        "pid=999999\nkind=active\nnote=simulated crash\n",
+        prikk_store::lock_body_naming_pid_for_test("active", 999_999),
     )
     .unwrap();
 }
@@ -190,5 +190,50 @@ fn naming_a_lock_that_is_not_held_refuses() {
         String::from_utf8_lossy(&output.stderr).contains("no held lock"),
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// L1: the listing says why an answer is "unknown", for a lock written by 0.56.0 (a live pid, no start
+/// time to check it against) and for a body cut while being written; `doctor` prints the same words.
+#[test]
+fn the_listing_and_doctor_say_why_a_lock_is_unknown() {
+    let repo = unique_repo("unlock-unknown-reasons");
+    init(&repo);
+    let old = format!(
+        "pid={}\nkind=active\nnote=PR-007 lock has no stale-lock stealing yet\n",
+        std::process::id()
+    );
+    std::fs::write(active_lock_path(&repo), old).unwrap();
+    let output = prikk(&repo).arg("unlock").output().unwrap();
+    ok(&output, "unlock");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("liveness: unknown: written by an older prikk"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("recorded pid: {}", std::process::id())),
+        "stdout: {stdout}"
+    );
+    let doctor = prikk(&repo).arg("doctor").output().unwrap();
+    let doctor_out = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        doctor_out.contains("liveness: unknown: written by an older prikk"),
+        "doctor must print the listing's words: {doctor_out}"
+    );
+
+    std::fs::write(active_lock_path(&repo), "prikk-lock-v2\npid=12").unwrap();
+    let output = prikk(&repo).arg("unlock").output().unwrap();
+    ok(&output, "unlock");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "liveness: unknown: the lock body is incomplete: still being written, or damaged"
+        ),
+        "stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("recorded pid: 12"),
+        "a cut body's pid must never be shown or used: {stdout}"
     );
 }

@@ -399,7 +399,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // separate production file): 173 -> 174.
     // 0.57.0 step 0c added `node_authoring/cache_rebuild.rs` (`doctor --rebuild-caches`; `index_rebuild.rs` until 0.57.0 step 1d): 174 -> 175.
     // 0.57.0 step 1e added `way_out.rs`: 175 -> 176.
-    assert_eq!(store.production_files, 176);
+    // 0.57.0 step 2 (L1) added `lock_holder.rs`: 176 -> 177.
+    assert_eq!(store.production_files, 177);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

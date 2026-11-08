@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
 use crate::commands::CliError;
 use crate::stdout::{print, println};
-use prikk_store::{HeldLock, PidLiveness, clear_lock, find_held_lock, list_held_locks};
+use prikk_store::{HeldLock, clear_lock, find_held_lock, list_held_locks};
 
 pub(crate) fn run_unlock(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut args = args.into_iter();
@@ -94,25 +94,19 @@ fn print_locks(locks: &[HeldLock]) {
             Some(pid) => println!("  recorded pid: {pid}"),
             None => println!("  recorded pid: (unparseable)"),
         }
-        println!("  liveness: {}", describe_liveness(lock.liveness));
+        if let Some(start) = &lock.recorded_start {
+            println!("  recorded start: {start}");
+        }
+        println!("  liveness: {}", lock.liveness_words());
     }
     println!();
     println!(
-        "liveness is advisory only: a positive result is reliable evidence the process is still \
-         running, but a negative or unknown result is NOT proof it is safe to clear -- PID reuse \
-         and container namespace isolation can both make a genuinely running process appear absent. \
-         Clear a lock only if you have independently confirmed the process that created it is gone."
+        "liveness is advisory only: \"appears running\" means the process that took the lock is \
+         still the one running (same pid and start time, and on Linux the same boot and pid \
+         namespace); \"does not appear to be running\" and \"unknown\" are NOT proof it is safe to \
+         clear. Clear a lock only if you have independently confirmed the process that created it is \
+         gone."
     );
-}
-
-fn describe_liveness(liveness: PidLiveness) -> &'static str {
-    match liveness {
-        PidLiveness::AppearsRunning => "appears running -- do not clear",
-        PidLiveness::DoesNotAppearRunning => {
-            "does not appear to be running (not proof it is safe to clear)"
-        }
-        PidLiveness::Unknown => "unknown (not proof it is safe to clear)",
-    }
 }
 
 fn confirm_interactively(lock: &HeldLock) -> bool {

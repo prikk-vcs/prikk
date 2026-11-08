@@ -26,11 +26,16 @@
 //! not this module's -- keeping the decision in the caller that can actually see a terminal keeps this
 //! module a pure, easily-tested primitive.
 //!
-//! **The liveness check is advisory, and the asymmetry in how it is trusted is the whole point:** a
-//! *positive* result (`AppearsRunning`) is reliable evidence to refuse -- `kill(pid, 0)` succeeding, or
-//! failing with `EPERM`, both mean the process genuinely exists. A *negative* result
-//! (`DoesNotAppearRunning`) is **not** evidence the lock is safe to clear, for the PID-reuse/namespace
-//! reasons above -- it is information for the operator, never authorization for the tool.
+//! **The liveness check is advisory, and the asymmetry in how it is trusted is the whole point.**
+//! Since 0.57.0 (step 2, L1) a lock records its holder's start time and, on Linux, the boot id and
+//! pid namespace (`lock_holder`'s module doc), so the check asks "is the process that took this lock
+//! still the one running?", not "is some process using this number?". A *positive* result
+//! (`AppearsRunning`) now needs the pid alive, the start time equal and (Linux) the boot id and
+//! namespace equal; a body from an older prikk, an incomplete one, another namespace's, or any
+//! unreadable field answers `Unknown`, with a [`LivenessReason`] saying which. A *negative* result
+//! (`DoesNotAppearRunning`) is still **not** proof the lock is safe to clear -- it is information for
+//! the operator, never authorization for the tool. This module still never removes a lock itself;
+//! `prikk unlock` refuses a holder that appears running unless `--force` (step 2, L2).
 
 use std::path::{Path, PathBuf};
 
@@ -40,24 +45,10 @@ use crate::foundation::fsutil::{
     EntryKind, list_directory_tolerating_absence, read_file_if_exists, remove_file_required,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
+use crate::lock_holder::{self, SystemProbe};
+pub use crate::lock_holder::{LivenessReason, PidLiveness};
 
-/// Best-effort, advisory-only liveness of a lock's recorded `pid=`. See the module doc for why a
-/// negative or unknown result must never be treated as authorization to clear the lock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PidLiveness {
-    /// The recorded PID genuinely exists on this host right now -- reliable: refuse to clear.
-    AppearsRunning,
-    /// The recorded PID does not appear to exist on this host -- **not proof it is safe to clear**
-    /// (PID reuse, container namespace isolation both make "not found here" compatible with "still
-    /// running somewhere that matters").
-    DoesNotAppearRunning,
-    /// The check could not be performed (unparseable `pid=` value, or no liveness primitive on this
-    /// platform).
-    Unknown,
-}
-
-/// One lock file found on disk, parsed from its own body (`lock.rs::lock_body`'s format:
-/// `pid=<n>\nkind=<k>\nnote=...\n`).
+/// One lock file found on disk, parsed from its own body (`lock_holder`'s format).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldLock {
     /// The lock file's own path -- pass this to `clear_lock` to remove it.
@@ -67,59 +58,13 @@ pub struct HeldLock {
     pub kind: String,
     /// The `pid=` field, if the body parsed cleanly.
     pub recorded_pid: Option<u32>,
-    /// Best-effort, advisory liveness of `recorded_pid` -- see `PidLiveness`'s own doc.
+    /// The holder's recorded start time (platform units, opaque beyond equality); `None` for an
+    /// older prikk's body or an incomplete one.
+    pub recorded_start: Option<String>,
+    /// Best-effort, advisory liveness of the holder -- see `PidLiveness`'s own doc.
     pub liveness: PidLiveness,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn check_pid_liveness(pid: u32) -> PidLiveness {
-    let Ok(raw) = i32::try_from(pid) else {
-        return PidLiveness::Unknown;
-    };
-    let Some(rustix_pid) = rustix::process::Pid::from_raw(raw) else {
-        return PidLiveness::Unknown;
-    };
-    match rustix::process::test_kill_process(rustix_pid) {
-        Ok(()) => PidLiveness::AppearsRunning,
-        // `EPERM` means the kernel found a process to check permissions against -- it exists, this
-        // caller simply cannot signal it. That is still existence, not absence.
-        Err(rustix::io::Errno::PERM) => PidLiveness::AppearsRunning,
-        Err(rustix::io::Errno::SRCH) => PidLiveness::DoesNotAppearRunning,
-        Err(_) => PidLiveness::Unknown,
-    }
-}
-
-/// DC-99: mirrors the Unix implementation's own reasoning, including its subtlety --
-/// `prikk_ffi::ProcessLiveness::Exists` covers both a confirmed-running handle and the
-/// access-denied case (`ERROR_ACCESS_DENIED`, the kernel found a process to check permissions
-/// against), the same two situations Linux/macOS's `Ok(())`/`EPERM` arms both map to
-/// `AppearsRunning`.
-#[cfg(target_os = "windows")]
-fn check_pid_liveness(pid: u32) -> PidLiveness {
-    match prikk_ffi::process_liveness(pid) {
-        prikk_ffi::ProcessLiveness::Exists => PidLiveness::AppearsRunning,
-        prikk_ffi::ProcessLiveness::DoesNotExist => PidLiveness::DoesNotAppearRunning,
-        prikk_ffi::ProcessLiveness::Indeterminate => PidLiveness::Unknown,
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn check_pid_liveness(_pid: u32) -> PidLiveness {
-    PidLiveness::Unknown
-}
-
-fn parse_lock_body(bytes: &[u8]) -> (String, Option<u32>) {
-    let body = String::from_utf8_lossy(bytes);
-    let mut kind = String::new();
-    let mut recorded_pid = None;
-    for line in body.lines() {
-        if let Some(value) = line.strip_prefix("kind=") {
-            kind = value.to_string();
-        } else if let Some(value) = line.strip_prefix("pid=") {
-            recorded_pid = value.parse::<u32>().ok();
-        }
-    }
-    (kind, recorded_pid)
+    /// Why `liveness` is what it is; the listing prints it so "unknown" is never bare.
+    pub liveness_reason: LivenessReason,
 }
 
 fn read_lock_if_present(layout: &RepositoryLayout, path: &Path) -> Result<Option<HeldLock>> {
@@ -127,13 +72,14 @@ fn read_lock_if_present(layout: &RepositoryLayout, path: &Path) -> Result<Option
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(None);
     };
-    let (kind, recorded_pid) = parse_lock_body(&bytes);
-    let liveness = recorded_pid.map_or(PidLiveness::Unknown, check_pid_liveness);
+    let seen = lock_holder::inspect(&bytes, &SystemProbe);
     Ok(Some(HeldLock {
         path: path.to_path_buf(),
-        kind,
-        recorded_pid,
-        liveness,
+        kind: seen.kind,
+        recorded_pid: seen.pid,
+        recorded_start: seen.start,
+        liveness: seen.reason.liveness(),
+        liveness_reason: seen.reason,
     }))
 }
 
@@ -222,6 +168,14 @@ fn paths_name_the_same_file(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
+    }
+}
+
+impl HeldLock {
+    /// The liveness words, with the reason: one definition for every place that prints them.
+    #[must_use]
+    pub fn liveness_words(&self) -> String {
+        lock_holder::describe_liveness(self.liveness, self.liveness_reason)
     }
 }
 

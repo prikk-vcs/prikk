@@ -16,6 +16,9 @@ keywords.workspace      = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
 # DC-90: this crate is the one workspace member permitted to omit `unsafe_code = "forbid"`
 # (`UNSAFE_EXEMPT_CRATES`, tools/release-policy/src/boundary/unsafe_boundary.rs). Cargo does not
 # allow `[lints] workspace = true` together with any local override in the same manifest, so

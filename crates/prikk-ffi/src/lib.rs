@@ -604,3 +604,134 @@ mod tests {
         Ok(())
     }
 }
+
+/// What reading a process's start time found (0.57.0 step 2, L1: a lock names its holder, not just a
+/// pid). Two instances of one pid number never share a start time, so a recorded start time that
+/// equals the one read now is what tells "the same process" from "the pid reused by another".
+/// `prikk-ffi` cannot depend on `prikk-store`; the caller maps this to its own vocabulary, the same
+/// split `ProcessLiveness` draws. Linux needs no FFI for this (`/proc/<pid>/stat` is a plain file) and
+/// compiles nothing here.
+#[cfg(any(windows, target_os = "macos"))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProcessStart {
+    /// The process exists and started at this moment: microseconds since the Unix epoch on macOS, the
+    /// 100 ns `FILETIME` creation stamp on Windows. Opaque to the caller beyond equality; both are
+    /// absolute wall-clock instants, so unlike a since-boot count they do not repeat across a reboot.
+    Started(u64),
+    /// Positively established absence: no such process, or one that has terminated (a zombie on
+    /// macOS, a signaled process handle on Windows).
+    Gone,
+    /// Neither established -- an unexpected error, or a process this caller may not query. Never
+    /// authorization to treat the process as gone.
+    Indeterminate,
+}
+
+/// macOS: the start time of `pid`, from `proc_pidinfo(PROC_PIDTBSDINFO)`. A zombie reports `Gone`:
+/// it can never run again, though `kill(pid, 0)` still succeeds on it.
+#[cfg(target_os = "macos")]
+pub fn process_start_time(pid: u32) -> ProcessStart {
+    /// `SZOMB` from `<sys/proc.h>`: the process has exited and awaits its parent's `wait`.
+    const SZOMB: u32 = 5;
+
+    let Ok(raw) = libc::c_int::try_from(pid) else {
+        return ProcessStart::Indeterminate;
+    };
+    let Ok(size) = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()) else {
+        return ProcessStart::Indeterminate;
+    };
+    // SAFETY: `proc_bsdinfo` is a plain C struct of integers and byte arrays, for which the all-zero
+    // bit pattern is a valid value; it is overwritten by the call below before any field is read.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    // SAFETY: the buffer pointer is to `info`, a live, writable `proc_bsdinfo`, and `size` is exactly
+    // its size in bytes, so the kernel writes no more than the buffer holds. The other arguments are
+    // plain integers. The function returns the number of bytes written, or 0 / -1 with `errno` set.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            raw,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&raw mut info).cast::<libc::c_void>(),
+            size,
+        )
+    };
+    if written == size {
+        if info.pbi_status == SZOMB {
+            return ProcessStart::Gone;
+        }
+        let micros = info
+            .pbi_start_tvsec
+            .checked_mul(1_000_000)
+            .and_then(|whole| whole.checked_add(info.pbi_start_tvusec));
+        return micros.map_or(ProcessStart::Indeterminate, ProcessStart::Started);
+    }
+    // `errno` is read immediately after the failed call, before anything else can set it.
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(code) if code == libc::ESRCH => ProcessStart::Gone,
+        _ => ProcessStart::Indeterminate,
+    }
+}
+
+/// Windows: the creation time of `pid`, from `GetProcessTimes`. A process whose handle is already
+/// signaled has terminated and reports `Gone`. A process this caller may not open reports
+/// `Indeterminate`, never `Gone`.
+#[cfg(windows)]
+pub fn process_start_time(pid: u32) -> ProcessStart {
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_PARAMETER, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        WaitForSingleObject,
+    };
+
+    if pid == 0 {
+        return ProcessStart::Indeterminate;
+    }
+    // SAFETY: as in `process_liveness`: plain integer arguments; the result is NULL (checked below)
+    // or a `HANDLE` owned from here by `OwnedProcessHandle`.
+    let handle: HANDLE = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            pid,
+        )
+    };
+    if handle.is_null() {
+        return match std::io::Error::last_os_error().raw_os_error() {
+            Some(code) if code == ERROR_INVALID_PARAMETER as i32 => ProcessStart::Gone,
+            _ => ProcessStart::Indeterminate,
+        };
+    }
+    let guard = OwnedProcessHandle(handle);
+
+    // SAFETY: `guard.0` is the valid, open handle just obtained; a zero timeout never blocks.
+    match unsafe { WaitForSingleObject(guard.0, 0) } {
+        WAIT_TIMEOUT => {}
+        WAIT_OBJECT_0 => return ProcessStart::Gone,
+        _ => return ProcessStart::Indeterminate,
+    }
+
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: `guard.0` is a valid open handle with `PROCESS_QUERY_LIMITED_INFORMATION`, which
+    // `GetProcessTimes` requires; the four pointers are to live, writable `FILETIME`s that outlive the
+    // call.
+    let ok = unsafe {
+        GetProcessTimes(
+            guard.0,
+            &raw mut created,
+            &raw mut exited,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    };
+    if ok == 0 {
+        return ProcessStart::Indeterminate;
+    }
+    ProcessStart::Started(
+        (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
+    )
+}
