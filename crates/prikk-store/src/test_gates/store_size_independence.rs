@@ -99,6 +99,12 @@ fn store_of(content_bytes: usize) -> Result<(RepositoryLayout, std::path::PathBu
             layout.root().join(format!("data{index}.bin")),
             content(per_file, index + 1),
         )?;
+        // 0.57.0 step 0c (git's racy-entry rule): a file too recent to trust is read again at the
+        // next commit, which would make this row measure the clock, not the store. Age the content.
+        std::fs::File::options()
+            .write(true)
+            .open(layout.root().join(format!("data{index}.bin")))?
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(86_400))?;
     }
     commit_worktree_changes_signed(
         &layout,

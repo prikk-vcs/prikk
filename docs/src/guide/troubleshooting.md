@@ -149,14 +149,18 @@ exists for repositories damaged before that.
 another, although the entry's size and modification time still match the file. The index is a cache
 that only saves `commit` a read; it holds no history, so nothing recorded in the repository is wrong.
 
+Run `prikk doctor --rebuild-commit-index` (`--plan-only` first to see how many files it reads): it
+reads every file `commit` would scan once and writes a correct index, under the lock `commit` takes, and
+`verify` is clean afterwards. Two shapes, both cured by it:
+
 - **The entry says the file differs from the last committed content, but it does not** (a damaged
   entry). `prikk commit` re-reads the path, corrects the entry and authors nothing for that file — an
-  unrelated new file commits as usual. Before 0.57.0 this shape refused the commit with `integrity
-  error: EditText requested for unchanged text`.
+  unrelated new file commits as usual — so this shape cures itself at the next commit. Before 0.57.0 it
+  refused the commit with `integrity error: EditText requested for unchanged text`.
 - **The entry says the file is unchanged, but it was rewritten** with the same size and modification
-  time (a restored or backdated timestamp, or two writes in one clock tick). `prikk diff` and
-  `prikk worktree-status` show the change; `prikk commit` does not, because it trusts the entry.
-  Save the file again (any new modification time) and commit; `verify` is clean afterwards.
+  time (a restored or backdated timestamp). `prikk diff` and `prikk worktree-status` show the change;
+  `prikk commit` does not, because it trusts the entry — until the rebuild, after which the next
+  `commit` authors the edit.
 
 ## `error: integrity error: active WAL has a damaged record (damaged record at byte offset N; K sound record(s) follow it); …`
 

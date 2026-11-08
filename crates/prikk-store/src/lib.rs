@@ -190,9 +190,11 @@ pub use commit_boundary::worktree_patch::{
     DEFAULT_ACTIVE_PATCH_LIMIT, DeclarationDisclosure, DeclarationDisclosureReason,
     MOVE_HINT_SUMMARY_THRESHOLD, MoveHintCandidate, MoveHints, WorktreePatchCommitOptions,
     WorktreePatchCommitReport, WorktreePatchOperationKind, WorktreePatchOperationSummary,
-    commit_worktree_changes_signed,
+    commit_worktree_changes_signed, plan_commit_index_rebuild, rebuild_commit_index,
 };
-pub use commit_index::{COMMIT_INDEX_DIVERGENCE_ADVICE, CommitIndexDivergence};
+pub use commit_index::{
+    COMMIT_INDEX_DIVERGENCE_ADVICE, CommitIndexDivergence, CommitIndexRebuildReport,
+};
 pub use compact::{
     CompactionReport, KeepSlotReport, compact_received_index, compact_received_index_keep_slot,
     compact_ref_pointer_index, compact_trust_policy, compact_trust_policy_keep_slot,

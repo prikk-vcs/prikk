@@ -122,6 +122,7 @@ fn verdict_catches_a_commit_index_divergence_outside_stage_and_item_failure() {
     let repo = support::unique_repo("rfc118-stage5-commit-index-divergence");
     support::init(&repo);
     std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
     ok(
         &support::commit(&repo, "heads/main", "genesis"),
         "genesis commit",

@@ -81,6 +81,7 @@ prikk doctor [path] --repair-pointer-index-tail
 prikk doctor [path] --repair-tails [--plan-only]
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
+prikk doctor [path] --rebuild-commit-index [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]
 prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]
 prikk doctor [path] --recovery-list
@@ -96,6 +97,22 @@ prikk compact --received-index|--trust-policy --keep-slot a|b [--plan-only]
 prikk received remove <remotes/…> [--plan-only]
 prikk --version
 ```
+
+**`doctor --rebuild-commit-index` rebuilds a cache.** `.prikk/cache/commit-index.v1` only saves `commit` a
+read; it holds no history, so the verb writes no recovery-log entry. It reads every file `commit` would
+scan once (the current branch's baseline decides each file's kind) and writes a correct index, under the
+active lock `commit` takes: a `commit` running meanwhile fails with `lock conflict` instead of racing it.
+A file written too recently to trust (see below), changed while being read, or holding content `commit`
+refuses is read but left out. `--plan-only` counts the files, takes no lock and writes nothing. It runs
+alone (only `--plan-only` goes with it). `verify` and `doctor` name it when they find a commit-index
+divergence.
+
+**`commit` does not record an entry for a file written inside the file system's current timestamp tick.**
+An entry is left out when the file's mtime is not older than the file system's own clock at the moment
+`commit` took its lock (the creation stamp of the lock file, so the comparison holds on a coarse-clock
+file system too). The next `commit` reads that file once; nothing else changes. This closes the
+cache-validity specification's first residual-risk class (a rewrite in the same tick as the recorded
+mtime); an mtime put back by a tool stays `verify`'s to find.
 
 **What `--from` and `--target` accept.** `branch create --from REF` takes any published ref: a
 branch ref names its Block directly, and a tag ref is dereferenced through its tag object, so

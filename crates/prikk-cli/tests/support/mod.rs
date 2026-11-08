@@ -13,3 +13,21 @@
 #![allow(dead_code)]
 
 pub use prikk_test_support::*;
+
+/// Set `path`'s modification time a day into the past.
+///
+/// 0.57.0 step 0c (git's racy-entry rule): `commit` does not record a commit-index entry for a file
+/// whose mtime is not older than the file system's clock when the commit took its lock, because a
+/// rewrite in the same timestamp tick could reproduce the recorded stat. A test that needs the entry
+/// -- to damage it, to count its reads -- must therefore write a file that is not "too recent" on
+/// *any* clock, not only on this machine's fine-grained one (a coarse kernel tick, NTFS, FAT).
+#[allow(clippy::expect_used)]
+pub fn backdate_mtime(path: &std::path::Path) {
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("open to backdate")
+        .set_modified(std::time::SystemTime::now() - day)
+        .expect("set the modification time");
+}

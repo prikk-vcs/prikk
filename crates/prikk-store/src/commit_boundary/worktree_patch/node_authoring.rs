@@ -21,11 +21,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
+mod index_rebuild;
 mod worktree_files;
 mod worktree_read;
 
 // The read-only view `prikk diff` reads the worktree through (RFC 153 §6.2): built from the same parts
 // `author_inner` uses, and it writes nothing.
+pub(crate) use index_rebuild::rebuild_commit_index_for;
 pub(crate) use worktree_read::{Retain, read_worktree_for_diff};
 
 use prikk_error::{PrikkError, Result};
@@ -813,6 +815,10 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
     // the first commit against a repository already does. See the cache-validity specification at
     // `rfcs/handoffs/DC-56-commit-full-tree-scan-compliance/cache-validity-specification-v1.md`.
     let mut commit_index = CommitIndex::load(layout).map_err(AuthorError::Store)?;
+    // 0.57.0 step 0c, git's racy-entry rule: nothing below records an entry for a file whose mtime is
+    // not older than the file system's clock at the moment this commit took its lock (before any
+    // content read), so a rewrite in the same timestamp tick can never match a recorded stat.
+    commit_index.set_racy_horizon(commit_index::file_system_horizon(active_lock.path()));
 
     // Working state for same-session duplicate prevention (E1): clone the baseline; each fresh node
     // is inserted immediately after minting so the next mint sees it via contains_seen_node_id.

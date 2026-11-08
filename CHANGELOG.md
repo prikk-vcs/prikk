@@ -21,6 +21,20 @@ exists to detect. **New:** `doctor` now reports the same disagreement as a warni
 `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE` (exit stays `0`: an error would refuse every `doctor --repair-*`
 over a file that holds no history), and both `verify` and `doctor` print what to do about it.
 
+### Added — `prikk doctor --rebuild-commit-index [--plan-only]`, and git's racy-entry rule for the commit-index
+
+`verify` and `doctor` now name one command for a commit-index divergence: **`prikk doctor
+--rebuild-commit-index`** reads every file `commit` would scan once (the current branch's baseline decides
+each file's kind) and writes a correct index, under the active lock `commit` takes, so a `commit` running
+meanwhile fails with `lock conflict` instead of racing it. `--plan-only` counts the files and writes
+nothing. The index is a cache and holds no history: no recovery-log entry. This is the way out for the
+case `commit` cannot see on its own, an entry that hides a same-size rewrite whose mtime a tool put back.
+
+`commit` no longer records an entry for a file whose mtime is not older than the file system's own
+clock when `commit` took its lock (git's racy-entry rule), so a rewrite inside one timestamp tick can no
+longer hide behind a recorded stat: on a coarse-clock file system (an older kernel's tick, NTFS, FAT's 2
+seconds) `commit` silently skipped such a change; it reads the file instead, once.
+
 ### Documented — signatures and RefUpdates carry no time
 
 `created_at` is `0` at every current signing and ref-update writer, so no block, patch or ref record

@@ -12,6 +12,12 @@
 //! result is identical whether the index is warm, cold, or missing entirely — only the amount of
 //! worktree content re-read differs.
 //!
+//! **Two further rules keep an entry from ever changing an answer.** `commit` trusts an entry unread
+//! only to say a file is *unchanged* (a disagreeing "differs" is a miss, re-read and corrected --
+//! `resolve_existing_file`), and records none for a file whose mtime is not older than the file
+//! system's clock at the moment the commit took its lock ([`CommitIndex::set_racy_horizon`], git's
+//! racy-entry rule). `prikk doctor --rebuild-commit-index` rebuilds the whole file.
+//!
 //! The validity rule this module implements — when an entry is trusted, what invalidates it, and
 //! what bounds how often a rebuild occurs — is specified as a first-class document at
 //! `rfcs/handoffs/DC-56-commit-full-tree-scan-compliance/cache-validity-specification-v1.md`. Read
@@ -59,6 +65,10 @@ impl CommitIndexEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CommitIndex {
     entries: BTreeMap<String, CommitIndexEntry>,
+    /// Git's racy-entry rule (0.57.0 step 0c): the file-system timestamp (seconds, nanoseconds)
+    /// taken before this writer read any content. An entry whose file mtime is **not older** than
+    /// it is not recorded -- see [`CommitIndex::set_racy_horizon`]. `None` records everything.
+    racy_horizon: Option<(i64, u32)>,
 }
 
 impl CommitIndex {
@@ -89,8 +99,26 @@ impl CommitIndex {
         self.entries.get(path)
     }
 
-    /// Record or replace a path's content state.
+    /// Arm the racy-entry rule for the records that follow (specification §5): an entry whose file
+    /// mtime is not older than `horizon` is **not recorded**, and any older entry for the same path
+    /// is dropped, so the next `commit` reads that file instead of trusting a stat that a rewrite in
+    /// the same timestamp tick would reproduce. The horizon must come from the **file system's own
+    /// clock**, taken before the first content read (see [`file_system_horizon`]): a file written
+    /// before it has a strictly older stamp, and any rewrite after the read is stamped no earlier
+    /// than the horizon, so it can never collide with a recorded mtime -- on a coarse clock too.
+    pub(crate) fn set_racy_horizon(&mut self, horizon: (i64, u32)) {
+        self.racy_horizon = Some(horizon);
+    }
+
+    /// Record or replace a path's content state (unless the racy-entry rule leaves it out).
     pub(crate) fn record(&mut self, path: String, entry: CommitIndexEntry) {
+        if self
+            .racy_horizon
+            .is_some_and(|horizon| (entry.mtime_secs, entry.mtime_nanos) >= horizon)
+        {
+            self.entries.remove(&path);
+            return;
+        }
         self.entries.insert(path, entry);
     }
 
@@ -113,6 +141,42 @@ impl CommitIndex {
     }
 }
 
+/// The file system's own clock now: the modification time of `held_lock`, a lock file this process
+/// created (exclusively) before reading any content. Using a file the file system stamped, rather than
+/// the system clock, is what makes the racy-entry rule hold on a coarse-clock file system (a kernel
+/// tick, FAT's 2 s): both stamps come from the same clock. If it cannot be read, the horizon is the
+/// earliest possible time, so **nothing** is recorded -- a cache that cannot prove an entry safe
+/// leaves it out.
+pub(crate) fn file_system_horizon(held_lock: &Path) -> (i64, u32) {
+    let stamp = std::fs::metadata(held_lock)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok());
+    stamp
+        .and_then(|d| {
+            i64::try_from(d.as_secs())
+                .ok()
+                .map(|s| (s, d.subsec_nanos()))
+        })
+        .unwrap_or((i64::MIN, 0))
+}
+
+/// What `prikk doctor --rebuild-commit-index` read and wrote (0.57.0 step 0c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitIndexRebuildReport {
+    /// Entries the index held before.
+    pub entries_before: usize,
+    /// Worktree files `commit` would scan: each is read once.
+    pub paths_read: usize,
+    /// Entries in the rebuilt index.
+    pub entries_written: usize,
+    /// Files read but not entered: too recently written to trust (the racy-entry rule), changed
+    /// while being read, or content `commit` itself refuses.
+    pub left_out: usize,
+    /// Whether the index file was written (false for a plan).
+    pub written: bool,
+}
+
 /// One path where the commit-index's recorded content hash disagrees with the worktree's actual
 /// current content, despite the entry's stat still matching — the case the cache-validity
 /// specification's §5/§6 exists to catch: a stat heuristic that was trusted but wrong (mtime
@@ -127,15 +191,11 @@ pub struct CommitIndexDivergence {
     pub actual_hash: ObjectId,
 }
 
-/// What to do about a [`CommitIndexDivergence`], in the words `verify` and `doctor` both print. The
-/// index is a cache and holds no history, so nothing recorded in the repository is wrong; this
-/// names what `commit` does with such an entry and the one case it cannot see on its own.
+/// What to do about a [`CommitIndexDivergence`], in the words `verify` and `doctor` both print: one
+/// sentence, naming the one command that cures every shape of it.
 pub const COMMIT_INDEX_DIVERGENCE_ADVICE: &str = "the commit-index is a cache and holds no \
-history, so nothing recorded in the repository is wrong. `prikk commit` re-reads a path and \
-corrects its entry whenever the entry says the file differs from the last committed content. When \
-the entry instead hides a real change (the file was rewritten with the same size and modification \
-time: `prikk diff` shows it, `prikk commit` does not), save the file again (any new modification \
-time) and commit";
+history, so nothing recorded in the repository is wrong; run `prikk doctor --rebuild-commit-index` \
+to rebuild it from the worktree (`--plan-only` first to see how many files it reads)";
 
 /// Check every commit-index entry whose recorded stat still matches the worktree against the file's
 /// actual current content. An entry whose stat no longer matches is not re-read here: that is the
@@ -235,7 +295,10 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<CommitIndex> {
             },
         );
     }
-    Some(CommitIndex { entries })
+    Some(CommitIndex {
+        entries,
+        racy_horizon: None,
+    })
 }
 
 /// Compute the content hash a worktree file's bytes would produce as a blob of the given kind — the

@@ -1420,6 +1420,51 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
     // (`plan_pointer_index_rebuild`/`rebuild_pointer_index` each call the same internal function
     // under one lock), so the plan printed here is always the plan a real run would also print
     // before writing.
+    if doctor_args.rebuild_commit_index {
+        let branch = current_branch::resolve_ref(&layout, None)?;
+        let report = if doctor_args.plan_only {
+            prikk_store::plan_commit_index_rebuild(&layout, &branch)
+        } else {
+            prikk_store::rebuild_commit_index(&layout, &branch)
+        }
+        .map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        println!(
+            "commit-index: {} entr{} before, {} file{} {}",
+            report.entries_before,
+            if report.entries_before == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            report.paths_read,
+            if report.paths_read == 1 { "" } else { "s" },
+            if report.written {
+                "read"
+            } else {
+                "would be read"
+            },
+        );
+        if report.written {
+            println!(
+                "commit-index rebuilt: {} entr{} written, {} file{} left out (written too recently to trust, changed while being read, or content `commit` refuses)",
+                report.entries_written,
+                if report.entries_written == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                report.left_out,
+                if report.left_out == 1 { "" } else { "s" },
+            );
+            println!(
+                "The commit-index is a cache and holds no history: nothing was recorded in the recovery log."
+            );
+        } else {
+            println!("plan only -- nothing written");
+        }
+        return Ok(());
+    }
     if doctor_args.rebuild_pointer_index {
         let result = if doctor_args.plan_only {
             prikk_store::plan_pointer_index_rebuild(&layout)

@@ -177,7 +177,9 @@ fn walk_finds_the_confirmed_production_module_count() {
     // 0.56.0 step W3b added `worktree_materialize` (the shared "clean, mark dirty, materialize
     // through the verified path" sequence R3's ruling gives, used by `branch_switch` and by the
     // producers moving the current branch): 172 -> 173.
-    assert_eq!(modules.len(), 173, "modules: {modules:?}");
+    // 0.57.0 step 0c added `commit_boundary::worktree_patch::node_authoring::index_rebuild`
+    // (`doctor --rebuild-commit-index`, built from the same parts `commit` and `diff` use): 173 -> 174.
+    assert_eq!(modules.len(), 174, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

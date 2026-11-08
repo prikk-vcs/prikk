@@ -13,6 +13,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
 use crate::author::author_signing::AuthorSigner;
+use crate::commit_index::CommitIndexRebuildReport;
 use crate::foundation::layout::RepositoryLayout;
 use crate::node::node_id_gen::NodeIdGenerator;
 
@@ -24,6 +25,7 @@ mod node_authoring;
 /// rendered, so no caller outside can reconstruct or diverge from the rule.
 pub(crate) use node_authoring::{WorktreeEntryShape, authoring_refusal_reason};
 
+use node_authoring::rebuild_commit_index_for;
 /// The read-only view of what `commit` would author, for `prikk diff` (RFC 153 §6.2). Built from `commit`'s own
 /// parts inside `node_authoring`, so the private module stays private and what crosses is the result.
 pub(crate) use node_authoring::{Retain, read_worktree_for_diff};
@@ -338,3 +340,28 @@ mod ref_name_once_per_session_tests;
 
 #[cfg(test)]
 mod step1_merged_decode_tests;
+
+/// Count what `prikk doctor --rebuild-commit-index` would read, against `ref_name`'s baseline. Takes no
+/// lock and writes nothing.
+///
+/// # Errors
+/// An unreadable baseline, worktree or active WAL.
+pub fn plan_commit_index_rebuild(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<CommitIndexRebuildReport> {
+    rebuild_commit_index_for(layout, ref_name, true)
+}
+
+/// Rebuild `.prikk/cache/commit-index.v1` from the worktree: every file `commit` would scan is read
+/// once and the index is replaced by a correct one. Holds the lock `commit` takes, so a `commit`
+/// running meanwhile fails with `lock conflict` instead of racing it. A cache: no recovery-log entry.
+///
+/// # Errors
+/// A lock conflict, an unreadable baseline, worktree or active WAL, or a failed write.
+pub fn rebuild_commit_index(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<CommitIndexRebuildReport> {
+    rebuild_commit_index_for(layout, ref_name, false)
+}

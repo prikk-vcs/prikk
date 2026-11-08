@@ -195,6 +195,7 @@ fn commit_populates_the_index_under_cache_dir() {
     let repo = unique_repo("cache-dir-location");
     init(&repo);
     std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
     ok(&commit(&repo, "genesis"), "genesis commit");
 
     let index_path = commit_index_path(&repo);
@@ -254,6 +255,7 @@ fn verify_reports_a_deliberately_stale_index_entry_as_divergence() {
     let repo = unique_repo("verify-stale-entry");
     init(&repo);
     std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
     ok(&commit(&repo, "genesis"), "genesis commit");
 
     let index_path = commit_index_path(&repo);
@@ -341,6 +343,7 @@ fn a_damaged_hash_digit_is_a_miss_for_commit_and_a_finding_for_verify_and_doctor
     let repo = unique_repo("damaged-digit");
     init(&repo);
     std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
     ok(&commit(&repo, "genesis"), "genesis commit");
 
     flip_one_hash_digit(&commit_index_path(&repo), "a.txt");
@@ -400,19 +403,22 @@ fn a_damaged_hash_digit_is_a_miss_for_commit_and_a_finding_for_verify_and_doctor
 }
 
 /// The other half of §5, stated and held: an entry that wrongly says "unchanged" (the file was
-/// rewritten with the same size and modification time) is the accepted residual risk of the stat
-/// heuristic. `commit` does not see the change; `verify` and `doctor` do, name the way out, and
-/// saving the file again (a new modification time) lets `commit` author the edit.
+/// rewritten with the same size and modification time -- an mtime put back by a tool: class 2) is the
+/// accepted residual risk of the stat heuristic. `commit` does not see the change; `verify` and
+/// `doctor` do, and both name `prikk doctor --rebuild-commit-index`, which cures it: `--plan-only`
+/// writes nothing, the real run rebuilds, `verify` is clean, and the next `commit` authors the edit.
 ///
 /// **Perturb (red control):** remove the warning push in `doctor_repository` -- the `doctor`
 /// assertion goes red; remove the advice print in `output/verification.rs` -- the `verify`
-/// assertion goes red.
+/// assertion goes red; make the rebuild write nothing (skip `index.save`) -- the cure assertions go
+/// red.
 #[test]
-fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_saving_the_file() {
+fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_the_rebuild_verb() {
     let repo = unique_repo("hidden-rewrite");
     init(&repo);
     let file = repo.join("a.txt");
     std::fs::write(&file, "alpha\n").unwrap();
+    support::backdate_mtime(&file);
     ok(&commit(&repo, "genesis"), "genesis commit");
 
     let mtime = std::fs::metadata(&file).unwrap().modified().unwrap();
@@ -444,8 +450,8 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_savi
         "{stdout}"
     );
     assert!(
-        stdout.contains(prikk_store::COMMIT_INDEX_DIVERGENCE_ADVICE),
-        "{stdout}"
+        stdout.contains("prikk doctor --rebuild-commit-index"),
+        "verify names the verb: {stdout}"
     );
     let doctor = prikk(&repo).arg("doctor").output().unwrap();
     let stdout = String::from_utf8_lossy(&doctor.stdout);
@@ -453,14 +459,266 @@ fn an_entry_that_hides_a_rewrite_is_found_by_verify_and_doctor_and_cured_by_savi
         stdout.contains("PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("prikk doctor --rebuild-commit-index"),
+        "doctor names the verb: {stdout}"
+    );
 
-    // The way out the message names: save the file again.
-    std::fs::write(&file, "omega\n").unwrap();
-    let out = commit(&repo, "the rewrite");
-    ok(&out, "commit after saving the file again");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("operations: 1"));
+    // --plan-only: counts, writes nothing.
+    let before = std::fs::read(commit_index_path(&repo)).unwrap();
+    let plan = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index", "--plan-only"])
+        .output()
+        .unwrap();
+    ok(&plan, "rebuild --plan-only");
+    let stdout = String::from_utf8_lossy(&plan.stdout);
+    assert!(stdout.contains("1 file would be read"), "{stdout}");
+    assert!(stdout.contains("plan only -- nothing written"), "{stdout}");
+    assert_eq!(
+        std::fs::read(commit_index_path(&repo)).unwrap(),
+        before,
+        "a plan writes nothing"
+    );
+
+    let rebuild = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index"])
+        .output()
+        .unwrap();
+    ok(&rebuild, "rebuild");
+    let stdout = String::from_utf8_lossy(&rebuild.stdout);
+    assert!(
+        stdout.contains("commit-index rebuilt: 1 entry written"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("holds no history"),
+        "a cache, said in its output: {stdout}"
+    );
+
     let verify = prikk(&repo).arg("verify").output().unwrap();
-    ok(&verify, "verify after");
+    ok(&verify, "verify after the rebuild");
+    assert!(
+        String::from_utf8_lossy(&verify.stdout).contains("commit-index divergences: 0"),
+        "clean after the rebuild"
+    );
+    let out = commit(&repo, "the rewrite");
+    ok(
+        &out,
+        "the next commit authors the edit the entry had hidden",
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("operations: 1"));
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The verb's argument hygiene: alone (only `--plan-only` goes with it), and `--plan-only` is accepted
+/// with it.
+#[test]
+fn the_rebuild_verb_runs_alone() {
+    let repo = unique_repo("rebuild-args");
+    init(&repo);
+    for other in [
+        "--repair-wal-tail",
+        "--rebuild-pointer-index",
+        "--recovery-list",
+    ] {
+        let out = prikk(&repo)
+            .args(["doctor", "--rebuild-commit-index", other])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2), "{other}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr)
+                .contains("--rebuild-commit-index cannot be combined"),
+            "{other}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **Git's racy-entry rule (0.57.0 step 0c).** An entry for a file whose mtime is not older than the
+/// file system's clock when `commit` took its lock is not recorded, so the next `commit` reads the
+/// file: a rewrite inside the same timestamp tick (same size, same mtime) cannot hide. Shown with a file
+/// whose mtime is in the future -- "not older" on every clock -- against one whose mtime is a day
+/// old: the old file gets an entry, the future one does not, and a same-size rewrite of the future
+/// file with its mtime put back is *seen* by the next `commit` (the old file's identical rewrite is
+/// the accepted blind spot, `an_entry_that_hides_a_rewrite_…`).
+///
+/// **Perturb (red control):** make `CommitIndex::record` ignore the horizon -- the future file gets an
+/// entry and the final `commit` is blind, so the first and last assertions go red.
+#[test]
+fn an_entry_recorded_inside_the_current_tick_is_not_trusted_and_the_rewrite_is_seen() {
+    let repo = unique_repo("racy-entry");
+    init(&repo);
+    let old = repo.join("old.txt");
+    let recent = repo.join("recent.txt");
+    std::fs::write(&old, "alpha\n").unwrap();
+    support::backdate_mtime(&old);
+    std::fs::write(&recent, "alpha\n").unwrap();
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&recent)
+        .unwrap()
+        .set_modified(future)
+        .unwrap();
+    ok(&commit(&repo, "genesis"), "genesis commit");
+
+    let index = std::fs::read_to_string(commit_index_path(&repo)).unwrap();
+    assert!(
+        index.contains("old.txt\t"),
+        "an old file is recorded: {index}"
+    );
+    assert!(
+        !index.contains("recent.txt\t"),
+        "a file not older than the commit's own clock is not recorded: {index}"
+    );
+
+    // Same size, mtime put back: with no entry the next commit reads the file and sees it.
+    std::fs::write(&recent, "omega\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&recent)
+        .unwrap()
+        .set_modified(future)
+        .unwrap();
+    let out = commit(&repo, "the rewrite");
+    ok(&out, "the rewrite of a file that was never trusted is seen");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("operations: 1"));
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **The rebuild verb takes the lock `commit` takes** -- the deterministic half of the race. While
+/// another process holds the active lock, `doctor --rebuild-commit-index` fails with `lock conflict`
+/// and leaves the index byte-identical; `--plan-only` (a read) still answers; once the lock is
+/// released the rebuild runs.
+///
+/// **Perturb (red control):** have `rebuild_commit_index_for` take a differently named lock -- the
+/// rebuild succeeds while the active lock is held and the first assertion goes red.
+#[test]
+fn the_rebuild_verb_conflicts_with_a_held_active_lock_and_a_plan_does_not() {
+    let repo = unique_repo("rebuild-lock");
+    init(&repo);
+    std::fs::write(repo.join("a.txt"), "alpha\n").unwrap();
+    support::backdate_mtime(&repo.join("a.txt"));
+    ok(&commit(&repo, "genesis"), "genesis commit");
+    let before = std::fs::read(commit_index_path(&repo)).unwrap();
+
+    let layout = prikk_store::RepositoryLayout::open(&repo).unwrap();
+    let held = prikk_store::ActiveLock::acquire(&layout, prikk_store::DEFAULT_ACTIVE_NAME).unwrap();
+    let blocked = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index"])
+        .output()
+        .unwrap();
+    assert_eq!(blocked.status.code(), Some(1), "{blocked:?}");
+    assert!(
+        String::from_utf8_lossy(&blocked.stderr).contains("lock conflict"),
+        "{}",
+        String::from_utf8_lossy(&blocked.stderr)
+    );
+    assert_eq!(
+        std::fs::read(commit_index_path(&repo)).unwrap(),
+        before,
+        "a refused rebuild writes nothing"
+    );
+    let plan = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index", "--plan-only"])
+        .output()
+        .unwrap();
+    ok(&plan, "a plan takes no lock");
+    drop(held);
+    let rebuild = prikk(&repo)
+        .args(["doctor", "--rebuild-commit-index"])
+        .output()
+        .unwrap();
+    ok(&rebuild, "the rebuild runs once the lock is free");
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **The rebuild verb is a writer, so it is raced against an ordinary `commit`.** Each round writes a
+/// new (aged) file and starts `commit` and `doctor --rebuild-commit-index` together. The rebuild takes
+/// the lock `commit` takes, so one of them wins and the other either runs after it or fails cleanly with
+/// `lock conflict` -- never a torn index, never a lost or duplicated commit. After every round the
+/// loser is re-run, then: both succeeded, the worktree has nothing left to commit, `verify` is clean
+/// and the index agrees with every file.
+///
+/// The deterministic proof that the lock is the commit lock is the test above; this one is the stress
+/// run (it prints how many rounds ended in a lock conflict).
+#[test]
+fn the_rebuild_verb_raced_against_commit_loses_cleanly_or_follows_it() {
+    let repo = unique_repo("rebuild-race");
+    init(&repo);
+    std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+    support::backdate_mtime(&repo.join("base.txt"));
+    ok(&commit(&repo, "genesis"), "genesis commit");
+
+    let (mut conflicts, mut clean_orders) = (0, 0);
+    for round in 0..12 {
+        let name = format!("f{round}.txt");
+        std::fs::write(repo.join(&name), format!("round {round}\n")).unwrap();
+        support::backdate_mtime(&repo.join(&name));
+
+        let mut commit_cmd = prikk(&repo);
+        commit_cmd
+            .env("PRIKK_AUTHOR_KEY_ID", AUTHOR_KEY_ID)
+            .env(
+                "PRIKK_AUTHOR_SEED_FILE",
+                support::seed_file(AUTHOR_SEED_HEX),
+            )
+            .args(["commit", "-m", &format!("round {round}")])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut rebuild_cmd = prikk(&repo);
+        rebuild_cmd
+            .args(["doctor", "--rebuild-commit-index"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let commit_child = commit_cmd.spawn().unwrap();
+        let rebuild_child = rebuild_cmd.spawn().unwrap();
+        let commit_out = commit_child.wait_with_output().unwrap();
+        let rebuild_out = rebuild_child.wait_with_output().unwrap();
+
+        for (what, out) in [("commit", &commit_out), ("rebuild", &rebuild_out)] {
+            if !out.status.success() {
+                let err = String::from_utf8_lossy(&out.stderr);
+                assert!(
+                    err.contains("lock conflict"),
+                    "round {round}: {what} may lose only by a lock conflict, got: {err}"
+                );
+                conflicts += 1;
+            }
+        }
+        if commit_out.status.success() && rebuild_out.status.success() {
+            clean_orders += 1;
+        }
+        // Re-run whichever lost, alone.
+        if !commit_out.status.success() {
+            ok(&commit(&repo, &format!("round {round}")), "commit re-run");
+        }
+        if !rebuild_out.status.success() {
+            let again = prikk(&repo)
+                .args(["doctor", "--rebuild-commit-index"])
+                .output()
+                .unwrap();
+            ok(&again, "rebuild re-run");
+        }
+    }
+    eprintln!("rebuild race: {conflicts} lock conflicts, {clean_orders} rounds where both ran");
+
+    let wt = prikk(&repo).arg("worktree-status").output().unwrap();
+    ok(&wt, "worktree-status");
+    let stdout = String::from_utf8_lossy(&wt.stdout);
+    assert!(stdout.contains("modified files: 0"), "{stdout}");
+    assert!(stdout.contains("untracked files: 0"), "{stdout}");
+    let verify = prikk(&repo).arg("verify").output().unwrap();
+    ok(&verify, "verify after the race");
+    assert!(
+        String::from_utf8_lossy(&verify.stdout).contains("commit-index divergences: 0"),
+        "the index agrees with every file"
+    );
 
     let _ = std::fs::remove_dir_all(&repo);
 }
