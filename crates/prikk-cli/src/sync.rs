@@ -55,8 +55,8 @@ use prikk_store::{
     decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
     mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
     patch_ids_pending, pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
-    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
-    validate_local_branch_ref,
+    require_seal_batch_parents_reached, require_worktree_clean_and_capture,
+    seal_from_accepted_claim_in_batch, validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -481,6 +481,13 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // change between claims until the first publish, under this same held lock.
     RefStore::new(layout.clone())
         .ensure_pointer_index_has_no_tail(&canonical_ref)
+        .map_err(|err| err.to_string())?;
+
+    // 0.57.0 step 0a: refuse the whole batch, before anything is marked or written, at the first
+    // claim that builds on a block `canonical_ref`'s history does not reach (an unborn ref, another
+    // line, or a ref behind the parent). Judged claim by claim against the ref's own history, each
+    // claim's patches joining it for the claims after: a complete chain sealed in order passes.
+    require_seal_batch_parents_reached(&layout, &canonical_ref, &ordered)
         .map_err(|err| err.to_string())?;
 
     // Steps 1-2: the clean check and the pre-write in-the-way check, once, before the first

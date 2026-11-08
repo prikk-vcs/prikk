@@ -363,7 +363,8 @@ pub use rollback::verify::{RollbackDraftVerification, verify_active_rollback_dra
 // materialize call) lives in `prikk-cli`'s `run_seal`, per this round's own ruling, so the CLI
 // needs both named here.
 pub use seal_from_accepted::{
-    SealFromAcceptedOutcome, require_nothing_in_the_way_for_seal_batch, seal_from_accepted_claim,
+    SealFromAcceptedOutcome, require_nothing_in_the_way_for_seal_batch,
+    require_seal_batch_parents_reached, seal_from_accepted_claim,
     seal_from_accepted_claim_in_batch,
 };
 pub use show::{

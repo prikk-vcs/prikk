@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — `sync seal` onto a branch the receiver does not hold sealed the branch without its earlier files
+
+Measured on 0.56.0: carry `heads/main` (three sealed commits) into a fresh repository with `sync
+have` / `build` / `accept` / `seal`, then carry `heads/feature` (a branch of `heads/main` plus one
+commit adding `f.txt`) the same way, **without** `prikk branch create heads/feature --from heads/main`
+first. `sync seal heads/feature --claims claims.txt` printed `claim <id>: heads/feature was already
+fully sealed -- no-op` for the three claims `heads/main` had sealed (false: `heads/feature` did not
+exist), then sealed `f.txt`'s patch onto the unborn `heads/feature` as a new root. Every exit code was
+`0` and `verify` was clean, and the branch silently lacked its earlier files (`tree`: one entry,
+`log`: one block). A claim sealed onto a branch that existed but was behind the history the claim was
+made on, or on another line, did the same.
+
+`sync seal` now judges a claim against the target ref's own history. A claim's patches are "already
+fully sealed" only when a block reachable from the ref's current tip carries them; a block another ref
+sealed does not count. And a claim that builds on a block the ref's tip does not reach is refused
+before anything is written, with `error: precondition not met: sync seal <ref>: claim <id> builds on
+block <id>, which <ref> does not reach (<ref> has no history yet | is at block <id>) …`, exit `1`,
+`.prikk` unchanged, and a way out you can type: `prikk branch create <ref> --from <branch>` when a
+local branch holds that history, or the `sync have` / `build` / `accept` / `seal` commands that carry
+the branch it belongs to first when none does. There is no new `refusal-v1` id (`sync seal` has no
+`--format json`). A claims file that carries a branch's whole chain, root first, onto an unborn ref
+still seals it claim by claim and now builds the complete branch; creating the branch first
+(`prikk branch create heads/feature --from heads/main`) gives the same block ids and tree as the
+sender's. The sync guide states the step.
+
 ## 0.56.0 — 2026-11-08
 
 ### Security

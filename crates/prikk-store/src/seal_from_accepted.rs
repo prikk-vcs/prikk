@@ -39,6 +39,20 @@
 //! this module because a sealed block's `patch_ids` does not equal the claim's own, that is not a
 //! bug.
 //!
+//! **"Already sealed" and "builds on" are judged against the target ref's own history (0.57.0
+//! step 0a).** A patch is skipped as already sealed only when a block reachable from the target
+//! ref's current tip carries it; a block some *other* ref sealed does not count, so the answer
+//! never says a ref holds something it does not. And a claim whose `parent_block_ids` name a block
+//! the target ref's tip does not reach is refused before anything is written
+//! ([`parent_not_reached_refusal`]): sealing it anyway puts the patch on whatever the tip happens
+//! to be and silently drops the history the claim was made on (measured on 0.56.0: a branch
+//! carried to a repository that did not hold it came out with only its own file). "Reaches" is
+//! judged at the patch level, the level this module's identity lives at, because block ids differ
+//! between repositories by design: a parent counts as reached when its id is in the tip's history,
+//! or when every patch of its own ancestry that this repository can name (from the block itself
+//! when held, else from the claims held for it) is already in the tip's history. A parent that
+//! is neither a held block nor the subject of a held claim cannot be judged and is not reached.
+//!
 //! **Out of scope (§7):** resolving divergence (refuse and report; that is `merge`'s job),
 //! transport, and CLI wiring.
 
@@ -63,6 +77,7 @@ use crate::foundation::layout::{
 use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
+use crate::merge::evidence::ancestors_inclusive;
 use crate::merge::execute::candidate_replay_manifest;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::patch_exchange::accepted_but_unsealed_patch_ids;
@@ -189,20 +204,27 @@ fn seal_from_accepted_claim_impl(
     // never sorted, never deduplicated; restricting a total order to a subset is well-defined. An
     // empty subset is the degenerate case: every named patch is already sealed, so this is a no-op
     // success, not an error (§8.7/§6 row 9).
-    let unsealed: BTreeSet<ObjectId> = accepted_but_unsealed_patch_ids(layout)?
-        .into_iter()
-        .collect();
-    let selected_patch_ids: Vec<ObjectId> = claim
-        .patch_ids
-        .iter()
-        .copied()
-        .filter(|patch_id| unsealed.contains(patch_id))
-        .collect();
-    if selected_patch_ids.is_empty() {
-        return Ok(SealFromAcceptedOutcome::AlreadySealed {
-            ref_name: canonical_ref,
-            claim_id,
-        });
+    //
+    // 0.57.0 step 0a: "sealed" means sealed in *the target ref's own history* (blocks reachable
+    // from its current tip), not in any block this repository holds -- a patch another ref sealed
+    // is still work for this one. This first read is the cheap, lock-free answer for the no-op
+    // case; the authoritative selection is made again under the lock below, against the tip read
+    // there.
+    {
+        let ref_store = RefStore::new(layout.clone());
+        let tip = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?
+            .map(|tip| tip.target_block_id);
+        let history = ref_history(&read_snapshot, tip)?;
+        if claim
+            .patch_ids
+            .iter()
+            .all(|patch_id| history.patches.contains(patch_id))
+        {
+            return Ok(SealFromAcceptedOutcome::AlreadySealed {
+                ref_name: canonical_ref,
+                claim_id,
+            });
+        }
     }
 
     // §3 item 4: if a stored claim overlaps this one's patch set and disagrees on their relative
@@ -300,6 +322,40 @@ fn seal_from_accepted_claim_impl(
     ref_store.ensure_pointer_index_has_no_tail(&canonical_ref)?;
     let current = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?;
     let parent = current.as_ref().map(|tip| tip.target_block_id);
+    let history = ref_history(&read_snapshot, parent)?;
+    let selected_patch_ids: Vec<ObjectId> = claim
+        .patch_ids
+        .iter()
+        .copied()
+        .filter(|patch_id| !history.patches.contains(patch_id))
+        .collect();
+    if selected_patch_ids.is_empty() {
+        // Another writer sealed it between the first read and the lock: nothing left to do.
+        return Ok(SealFromAcceptedOutcome::AlreadySealed {
+            ref_name: canonical_ref,
+            claim_id,
+        });
+    }
+    // 0.57.0 step 0a: refuse before any write when the claim builds on history this ref's tip
+    // does not reach (see the module doc).
+    if !claim.parent_block_ids.is_empty() {
+        let claims = enumerate_stored_claims(layout)?;
+        let by_block = claims_by_block(&claims);
+        for &parent_id in &claim.parent_block_ids {
+            if !parent_reached(&read_snapshot, &by_block, &history, parent_id)? {
+                return Err(parent_not_reached_refusal(
+                    layout,
+                    &read_snapshot,
+                    &ref_store,
+                    &by_block,
+                    &canonical_ref,
+                    parent,
+                    claim_id,
+                    parent_id,
+                ));
+            }
+        }
+    }
 
     // §4 and Phase D: seal the new Block under the receiver's own key, carrying the claim's own
     // order restricted to the unsealed subset, verbatim (D7, §6 row 11). The derivation is the last
@@ -734,6 +790,233 @@ fn orders_agree_on_overlap(a: &[ObjectId], b: &[ObjectId]) -> bool {
 /// `accepted_but_unsealed_patch_ids` (`patch_exchange.rs`) already uses for `Patch` --
 /// `persisted_object_types()` -> container -> `decode_container_records`, narrowed here to
 /// `ObjectType::RecognitionClaim`.
+/// What one ref's own history holds: the blocks reachable from its tip (inclusive) and every patch
+/// those blocks carry. `None` (an unborn ref) is the empty history.
+struct RefHistory {
+    blocks: BTreeSet<ObjectId>,
+    patches: BTreeSet<ObjectId>,
+}
+
+fn ref_history(object_store: &impl ObjectReader, tip: Option<ObjectId>) -> Result<RefHistory> {
+    let mut history = RefHistory {
+        blocks: BTreeSet::new(),
+        patches: BTreeSet::new(),
+    };
+    if let Some(tip) = tip {
+        for (block_id, block) in ancestors_inclusive(object_store, tip)? {
+            history.blocks.insert(block_id);
+            history.patches.extend(block.patch_ids.iter().copied());
+        }
+    }
+    Ok(history)
+}
+
+/// The held claims keyed by the block they are about (the first claim for a block is kept: claims
+/// about one block carry the same patches and parents).
+fn claims_by_block(
+    claims: &[(ObjectId, RecognitionClaimPayload)],
+) -> BTreeMap<ObjectId, &RecognitionClaimPayload> {
+    let mut by_block = BTreeMap::new();
+    for (_, claim) in claims {
+        by_block.entry(claim.block_id).or_insert(claim);
+    }
+    by_block
+}
+
+/// Whether `parent` -- a block id a claim names -- is reached by `history`. See the module doc:
+/// its id is in the history, or every patch of its own ancestry this repository can name is
+/// already in the history (judged from the held block when there is one, else from the claims held
+/// for it, recursively). A block that is neither held nor the subject of a held claim cannot be
+/// judged, and is not reached.
+fn parent_reached(
+    object_store: &impl ObjectReader,
+    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    history: &RefHistory,
+    parent: ObjectId,
+) -> Result<bool> {
+    parent_reached_visiting(
+        object_store,
+        by_block,
+        history,
+        parent,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn parent_reached_visiting(
+    object_store: &impl ObjectReader,
+    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    history: &RefHistory,
+    parent: ObjectId,
+    visiting: &mut BTreeSet<ObjectId>,
+) -> Result<bool> {
+    if history.blocks.contains(&parent) {
+        return Ok(true);
+    }
+    if object_store.has_object(parent, ObjectType::Block)? {
+        let ancestry = ancestors_inclusive(object_store, parent)?;
+        return Ok(ancestry.values().all(|block| {
+            block
+                .patch_ids
+                .iter()
+                .all(|id| history.patches.contains(id))
+        }));
+    }
+    let Some(claim) = by_block.get(&parent) else {
+        return Ok(false);
+    };
+    if !visiting.insert(parent) {
+        return Ok(false);
+    }
+    let mut reached = claim
+        .patch_ids
+        .iter()
+        .all(|id| history.patches.contains(id));
+    if reached {
+        for &grandparent in &claim.parent_block_ids {
+            if !parent_reached_visiting(object_store, by_block, history, grandparent, visiting)? {
+                reached = false;
+                break;
+            }
+        }
+    }
+    visiting.remove(&parent);
+    Ok(reached)
+}
+
+/// The refusal for a claim that builds on `parent_id`, which `target_ref`'s tip does not reach.
+/// A precondition (exit `1`, `error: precondition not met:`), never a new `refusal-v1` id: `sync
+/// seal` has no JSON surface. It names the claim, the parent and a way out the user can type: when
+/// a local branch reaches the parent, `branch create` from it; when none does, the commands that
+/// carry the branch the parent belongs to first.
+#[allow(clippy::too_many_arguments)]
+fn parent_not_reached_refusal(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    ref_store: &RefStore,
+    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    target_ref: &str,
+    tip: Option<ObjectId>,
+    claim_id: ObjectId,
+    parent_id: ObjectId,
+) -> PrikkError {
+    let _ = layout;
+    let state = match tip {
+        Some(tip) => format!("is at block {tip}"),
+        None => "has no history yet".to_string(),
+    };
+    let carrier = local_branch_reaching(object_store, ref_store, by_block, target_ref, parent_id);
+    let way_out = match (&carrier, tip) {
+        (Some(branch), None) => {
+            format!("run `prikk branch create {target_ref} --from {branch}`, then seal again")
+        }
+        (Some(branch), Some(_)) => format!(
+            "{target_ref} does not contain that history (it is behind it, or on another line); \
+             to carry this claim on the history it was made on, run `prikk branch create \
+             <new-branch> --from {branch}` and seal onto <new-branch>"
+        ),
+        (None, _) => format!(
+            "block {parent_id} is not held on any local branch here. Carry the branch it \
+             belongs to first: in this repository run `prikk sync have <that-branch> --output \
+             have.bin`; in the repository the claims came from run `prikk sync build \
+             <that-branch> --have have.bin --output art.bin`; back here run `prikk sync accept \
+             art.bin --claims-out claims.txt` and `prikk sync seal <that-branch> --claims \
+             claims.txt`; then run `prikk branch create {target_ref} --from <that-branch>` and \
+             seal again"
+        ),
+    };
+    PrikkError::Precondition(format!(
+        "sync seal {target_ref}: claim {claim_id} builds on block {parent_id}, which {target_ref} \
+         does not reach ({target_ref} {state}); sealing it here would drop the history it was \
+         made on -- refusing, nothing was written. To carry it: {way_out}"
+    ))
+}
+
+/// The first local branch (other than `target_ref`) whose history reaches `parent_id`, if any.
+fn local_branch_reaching(
+    object_store: &impl ObjectReader,
+    ref_store: &RefStore,
+    by_block: &BTreeMap<ObjectId, &RecognitionClaimPayload>,
+    target_ref: &str,
+    parent_id: ObjectId,
+) -> Option<String> {
+    let pointers = ref_store.list_ref_pointers().ok()?;
+    for pointer in pointers {
+        if !pointer.ref_name.starts_with("heads/") || pointer.ref_name == target_ref {
+            continue;
+        }
+        let Ok(Some(tip)) = read_current_tip(object_store, ref_store, &pointer.ref_name) else {
+            continue;
+        };
+        let Ok(history) = ref_history(object_store, Some(tip.target_block_id)) else {
+            continue;
+        };
+        if let Ok(true) = parent_reached(object_store, by_block, &history, parent_id) {
+            return Some(pointer.ref_name);
+        }
+    }
+    None
+}
+
+/// Before a `sync seal` batch writes anything: simulate the batch against `ref_name`'s history,
+/// claim by claim in order, each claim's patches joining the history for the claims after it, and
+/// refuse the whole batch -- with nothing written -- at the first claim that builds on a block the
+/// history does not reach (0.57.0 step 0a). A claim the real loop would refuse for another reason
+/// (it does not exist, a patch is missing) ends the simulation with no opinion: the loop reports
+/// that, as it always has. The per-claim check inside the seal itself stays, as the backstop for a
+/// claim this simulation could not foresee.
+pub fn require_seal_batch_parents_reached(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    ordered_claim_ids: &[ObjectId],
+) -> Result<()> {
+    let canonical_ref = validate_local_branch_ref(ref_name)?;
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let ref_store = RefStore::new(layout.clone());
+    let tip =
+        read_current_tip(&object_store, &ref_store, &canonical_ref)?.map(|tip| tip.target_block_id);
+    let mut history = ref_history(&object_store, tip)?;
+    let claims = enumerate_stored_claims(layout)?;
+    let by_block = claims_by_block(&claims);
+    for claim_id in ordered_claim_ids {
+        let Some((_, claim)) = claims.iter().find(|(id, _)| id == claim_id) else {
+            return Ok(());
+        };
+        if !claim
+            .patch_ids
+            .iter()
+            .all(|id| object_store.contains_object(ObjectType::Patch, *id))
+        {
+            return Ok(());
+        }
+        let selected: Vec<ObjectId> = claim
+            .patch_ids
+            .iter()
+            .copied()
+            .filter(|id| !history.patches.contains(id))
+            .collect();
+        if selected.is_empty() {
+            continue;
+        }
+        for &parent_id in &claim.parent_block_ids {
+            if !parent_reached(&object_store, &by_block, &history, parent_id)? {
+                return Err(parent_not_reached_refusal(
+                    layout,
+                    &object_store,
+                    &ref_store,
+                    &by_block,
+                    &canonical_ref,
+                    tip,
+                    *claim_id,
+                    parent_id,
+                ));
+            }
+        }
+        history.patches.extend(selected);
+    }
+    Ok(())
+}
+
 fn enumerate_stored_claims(
     layout: &RepositoryLayout,
 ) -> Result<Vec<(ObjectId, RecognitionClaimPayload)>> {

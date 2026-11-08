@@ -981,6 +981,17 @@ commit again. When you committed with `--ref <x>` onto a branch you are not on, 
 switch to `<x>` itself. `prikk worktree-status` reports the same state as `behind heads/<name>` instead of
 listing every new file as `missing`.
 
+## `error: precondition not met: sync seal <ref>: claim <id> builds on block <id>, which <ref> does not reach …`
+
+`sync seal` was asked to put a claim's patches on `<ref>`, but the claim was made on top of a block
+that `<ref>`'s tip does not reach: `<ref>` has no history yet, or is behind that history, or is on
+another line. Sealing it there would drop the history the claim was made on (a branch carried without
+its earlier files), so nothing was written. The message names the next step. When a local branch
+already holds that history, create the ref from it (`prikk branch create <ref> --from <branch>`; for a
+ref that exists, create a new branch from it and seal onto that) and run the same `sync seal` again.
+When no local branch holds it, carry the branch it belongs to first (`sync have`, `sync build`,
+`sync accept`, `sync seal` for that branch), then create `<ref>` from it. See [Sync](sync.md).
+
 ## `error: lock conflict: active lock already exists: <path> -- run prikk unlock to list held locks, …`
 
 Another prikk process is writing this repository, or one that was writing it died and left its lock

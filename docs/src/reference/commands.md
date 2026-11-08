@@ -288,6 +288,27 @@ and `verify`/`doctor` do not look at it.
   *any* non-empty active WAL regardless of which ref owns it, a strictly stronger condition that
   already covers this case for both.
 
+**`sync seal` judges a claim against the target ref's own history.** A claim's patches count as
+already sealed (`claim <id>: <ref> was already fully sealed -- no-op`) only when a block reachable
+from `<ref>`'s current tip carries them; a block some other ref sealed does not count, so the line is
+never printed for a ref that does not hold the patches. And a claim whose `parent_block_ids` name a
+block that `<ref>`'s tip does not reach is refused before anything is written, whole batch included:
+sealing it would put the patch on whatever the tip happens to be and drop the history the claim was
+made on. The refusal is `error: precondition not met: sync seal <ref>: claim <id> builds on block
+<id>, which <ref> does not reach (<ref> has no history yet | is at block <id>) …`, exit `1`, with no
+`refusal-v1` document (`sync seal` has no `--format json`), `.prikk` unchanged, and a way out: when a
+local branch reaches that block, `prikk branch create <ref> --from <branch>` (for an unborn `<ref>`)
+or `prikk branch create <new-branch> --from <branch>` and seal onto it (for a `<ref>` that exists but
+is behind that history or on another line); when no local branch does, the commands that carry the
+branch it belongs to first (`sync have`, `sync build`, `sync accept`, `sync seal`), then `prikk branch
+create <ref> --from <that-branch>`. "Reaches" is judged by patch, because block ids differ between
+repositories by design: a parent counts as reached when its id is in the tip's history, or when every
+patch of its own ancestry that this repository can name (from the block when held, else from the
+claims held for it) is already in the tip's history. A parent that is neither a held block nor the
+subject of a held claim cannot be judged and is not reached. A batch that carries a branch's whole
+chain, in a file, onto an unborn `<ref>` seals it claim by claim and passes, since each claim's
+parent is the one before it.
+
 **`bundle import` and `bundle preview` classify a delivery against the pointer it would replace,
 in six classes:** `no-local-history` (nothing to compare against), `already-at-tip` (identical to
 what is already there), `rollback` (the delivery is older than what is already there),

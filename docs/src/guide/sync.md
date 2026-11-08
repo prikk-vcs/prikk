@@ -51,6 +51,27 @@ received but not adopted, with its current signature outcome and whether B's own
 it yet. **`adopt-tag`** creates B's own local tag for one received tag, once B holds the same patch
 set locally.
 
+## Carrying a second branch
+
+`seal` puts the patches of a claim on the tip of the ref you name, so that ref has to hold the history
+the claim was made on. To carry a branch that forks from one you already hold, create it first, then run
+the loop for it:
+
+```
+B: prikk branch create heads/feature --from heads/main     # before the first sync have for it
+B: prikk sync have heads/feature --output have.bin
+A: prikk sync build heads/feature --have have.bin --output artifact.bin
+B: prikk sync accept artifact.bin --claims-out claims.txt
+B: prikk sync seal heads/feature --claims claims.txt
+```
+
+Without the `branch create`, a claim for `heads/feature` whose parent block `heads/feature` does not
+reach is refused before anything is written (`error: precondition not met: sync seal heads/feature:
+claim … builds on block …, which heads/feature does not reach …`), and the message names the
+`branch create` to run. "Already fully sealed" is judged against the ref you name: a patch another ref
+sealed is still work for this one. If the claims file carries the whole chain, root first, the ref is
+built claim by claim and no `branch create` is needed.
+
 ## What it does — and does not do
 
 **prikk does not move the bytes, and does not encrypt them.** A file `sync build` writes contains
@@ -155,7 +176,7 @@ forthcoming.
 | The exchange artifact (`PEXCH002`) carries patches, blobs, public AUTHOR key material, recognition claims, and Tag objects; author key material is `{key_id, public_key}` only, never a secret key or seed. | [`artifact.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_exchange/artifact.rs), [`author_key_index.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/author/author_key_index.rs) |
 | `accept` verifies and stores everything the artifact carries and reports signature outcomes; it adopts no key, advances no ref, and creates no local tag by itself. | [`accept.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_exchange/accept.rs) |
 | `pending` lists accepted patches not yet reachable from any local block. | [`patch_exchange.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_exchange.rs) |
-| `seal` turns accepted patches named by claim ids into sealed blocks under the receiver's own maintainer key, ordered by each claim's own signed parent relationships. | [`seal_from_accepted.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/seal_from_accepted.rs), [`recognition_claim.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/recognition_claim.rs) |
+| `seal` turns accepted patches named by claim ids into sealed blocks under the receiver's own maintainer key, ordered by each claim's own signed parent relationships; it judges "already sealed" against the target ref's own history and refuses, before writing, a claim whose parent block that ref's tip does not reach. | [`seal_from_accepted.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/seal_from_accepted.rs), [`recognition_claim.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/recognition_claim.rs) |
 | `tags` lists every received-but-unadopted tag with a live signature outcome and current resolution state (`Resolved`, `NotHeld`, or ambiguous); `adopt-tag` resolves one by patch set and creates a **local** tag under the receiver's own key, refusing when the patch set is not yet held or resolves ambiguously. | [`tag_travel.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/tag_travel.rs) |
 | Tag resolution by patch set is a full local-block scan, measured superlinear (~12.6 ms at 500 blocks, ~86 ms at 2000, one long branch). | [`patch_set_digest.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/patch_set_digest.rs), [RFC 117](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/117-tag-sync.md) |
 | Negotiation-as-artifacts is the ruled next increment; prikk stays off the network and `prikk-store` stays bytes-in/bytes-out by design. | [RFC 116](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/116-sync-negotiation-and-transport.md) |
