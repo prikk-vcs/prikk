@@ -193,9 +193,22 @@ fn classify_extract_plan_error(
 /// (`CliError::message`'s own text), carried into the JSON verbatim, the same convention
 /// `VerdictCondition` already uses for its own message field (`verify_verdict.rs`).
 fn print_refusal_json(id: ExtractRefusalId, reason: Option<&'static str>, message: &str) {
+    print_refusal_document("extract", id.id(), reason, message);
+}
+
+/// The one `refusal-v1` emitter (0.57.0 step 3, S4: `cat` prints the same document, with `"command":
+/// "cat"`, from here rather than from a second copy of the shape). `refusal` is a stable kebab-case id.
+pub(crate) fn print_refusal_document(
+    command: &str,
+    refusal: &str,
+    reason: Option<&str>,
+    message: &str,
+) {
     let mut json = String::new();
-    json.push_str("{\"schema_version\": \"refusal-v1\", \"command\": \"extract\", \"refusal\": ");
-    json.push_str(&escape_json_string(id.id()));
+    json.push_str("{\"schema_version\": \"refusal-v1\", \"command\": ");
+    json.push_str(&escape_json_string(command));
+    json.push_str(", \"refusal\": ");
+    json.push_str(&escape_json_string(refusal));
     json.push_str(", \"reason\": ");
     match reason {
         Some(reason) => json.push_str(&escape_json_string(reason)),
@@ -900,40 +913,13 @@ fn write_file_durably(
     file.write_all(bytes).map_err(|err| {
         CliError::Failure(format!("failed to write {}: {err}", destination.display()))
     })?;
-    set_mode(&file, destination, mode)?;
+    crate::durable_output::set_file_mode(&file, destination, mode).map_err(CliError::Failure)?;
     file.sync_all().map_err(|err| {
         CliError::Failure(format!(
             "failed to sync {} before moving the extract into place: {err}",
             destination.display()
         ))
     })
-}
-
-/// Set `mode` on the still-open `file` -- the same handle [`write_file_durably`] is about to
-/// `sync_all`, so the mode change is covered by that one sync rather than needing a second.
-/// `destination` is used only for error messages (`File::set_permissions` takes no path of its
-/// own).
-#[cfg(unix)]
-fn set_mode(file: &fs::File, destination: &Path, mode: u32) -> std::result::Result<(), CliError> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(fs::Permissions::from_mode(mode & 0o7777))
-        .map_err(|err| {
-            CliError::Failure(format!(
-                "failed to set mode on {}: {err}",
-                destination.display()
-            ))
-        })
-}
-
-/// No observable POSIX mode on this platform (DC-87 §3.3/§4.3): a documented no-op, the same
-/// reasoning `worktree.rs`'s own mode-aware materializer already applies.
-#[cfg(not(unix))]
-fn set_mode(
-    _file: &fs::File,
-    _destination: &Path,
-    _mode: u32,
-) -> std::result::Result<(), CliError> {
-    Ok(())
 }
 
 /// `point_label`'s own label, extended to a claim source (0.54.0 step 3 Part 3): `"claim"` for one,

@@ -116,6 +116,12 @@ prikk cat --path src/main.rs --ref <block-id>     # at an older block
   refuses any path inside `.prikk/`. The write goes to a temporary file beside the destination and is
   renamed into place, so a failed or interrupted write leaves the destination untouched rather than half
   written.
+- **`--output` applies the recorded mode** (0.57.0), as `extract` does and through the same function: a file
+  prikk recorded as executable (0755) is written executable, any other file as 0644, whether the destination
+  is new or replaced with `--force` (the replaced file's old mode is not kept). Only those two modes exist in
+  history prikk accepts, and only they are ever applied: a setuid, setgid or sticky bit is never taken from
+  content. Where there is no POSIX mode (Windows) nothing is applied and the file is written with the
+  platform's default, which is what `extract` does there too. Writing to stdout has no mode.
 - **Binary content never reaches a terminal.** With stdout on a terminal, a binary file refuses and names
   `--output`; nothing is written. History from someone else must not be able to drive your terminal by
   being printed. Text goes to a terminal as-is, exactly as `checkout` would materialize it. Redirecting or
@@ -154,3 +160,25 @@ consumer can decide between rendering inline and downloading — and show a size
 `cat` refuses the same things, plus a path that is not a file at the point, a `--max-bytes` bound the content
 exceeds, an existing `--output` without `--force`, an `--output` inside `.prikk/`, and binary content to a
 terminal.
+
+### `cat --format json` refusals: `refusal-v1`
+
+Under `--format json`, every refusal `cat` exits `1` for (never a usage error, exit `2`) writes one
+`refusal-v1` document to **stdout**, the document `extract` prints with `"command": "cat"`; stderr's text and
+the exit code are unchanged. `refusal` is one of these nine stable ids, eight of which `extract` uses with the same
+meaning and one of which is new:
+
+| `refusal` | when |
+|---|---|
+| `not-a-repository` | no repository at the path |
+| `point-not-found` | an absent ref, a block id the repository does not hold, or an object that is not a block |
+| `path-not-found` (new) | the path is not a file at the point: never existed, deleted by then, a directory prefix, or an unpublished current branch |
+| `over-max-bytes` | the content is above `--max-bytes` |
+| `destination-exists` | `--output` names an existing file and `--force` was not given |
+| `destination-inside-repository` | `--output` is inside `.prikk/` |
+| `outside-version-rule` | a path this version of `prikk` refuses (today: non-ASCII) that a newer one may have written |
+| `damaged-repository` | a missing or damaged object, or an unresolvable current branch |
+| `io-failure` | a real I/O or resource failure |
+
+`reason` is always `null`. Binary content to a terminal is a text-mode refusal only and has no id: it exists
+when bytes would be written, and `--format json` never writes bytes.

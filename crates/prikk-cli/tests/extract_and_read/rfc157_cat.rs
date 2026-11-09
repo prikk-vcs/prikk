@@ -408,7 +408,8 @@ fn control6_absent_path_and_directory_prefix_refuse() {
 }
 
 /// Addendum 1 (RFC 157 §5a): post-seal blob damage fails the **whole call** — `tree`, `tree --format json`
-/// and `cat` each exit 1 and print nothing on stdout. There is no entry-level `unavailable`.
+/// and `cat` each exit 1 and print no answer on stdout (under `cat --format json`, the one `refusal-v1`
+/// document of 0.57.0 step 3, S4, and nothing else). There is no entry-level `unavailable`.
 #[test]
 fn control7_blob_damage_fails_the_whole_call() {
     let repo = support::unique_repo("rfc157-cat-control7");
@@ -441,12 +442,26 @@ fn control7_blob_damage_fails_the_whole_call() {
             args.join(" "),
             text_of(&output)
         );
-        assert!(
-            output.stdout.is_empty(),
-            "{} printed a partial answer: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout)
-        );
+        if args.first() == Some(&"cat") && args.contains(&"json") {
+            // 0.57.0 step 3, S4: a `cat --format json` refusal prints one `refusal-v1` document (and only
+            // that: never a `path-content-v1` answer). It names the damage.
+            let document = support::json::parse(&String::from_utf8_lossy(&output.stdout));
+            assert_eq!(
+                document.get("schema_version").as_str(),
+                "refusal-v1",
+                "{} printed something other than a refusal: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout)
+            );
+            assert_eq!(document.get("refusal").as_str(), "damaged-repository");
+        } else {
+            assert!(
+                output.stdout.is_empty(),
+                "{} printed a partial answer: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
         assert!(
             text_of(&output).contains("integrity error"),
             "{} names the damage: {}",

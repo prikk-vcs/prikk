@@ -196,3 +196,59 @@ fn a_failed_write_to_a_missing_directory_leaves_nothing_behind() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// 0.57.0 step 3, S4: the recorded mode is applied to the temporary file, so the destination is replaced whole
+/// with that mode -- also over an existing file of another mode.
+#[cfg(unix)]
+#[test]
+fn write_new_file_durably_with_mode_applies_the_recorded_mode_over_an_existing_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = unique_dir("with-mode");
+    let destination = dir.join("tool.sh");
+    std::fs::write(&destination, b"old").unwrap();
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    super::write_new_file_durably_with_mode(&destination, b"new", 0o100_755).unwrap();
+    assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+    assert_eq!(
+        std::fs::metadata(&destination)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o755
+    );
+    super::write_new_file_durably_with_mode(&destination, b"again", 0o100_644).unwrap();
+    assert_eq!(
+        std::fs::metadata(&destination)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o644
+    );
+    assert_eq!(entries(&dir), vec!["tool.sh".to_string()]);
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Only the two modes prikk records are ever applied: a setuid, setgid or sticky bit (or any other mode) is
+/// refused, nothing is written, and no temporary file is left.
+#[cfg(unix)]
+#[test]
+fn a_mode_prikk_never_records_is_refused_and_nothing_is_written() {
+    let dir = unique_dir("with-mode-refused");
+    let destination = dir.join("out");
+    for mode in [
+        0o104_755, 0o102_755, 0o101_755, 0o100_777, 0o100_600, 0o120_000,
+    ] {
+        let err = super::write_new_file_durably_with_mode(&destination, b"x", mode).unwrap_err();
+        assert!(
+            err.contains("not one of the two modes prikk records"),
+            "{err}"
+        );
+        assert!(!destination_exists(&destination), "mode {mode:o}");
+        assert_eq!(entries(&dir), Vec::<String>::new(), "mode {mode:o}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

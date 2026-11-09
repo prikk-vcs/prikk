@@ -763,7 +763,8 @@ classified by a fallback, rather than exiting `1` under `--format json` with not
 {"schema_version": "refusal-v1", "command": "extract", "refusal": "<id>", "reason": "<id>|null", "message": "<the stderr text>"}
 ```
 
-`refusal` is one of twenty stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
+`cat --format json` prints the same document with `"command": "cat"` and a subset of these ids plus `path-not-found`
+(see [Tree and cat](../guide/tree-and-cat.md)). For `extract`, `refusal` is one of twenty stable, kebab-case ids: `over-max-bytes`, `over-max-files`,
 `destination-exists`, `destination-inside-repository`, `temporary-sibling-exists`, `point-not-found`,
 `claim-not-found`, `not-a-claim`, `claim-has-several-parents`, `claim-parent-not-sealed`,
 `claim-signature-invalid`, `claim-does-not-fold`, `claim-chain-shared-block`, `claim-chain-cycle`,
@@ -974,15 +975,20 @@ unchanged), each from the very structure the text line is printed from:
   never inside it. So "how many of these blocks did key K seal" is a count over `sealed_by`, answerable
   before a removal and after it.
 - **`publication_trust_issues`**: the text's `publication-trust [code]` lines, typed: one entry per signature
-  that did not count, `{"code", "object_type", "object_id", "key_id", "outcome"}` (`outcome` is
-  `unverifiable`, `invalid`, or `unsigned` for an object with no MAINTAINER signature at all, whose `key_id`
-  is `null`); an issue about no object (an unreadable trust policy) has `null` object fields.
+  that did not count, `{"code", "object_type", "object_id", "key_id", "outcome"}`. `outcome` is
+  one of **three** values: `unverifiable` (the key is not adopted here), `invalid` (the key is adopted and the
+  signature does not verify: a forgery, or another maintainer using the same key id), or `unsigned` (the object
+  has no MAINTAINER signature at all; its `key_id` is `null`). `unverifiable` and `invalid` are the values
+  `bundle preview`'s `sealed_by_signatures` uses (which also has `sound`); **`unsigned` appears only here**.
+  An issue about no object (an unreadable trust policy) has `null` object fields. `block_seals[].
+  sealed_by_signatures[].outcome` is one of `sound`, `unverifiable`, `invalid` (an object with no signature
+  has no entries there).
 
 **Which object each `sealed_by` lists.** `log` and `verify` list the **Block's** MAINTAINER signatures;
 `bundle preview` lists the **delivered tip RefState's**. They are different objects and can differ: when
 another signer's copy of a stored Block arrives it is merged as one superseding record carrying the union of
 both signature sets, and the local RefState gains nothing. A Block stored twice that way is one entry in
-`block_seals`, the current (latest) record's.
+`block_seals`, the current (latest) record's, and the text's `sealed blocks:` lists it once as well.
 
 Not in this document: `ways_out` (the way-out line the text prints under a finding) is carried by the JSON
 tier round of 0.59.0, not here.

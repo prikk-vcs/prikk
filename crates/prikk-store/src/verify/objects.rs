@@ -104,6 +104,9 @@ pub(super) struct ObjectSummary {
     pub(super) signature_issues: Vec<SignatureEnvelopeIssue>,
     pub(super) merge_baseline_divergences: Vec<super::MergeBaselineDivergence>,
     pub(super) block_seals: Vec<BlockSealVerification>,
+    /// Per stored Block record (a Block id can have several, RFC 156): the adopted key whose signature
+    /// verified, if any. Folded to the latest record per Block into `block_seals` once the scan is whole.
+    pub(super) block_seal_records: Vec<(ObjectId, Option<String>)>,
     /// 0.57.0 step 3 (S3): every reached Block's recorded sealers and outcomes, scan order.
     pub(super) block_sealers: Vec<super::BlockSealers>,
     /// Unparseable frames nothing names (see [`InterruptedAppend`]).
@@ -141,6 +144,7 @@ impl ObjectSummary {
             signature_issues: Vec::new(),
             merge_baseline_divergences: Vec::new(),
             block_seals: Vec::new(),
+            block_seal_records: Vec::new(),
             block_sealers: Vec::new(),
             interrupted_appends: Vec::new(),
             trailing_partial_index_bytes: 0,
@@ -151,6 +155,25 @@ impl ObjectSummary {
         }
     }
 
+    /// A Block stored twice (a superseding record carrying the union of two signature sets, RFC 156) is one
+    /// Block, and its **latest** record is the current one -- the one every reader (`log` included) sees.
+    /// So the sealed-Block list the text prints (`sealed blocks:`) and the JSON's `block_seals` hold it
+    /// once, and a later record with no trusted sealer removes an earlier record's trusted one. O(records).
+    fn collapse_to_latest_record(&mut self) {
+        let records = std::mem::take(&mut self.block_seal_records);
+        self.block_seals = latest_per_block(records, |record| record.0)
+            .into_iter()
+            .filter_map(|(block_id, key)| {
+                key.map(|sealed_by_key_id| BlockSealVerification {
+                    block_id,
+                    sealed_by_key_id,
+                })
+            })
+            .collect();
+        let sealers = std::mem::take(&mut self.block_sealers);
+        self.block_sealers = latest_per_block(sealers, |sealers| sealers.block_id);
+    }
+
     fn add(&mut self, other: Self) {
         self.item_outcomes.extend(other.item_outcomes);
         self.topological_outcomes.extend(other.topological_outcomes);
@@ -159,6 +182,7 @@ impl ObjectSummary {
         self.merge_baseline_divergences
             .extend(other.merge_baseline_divergences);
         self.block_seals.extend(other.block_seals);
+        self.block_seal_records.extend(other.block_seal_records);
         self.block_sealers.extend(other.block_sealers);
         self.interrupted_appends.extend(other.interrupted_appends);
         self.object_container_tails
@@ -290,6 +314,7 @@ pub(super) fn verify_objects(
             &reachable,
         )?);
     }
+    summary.collapse_to_latest_record();
     for (entry, message) in unreadable {
         let locator = layout
             .container_slot_path(entry.object_type, entry.slot)
@@ -455,25 +480,14 @@ fn verify_object_type_container(
                     .merge_baseline_divergences
                     .extend(merge_baseline_divergence);
                 if let Some(sealers) = object.block_sealers.clone() {
-                    // A Block stored twice (a superseding record carrying the union of two signature
-                    // sets, RFC 156) is one Block: the later record is the current one, the one every
-                    // reader (`log` included) sees, so it replaces the earlier entry in place.
-                    match summary
-                        .block_sealers
-                        .iter_mut()
-                        .find(|existing| existing.block_id == sealers.block_id)
-                    {
-                        Some(existing) => *existing = sealers,
-                        None => summary.block_sealers.push(sealers),
-                    }
+                    summary.block_sealers.push(sealers);
                 }
                 if object.object_type == ObjectType::Block {
-                    if let Some(sealed_by_key_id) = object.sealed_by_key_id.clone() {
-                        summary.block_seals.push(BlockSealVerification {
-                            block_id: object.object_id,
-                            sealed_by_key_id,
-                        });
-                    }
+                    // One entry per stored RECORD here; `collapse_to_latest_record` below folds a Block
+                    // stored twice (a superseding record) to its current record, in O(records).
+                    summary
+                        .block_seal_records
+                        .push((object.object_id, object.sealed_by_key_id.clone()));
                 }
                 let status = if indexed_ids.contains(&object.object_id) {
                     ObjectItemStatus::Evaluated(object)
@@ -505,6 +519,19 @@ fn verify_object_type_container(
         }
     }
     Ok(summary)
+}
+
+/// `items` with each Block id kept once, at its **last** occurrence's position, in the order of those last
+/// occurrences. O(n).
+fn latest_per_block<T>(items: Vec<T>, id_of: impl Fn(&T) -> ObjectId) -> Vec<T> {
+    let mut seen = HashSet::new();
+    let mut kept: Vec<T> = items
+        .into_iter()
+        .rev()
+        .filter(|item| seen.insert(id_of(item)))
+        .collect();
+    kept.reverse();
+    kept
 }
 
 /// `pending_v3_blocks` and the RFC 164 Rule E classifier, bundled purely to keep

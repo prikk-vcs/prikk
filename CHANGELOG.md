@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — `cat --output` applies the recorded mode, and `cat --format json` refusals are `refusal-v1`
+
+Promised in stikk letter 029 (§4.5). `prikk cat --path <p> --output <file>` now writes the file with the mode
+prikk recorded (0755 stays executable, anything else is 0644), also over an existing file with `--force`,
+through the one function `extract` uses; only those two modes are ever applied, and a setuid, setgid or
+sticky bit is never taken from content. Where there is no POSIX mode (Windows) nothing is applied, as in
+`extract`. Under `--format json`, every refusal `cat` exits `1` for now prints one `refusal-v1` document to
+stdout with `"command": "cat"`, and stderr and the exit code are unchanged. Eight of its nine ids are
+`extract`'s, with the same meaning; the new one is `path-not-found`. See [Tree and
+cat](docs/src/guide/tree-and-cat.md).
+
+### Fixed — `verify`'s `sealed blocks:` listed a Block twice when a superseding record carried it
+
+A Block stored twice (RFC 156: another signer's copy merged as one superseding record) was one `sealed-block`
+line per stored record in `verify`'s text, so `sealed blocks:` counted it twice. It is listed once, from its
+latest record (the one every reader sees), and a later record with no trusted sealer no longer leaves the
+earlier record's trusted one in the list. The list is folded at its source in the verification, so the text
+and `verify --format json`'s `block_seals` agree.
+
 ### Added — `verify --format json` carries the block seals, item counts, failed objects and unverifiable signatures
 
 Promised in stikk letter 029 (1.2) and inklkunn's 2026-10-31 letter (§1: "the same field reaches

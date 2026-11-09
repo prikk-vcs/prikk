@@ -113,14 +113,56 @@ pub(crate) fn inside_directory(ancestor: &Path, destination: &Path) -> bool {
     }
 }
 
+/// Set a recorded file `mode` on a still-open `file` (0.57.0 step 3, S4: the one definition, used by `extract`
+/// for every file it writes and by `cat --output`). **Only the two modes prikk records are ever applied**
+/// (`0o100644` and `0o100755`, `prikk_object::is_canonical_file_mode`): a patch naming any other mode is
+/// refused at decode, so nothing else can arrive here, and this refuses it again rather than trusting that:
+/// setuid, setgid and sticky bits are never taken from received content. Applied to the open handle so the
+/// caller's `sync_all` covers the mode as well as the bytes. On Windows there is no observable POSIX mode
+/// (DC-87 §3.3/§4.3): a documented no-op.
+#[cfg(unix)]
+pub(crate) fn set_file_mode(file: &File, destination: &Path, mode: u32) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    if !prikk_object::is_canonical_file_mode(mode) {
+        return Err(format!(
+            "refusing to set mode {mode:o} on {}: not one of the two modes prikk records",
+            destination.display()
+        ));
+    }
+    file.set_permissions(std::fs::Permissions::from_mode(mode & 0o7777))
+        .map_err(|err| format!("failed to set mode on {}: {err}", destination.display()))
+}
+
+/// See the Unix definition: no observable POSIX mode here, so nothing is applied.
+#[cfg(not(unix))]
+pub(crate) fn set_file_mode(_file: &File, _destination: &Path, _mode: u32) -> Result<(), String> {
+    Ok(())
+}
+
+/// As [`write_new_file_durably`], and the recorded `mode` is applied to the temporary file before it is synced
+/// and renamed into place, so the content and the mode become durable together and the destination is
+/// replaced whole (with an existing destination, `--force`, the mode is the recorded one, not the old
+/// file's).
+pub(crate) fn write_new_file_durably_with_mode(
+    destination: &Path,
+    bytes: &[u8],
+    mode: u32,
+) -> Result<(), String> {
+    write_durably(destination, bytes, Some(mode))
+}
+
 /// Write `bytes` to `destination`, atomically and durably, never leaving a partial file at
 /// `destination` either on success or on failure. See this module's own doc comment for exactly
 /// what is and is not guaranteed. Overwrites `destination` if it already exists — callers that
 /// need to refuse an existing destination must check [`destination_exists`] themselves first;
 /// this function's own job is the write, not the collision policy.
 pub(crate) fn write_new_file_durably(destination: &Path, bytes: &[u8]) -> Result<(), String> {
+    write_durably(destination, bytes, None)
+}
+
+fn write_durably(destination: &Path, bytes: &[u8], mode: Option<u32>) -> Result<(), String> {
     let temp_path = temporary_sibling_path(destination)?;
-    let write_result = write_and_sync_temp_file(&temp_path, bytes);
+    let write_result = write_and_sync_temp_file(&temp_path, bytes, mode);
     if write_result.is_err() {
         let _ = std::fs::remove_file(&temp_path);
     }
@@ -195,7 +237,11 @@ pub(crate) fn write_new_file_durably_streaming<T>(
     Ok(value)
 }
 
-fn write_and_sync_temp_file(temp_path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn write_and_sync_temp_file(
+    temp_path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+) -> Result<(), String> {
     let mut file = File::create_new(temp_path).map_err(|err| {
         format!(
             "failed to create a temporary file beside the destination at {}: {err}",
@@ -208,6 +254,9 @@ fn write_and_sync_temp_file(temp_path: &Path, bytes: &[u8]) -> Result<(), String
             temp_path.display()
         )
     })?;
+    if let Some(mode) = mode {
+        set_file_mode(&file, temp_path, mode)?;
+    }
     file.sync_all().map_err(|err| {
         format!(
             "failed to sync the temporary file at {} before moving it into place: {err}",

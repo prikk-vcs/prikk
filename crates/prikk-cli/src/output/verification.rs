@@ -347,11 +347,10 @@ fn push_item_level_fields(json: &mut String, report: &prikk_store::RepositoryVer
             json.push_str(&escape_json_string(key_id));
         }
         json.push_str("], \"trusted_by\": ");
-        // The latest record of a Block stored twice (a superseding record) is the current one.
+        // `block_seals` holds a Block once, its latest record (a superseding record replaces the earlier).
         match report
             .block_seals
             .iter()
-            .rev()
             .find(|seal| seal.block_id == sealers.block_id)
         {
             Some(seal) => json.push_str(&escape_json_string(&seal.sealed_by_key_id)),

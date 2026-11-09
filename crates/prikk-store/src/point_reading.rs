@@ -181,6 +181,59 @@ pub struct PathContent {
     pub bytes: Vec<u8>,
 }
 
+/// Which of the two caller-fixable conditions [`read_path_at_point_reporting_anchor`] raised itself
+/// (0.57.0 step 3, S4). Carried beside the ordinary error so `cat --format json` classifies a refusal from
+/// the raise site, never from the message text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathReadRefusalKind {
+    /// The path is not a file present at the point (a directory prefix is not a file either).
+    PathNotFound,
+    /// The path's content is above the caller's `--max-bytes` bound.
+    OverMaxBytes,
+}
+
+/// [`read_path_at_point_reporting_anchor`]'s error: the ordinary error, with a classification when the raise
+/// site already knows one. `kind: None` is any other failure (the replay's own), which the caller classifies
+/// by `error`'s variant. Its `Display` is `error`'s, unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PathReadError {
+    /// The refusal kind, when the raise site knows it.
+    pub kind: Option<PathReadRefusalKind>,
+    /// The ordinary error.
+    pub error: PrikkError,
+}
+
+impl PathReadError {
+    fn classified(kind: PathReadRefusalKind, error: PrikkError) -> Self {
+        Self {
+            kind: Some(kind),
+            error,
+        }
+    }
+}
+
+impl std::fmt::Display for PathReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+impl std::error::Error for PathReadError {}
+
+impl From<PrikkError> for PathReadError {
+    fn from(error: PrikkError) -> Self {
+        Self { kind: None, error }
+    }
+}
+
+impl From<PathReadError> for PrikkError {
+    fn from(value: PathReadError) -> Self {
+        value.error
+    }
+}
+
 /// **Read one path's content at a point** (RFC 157 §4): one anchored replay, the path's own entry, and its
 /// bytes -- **fully resolved before the caller writes anything**.
 ///
@@ -199,7 +252,7 @@ pub fn read_path_at_point_reporting_anchor(
     point: &Point,
     path: &str,
     max_bytes: Option<u64>,
-) -> Result<(PathContent, Option<SnapshotAnchorFallback>)> {
+) -> std::result::Result<(PathContent, Option<SnapshotAnchorFallback>), PathReadError> {
     let (snapshot, fallback) = replay_point_for_read_only_report(layout, point)?;
     let found = snapshot
         .manifest
@@ -207,15 +260,21 @@ pub fn read_path_at_point_reporting_anchor(
         .iter()
         .find(|entry| entry.path.as_str() == path)
         .ok_or_else(|| {
-            PrikkError::Precondition(format!("path {path} does not exist at {}", point.name))
+            PathReadError::classified(
+                PathReadRefusalKind::PathNotFound,
+                PrikkError::Precondition(format!("path {path} does not exist at {}", point.name)),
+            )
         })?;
     let entry = entry_of(found)?;
     if let Some(bound) = max_bytes {
         if entry.size > bound {
-            return Err(PrikkError::Precondition(format!(
-                "{path} is {} bytes at {}, above the --max-bytes bound of {bound}; nothing was written",
-                entry.size, point.name
-            )));
+            return Err(PathReadError::classified(
+                PathReadRefusalKind::OverMaxBytes,
+                PrikkError::Precondition(format!(
+                    "{path} is {} bytes at {}, above the --max-bytes bound of {bound}; nothing was written",
+                    entry.size, point.name
+                )),
+            ));
         }
     }
     Ok((

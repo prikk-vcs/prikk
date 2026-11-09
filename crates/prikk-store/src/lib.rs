@@ -309,9 +309,9 @@ pub use point::{
     Point, PointKind, is_bare_block_id, is_point_name, refuse_block_point_for_worktree_write,
 };
 pub use point_reading::{
-    PathContent, PointEntry, PointEntryEncoding, PointEntryKind, TreeListing,
-    list_tree_at_point_reporting_anchor, parse_tree_prefix, read_path_at_point_reporting_anchor,
-    unpublished_branch_tree_listing,
+    PathContent, PathReadError, PathReadRefusalKind, PointEntry, PointEntryEncoding,
+    PointEntryKind, TreeListing, list_tree_at_point_reporting_anchor, parse_tree_prefix,
+    read_path_at_point_reporting_anchor, unpublished_branch_tree_listing,
 };
 pub use pointer_rebuild::{
     DroppedLead, RebuildPlan, RefRebuildEntry, RestoredRef, plan_pointer_index_rebuild,

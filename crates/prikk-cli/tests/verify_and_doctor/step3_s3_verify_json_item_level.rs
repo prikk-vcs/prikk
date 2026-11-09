@@ -380,6 +380,23 @@ fn log_and_verify_list_the_blocks_sealers_and_a_previews_list_the_refstates() {
         "verify lists the Block's sealers, as log does"
     );
 
+    // The text lists a superseded Block once as well: one Block, one `sealed-block` line (it listed it twice
+    // before 0.57.0 S4, once per stored record).
+    let verified = support::prikk(&repo).arg("verify").output().unwrap();
+    let verified_text = text(&verified);
+    assert!(
+        verified_text.contains("sealed blocks: 1\n"),
+        "{verified_text}"
+    );
+    assert_eq!(
+        verified_text
+            .lines()
+            .filter(|line| line.starts_with("sealed-block "))
+            .count(),
+        1,
+        "{verified_text}"
+    );
+
     let bundle =
         std::env::temp_dir().join(format!("prikk-cli-s3-{}.pbndl", support::unique_suffix()));
     support::ok(
@@ -403,4 +420,108 @@ fn log_and_verify_list_the_blocks_sealers_and_a_previews_list_the_refstates() {
         vec![support::MAINTAINER_KEY_ID.to_string()],
         "a preview lists the delivered RefState's sealers: the Block's second signer is not among them"
     );
+}
+
+/// A repository whose tip Block's current record is `mutate(original)`, appended the way a superseding
+/// record is (the test-support writer). Returns the repo and the tip Block's id.
+fn tip_block_rewritten(
+    tag: &str,
+    mutate: impl FnOnce(&mut prikk_object::ObjectEnvelope),
+) -> (std::path::PathBuf, String) {
+    use prikk_object::{ObjectId, ObjectType};
+    use prikk_store::{FileObjectStore, ObjectReader, append_superseding_record_for_test_support};
+
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "f.txt", b"one\n", "one");
+    let tip_text = log_blocks(&repo)[0].get("block_id").as_str().to_string();
+    let tip: ObjectId = tip_text.parse().unwrap();
+    let layout = RepositoryLayout::open(repo.clone()).unwrap();
+    let mut envelope = FileObjectStore::new(layout.clone())
+        .read_typed(tip, ObjectType::Block)
+        .unwrap()
+        .unwrap();
+    mutate(&mut envelope);
+    append_superseding_record_for_test_support(&layout, &envelope).unwrap();
+    (repo, tip_text)
+}
+
+fn issue_for<'a>(document: &'a Value, block_id: &str, code: &str) -> Vec<&'a Value> {
+    document
+        .get("publication_trust_issues")
+        .as_array()
+        .iter()
+        .filter(|issue| {
+            issue.get("code").as_str() == code
+                && !issue.get("object_id").is_null()
+                && issue.get("object_id").as_str() == block_id
+        })
+        .collect()
+}
+
+/// `invalid`: the key is adopted and the signature does not verify (a forgery, or another maintainer using
+/// the same key id): the one outcome a later sealer of the same id can produce. The typed entry names the
+/// block, the key and `invalid`, and the Block's own signature outcome agrees.
+#[test]
+fn an_adopted_key_whose_signature_does_not_verify_is_invalid() {
+    let (repo, block_id) = tip_block_rewritten("s3-invalid", |envelope| {
+        envelope.signatures[0].signature_bytes[0] ^= 0xff;
+    });
+    let (code, document) = verify_json(&repo);
+    assert_eq!(code, Some(1), "{document:?}");
+    let entries = issue_for(
+        &document,
+        &block_id,
+        "PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE",
+    );
+    assert_eq!(entries.len(), 1, "{document:?}");
+    assert_eq!(entries[0].get("object_type").as_str(), "block");
+    assert_eq!(
+        entries[0].get("key_id").as_str(),
+        support::MAINTAINER_KEY_ID
+    );
+    assert_eq!(entries[0].get("outcome").as_str(), "invalid");
+    let seal = document
+        .get("block_seals")
+        .as_array()
+        .iter()
+        .find(|seal| seal.get("block_id").as_str() == block_id)
+        .unwrap();
+    assert!(seal.get("trusted_by").is_null());
+    assert_eq!(
+        seal.get("sealed_by_signatures").as_array()[0]
+            .get("outcome")
+            .as_str(),
+        "invalid"
+    );
+    // As recorded: the key id is listed even though its signature is bad.
+    assert_eq!(
+        strings(seal.get("sealed_by")),
+        vec![support::MAINTAINER_KEY_ID.to_string()]
+    );
+}
+
+/// `unsigned`: a Block with no MAINTAINER signature at all. One typed entry with a `null` key id; the Block's
+/// `sealed_by` is `[]`.
+#[test]
+fn a_block_with_no_maintainer_signature_is_unsigned() {
+    let (repo, block_id) = tip_block_rewritten("s3-unsigned", |envelope| {
+        envelope.signatures.clear();
+    });
+    let (code, document) = verify_json(&repo);
+    assert_eq!(code, Some(1), "{document:?}");
+    let entries = issue_for(&document, &block_id, "PRIKK-TRUST-PUBLICATION-UNTRUSTED");
+    assert_eq!(entries.len(), 1, "{document:?}");
+    assert_eq!(entries[0].get("object_type").as_str(), "block");
+    assert!(entries[0].get("key_id").is_null());
+    assert_eq!(entries[0].get("outcome").as_str(), "unsigned");
+    let seal = document
+        .get("block_seals")
+        .as_array()
+        .iter()
+        .find(|seal| seal.get("block_id").as_str() == block_id)
+        .unwrap();
+    assert_eq!(seal.get("sealed_by").as_array().len(), 0);
+    assert_eq!(seal.get("sealed_by_signatures").as_array().len(), 0);
+    assert!(seal.get("trusted_by").is_null());
 }
