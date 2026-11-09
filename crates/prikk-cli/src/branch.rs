@@ -280,8 +280,20 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         .map_err(|err| err.to_string())?;
 
     // RFC 151 §2.2: a new branch starts from the current branch unless `--from` says otherwise.
-    let from_ref = crate::current_branch::resolve_ref(&layout, parsed.from)?;
-    let target_object_id = resolve_published_target(&ref_store, &object_store, &from_ref)?;
+    // 0.57.0 step 3 (S1): `--from` is a ref, or a bare block id a local branch or tag reaches.
+    let source = match parsed.from {
+        Some(from) if prikk_store::is_bare_block_id(&from) => CreateSource::Block(
+            prikk_store::resolve_branch_source_block(&layout, &canonical, &from)
+                .map_err(|err| err.to_string())?,
+        ),
+        from => CreateSource::Ref(crate::current_branch::resolve_ref(&layout, from)?),
+    };
+    let target_object_id = match &source {
+        CreateSource::Ref(from_ref) => {
+            resolve_published_target(&ref_store, &object_store, from_ref)?
+        }
+        CreateSource::Block(block_id) => *block_id,
+    };
 
     let signer = crate::maintainer_signer_from_env()?;
     // DC-11/DC-63 §4: publishing a maintainer-signed object is gated on the same terms as `seal`,
@@ -317,12 +329,21 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         // `from_ref` is already published -- `resolve_published_target` above already refuses
         // otherwise -- so its tip's manifest is available now, through the same verified-anchor
         // replay step 4 uses on `canonical` itself once this create has published it.
-        require_nothing_in_the_way_for_published_ref(
-            &layout,
-            &pending,
-            &from_ref,
-            &format!("creating {canonical}"),
-        )
+        let action = format!("creating {canonical}");
+        match &source {
+            CreateSource::Ref(from_ref) => {
+                require_nothing_in_the_way_for_published_ref(&layout, &pending, from_ref, &action)
+            }
+            CreateSource::Block(block_id) => {
+                prikk_store::require_nothing_in_the_way_for_held_block(
+                    &layout,
+                    &pending,
+                    &block_id.to_string(),
+                    *block_id,
+                    &action,
+                )
+            }
+        }
         .map_err(|err| err.to_string())?;
         Some(pending)
     } else {
@@ -651,6 +672,14 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
         "nothing was reclaimed; the pointer, its history, and every object remain, and the branch is recoverable"
     );
     Ok(())
+}
+
+/// What `branch create --from` names (0.57.0 step 3, S1).
+enum CreateSource {
+    /// A published ref (the default: the current branch).
+    Ref(String),
+    /// A block a local branch or tag reaches, named by its bare id.
+    Block(ObjectId),
 }
 
 /// Resolve `--from`'s target block, requiring it to be a currently published ref.

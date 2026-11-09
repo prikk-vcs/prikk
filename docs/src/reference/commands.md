@@ -46,7 +46,7 @@ prikk rollback-draft --append-inverse [path] [--ref REF] -m <message>
 prikk rollback-draft-verify [path] [--ref REF]
 
 prikk branch [list] [--all] [--format json]
-prikk branch create heads/<name> [--from REF]
+prikk branch create heads/<name> [--from REF|BLOCK-ID]
 prikk branch close heads/<name>
 prikk branch switch heads/<name>
 prikk tag [list] [--format json]
@@ -165,6 +165,19 @@ repository at open. See [Release Compatibility](release-compatibility.md).
   `precondition not met: <name> is a received ref`, naming the commands that read received refs (`log`,
   `merge-evidence`, `merge-plan`, `bundle preview`) and the one that takes it into a local branch
   (`merge --from`).
+- **`branch create --from <block id>`** (0.57.0) makes a branch at a block **a local branch or tag reaches**
+  (the block is in the ancestry of a `heads/*` tip or of a tag's block; a received ref's history does not
+  count). The block id is resolved by the same point resolver `cat`, `tree` and `extract` use: an id the
+  store does not hold refuses with `block <id> is not in this repository`, and an id of another kind with
+  `object <id> is a patch, not a block` (or a ref-state, and so on). A block held **only through a received
+  ref**, or **reached by no ref at all** (after `received remove`, say), refuses by name, with exit `1`
+  and before anything is written: publishing a local branch there would take in history without the trust
+  checks `archive import --adopt` makes. The refusal names the received ref(s) that hold the block and the
+  way forward, `prikk archive import <the archive that carried it> --adopt`, after which the same
+  command succeeds (an adopted branch needs a name free here; where a local branch of that name exists the
+  delivery stays under `remotes/`). The RefState written is the one a ref route writes (`update_seq: 1`,
+  no previous RefState, no attestations, open). When the new branch is the unborn current branch, a file
+  in the way of the block's files refuses before the publish, as it does for a ref.
 - **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
   <path>"), decided when the repository is opened, in every command that opens one.
 

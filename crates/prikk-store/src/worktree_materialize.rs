@@ -445,6 +445,29 @@ pub(crate) fn require_nothing_in_the_way_for_block(
     )
 }
 
+/// As the crate-private by-block check `archive import --adopt` uses, for a caller outside this crate whose target is a bare
+/// block id the store already holds (0.57.0 step 3, S1: `branch create <name> --from <block id>` onto
+/// the unborn current branch). The block is a published, reached Block, so a fresh snapshot sees every
+/// object the replay needs. `point_name` is the block id as the user typed it.
+pub fn require_nothing_in_the_way_for_held_block(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    point_name: &str,
+    target_block_id: ObjectId,
+    action: &str,
+) -> Result<()> {
+    let reader = ObjectReadSnapshot::open(layout)?;
+    require_nothing_in_the_way_for_block(
+        layout,
+        pending,
+        &reader,
+        point_name,
+        target_block_id,
+        action,
+        None,
+    )
+}
+
 /// Step 2b of the R3 ruling (0.56.0 step W3c-1): mark the worktree dirty as a `Switch` to the
 /// pending capture's own `current_branch`, using the value [`require_worktree_clean_and_capture`]
 /// already produced. Called **immediately before the producer's own publish (step 3)** -- not

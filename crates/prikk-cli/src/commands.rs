@@ -172,7 +172,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_branch,
         help_lines: &[
             "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
-            "  prikk branch create heads/<name> [--from REF]  Publish a branch at an existing target",
+            "  prikk branch create heads/<name> [--from REF|BLOCK-ID]  Publish a branch at an existing target (a block id must be reached by a local branch or tag)",
             "  prikk branch close heads/<name>           Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
             "  prikk branch switch heads/<name>          Switch the worktree and the current branch (refuses a missing or closed branch, unsealed work for another ref, or a dirty worktree)",
         ],

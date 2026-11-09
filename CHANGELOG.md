@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — `prikk branch create heads/<name> --from <block id>`
+
+Promised in stikk letter 029 (1.1). `--from` now takes a bare block id (64 lowercase hex characters) as well
+as a ref, for a block that **a local branch or tag reaches**. Going back to an earlier block no longer
+takes a tag you did not ask for. The id is resolved by the point resolver `cat`, `tree` and `extract` use
+(an id the store does not hold, or of another kind, refuses saying what it is); the RefState written is the
+one a ref route writes. A block held **only through a received ref**, or **reached by no ref**, refuses by
+name before anything is written, with the received ref(s) that hold it and the way forward
+(`prikk archive import <archive> --adopt`, then the same command): a branch published there would bypass
+the trust checks `--adopt` makes. See
+[Commands](docs/src/reference/commands.md).
+
 ### Changed — a lock names its holder, not just a pid; `prikk unlock` says what it knows and why
 
 A lock file recorded only `pid=<n>`, so `prikk unlock` could only ask whether *some* process had that

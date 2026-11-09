@@ -14,8 +14,10 @@
 //!
 //! An upper-layer module (RFC 149): it reads both the local ref store and the received-ref index.
 
+use std::collections::BTreeSet;
+
 use prikk_error::{PrikkError, Result};
-use prikk_object::{ObjectId, ObjectType, RefStatePayload};
+use prikk_object::{BlockPayload, ObjectId, ObjectType, RefStatePayload};
 
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
@@ -234,6 +236,142 @@ pub(crate) fn require_block_given(
         }
         Some(_) => Ok(()),
     }
+}
+
+/// Where a block stands among this repository's refs (0.57.0 step 3, S1): the question `branch create
+/// --from <block id>` asks before it publishes a local branch at a block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlockStanding {
+    /// A local branch or tag reaches it (the block is in the tip's ancestry). The ref names, sorted;
+    /// at most the first few are listed.
+    ReachedLocally(Vec<String>),
+    /// No local branch or tag reaches it, but a received ref does: held only through what was
+    /// received, which `archive import --adopt` takes in with its trust checks and nothing else does.
+    ReceivedOnly(Vec<String>),
+    /// The store holds the block and no ref of any kind reaches it (after `received remove`, say).
+    Unreached,
+}
+
+/// How many ref names a [`BlockStanding`] lists.
+const STANDING_NAMES_LISTED: usize = 3;
+
+/// **Where `block_id` stands among the refs** (S1): which local branches or tags reach it, else which
+/// received refs do, else neither. "Reaches" is the full-DAG ancestor closure of a tip (every parent
+/// followed, as the merge reachability primitive does), inclusive of the tip itself.
+///
+/// A local ref's tip is read as every ref-addressed reader reads it (a tag through its Tag object), so
+/// a tag reaches exactly what the Block it names reaches. The walk
+/// over local refs shares one visited set: a block seen from an earlier tip has had its whole
+/// ancestry searched already, so a repository of many branches walks each block once. Received refs
+/// are walked one by one, because the answer lists them (and only a refusal asks).
+///
+/// # Errors
+///
+/// Any read error, including `Integrity` for a block in an ancestry the store cannot read: a damaged
+/// history is reported, not read as "unreached".
+pub fn block_standing(layout: &RepositoryLayout, block_id: ObjectId) -> Result<BlockStanding> {
+    let object_store = ObjectReadSnapshot::open(layout)?;
+    let ref_store = RefStore::new(layout.clone());
+    let mut local = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut names: Vec<String> = ref_store
+        .list_ref_pointers()?
+        .into_iter()
+        .map(|pointer| pointer.ref_name)
+        .filter(|name| name.starts_with("heads/") || name.starts_with("tags/"))
+        .collect();
+    names.sort();
+    for name in names {
+        let tip = crate::refs::read_current_ref_tip_block(layout, &object_store, &name)?;
+        if reaches(&object_store, tip, block_id, &mut seen)? {
+            local.push(name);
+            if local.len() == STANDING_NAMES_LISTED {
+                break;
+            }
+        }
+    }
+    if !local.is_empty() {
+        return Ok(BlockStanding::ReachedLocally(local));
+    }
+    let mut received = Vec::new();
+    for pointer in crate::received::list_received_pointers(layout)? {
+        let tip = received_tip_block(layout, &object_store, &pointer.ref_name)?;
+        if reaches(&object_store, tip, block_id, &mut BTreeSet::new())? {
+            received.push(pointer.ref_name);
+            if received.len() == STANDING_NAMES_LISTED {
+                break;
+            }
+        }
+    }
+    if received.is_empty() {
+        Ok(BlockStanding::Unreached)
+    } else {
+        Ok(BlockStanding::ReceivedOnly(received))
+    }
+}
+
+/// **The block `branch create <new_branch> --from <block id>` publishes at** (0.57.0 step 3, S1): the id
+/// through [`resolve_point`] (a block the store holds; an absent id or one of another kind refuses
+/// there, saying what it is), then the one question this command adds -- does a local branch or tag
+/// reach it? Publishing a branch at a block only a received ref (or nothing) reaches would take in
+/// history without the trust checks `archive import --adopt` makes, so it is refused by name, before
+/// anything is written.
+///
+/// # Errors
+///
+/// `Precondition` as above; any read error.
+pub fn resolve_branch_source_block(
+    layout: &RepositoryLayout,
+    new_branch: &str,
+    block_id_text: &str,
+) -> Result<ObjectId> {
+    let point = resolve_point(layout, block_id_text, ReceivedRefs::Refused)?;
+    let prefix = format!("branch create {new_branch} --from {block_id_text}");
+    match block_standing(layout, point.block_id)? {
+        BlockStanding::ReachedLocally(_) => Ok(point.block_id),
+        BlockStanding::ReceivedOnly(refs) => Err(PrikkError::Precondition(format!(
+            "{prefix}: block {block_id_text} is not reached by any local branch or tag; it is held \
+             only through the received ref(s) {}. Publishing it as a local branch would bypass the \
+             trust checks `prikk archive import --adopt` makes -- refusing, nothing was written. To \
+             bring that history in with those checks, run `prikk archive import <the archive that \
+             carried it> --adopt` (it adopts a branch whose name is free here; where a local branch \
+             of that name exists the delivery stays under remotes/), then run this command again",
+            refs.join(", ")
+        ))),
+        BlockStanding::Unreached => Err(PrikkError::Precondition(format!(
+            "{prefix}: block {block_id_text} is in this repository but no ref reaches it (not a \
+             local branch, a tag or a received ref; `prikk received remove` leaves blocks like \
+             this), so there is no published history to branch from -- refusing, nothing was \
+             written. Bring the history that carried it back with `prikk archive import <the \
+             archive that carried it> --adopt`, then run this command again"
+        ))),
+    }
+}
+
+/// Whether `target` is `tip` or one of its ancestors. `seen` holds blocks already searched from an
+/// earlier tip without finding `target`; a block in it is skipped.
+fn reaches(
+    object_store: &impl ObjectReader,
+    tip: ObjectId,
+    target: ObjectId,
+    seen: &mut BTreeSet<ObjectId>,
+) -> Result<bool> {
+    let mut stack = vec![tip];
+    while let Some(current) = stack.pop() {
+        if current == target {
+            return Ok(true);
+        }
+        if !seen.insert(current) {
+            continue;
+        }
+        let envelope = object_store
+            .read_typed(current, ObjectType::Block)?
+            .ok_or_else(|| PrikkError::Integrity(format!("missing Block {current}")))?;
+        let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+        stack.extend(block.parent_block_ids.iter().copied());
+    }
+    Ok(false)
 }
 
 /// The Block a received ref's tip names. A received RefState carries the origin's own name, so there is

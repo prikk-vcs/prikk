@@ -338,7 +338,8 @@ pub use ref_completion::{
     incomplete_publication_refusal_naming_any_lead, plan_ref_completion,
 };
 pub use ref_resolution::{
-    ReceivedRefs, is_unpublished_local_branch, require_existing_ref, resolve_point,
+    BlockStanding, ReceivedRefs, block_standing, is_unpublished_local_branch, require_existing_ref,
+    resolve_branch_source_block, resolve_point,
 };
 pub use refs::{
     PointerIndexRepair, RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord,
@@ -462,6 +463,6 @@ pub use worktree_status::{
 pub use worktree_materialize::{
     CurrentBranchMaterializeReport, PendingCurrentBranchMaterialization,
     abandon_unpublished_materialization, mark_current_branch_switch_pending,
-    materialize_after_publish, require_nothing_in_the_way_for_published_ref,
-    require_worktree_clean_and_capture,
+    materialize_after_publish, require_nothing_in_the_way_for_held_block,
+    require_nothing_in_the_way_for_published_ref, require_worktree_clean_and_capture,
 };

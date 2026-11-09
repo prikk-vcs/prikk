@@ -26,5 +26,7 @@ mod rfc151_branch_switch;
 mod rfc151_current_branch;
 #[path = "branch_and_tag/step1c_worktree_record_restore.rs"]
 mod step1c_worktree_record_restore;
+#[path = "branch_and_tag/step3_s1_branch_create_from_a_block_id.rs"]
+mod step3_s1_branch_create_from_a_block_id;
 #[path = "support/mod.rs"]
 mod support;
