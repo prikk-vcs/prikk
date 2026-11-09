@@ -390,6 +390,18 @@ pub(crate) fn print_history_json(
     println!("{json}");
 }
 
+/// `["a", "b"]` on one line, `[]` when empty.
+fn push_json_string_array(json: &mut String, items: impl Iterator<Item = String>) {
+    json.push('[');
+    for (index, item) in items.enumerate() {
+        if index > 0 {
+            json.push_str(", ");
+        }
+        json.push_str(&escape_json_string(&item));
+    }
+    json.push(']');
+}
+
 fn push_history_entry(json: &mut String, entry: &HistoryEntry) {
     json.push_str("{\n");
     json.push_str(&format!(
@@ -413,6 +425,14 @@ fn push_history_entry(json: &mut String, entry: &HistoryEntry) {
         "      \"parent_count\": {},\n",
         entry.parent_count
     ));
+    // 0.57.0 step 3 (S2), additive within `log-report-v1`: the Block's own parents as stored (sorted by
+    // object id: no "first parent" can be read from the order), and the MAINTAINER key ids its seal
+    // records -- as recorded, never as trusted.
+    json.push_str("      \"parent_block_ids\": ");
+    push_json_string_array(json, entry.parent_block_ids.iter().map(ToString::to_string));
+    json.push_str(",\n      \"sealed_by\": ");
+    push_json_string_array(json, entry.sealed_by.iter().cloned());
+    json.push_str(",\n");
     json.push_str(&format!("      \"patch_count\": {},\n", entry.patch_count));
     json.push_str(&format!(
         "      \"rollback_patch_count\": {},\n",

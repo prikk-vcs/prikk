@@ -440,6 +440,27 @@ pub fn verify_signer_trusted(
     Ok(policy)
 }
 
+/// **The MAINTAINER key ids an object's envelope records**, as recorded, in the order stored: the one
+/// definition of `sealed_by` (0.57.0 step 3, S2). `bundle preview` reads it from the exported RefState,
+/// `log --format json` from each Block -- the same function, so the two cannot differ in what "the
+/// key ids a seal records" means.
+///
+/// **Recorded, not trusted.** This reads the envelope's own signature list and nothing else: not the
+/// adopted policy, not whether a signature verifies. So it reads the same before and after
+/// `trust maintainer remove` of a sealer (adoption is local, and a key can be removed after it
+/// signed), which is the whole point -- a consumer asking "who sealed this" must not get a different
+/// answer from a trust edit. Which of these signatures this repository trusts is a different question
+/// (`verify`, and `bundle preview`'s `sealed_by_signatures`).
+#[must_use]
+pub fn recorded_maintainer_key_ids(envelope: &ObjectEnvelope) -> Vec<String> {
+    envelope
+        .signatures
+        .iter()
+        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
+        .map(|signature| signature.key_id.clone())
+        .collect()
+}
+
 /// Verify a publication envelope against the current repository-local trust policy. Returns the
 /// adopted key id whose signature matched (DC-78 §D3), the first in canonical order: the sealer's
 /// identity already lives inside the envelope's own signature, non-strippably — this is reporting that

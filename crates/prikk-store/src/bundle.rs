@@ -686,9 +686,7 @@ pub fn preview_bundle_reporting_anchor(
     let ref_state_envelope_for_sealers = bundle_only_reader.read_object(ref_state_id)?;
     let sealed_by: Vec<String> = ref_state_envelope_for_sealers
         .iter()
-        .flat_map(|envelope| envelope.signatures.iter())
-        .filter(|signature| signature.signer_role == SignerRole::Maintainer)
-        .map(|signature| signature.key_id.clone())
+        .flat_map(crate::trust::recorded_maintainer_key_ids)
         .collect();
     // 0.56.0 step F: `sealed_by`'s own per-signature publication-trust outcome, additive beside
     // it -- see `BundlePreviewReport::sealed_by_signatures`'s own doc comment for why `sealed_by`

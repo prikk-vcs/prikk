@@ -29,6 +29,21 @@ For each entry, the CLI reports:
 
 Nothing in that list is a time: signatures and RefUpdates have a `created_at` field, every current writer sets it to 0, and so no block, patch or ref record carries one. The entries are ordered by update sequence, not by date.
 
+**`--format json`** (`log-report-v1`) carries the same facts per block, plus two fields added in 0.57.0,
+additive within the version (a consumer written against the older field set reads these documents
+unchanged):
+
+- **`parent_block_ids`**: the Block's own parents, as stored (the same field `sync` claims and `extract`
+  links call `parent_block_ids`), `[]` for a root block. They are stored **sorted by object id**, so the order
+  means nothing: a merge has no "first parent" to read from it, and a consumer must not infer one
+  (`mainline_parent_id`, not the order, names the mainline). `parent_count` is kept and equals the length.
+- **`sealed_by`**: the MAINTAINER key ids the Block's seal records, in stored order. It is **as recorded, not
+  as trusted**: it lists the keys whether or not this repository has adopted them, so it reads the same
+  before and after `prikk trust maintainer remove` of a sealer. A block sealed by two keys (a superseding
+  record, RFC 156) lists both. `bundle preview`'s `sealed_by` is the same list, built by the same function.
+  Which of those signatures verify against this repository's adopted keys is a different question, answered
+  by `prikk verify` and, for a delivery, by `bundle preview`'s `sealed_by_signatures`.
+
 A Block is classified as a rollback Block when it references at least one Patch envelope carrying the current development rollback marker and that Patch payload decodes under the supported replay subset.
 
 History inspection does not yet perform full block-DAG traversal, path-aware history queries, rollback authorization checks, or patch algebra.

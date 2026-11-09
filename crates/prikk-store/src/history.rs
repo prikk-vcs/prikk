@@ -49,6 +49,12 @@ pub struct HistoryEntry {
     pub block_kind: BlockKind,
     /// Number of parent blocks referenced by the target Block.
     pub parent_count: usize,
+    /// The target Block's own `parent_block_ids`, as stored (0.57.0 step 3, S2): sorted by object id,
+    /// so the order carries no "first parent" and no mainline. Empty for a root block.
+    pub parent_block_ids: Vec<ObjectId>,
+    /// The MAINTAINER key ids the target Block's seal records, as recorded and in stored order -- the
+    /// same function `bundle preview`'s `sealed_by` is built from, never filtered by trust.
+    pub sealed_by: Vec<String>,
     /// Number of patches referenced by the target Block.
     pub patch_count: usize,
     /// Number of required attestations attached to this RefState.
@@ -103,7 +109,7 @@ pub fn load_ref_history(
         // is what removes `read_block`'s "is Tag, expected Block" refusal for a valid tag ref --
         // that message stays for a genuinely wrong object type, which is all it ever meant to say.
         let (block_id, _tag_envelope) = resolve_ref_tip_block(&object_store, &ref_state)?;
-        let block = read_block(&object_store, block_id)?;
+        let (block, sealed_by) = read_block(&object_store, block_id)?;
         let rollback_patch_count =
             count_rollback_patches(&object_store, block_id, &block.patch_ids)?;
         let patch_messages = read_patch_messages(&object_store, block_id, &block.patch_ids)?;
@@ -114,6 +120,8 @@ pub fn load_ref_history(
             previous_ref_state_id: ref_state.previous_ref_state_id,
             block_kind: block.kind,
             parent_count: block.parent_block_ids.len(),
+            parent_block_ids: block.parent_block_ids.clone(),
+            sealed_by,
             patch_count: block.patch_ids.len(),
             required_attestation_count: ref_state.required_attestation_ids.len(),
             rollback_patch_count,
@@ -171,7 +179,7 @@ pub fn load_received_ref_history(
         // --ref tags/x` then `bundle import` records `remotes/tags/x`), so this path meets the same
         // Tag ref-state the local one does and resolves it the same way.
         let (block_id, _tag_envelope) = resolve_ref_tip_block(&object_store, &ref_state)?;
-        let block = read_block(&object_store, block_id)?;
+        let (block, sealed_by) = read_block(&object_store, block_id)?;
         let rollback_patch_count =
             count_rollback_patches(&object_store, block_id, &block.patch_ids)?;
         let patch_messages = read_patch_messages(&object_store, block_id, &block.patch_ids)?;
@@ -182,6 +190,8 @@ pub fn load_received_ref_history(
             previous_ref_state_id: ref_state.previous_ref_state_id,
             block_kind: block.kind,
             parent_count: block.parent_block_ids.len(),
+            parent_block_ids: block.parent_block_ids.clone(),
+            sealed_by,
             patch_count: block.patch_ids.len(),
             required_attestation_count: ref_state.required_attestation_ids.len(),
             rollback_patch_count,
@@ -274,7 +284,10 @@ fn read_patch_messages(
     Ok(messages)
 }
 
-fn read_block(object_store: &impl ObjectReader, block_id: ObjectId) -> Result<BlockPayload> {
+fn read_block(
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+) -> Result<(BlockPayload, Vec<String>)> {
     let Some(envelope) = object_store.read_object(block_id)? else {
         return Err(PrikkError::Integrity(format!(
             "history Block {block_id} is missing"
@@ -286,7 +299,11 @@ fn read_block(object_store: &impl ObjectReader, block_id: ObjectId) -> Result<Bl
             envelope.object_type
         )));
     }
-    BlockPayload::decode_canonical(&envelope.canonical_payload)
+    let sealed_by = crate::trust::recorded_maintainer_key_ids(&envelope);
+    Ok((
+        BlockPayload::decode_canonical(&envelope.canonical_payload)?,
+        sealed_by,
+    ))
 }
 
 #[cfg(test)]

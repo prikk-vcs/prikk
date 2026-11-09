@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — `log --format json` carries `parent_block_ids` and `sealed_by`
+
+Promised in stikk letter 029 (§4.3) and inklkunn's 2026-10-31 letter (§1). Each block in `log-report-v1`
+gains two fields, additive within the version (a consumer written against the older field set reads these
+documents unchanged; `parent_count` is kept):
+- **`parent_block_ids`**: the Block's own parents as stored, sorted by object id (the order carries no
+  "first parent"; a root block has `[]`).
+- **`sealed_by`**: the MAINTAINER key ids the Block's seal records, **as recorded, not as trusted**: it
+  reads the same before and after `trust maintainer remove` of a sealer, and lists a sealer this
+  repository never adopted. The same function builds `bundle preview`'s `sealed_by`.
+See [History inspection](docs/src/guide/history.md).
+
 ### Added — `prikk branch create heads/<name> --from <block id>`
 
 Promised in stikk letter 029 (1.1). `--from` now takes a bare block id (64 lowercase hex characters) as well
