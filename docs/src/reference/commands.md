@@ -952,6 +952,41 @@ default. **`set` rewrites the whole file and `unset` removes it, so a comment yo
 the format allows — is dropped without a word:** keep notes somewhere else. An older `prikk` build simply does not read this file — it has no effect on that build's
 own behavior, and no error results from a repository holding one.
 
+**`verify --format json` (`verify-report-v1`) carries the item-level facts the text prints (0.57.0).** The
+document already had `verdict`, `active_sessions`, `stages` and `unreached_objects`; these keys are added,
+**additive within the version** (a consumer written against the older field set reads the document
+unchanged), each from the very structure the text line is printed from:
+- **`object_items`**: `{"scanned": N, "failed": M}` (the text's `object items: N scanned, M failed`).
+- **`failed_objects`**: one entry per failed object, typed: `object_type`, `object_id` (the object's id when
+  the record decoded far enough to have one, **`null`** when the container frame itself is unreadable),
+  `locator` (a display-only container path with a byte offset, as the text prints it), `class` (`corrupt`, or
+  `outside-version-rule` for a path this version's own rule refuses, which a newer `prikk` may have
+  written), and `message` (display text; never the only field).
+- **`unverifiable_author_signatures`**: the count the text prints, patches whose AUTHOR key id has no
+  recorded key material (not a failure).
+- **`block_seals`**: one entry per Block whose publication trust was checked (reached from committed state;
+  an unreached Block is in `unreached_objects`): `block_id`; **`sealed_by`**, the MAINTAINER key ids the
+  Block records, as recorded and never as trusted (the same field and the same function as `log --format
+  json`'s `sealed_by`, so the two cannot differ, and it reads the same before and after `trust maintainer
+  remove`); **`trusted_by`**, the one adopted key whose signature verified, or `null` (the text's `sealed
+  blocks:` lists the blocks where it is not `null`; here a Block is one entry however many records hold it); and `sealed_by_signatures`, each signature's own
+  outcome (`sound`, `unverifiable`, `invalid`, as `bundle preview` reports them), beside `sealed_by` and
+  never inside it. So "how many of these blocks did key K seal" is a count over `sealed_by`, answerable
+  before a removal and after it.
+- **`publication_trust_issues`**: the text's `publication-trust [code]` lines, typed: one entry per signature
+  that did not count, `{"code", "object_type", "object_id", "key_id", "outcome"}` (`outcome` is
+  `unverifiable`, `invalid`, or `unsigned` for an object with no MAINTAINER signature at all, whose `key_id`
+  is `null`); an issue about no object (an unreadable trust policy) has `null` object fields.
+
+**Which object each `sealed_by` lists.** `log` and `verify` list the **Block's** MAINTAINER signatures;
+`bundle preview` lists the **delivered tip RefState's**. They are different objects and can differ: when
+another signer's copy of a stored Block arrives it is merged as one superseding record carrying the union of
+both signature sets, and the local RefState gains nothing. A Block stored twice that way is one entry in
+`block_seals`, the current (latest) record's.
+
+Not in this document: `ways_out` (the way-out line the text prints under a finding) is carried by the JSON
+tier round of 0.59.0, not here.
+
 **Exit codes.** `0` — the operation succeeded and did what was asked. `1` — operational failure:
 verification findings, an integrity failure, a refusal, a dirty worktree. `2` — usage error: an
 unknown argument, a missing required flag, a duplicate flag. Graded verification results are in

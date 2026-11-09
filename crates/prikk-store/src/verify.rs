@@ -365,6 +365,10 @@ pub struct ObjectVerification {
     /// For a Block or RefState, the adopted MAINTAINER key id whose signature was trusted (DC-78
     /// §D3). `None` for other object types, or when publication trust could not be established.
     pub sealed_by_key_id: Option<String>,
+    /// For a Block whose publication trust was checked (reached from committed state): every
+    /// MAINTAINER key id it records and each signature's outcome (0.57.0 step 3, S3). `None` for any
+    /// other object.
+    pub block_sealers: Option<BlockSealers>,
     /// For a Patch, the outcome of checking its AUTHOR signature against recorded key material
     /// (DC-53 Stage 1). `None` for other object types, or when the Patch carries no AUTHOR-role
     /// signature at all (out of this increment's scope). A signature that does not verify against
@@ -392,6 +396,24 @@ pub enum AuthorSignatureVerification {
         /// The AUTHOR key id named, for which no key material is on file.
         key_id: String,
     },
+}
+
+/// Every MAINTAINER key id a reached Block's seal **records**, and each signature's own outcome against
+/// this repository's adopted keys (0.57.0 step 3, S3). Unlike [`BlockSealVerification`] -- which lists a
+/// Block only when some adopted key's signature verified, and names only that one key -- this lists every
+/// Block whose publication trust was checked, including one nothing adopted signs for, so "how many of
+/// these blocks did key K seal" has an answer before and after `trust maintainer remove`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockSealers {
+    /// The Block's object id.
+    pub block_id: ObjectId,
+    /// The MAINTAINER key ids the Block records, as recorded and in stored order: the same function
+    /// (`trust::recorded_maintainer_key_ids`) `log --format json`'s `sealed_by` is built from, so the two
+    /// cannot differ. Never filtered by trust.
+    pub sealed_by: Vec<String>,
+    /// Each MAINTAINER signature's own outcome against the adopted policy, in the same order as
+    /// `sealed_by`: kept beside it, never inside it.
+    pub signatures: Vec<(String, crate::trust::PublicationSignatureOutcome)>,
 }
 
 /// Which adopted MAINTAINER key sealed a given Block (DC-78 §D3). Reporting only: the sealer's key
@@ -719,6 +741,10 @@ pub struct RepositoryVerification {
     /// Reporting only — surfaces provenance that was already intrinsic to each block's own
     /// signature, so an auditor can ask "which parts of this history did I seal" and get an answer.
     pub block_seals: Vec<BlockSealVerification>,
+    /// 0.57.0 step 3 (S3): every reached Block's recorded sealers and per-signature outcomes, in
+    /// on-disk scan order -- see [`BlockSealers`]. A Block nothing in committed state reaches is not
+    /// here (its publication trust is not checked; it is in `unreached_objects`).
+    pub block_sealers: Vec<BlockSealers>,
     /// RFC 115 Stage 3 §6: one outcome per received (`remotes/*`) pointer, in
     /// `list_received_pointers`' sorted-by-name order — the same kind-aware two-hop target check
     /// local refs already get, applied here for the first time. Empty when the `ReceivedRefs` stage
@@ -1872,6 +1898,7 @@ pub fn verify_repository_with_options(
         object_temp_paths,
         merge_baseline_divergences,
         block_seals,
+        block_sealers,
         mut signature_envelope_issues,
     ) = match object_summary {
         Some(summary) => {
@@ -1886,6 +1913,7 @@ pub fn verify_repository_with_options(
                 summary.temp_paths,
                 summary.merge_baseline_divergences,
                 summary.block_seals,
+                summary.block_sealers,
                 summary.signature_issues,
             )
         }
@@ -1896,6 +1924,7 @@ pub fn verify_repository_with_options(
             None,
             None,
             None,
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -2291,6 +2320,7 @@ pub fn verify_repository_with_options(
         active_wal_ordering_issues,
         merge_baseline_divergences,
         block_seals,
+        block_sealers,
         received_ref_item_outcomes,
         active_session_count,
         connectivity_issues,

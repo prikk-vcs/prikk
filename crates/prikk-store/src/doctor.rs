@@ -1010,7 +1010,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // preserve `repair_repository`'s refusal gate at item granularity, the same way the loop
             // above preserves it at stage granularity.
             for outcome in &verification.object_outcomes {
-                if let ObjectItemStatus::Failed { message, kind } = &outcome.status {
+                if let ObjectItemStatus::Failed { message, kind, .. } = &outcome.status {
                     // 0.56.0 step 3d (A6): a path this version's own path rule refuses (a newer
                     // `prikk` version may have written it) is not damage, so it gets its own code
                     // and advice instead of "preserve and inspect" -- that advice is for real

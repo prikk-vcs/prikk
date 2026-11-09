@@ -43,6 +43,10 @@ unchanged):
   record, RFC 156) lists both. `bundle preview`'s `sealed_by` is the same list, built by the same function.
   Which of those signatures verify against this repository's adopted keys is a different question, answered
   by `prikk verify` and, for a delivery, by `bundle preview`'s `sealed_by_signatures`.
+  **It lists the Block's own signatures.** `prikk verify --format json`'s `block_seals[].sealed_by` is the
+  same list from the same function; `bundle preview`'s `sealed_by` lists the **delivered tip RefState's**
+  signatures instead, and the two can differ (another signer's copy of a stored Block merges as a
+  superseding record carrying the union, and the local RefState gains nothing).
 
 A Block is classified as a rollback Block when it references at least one Patch envelope carrying the current development rollback marker and that Patch payload decodes under the supported replay subset.
 

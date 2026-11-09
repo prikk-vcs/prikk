@@ -4,10 +4,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectEnvelope;
 
 use crate::foundation::layout::RepositoryLayout;
-use crate::trust::{
-    MaintainerTrustPolicy, PublicationTrustIssue, load_maintainer_trust_policy,
-    verify_trusted_publication_envelope,
-};
+use crate::trust::{MaintainerTrustPolicy, PublicationTrustIssue, load_maintainer_trust_policy};
 
 pub(super) struct PublicationTrustVerifier<'a> {
     layout: &'a RepositoryLayout,
@@ -15,6 +12,9 @@ pub(super) struct PublicationTrustVerifier<'a> {
     policy_issue_added: bool,
     pub(super) checked_records: usize,
     pub(super) issues: Vec<PublicationTrustIssue>,
+    /// Every MAINTAINER signature's outcome for the envelope the last [`Self::verify`] checked (0.57.0
+    /// step 3, S3), from the same single verification pass as its verdict.
+    pub(super) last_outcomes: Vec<(String, crate::trust::PublicationSignatureOutcome)>,
 }
 
 impl<'a> PublicationTrustVerifier<'a> {
@@ -25,6 +25,7 @@ impl<'a> PublicationTrustVerifier<'a> {
             policy_issue_added: false,
             checked_records: 0,
             issues: Vec::new(),
+            last_outcomes: Vec::new(),
         }
     }
 
@@ -32,6 +33,7 @@ impl<'a> PublicationTrustVerifier<'a> {
     /// report which key sealed it. `None` covers both a recorded trust-policy failure and an
     /// unmatched signature — either way, nothing to report.
     pub(super) fn verify(&mut self, envelope: &ObjectEnvelope) -> Result<Option<String>> {
+        self.last_outcomes.clear();
         self.checked_records = self
             .checked_records
             .checked_add(1)
@@ -52,7 +54,10 @@ impl<'a> PublicationTrustVerifier<'a> {
         let Some(policy) = self.policy.as_ref() else {
             return Ok(None);
         };
-        match verify_trusted_publication_envelope(policy, envelope) {
+        let (verdict, outcomes) =
+            crate::trust::verify_trusted_publication_envelope_with_outcomes(policy, envelope);
+        self.last_outcomes = outcomes;
+        match verdict {
             Ok(key_id) => Ok(Some(key_id)),
             Err(issue) => {
                 self.issues.push(issue);

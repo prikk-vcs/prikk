@@ -253,9 +253,171 @@ pub(crate) fn print_verify_report_json(
     if !report.unreached_objects.is_empty() {
         json.push_str("\n  ");
     }
-    json.push_str("]\n}");
+    json.push_str("],\n");
+    push_item_level_fields(&mut json, report);
+    json.push_str("\n}");
     println!("{json}");
     Ok(())
+}
+
+/// 0.57.0 step 3 (S3), additive within `verify-report-v1`: the item-level facts `verify`'s text has always
+/// printed and this document used to leave out (stikk 023 §1.2, answered in 029 §2), each from the very
+/// struct the text line is printed from. `ways_out` is not here: it is the JSON tier round's (0.59.0).
+fn push_item_level_fields(json: &mut String, report: &prikk_store::RepositoryVerification) {
+    // `object items: N scanned, M failed` and one line per failed object.
+    let failed: Vec<_> = report
+        .object_outcomes
+        .iter()
+        .filter_map(|outcome| match &outcome.status {
+            ObjectItemStatus::Failed {
+                message,
+                kind,
+                object_id,
+                ..
+            } => Some((outcome, message, kind, object_id)),
+            _ => None,
+        })
+        .collect();
+    json.push_str(&format!(
+        "  \"object_items\": {{\"scanned\": {}, \"failed\": {}}},\n",
+        report.object_outcomes.len(),
+        failed.len()
+    ));
+    json.push_str("  \"failed_objects\": [");
+    for (index, (outcome, message, kind, object_id)) in failed.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"object_type\": ");
+        json.push_str(&escape_json_string(&outcome.object_type.to_string()));
+        json.push_str(", \"object_id\": ");
+        match object_id {
+            Some(id) => json.push_str(&escape_json_string(&id.to_string())),
+            None => json.push_str("null"),
+        }
+        json.push_str(", \"locator\": ");
+        json.push_str(&escape_json_string(&outcome.path.display().to_string()));
+        json.push_str(", \"class\": ");
+        json.push_str(&escape_json_string(match kind {
+            prikk_error::DecodeFailureKind::Corrupt => "corrupt",
+            prikk_error::DecodeFailureKind::OutsideVersionRule => "outside-version-rule",
+            _ => "unclassified",
+        }));
+        json.push_str(", \"message\": ");
+        json.push_str(&escape_json_string(message));
+        json.push('}');
+    }
+    if !failed.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push_str("],\n");
+
+    // `unverifiable author signatures: K`.
+    let unverifiable_author = report
+        .object_outcomes
+        .iter()
+        .filter(|outcome| match &outcome.status {
+            ObjectItemStatus::Evaluated(verification)
+            | ObjectItemStatus::Unindexed(verification) => matches!(
+                verification.author_verification,
+                Some(AuthorSignatureVerification::Unverifiable { .. })
+            ),
+            ObjectItemStatus::Failed { .. } => false,
+        })
+        .count();
+    json.push_str(&format!(
+        "  \"unverifiable_author_signatures\": {unverifiable_author},\n"
+    ));
+
+    // Every reached Block's seal: the recorded sealers (the function `log`'s `sealed_by` is built from),
+    // the one adopted key whose signature verified (`trusted_by`, which is what the text's `sealed
+    // blocks:` counts), and each signature's own outcome beside -- never inside -- `sealed_by`.
+    json.push_str("  \"block_seals\": [");
+    for (index, sealers) in report.block_sealers.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"block_id\": ");
+        json.push_str(&escape_json_string(&sealers.block_id.to_string()));
+        json.push_str(", \"sealed_by\": [");
+        for (key_index, key_id) in sealers.sealed_by.iter().enumerate() {
+            if key_index > 0 {
+                json.push_str(", ");
+            }
+            json.push_str(&escape_json_string(key_id));
+        }
+        json.push_str("], \"trusted_by\": ");
+        // The latest record of a Block stored twice (a superseding record) is the current one.
+        match report
+            .block_seals
+            .iter()
+            .rev()
+            .find(|seal| seal.block_id == sealers.block_id)
+        {
+            Some(seal) => json.push_str(&escape_json_string(&seal.sealed_by_key_id)),
+            None => json.push_str("null"),
+        }
+        json.push_str(", \"sealed_by_signatures\": [");
+        for (signature_index, (key_id, outcome)) in sealers.signatures.iter().enumerate() {
+            if signature_index > 0 {
+                json.push_str(", ");
+            }
+            json.push_str("{\"key_id\": ");
+            json.push_str(&escape_json_string(key_id));
+            json.push_str(", \"outcome\": ");
+            json.push_str(&escape_json_string(outcome.as_str()));
+            json.push('}');
+        }
+        json.push_str("]}");
+    }
+    if !report.block_sealers.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push_str("],\n");
+
+    // `publication-trust [code]: message` lines, typed: one entry per signature that did not count (or
+    // one `unsigned` entry for an object with none), `null` object fields for an issue about no object.
+    json.push_str("  \"publication_trust_issues\": [");
+    let mut first = true;
+    for issue in &report.publication_trust_issues {
+        let rows: Vec<(String, String, String, String)> = match &issue.subject {
+            Some(subject) => subject
+                .findings
+                .iter()
+                .map(|finding| {
+                    (
+                        escape_json_string(&subject.object_type.to_string()),
+                        escape_json_string(&subject.object_id.to_string()),
+                        finding
+                            .key_id
+                            .as_deref()
+                            .map_or_else(|| "null".to_string(), escape_json_string),
+                        escape_json_string(finding.outcome),
+                    )
+                })
+                .collect(),
+            None => vec![(
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+                "null".to_string(),
+            )],
+        };
+        for (object_type, object_id, key_id, outcome) in rows {
+            if !first {
+                json.push(',');
+            }
+            first = false;
+            json.push_str(&format!(
+                "\n    {{\"code\": {}, \"object_type\": {object_type}, \"object_id\": {object_id}, \"key_id\": {key_id}, \"outcome\": {outcome}}}",
+                escape_json_string(issue.code)
+            ));
+        }
+    }
+    if !first {
+        json.push_str("\n  ");
+    }
+    json.push(']');
 }
 
 /// Print each active session's own repair outcome (RFC 108 increment 3d review v1 §1's condition):

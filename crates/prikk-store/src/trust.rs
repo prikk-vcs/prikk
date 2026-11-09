@@ -34,15 +34,58 @@ pub struct PublicationTrustIssue {
     pub code: &'static str,
     /// Human-readable explanation.
     pub message: String,
+    /// The object the issue is about and what its signatures came to, typed (0.57.0 step 3, S3), so a
+    /// consumer never has to read the object out of `message`. `None` for an issue about no object
+    /// (an unreadable trust policy).
+    pub subject: Option<PublicationTrustSubject>,
+}
+
+/// The object a [`PublicationTrustIssue`] is about, with one finding per MAINTAINER signature that
+/// did not verify as trusted (0.57.0 step 3, S3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationTrustSubject {
+    /// The object's type (`block`, `ref-state`, `tag`, `ref-update`, ...).
+    pub object_type: prikk_object::ObjectType,
+    /// The object's id.
+    pub object_id: prikk_object::ObjectId,
+    /// Why no signature of it counted: one finding per signature that did not, or one `unsigned`
+    /// finding when the object carries no MAINTAINER signature at all.
+    pub findings: Vec<PublicationTrustFinding>,
+}
+
+/// One MAINTAINER signature that did not count as trusted, or the absence of any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationTrustFinding {
+    /// The signature's key id; `None` exactly when the object has no MAINTAINER signature.
+    pub key_id: Option<String>,
+    /// `unverifiable` (the key is not adopted here), `invalid` (adopted, but the signature does not
+    /// verify) or `unsigned` (no MAINTAINER signature at all): the first two are
+    /// [`PublicationSignatureOutcome`]'s wire values, the third is only for this case.
+    pub outcome: &'static str,
 }
 
 impl PublicationTrustIssue {
-    /// Construct a publication trust issue.
+    /// Construct a publication trust issue about no particular object.
     #[must_use]
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
+            subject: None,
+        }
+    }
+
+    /// Construct a publication trust issue about `subject`.
+    #[must_use]
+    fn about(
+        code: &'static str,
+        message: impl Into<String>,
+        subject: PublicationTrustSubject,
+    ) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            subject: Some(subject),
         }
     }
 }
@@ -474,43 +517,100 @@ pub fn verify_trusted_publication_envelope(
     policy: &MaintainerTrustPolicy,
     envelope: &ObjectEnvelope,
 ) -> std::result::Result<String, PublicationTrustIssue> {
+    verify_trusted_publication_envelope_with_outcomes(policy, envelope).0
+}
+
+/// [`verify_trusted_publication_envelope`]'s verdict **and** every MAINTAINER signature's own outcome,
+/// from one pass: each adopted signature is verified once and the result serves both (0.57.0 step 3, S3:
+/// `verify`'s per-block `sealed_by_signatures` costs no second Ed25519 verification). The verdict is
+/// unchanged: any adopted signature that does not verify is `INVALID-SIGNATURE` (the first, in the
+/// envelope's order), else the first one that does is the trusted key, else `UNTRUSTED`.
+pub fn verify_trusted_publication_envelope_with_outcomes(
+    policy: &MaintainerTrustPolicy,
+    envelope: &ObjectEnvelope,
+) -> (
+    std::result::Result<String, PublicationTrustIssue>,
+    Vec<(String, PublicationSignatureOutcome)>,
+) {
     let object_id = envelope.object_id();
+    let mut outcomes = Vec::new();
     let mut trusted: Option<String> = None;
+    let mut first_invalid: Option<(String, PrikkError)> = None;
     for signature in envelope
         .signatures
         .iter()
         .filter(|signature| signature.signer_role == SignerRole::Maintainer)
     {
-        if policy.find(&signature.key_id).is_none() {
-            continue;
-        }
-        match verify_trusted_signature(policy, envelope, signature, object_id) {
-            Ok(()) => {
-                if trusted.is_none() {
-                    trusted = Some(signature.key_id.clone());
+        let outcome = if policy.find(&signature.key_id).is_none() {
+            PublicationSignatureOutcome::Unverifiable
+        } else {
+            match verify_trusted_signature(policy, envelope, signature, object_id) {
+                Ok(()) => {
+                    if trusted.is_none() {
+                        trusted = Some(signature.key_id.clone());
+                    }
+                    PublicationSignatureOutcome::Sound
+                }
+                Err(err) => {
+                    if first_invalid.is_none() {
+                        first_invalid = Some((signature.key_id.clone(), err));
+                    }
+                    PublicationSignatureOutcome::Invalid
                 }
             }
-            Err(err) => {
-                return Err(PublicationTrustIssue::new(
-                    "PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE",
-                    format!(
-                        "{} {} carries a MAINTAINER signature by adopted key {} that does not \
-                         verify: {err}",
-                        envelope.object_type, object_id, signature.key_id
-                    ),
-                ));
-            }
-        }
+        };
+        outcomes.push((signature.key_id.clone(), outcome));
     }
-    trusted.ok_or_else(|| {
-        PublicationTrustIssue::new(
+    if let Some((key_id, err)) = first_invalid {
+        let issue = PublicationTrustIssue::about(
+            "PRIKK-TRUST-PUBLICATION-INVALID-SIGNATURE",
+            format!(
+                "{} {} carries a MAINTAINER signature by adopted key {} that does not \
+                 verify: {err}",
+                envelope.object_type, object_id, key_id
+            ),
+            PublicationTrustSubject {
+                object_type: envelope.object_type,
+                object_id,
+                findings: vec![PublicationTrustFinding {
+                    key_id: Some(key_id),
+                    outcome: PublicationSignatureOutcome::Invalid.as_str(),
+                }],
+            },
+        );
+        return (Err(issue), outcomes);
+    }
+    let verdict = trusted.ok_or_else(|| {
+        // Every MAINTAINER signature here is by a key this repository has not adopted (an adopted one
+        // either verified, which made it trusted, or failed, returned above as invalid): one
+        // `unverifiable` finding each, or one `unsigned` finding when there is none.
+        let mut findings: Vec<PublicationTrustFinding> = outcomes
+            .iter()
+            .map(|(key_id, outcome)| PublicationTrustFinding {
+                key_id: Some(key_id.clone()),
+                outcome: outcome.as_str(),
+            })
+            .collect();
+        if findings.is_empty() {
+            findings.push(PublicationTrustFinding {
+                key_id: None,
+                outcome: "unsigned",
+            });
+        }
+        PublicationTrustIssue::about(
             "PRIKK-TRUST-PUBLICATION-UNTRUSTED",
             format!(
                 "{} {} has no trusted MAINTAINER signature",
                 envelope.object_type, object_id
             ),
+            PublicationTrustSubject {
+                object_type: envelope.object_type,
+                object_id,
+                findings,
+            },
         )
-    })
+    });
+    (verdict, outcomes)
 }
 
 /// 0.56.0 step F: turn [`verify_trusted_publication_envelope`]'s own verdict into an admission

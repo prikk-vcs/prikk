@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added — `verify --format json` carries the block seals, item counts, failed objects and unverifiable signatures
+
+Promised in stikk letter 029 (1.2) and inklkunn's 2026-10-31 letter (§1: "the same field reaches
+`verify-report-v1`"). `verify-report-v1` gains, additively within the version (a consumer written against
+the older field set reads these documents unchanged), what `verify`'s text has always printed:
+- **`block_seals`**: every reached Block's `sealed_by` (the key ids it records, **as recorded, not as
+  trusted**: the same field and function as `log`'s, so it reads the same before and after `trust maintainer
+  remove`), `trusted_by`, and each signature's outcome beside it. stikk's case: `colleague` sealed 1 of 3,
+  before the key is removed and after.
+- **`object_items`**, **`failed_objects`** (typed: object type, id when known, locator, class `corrupt` or
+  `outside-version-rule`), **`unverifiable_author_signatures`**.
+- **`publication_trust_issues`**, typed: `code`, `object_type`, `object_id`, `key_id`, `outcome`.
+`log` and `verify` list the **Block's** signatures; `bundle preview` lists the delivered tip RefState's, and
+the two can differ. `ways_out` is not here (the JSON tier round, 0.59.0). No extra verification work: the
+per-signature outcomes come from the single pass that already decided each block's trust.
+See [Commands](docs/src/reference/commands.md).
+
 ### Added — `log --format json` carries `parent_block_ids` and `sealed_by`
 
 Promised in stikk letter 029 (§4.3) and inklkunn's 2026-10-31 letter (§1). Each block in `log-report-v1`

@@ -50,6 +50,10 @@ pub enum ObjectItemStatus {
         /// here, alongside `message`, because by this point the original `PrikkError` is gone --
         /// a reader downstream (`doctor`'s advice) needs the classification, not just the text.
         kind: prikk_error::DecodeFailureKind,
+        /// 0.57.0 step 3 (S3): the object's id, when the record decoded far enough to have one (a
+        /// downstream check failed). `None` when the container frame itself is unreadable: it has no
+        /// id to give.
+        object_id: Option<ObjectId>,
     },
 }
 
@@ -100,6 +104,8 @@ pub(super) struct ObjectSummary {
     pub(super) signature_issues: Vec<SignatureEnvelopeIssue>,
     pub(super) merge_baseline_divergences: Vec<super::MergeBaselineDivergence>,
     pub(super) block_seals: Vec<BlockSealVerification>,
+    /// 0.57.0 step 3 (S3): every reached Block's recorded sealers and outcomes, scan order.
+    pub(super) block_sealers: Vec<super::BlockSealers>,
     /// Unparseable frames nothing names (see [`InterruptedAppend`]).
     pub(super) interrupted_appends: Vec<InterruptedAppend>,
     /// RFC 162 Addendum 1 fix 3: the object index's own trailing-partial byte count, set once from
@@ -135,6 +141,7 @@ impl ObjectSummary {
             signature_issues: Vec::new(),
             merge_baseline_divergences: Vec::new(),
             block_seals: Vec::new(),
+            block_sealers: Vec::new(),
             interrupted_appends: Vec::new(),
             trailing_partial_index_bytes: 0,
             index_interior_damage: false,
@@ -152,6 +159,7 @@ impl ObjectSummary {
         self.merge_baseline_divergences
             .extend(other.merge_baseline_divergences);
         self.block_seals.extend(other.block_seals);
+        self.block_sealers.extend(other.block_sealers);
         self.interrupted_appends.extend(other.interrupted_appends);
         self.object_container_tails
             .extend(other.object_container_tails);
@@ -313,6 +321,8 @@ pub(super) fn verify_objects(
                 // Container framing, never a path-rule refusal: this is a record this scan could not
                 // even read as a frame, well below any patch-operation decode.
                 kind: prikk_error::DecodeFailureKind::Corrupt,
+                // The index entry names the record: its id is the entry's.
+                object_id: Some(entry.object_id),
             },
         });
     }
@@ -400,6 +410,8 @@ fn verify_object_type_container(
                         // Container-record framing (bad checksum, torn frame): never a path-rule
                         // refusal, which can only surface decoding a Patch's own operations.
                         kind: prikk_error::DecodeFailureKind::Corrupt,
+                        // An unreadable frame has no id.
+                        object_id: None,
                     },
                 });
             } else {
@@ -442,6 +454,19 @@ fn verify_object_type_container(
                 summary
                     .merge_baseline_divergences
                     .extend(merge_baseline_divergence);
+                if let Some(sealers) = object.block_sealers.clone() {
+                    // A Block stored twice (a superseding record carrying the union of two signature
+                    // sets, RFC 156) is one Block: the later record is the current one, the one every
+                    // reader (`log` included) sees, so it replaces the earlier entry in place.
+                    match summary
+                        .block_sealers
+                        .iter_mut()
+                        .find(|existing| existing.block_id == sealers.block_id)
+                    {
+                        Some(existing) => *existing = sealers,
+                        None => summary.block_sealers.push(sealers),
+                    }
+                }
                 if object.object_type == ObjectType::Block {
                     if let Some(sealed_by_key_id) = object.sealed_by_key_id.clone() {
                         summary.block_seals.push(BlockSealVerification {
@@ -472,6 +497,8 @@ fn verify_object_type_container(
                     status: ObjectItemStatus::Failed {
                         message: err.to_string(),
                         kind,
+                        // The record decoded (a downstream check failed): its id is known.
+                        object_id: Some(record.envelope.object_id()),
                     },
                 });
             }
@@ -513,6 +540,7 @@ fn verify_object_record(
             object_id,
         },
     )?;
+    let mut block_sealers = None;
     let sealed_by_key_id = match object_type {
         ObjectType::Block | ObjectType::RefState => {
             // 0.54.0 B1 (RFC 164 Rule E, a second consumption site of the same `reachable` set
@@ -523,7 +551,16 @@ fn verify_object_record(
             // trust issue. An object that *is* reached is checked exactly as before this change;
             // nothing here weakens that.
             if ctx.classifier.reachable.contains(&object_id) {
-                trust_verifier.verify(envelope)?
+                let sealed_by_key_id = trust_verifier.verify(envelope)?;
+                // 0.57.0 step 3 (S3): a reached Block's recorded sealers, beside the trust verdict.
+                if object_type == ObjectType::Block {
+                    block_sealers = Some(super::BlockSealers {
+                        block_id: object_id,
+                        sealed_by: crate::trust::recorded_maintainer_key_ids(envelope),
+                        signatures: std::mem::take(&mut trust_verifier.last_outcomes),
+                    });
+                }
+                sealed_by_key_id
             } else {
                 ctx.classifier.unreached.push(super::UnreachedObject {
                     object_id,
@@ -585,6 +622,7 @@ fn verify_object_record(
             path: locator.to_path_buf(),
             rollback_patch_count,
             sealed_by_key_id,
+            block_sealers,
             author_verification,
         },
         signature_issues,

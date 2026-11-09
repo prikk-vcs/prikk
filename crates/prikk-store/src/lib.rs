@@ -404,21 +404,21 @@ pub use tag_travel::{
 };
 pub use trust::{
     AdoptedMaintainerKey, CarriedKeyRepositoryStatus, GatedOperation, MaintainerTrustPolicy,
-    PublicationSignatureOutcome, PublicationTrustIssue, add_trusted_maintainer,
-    classify_carried_key_against_repository, classify_publication_signatures,
-    load_maintainer_trust_policy, load_maintainer_trust_policy_or_empty,
-    refuse_forged_publication_signature, remove_trusted_maintainer, verify_signer_trusted,
-    verify_trusted_publication_envelope,
+    PublicationSignatureOutcome, PublicationTrustFinding, PublicationTrustIssue,
+    PublicationTrustSubject, add_trusted_maintainer, classify_carried_key_against_repository,
+    classify_publication_signatures, load_maintainer_trust_policy,
+    load_maintainer_trust_policy_or_empty, refuse_forged_publication_signature,
+    remove_trusted_maintainer, verify_signer_trusted, verify_trusted_publication_envelope,
 };
 pub use unlock::{
     HeldLock, LivenessReason, PidLiveness, clear_lock, find_held_lock, list_held_locks,
 };
 pub use verify::{
     ActiveWalMetadataStatus, ActiveWalOrderingIssue, AppendedFileTailStatus,
-    AuthorSignatureVerification, BlockSealVerification, ConnectivityIssue, ContainerInteriorDamage,
-    GenerationLogDeductionNote, InterruptedAppend, ObjectItemOutcome, ObjectItemStatus,
-    ObjectVerification, RepositoryVerification, StageOutcome, StageStatus, UnreachedObject,
-    UnreferencedRemnant, VerificationStage, VerifyOptions, verify_repository,
+    AuthorSignatureVerification, BlockSealVerification, BlockSealers, ConnectivityIssue,
+    ContainerInteriorDamage, GenerationLogDeductionNote, InterruptedAppend, ObjectItemOutcome,
+    ObjectItemStatus, ObjectVerification, RepositoryVerification, StageOutcome, StageStatus,
+    UnreachedObject, UnreferencedRemnant, VerificationStage, VerifyOptions, verify_repository,
     verify_repository_with_options,
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};

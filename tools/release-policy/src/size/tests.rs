@@ -160,7 +160,10 @@ fn removing_a_declaration_names_its_file() {
         // 0.56.0 step 3h (#9): `UnreachedObject`'s own doc comment widened to document `Patch`/
         // `Blob` joining `Block`/`RefState` in `unreached_objects`, and its `object_type` field doc
         // corrected to match, 2,831 -> 2,837.
-        detail.contains("2837"),
+        // 0.57.0 step 3 (S3): `BlockSealers`, `RepositoryVerification::block_sealers` and
+        // `ObjectVerification::block_sealers` (every reached Block's recorded sealers and per-signature
+        // outcomes), 2,837 -> 2,867.
+        detail.contains("2867"),
         "the line count is in the message: {detail}"
     );
     assert!(
