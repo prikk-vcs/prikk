@@ -171,8 +171,8 @@ meaning and one of which is new:
 | `refusal` | when |
 |---|---|
 | `not-a-repository` | no repository at the path |
-| `point-not-found` | an absent ref, a block id the repository does not hold, or an object that is not a block |
-| `path-not-found` (new) | the path is not a file at the point: never existed, deleted by then, a directory prefix, or an unpublished current branch |
+| `point-not-found` | an absent ref, a block id the repository does not hold, an object that is not a block, or an unpublished current branch (it has no Block to read; `extract` gives the same id for the same condition) |
+| `path-not-found` (new) | the point resolves, and the path is not a file there: never existed, deleted by then, or a directory prefix |
 | `over-max-bytes` | the content is above `--max-bytes` |
 | `destination-exists` | `--output` names an existing file and `--force` was not given |
 | `destination-inside-repository` | `--output` is inside `.prikk/` |

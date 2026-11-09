@@ -237,8 +237,10 @@ fn run_cat_inner(args: CatArgs) -> std::result::Result<(), CatRefusal> {
         // rules false for the current branch, so it is not reused here -- the accurate reason is that
         // nothing has been published yet, not that the ref is absent.
         Err(prikk_error::PrikkError::Precondition(_)) if unpublished_current_branch => {
+            // `extract` says `point-not-found` for the same condition: the point does not resolve to a
+            // Block, so the question of the path never arises. One condition, one id across commands.
             return Err(CatRefusal::new(
-                CatRefusalId::PathNotFound,
+                CatRefusalId::PointNotFound,
                 format!(
                     "precondition not met: path {} does not exist at {name} ({name} has no published \
                      history yet)",

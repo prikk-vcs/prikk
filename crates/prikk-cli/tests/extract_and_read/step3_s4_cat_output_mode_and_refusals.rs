@@ -249,7 +249,7 @@ fn no_repository_and_an_unpublished_current_branch_are_refusals_too() {
     );
     let fresh = support::unique_repo("s4-fresh");
     support::init(&fresh);
-    let document = assert_refusal(&cat_json(&fresh, &["--path", "f.txt"]), "path-not-found");
+    let document = assert_refusal(&cat_json(&fresh, &["--path", "f.txt"]), "point-not-found");
     assert!(
         document
             .get("message")
@@ -297,4 +297,33 @@ fn only_json_refusals_print_documents_and_usage_errors_print_none() {
         text_refusal.stdout.is_empty(),
         "no document without --format json"
     );
+}
+
+/// One condition, one id across commands (S5a item 0): on the same unpublished current branch, `cat` and
+/// `extract` both refuse with `point-not-found` -- the point does not resolve to a Block, so no path question
+/// arises -- and neither says `path-not-found`.
+#[test]
+fn cat_and_extract_give_the_same_id_for_an_unpublished_current_branch() {
+    let fresh = support::unique_repo("s5a-unpublished");
+    support::init(&fresh);
+    let destination = support::unique_repo("s5a-unpublished-out").join("out");
+
+    let cat = cat_json(&fresh, &["--path", "f.txt"]);
+    let cat_document = support::json::parse(&String::from_utf8_lossy(&cat.stdout));
+    let extract = run(
+        &fresh,
+        &["extract", destination.to_str().unwrap(), "--format", "json"],
+    );
+    let extract_document = support::json::parse(&String::from_utf8_lossy(&extract.stdout));
+
+    assert_eq!(cat.status.code(), Some(1));
+    assert_eq!(extract.status.code(), Some(1));
+    assert_eq!(extract_document.get("refusal").as_str(), "point-not-found");
+    assert_eq!(
+        cat_document.get("refusal").as_str(),
+        extract_document.get("refusal").as_str(),
+        "the same condition has the same id in both commands"
+    );
+    assert_eq!(cat_document.get("command").as_str(), "cat");
+    assert_eq!(extract_document.get("command").as_str(), "extract");
 }
