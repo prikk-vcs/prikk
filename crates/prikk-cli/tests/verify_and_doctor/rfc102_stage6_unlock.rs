@@ -32,12 +32,12 @@ fn unlock_with_stdin(repo: &Path, args: &[&str], stdin_line: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_line.as_bytes())
-        .unwrap();
+    // A command that refuses before it reads stdin (a live holder: `unlock` exits 1 without asking) may
+    // already be gone when this write happens, and the write then fails with a broken pipe. That is the
+    // command having answered, not a failure of the test; what is asserted is its exit and its output.
+    let mut stdin = child.stdin.take().unwrap();
+    let _ = stdin.write_all(stdin_line.as_bytes());
+    drop(stdin);
     child.wait_with_output().unwrap()
 }
 
