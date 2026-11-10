@@ -223,8 +223,12 @@ fn control5_a_group_readable_seed_file_is_refused() {
 fn control7_help_names_seed_file_and_no_seed_env_remains() {
     let repo = support::unique_repo("rfc148-help");
     support::init(&repo);
-    let help = support::prikk(&repo).arg("--help").output().unwrap();
-    support::ok(&help, "--help");
+    // `key`'s own help: the top-level help is a grouped summary since 0.57.0 (item 6).
+    let help = support::prikk(&repo)
+        .args(["key", "--help"])
+        .output()
+        .unwrap();
+    support::ok(&help, "key --help");
     let text = String::from_utf8_lossy(&help.stdout).into_owned();
     assert!(
         text.contains("prikk key public [--seed-file <path>]"),

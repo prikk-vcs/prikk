@@ -182,6 +182,25 @@ fn run() -> std::result::Result<(), CliError> {
             print_help(VERSION);
             Ok(())
         }
+        // 0.57.0 item 6: `prikk help [command]`. `prikk help <command>` is `prikk <command> --help` -- one code path
+        // (`print_command_help`), the same bytes and exit code; `prikk help` alone is the top-level help; an unknown name is the
+        // unknown-command error. Anything after the one name is a usage error, as it is for any command's arguments.
+        Some("help") => match (args.next(), args.next()) {
+            (None, _) => {
+                print_help(VERSION);
+                Ok(())
+            }
+            (Some(name), None) => match commands::find(&name) {
+                Some(command) => {
+                    print_command_help(command);
+                    Ok(())
+                }
+                None => Err(CliError::Usage(format!("unknown command: {name}"))),
+            },
+            (Some(_), Some(extra)) => {
+                Err(CliError::Usage(format!("unknown help argument: {extra}")))
+            }
+        },
         Some("--version") | Some("-V") => {
             println!("prikk {VERSION}");
             Ok(())

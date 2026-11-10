@@ -419,8 +419,9 @@ fn yes_and_force_may_be_given_together_and_each_only_once() {
 fn the_help_line_names_the_published_page_for_the_liveness_words() {
     let repo = unique_repo("unlock-help-url");
     init(&repo);
-    let output = prikk(&repo).arg("--help").output().unwrap();
-    ok(&output, "--help");
+    // `unlock`'s own help: the top-level help is a grouped summary since 0.57.0 (item 6).
+    let output = prikk(&repo).args(["unlock", "--help"]).output().unwrap();
+    ok(&output, "unlock --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean"),

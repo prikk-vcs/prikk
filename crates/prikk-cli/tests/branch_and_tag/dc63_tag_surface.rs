@@ -607,11 +607,12 @@ fn publish_rejects_branch_kind_under_tag_shaped_name() {
 
 #[test]
 fn tag_help_is_listed() {
+    // The synopses live in the command's own help since the top-level help became a grouped summary (0.57.0 item 6).
     let out = Command::new(env!("CARGO_BIN_EXE_prikk"))
-        .arg("--help")
+        .args(["tag", "--help"])
         .output()
         .unwrap();
-    ok(&out, "--help");
+    ok(&out, "tag --help");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("prikk tag"),

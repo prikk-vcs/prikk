@@ -53,8 +53,57 @@ impl From<String> for CliError {
     }
 }
 
+/// The groups of the top-level help, in the order it prints them: the order of a day's work (0.57.0 item 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Group {
+    Start,
+    Record,
+    Read,
+    Branches,
+    Share,
+    Trust,
+    Merge,
+    Undo,
+    Check,
+}
+
+impl Group {
+    /// Every group, in print order.
+    pub(crate) const ALL: [Group; 9] = [
+        Group::Start,
+        Group::Record,
+        Group::Read,
+        Group::Branches,
+        Group::Share,
+        Group::Trust,
+        Group::Merge,
+        Group::Undo,
+        Group::Check,
+    ];
+
+    /// The heading the top-level help prints.
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Group::Start => "Start",
+            Group::Record => "Record your work",
+            Group::Read => "Read history and files",
+            Group::Branches => "Branches and tags",
+            Group::Share => "Share with others",
+            Group::Trust => "Trust",
+            Group::Merge => "Merge",
+            Group::Undo => "Undo sealed work",
+            Group::Check => "Check and repair",
+        }
+    }
+}
+
 pub(crate) struct Command {
     pub(crate) name: &'static str,
+    /// The group the top-level help lists this command under (0.57.0 item 6). An enum, so a misspelt group cannot compile.
+    pub(crate) group: Group,
+    /// One line, true of the whole command, that the top-level help shows beside the name. The full synopses stay in
+    /// `help_lines`, which `prikk <command> --help` (and `prikk help <command>`) prints.
+    pub(crate) summary: &'static str,
     pub(crate) run: fn(Vec<String>) -> std::result::Result<(), CliError>,
     pub(crate) help_lines: &'static [&'static str],
 }
@@ -105,7 +154,18 @@ fn run_status_adapter(args: Vec<String>) -> std::result::Result<(), CliError> {
 /// `help.rs` printed in. Dispatch is a name lookup, so table order does not affect it.
 pub(crate) const COMMANDS: &[Command] = &[
     Command {
+        name: "setup",
+        group: Group::Start,
+        summary: "Create a repository and set up your signing keys",
+        run: crate::run_setup,
+        help_lines: &[
+            "  prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]  Init, put both keys in your key directory (created, or reused if already there), and trust the maintainer key",
+        ],
+    },
+    Command {
         name: "init",
+        group: Group::Start,
+        summary: "Create an empty repository",
         run: run_init_adapter,
         help_lines: &[
             "  prikk init [path]                         Create a .prikk repository layout",
@@ -113,6 +173,8 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "key",
+        group: Group::Start,
+        summary: "Generate a key, show its public half, check signing",
         run: crate::run_key,
         help_lines: &[
             "  prikk key generate [--out <path>]         Generate an Ed25519 seed; --out writes it (mode 0600) and never prints it",
@@ -121,79 +183,9 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "setup",
-        run: crate::run_setup,
-        help_lines: &[
-            "  prikk setup [repo-path] [--author-seed-out <path>] [--maintainer-seed-out <path>]  Init, put both keys in your key directory (created, or reused if already there), and trust the maintainer key",
-        ],
-    },
-    Command {
-        name: "trust",
-        run: crate::run_trust,
-        help_lines: &[
-            "  prikk trust maintainer add --key-id ID --public-key HEX [--format json]  Trust one MAINTAINER key",
-            "  prikk trust maintainer remove --key-id ID Revoke one MAINTAINER key",
-            "  prikk trust maintainer list [--format json]  List every currently adopted key",
-            "  prikk trust maintainer check --key-id ID [--format json]  Whether that id is adopted",
-        ],
-    },
-    Command {
-        name: "commit",
-        run: crate::run_commit,
-        help_lines: &[
-            "  prikk commit [--from-worktree] [--text-edits] [--ref REF] -m|--message <message>  Append worktree changes",
-            "  note: .prikkignore at the repository root excludes matching worktree paths from being authored",
-        ],
-    },
-    Command {
-        name: "uncommit",
-        run: crate::uncommit::run_uncommit,
-        help_lines: &[
-            "  prikk uncommit <patch-id> [--plan-only]   Take back your newest unsealed commit: nothing is wrong, your files in the worktree are not changed, and sealed history is never touched (for that, `prikk rollback-draft`)",
-        ],
-    },
-    Command {
-        name: "mv",
-        run: crate::mv::run_mv,
-        help_lines: &[
-            "  prikk mv <old> <new>                      Move and declare a rename, authored into the next commit",
-            "  note: if <old> is already moved on disk (a shell `mv`), this records the declaration alone, touching no bytes",
-        ],
-    },
-    Command {
-        name: "status",
-        run: run_status_adapter,
-        help_lines: &[
-            "  prikk status [--format json]               Check repository and active WAL status",
-        ],
-    },
-    Command {
-        name: "seal",
-        run: crate::run_seal,
-        help_lines: &[
-            "  prikk seal --allow-no-audit [--ref REF] Seal active WAL into a branch ref",
-        ],
-    },
-    Command {
-        name: "branch",
-        run: crate::run_branch,
-        help_lines: &[
-            "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
-            "  prikk branch create heads/<name> [--from REF|BLOCK-ID]  Publish a branch at an existing target (a block id must be reached by a local branch or tag)",
-            "  prikk branch close heads/<name>           Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
-            "  prikk branch switch heads/<name>          Switch the worktree and the current branch (refuses a missing or closed branch, unsealed work for another ref, or a dirty worktree)",
-        ],
-    },
-    Command {
-        name: "tag",
-        run: crate::run_tag,
-        help_lines: &[
-            "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
-            "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
-        ],
-    },
-    Command {
         name: "config",
+        group: Group::Start,
+        summary: "Read and set settings, and see where each comes from",
         run: crate::run_config,
         help_lines: &[
             "  prikk config get <key>                    Print one key's effective value and where it came from",
@@ -204,34 +196,121 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "bundle",
-        run: crate::run_bundle,
+        name: "status",
+        group: Group::Record,
+        summary: "Show the repository and what is waiting to be sealed",
+        run: run_status_adapter,
         help_lines: &[
-            "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
-            "  prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward] [--format json]  Import a bundle as an untrusted received pointer; refuses a rollback, a divergent rewrite, or an unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
-            "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
-            "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
-            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
+            "  prikk status [--format json]               Check repository and active WAL status",
         ],
     },
     Command {
-        name: "archive",
-        run: crate::run_archive,
+        name: "worktree-status",
+        group: Group::Record,
+        summary: "Show how the files on disk differ from recorded history",
+        run: crate::run_worktree_status,
         help_lines: &[
-            "  prikk archive export <file> [--format json]  Write a whole-repository archive (PREPO001); refuses an existing file",
-            "  prikk archive verify <file> [--format json]  Check structure, reference closure, and every signature against the archive's own carried material",
-            "  prikk archive import <file> [--adopt] [--allow-non-fast-forward] [--format json]  Land every ref an archive carries; --adopt lands an absent, adopted, verified ref as a real local branch; refuses a landing that is a rollback, diverged, or unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
+            "  prikk worktree-status [path] [--ref REF] [--format json]  Report changes against the replay baseline",
+            "  note: .prikkignore at the repository root excludes matching paths from the untracked list",
+            "  note: live rename declarations from `prikk mv` are reported here too, both in prose and as a `--format json` field",
+        ],
+    },
+    Command {
+        name: "commit",
+        group: Group::Record,
+        summary: "Record your changes as a patch in the queue",
+        run: crate::run_commit,
+        help_lines: &[
+            "  prikk commit [--from-worktree] [--text-edits] [--ref REF] -m|--message <message>  Append worktree changes",
+            "  note: .prikkignore at the repository root excludes matching worktree paths from being authored",
+        ],
+    },
+    Command {
+        name: "uncommit",
+        group: Group::Record,
+        summary: "Take your newest unsealed commit back out of the queue",
+        run: crate::uncommit::run_uncommit,
+        help_lines: &[
+            "  prikk uncommit <patch-id> [--plan-only]   Take back your newest unsealed commit: nothing is wrong, your files in the worktree are not changed, and sealed history is never touched (for that, `prikk rollback-draft`)",
+        ],
+    },
+    Command {
+        name: "mv",
+        group: Group::Record,
+        summary: "Move or declare a rename for the next commit",
+        run: crate::mv::run_mv,
+        help_lines: &[
+            "  prikk mv <old> <new>                      Move and declare a rename, authored into the next commit",
+            "  note: if <old> is already moved on disk (a shell `mv`), this records the declaration alone, touching no bytes",
+        ],
+    },
+    Command {
+        name: "seal",
+        group: Group::Record,
+        summary: "Seal the queued patches into a branch",
+        run: crate::run_seal,
+        help_lines: &[
+            "  prikk seal --allow-no-audit [--ref REF] Seal active WAL into a branch ref",
         ],
     },
     Command {
         name: "log",
+        group: Group::Read,
+        summary: "List the sealed blocks of a ref",
         run: crate::run_log,
         help_lines: &[
             "  prikk log [path] [--limit N] [--ref REF] [--format json]  Show sealed ref history including rollback blocks",
         ],
     },
     Command {
+        name: "show",
+        group: Group::Read,
+        summary: "Show what one block or patch changed",
+        run: crate::run_show,
+        help_lines: &[
+            "  prikk show <block-id|patch-id> [--format json]  Show what a block or patch changed",
+        ],
+    },
+    Command {
+        name: "diff",
+        group: Group::Read,
+        summary: "Compare two points, or a point and the worktree",
+        run: crate::diff::run_diff,
+        help_lines: &[
+            "  prikk diff [path] [--from <ref|block-id>] [--to <ref|block-id>] [--path <p>]... [--format json]  Show what changed between two points, or between a point and the worktree (bare: the current branch against what `commit` would author), with unified hunks for text; binary files show ids and sizes only, and `prikk cat` reads either side; --path filters the output, and the work is whole-tree either way; writes nothing",
+        ],
+    },
+    Command {
+        name: "tree",
+        group: Group::Read,
+        summary: "List the files at a point",
+        run: crate::tree::run_tree,
+        help_lines: &[
+            "  prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]  List the files at a point, with mode, size and encoding; --prefix filters by whole path components, and the replay is whole-tree either way",
+        ],
+    },
+    Command {
+        name: "cat",
+        group: Group::Read,
+        summary: "Print or write one file at a point",
+        run: crate::cat::run_cat,
+        help_lines: &[
+            "  prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]  Write one file's bytes at a point, or its metadata with --format json; --max-bytes bounds what is written, not memory; binary content refuses a terminal",
+        ],
+    },
+    Command {
+        name: "extract",
+        group: Group::Read,
+        summary: "Write the files at a point into a new directory",
+        run: crate::run_extract,
+        help_lines: &[
+            "  prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only] [--max-bytes N] [--max-files N] [--format json]  Write the files at a point into a new directory that does not exist yet; anchors only where a writer would (never cat/tree's own anchoring), refusing a point whose nearest admitted snapshot is unreachably far back unless --allow-full-replay is given; --plan-only reports the point's own size and writes nothing; --max-bytes/--max-files refuse the whole point by name before the first byte is written; --claim previews a pending RecognitionClaim instead of a ref or block id",
+        ],
+    },
+    Command {
         name: "checkout",
+        group: Group::Read,
+        summary: "Plan or write the files at a point into the worktree",
         run: crate::checkout::run_checkout,
         help_lines: &[
             "  prikk checkout --plan-only [path] [--ref <ref|block-id>]  Show a safe checkout plan",
@@ -245,56 +324,124 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "diff",
-        run: crate::diff::run_diff,
+        name: "branch",
+        group: Group::Branches,
+        summary: "List, create, switch and close branches",
+        run: crate::run_branch,
         help_lines: &[
-            "  prikk diff [path] [--from <ref|block-id>] [--to <ref|block-id>] [--path <p>]... [--format json]  Show what changed between two points, or between a point and the worktree (bare: the current branch against what `commit` would author), with unified hunks for text; binary files show ids and sizes only, and `prikk cat` reads either side; --path filters the output, and the work is whole-tree either way; writes nothing",
+            "  prikk branch [list] [--all] [--format json]  List branches deterministically (name, RefState id); --all also shows closed branches, marked",
+            "  prikk branch create heads/<name> [--from REF|BLOCK-ID]  Publish a branch at an existing target (a block id must be reached by a local branch or tag)",
+            "  prikk branch close heads/<name>           Close a branch (not delete — pointer, history, and objects stay; reclaims nothing)",
+            "  prikk branch switch heads/<name>          Switch the worktree and the current branch (refuses a missing or closed branch, unsealed work for another ref, or a dirty worktree)",
         ],
     },
     Command {
-        name: "cat",
-        run: crate::cat::run_cat,
+        name: "tag",
+        group: Group::Branches,
+        summary: "List and create tags",
+        run: crate::run_tag,
         help_lines: &[
-            "  prikk cat --path <p> [--ref <ref|block-id>] [--output <file> [--force]] [--max-bytes N] [--format json]  Write one file's bytes at a point, or its metadata with --format json; --max-bytes bounds what is written, not memory; binary content refuses a terminal",
+            "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
+            "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
         ],
     },
     Command {
-        name: "tree",
-        run: crate::tree::run_tree,
+        name: "ref",
+        group: Group::Branches,
+        summary: "Finish another adopted key's interrupted publication",
+        run: crate::run_ref,
         help_lines: &[
-            "  prikk tree [path] [--ref <ref|block-id>] [--prefix <p>] [--format json]  List the files at a point, with mode, size and encoding; --prefix filters by whole path components, and the replay is whole-tree either way",
+            "  prikk ref complete <ref> [--plan-only]    Finish another adopted key's interrupted publication (RFC 165 R4); --plan-only prints the plan and writes nothing",
         ],
     },
     Command {
-        name: "extract",
-        run: crate::run_extract,
+        name: "bundle",
+        group: Group::Share,
+        summary: "Export, import or check one ref's history as a file",
+        run: crate::run_bundle,
         help_lines: &[
-            "  prikk extract (--ref <ref|block-id>|--claim <claim-id>) <dir> [--allow-full-replay] [--plan-only] [--max-bytes N] [--max-files N] [--format json]  Write the files at a point into a new directory that does not exist yet; anchors only where a writer would (never cat/tree's own anchoring), refusing a point whose nearest admitted snapshot is unreachably far back unless --allow-full-replay is given; --plan-only reports the point's own size and writes nothing; --max-bytes/--max-files refuse the whole point by name before the first byte is written; --claim previews a pending RecognitionClaim instead of a ref or block id",
+            "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
+            "  prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward] [--format json]  Import a bundle as an untrusted received pointer; refuses a rollback, a divergent rewrite, or an unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
+            "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
+            "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
+            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
         ],
     },
     Command {
-        name: "show",
-        run: crate::run_show,
+        name: "archive",
+        group: Group::Share,
+        summary: "Back up, check or import the whole repository",
+        run: crate::run_archive,
         help_lines: &[
-            "  prikk show <block-id|patch-id> [--format json]  Show what a block or patch changed",
+            "  prikk archive export <file> [--format json]  Write a whole-repository archive (PREPO001); refuses an existing file",
+            "  prikk archive verify <file> [--format json]  Check structure, reference closure, and every signature against the archive's own carried material",
+            "  prikk archive import <file> [--adopt] [--allow-non-fast-forward] [--format json]  Land every ref an archive carries; --adopt lands an absent, adopted, verified ref as a real local branch; refuses a landing that is a rollback, diverged, or unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
         ],
     },
     Command {
-        name: "merge-evidence",
-        run: crate::run_merge_evidence,
+        name: "sync",
+        group: Group::Share,
+        summary: "Exchange patches with another repository, as files",
+        run: crate::run_sync,
         help_lines: &[
-            "  prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]  Show read-only merge evidence",
+            "  prikk sync summary --output <file>        Write this repository's PSYNCSU1 sync summary",
+            "  prikk sync compare --summary <file>       Compare local refs against a remote summary",
+            "  prikk sync have <ref> --output <file>     Write a PSYNCHV1 have-list for one ref",
+            "  prikk sync build <ref> --have <file> --output <file> [--force]  Build a PEXCH002 artifact closing the gap",
+            "  note: a built sync artifact contains repository content in the clear -- prikk does not encrypt it; move it only over a channel you trust",
+            "  prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
+            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
+            "  prikk sync pending [--format json]        List held patches named by a held recognition claim and sealed by no held Block",
+            "  note: --format json is sync-pending-v1: each pending patch with the recognition claim(s) naming it and each claim's own signature outcome -- \"invalid\" is an alarm, see commands.md",
+            "  prikk sync seal <ref> --claim <id>        Seal one accepted claim's patches into a block",
+            "  prikk sync seal <ref> --claims <file>     Seal a batch of claims, ordered by parent block first",
+            "  prikk sync tags                           List received tags and their resolution",
+            "  prikk sync adopt-tag <name>               Create a local, receiver-signed tag from a received tag",
+        ],
+    },
+    Command {
+        name: "received",
+        group: Group::Share,
+        summary: "Remove a received ref's pointer; its objects stay",
+        run: crate::run_received,
+        help_lines: &[
+            "  prikk received remove <remotes/…> [--plan-only]  Remove a received ref's own pointer; the objects it reached stay, reported as unreached by verify",
+        ],
+    },
+    Command {
+        name: "trust",
+        group: Group::Trust,
+        summary: "Choose whose maintainer keys this repository trusts",
+        run: crate::run_trust,
+        help_lines: &[
+            "  prikk trust maintainer add --key-id ID --public-key HEX [--format json]  Trust one MAINTAINER key",
+            "  prikk trust maintainer remove --key-id ID Revoke one MAINTAINER key",
+            "  prikk trust maintainer list [--format json]  List every currently adopted key",
+            "  prikk trust maintainer check --key-id ID [--format json]  Whether that id is adopted",
         ],
     },
     Command {
         name: "merge-plan",
+        group: Group::Merge,
+        summary: "Show what a merge would do",
         run: crate::run_merge_plan,
         help_lines: &[
             "  prikk merge-plan --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]  Show a read-only merge plan",
         ],
     },
     Command {
+        name: "merge-evidence",
+        group: Group::Merge,
+        summary: "Show the evidence a merge rests on",
+        run: crate::run_merge_evidence,
+        help_lines: &[
+            "  prikk merge-evidence --baseline-block ID (--left-block ID|--left-ref REF) (--right-block ID|--right-ref REF) [path]  Show read-only merge evidence",
+        ],
+    },
+    Command {
         name: "merge",
+        group: Group::Merge,
+        summary: "Seal a merge that is proven safe",
         run: crate::run_merge,
         help_lines: &[
             "  prikk merge --allow-no-audit --baseline-block ID --into REF --from REF [path]  Seal a proven-confluent merge",
@@ -302,16 +449,22 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "inverse-plan",
+        group: Group::Undo,
+        summary: "Plan a patch that undoes sealed changes",
         run: crate::run_inverse_plan,
         help_lines: &["  prikk inverse-plan [path] [--ref REF]     Plan an unsigned inverse patch"],
     },
     Command {
         name: "rollback-preview",
+        group: Group::Undo,
+        summary: "Preview that undo without writing",
         run: crate::run_rollback_preview,
         help_lines: &["  prikk rollback-preview [path] [--ref REF] Preview non-mutating rollback"],
     },
     Command {
         name: "rollback-draft",
+        group: Group::Undo,
+        summary: "Queue that undo as a patch",
         run: crate::run_rollback_draft,
         help_lines: &[
             "  prikk rollback-draft --append-inverse [path] [--ref REF] -m|--message <message>  Append inverse Patch",
@@ -319,22 +472,17 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "rollback-draft-verify",
+        group: Group::Undo,
+        summary: "Check a queued undo patch",
         run: crate::run_rollback_draft_verify,
         help_lines: &[
             "  prikk rollback-draft-verify [path] [--ref REF] Verify active rollback Patch",
         ],
     },
     Command {
-        name: "worktree-status",
-        run: crate::run_worktree_status,
-        help_lines: &[
-            "  prikk worktree-status [path] [--ref REF] [--format json]  Report changes against the replay baseline",
-            "  note: .prikkignore at the repository root excludes matching paths from the untracked list",
-            "  note: live rename declarations from `prikk mv` are reported here too, both in prose and as a `--format json` field",
-        ],
-    },
-    Command {
         name: "verify",
+        group: Group::Check,
+        summary: "Check the whole repository",
         run: crate::run_verify,
         help_lines: &[
             "  prikk verify [path] [--stop-on-first-error] [--format json]  Verify objects, WAL, refs, and publication trust",
@@ -342,6 +490,8 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "doctor",
+        group: Group::Check,
+        summary: "Diagnose problems, and repair damage on request",
         run: crate::run_doctor,
         help_lines: &[
             "  prikk doctor [path]                       Run health diagnostics",
@@ -361,21 +511,9 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "ref",
-        run: crate::run_ref,
-        help_lines: &[
-            "  prikk ref complete <ref> [--plan-only]    Finish another adopted key's interrupted publication (RFC 165 R4); --plan-only prints the plan and writes nothing",
-        ],
-    },
-    Command {
-        name: "format",
-        run: crate::run_format,
-        help_lines: &[
-            "  prikk format upgrade [path]               Verify, then move a format-6 repository to format 7 in place (explicit; no downgrade)",
-        ],
-    },
-    Command {
         name: "unlock",
+        group: Group::Check,
+        summary: "List held locks, or clear a stale one",
         run: crate::run_unlock,
         help_lines: &[
             "  prikk unlock                              List every currently held lock",
@@ -386,6 +524,8 @@ pub(crate) const COMMANDS: &[Command] = &[
     },
     Command {
         name: "compact",
+        group: Group::Check,
+        summary: "Drop stale index and policy records",
         run: crate::run_compact,
         help_lines: &[
             "  prikk compact --pointer-index|--received-index|--trust-policy|--all [--plan-only]",
@@ -395,29 +535,12 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
-        name: "received",
-        run: crate::run_received,
+        name: "format",
+        group: Group::Check,
+        summary: "Upgrade the repository format in place",
+        run: crate::run_format,
         help_lines: &[
-            "  prikk received remove <remotes/…> [--plan-only]  Remove a received ref's own pointer; the objects it reached stay, reported as unreached by verify",
-        ],
-    },
-    Command {
-        name: "sync",
-        run: crate::run_sync,
-        help_lines: &[
-            "  prikk sync summary --output <file>        Write this repository's PSYNCSU1 sync summary",
-            "  prikk sync compare --summary <file>       Compare local refs against a remote summary",
-            "  prikk sync have <ref> --output <file>     Write a PSYNCHV1 have-list for one ref",
-            "  prikk sync build <ref> --have <file> --output <file> [--force]  Build a PEXCH002 artifact closing the gap",
-            "  note: a built sync artifact contains repository content in the clear -- prikk does not encrypt it; move it only over a channel you trust",
-            "  prikk sync accept <file> [--max-object-bytes N] [--claims-out <file>] [--force]  Accept a PEXCH002 artifact (prints claim ids; optionally writes them)",
-            "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
-            "  prikk sync pending [--format json]        List held patches named by a held recognition claim and sealed by no held Block",
-            "  note: --format json is sync-pending-v1: each pending patch with the recognition claim(s) naming it and each claim's own signature outcome -- \"invalid\" is an alarm, see commands.md",
-            "  prikk sync seal <ref> --claim <id>        Seal one accepted claim's patches into a block",
-            "  prikk sync seal <ref> --claims <file>     Seal a batch of claims, ordered by parent block first",
-            "  prikk sync tags                           List received tags and their resolution",
-            "  prikk sync adopt-tag <name>               Create a local, receiver-signed tag from a received tag",
+            "  prikk format upgrade [path]               Verify, then move a format-6 repository to format 7 in place (explicit; no downgrade)",
         ],
     },
 ];

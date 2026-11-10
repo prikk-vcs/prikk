@@ -365,11 +365,12 @@ fn branch_create_fails_closed_on_surviving_log_with_no_live_pointer() {
 // switch exists, so the help must name it rather than deny it.
 #[test]
 fn branch_help_names_close_and_switch() {
+    // The synopses live in the command's own help since the top-level help became a grouped summary (0.57.0 item 6).
     let out = Command::new(env!("CARGO_BIN_EXE_prikk"))
-        .arg("--help")
+        .args(["branch", "--help"])
         .output()
         .unwrap();
-    ok(&out, "--help");
+    ok(&out, "branch --help");
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("branch"),

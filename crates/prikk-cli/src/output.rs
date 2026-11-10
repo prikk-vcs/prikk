@@ -26,6 +26,8 @@ mod worktree;
 pub(crate) use branch::{BranchListEntry, ReceivedListEntry, print_branch_list_json};
 pub(crate) use bundle_import::print_bundle_import_json;
 pub(crate) use bundle_preview::{print_bundle_preview_json, print_bundle_preview_plain};
+#[cfg(test)]
+pub(crate) use help::help_text;
 pub(crate) use help::{print_command_help, print_help};
 pub(crate) use merge_evidence::{print_merge_evidence, print_merge_plan};
 pub(crate) use patch_plan::print_patch_plan_content_json;

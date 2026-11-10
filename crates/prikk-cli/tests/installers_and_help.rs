@@ -7,6 +7,8 @@
 mod beginners_tutorial;
 #[path = "installers_and_help/dc44_backup_restore_page.rs"]
 mod dc44_backup_restore_page;
+#[path = "installers_and_help/item6_grouped_help_and_prikk_help.rs"]
+mod item6_grouped_help_and_prikk_help;
 #[path = "installers_and_help/rfc116_stage7_cross_platform_artifact.rs"]
 mod rfc116_stage7_cross_platform_artifact;
 #[path = "installers_and_help/rfc121_command_help.rs"]

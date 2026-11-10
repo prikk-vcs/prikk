@@ -124,7 +124,7 @@ before one `seal`.
 Every command accepts `--help` for its own usage:
 
 ```text
-prikk <command> --help
+prikk <command> --help   # or: prikk help <command>
 ```
 
 The full inventory, with exit-code semantics, is the [command surface

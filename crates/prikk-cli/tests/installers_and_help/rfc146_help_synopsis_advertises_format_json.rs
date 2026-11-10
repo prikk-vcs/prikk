@@ -86,12 +86,7 @@ fn parser_accepts_format_json(cwd: &Path, path: &[String]) -> bool {
 
 #[test]
 fn every_parser_that_accepts_format_json_advertises_it_and_vice_versa() {
-    let help = Command::new(env!("CARGO_BIN_EXE_prikk"))
-        .arg("--help")
-        .output()
-        .unwrap();
-    assert!(help.status.success(), "prikk --help must succeed");
-    let help = String::from_utf8_lossy(&help.stdout).into_owned();
+    let help = all_command_help();
 
     // Group by invocation: `checkout` advertises several lines under one parser, and only some of
     // them mention the flag — the question is whether *any* line for that invocation does.
@@ -153,4 +148,35 @@ fn every_parser_that_accepts_format_json_advertises_it_and_vice_versa() {
         "these synopses advertise `--format json` but the parser refuses it: {}",
         missing_from_parser.join(", ")
     );
+}
+
+/// Every command's own help, joined: the top-level help is a grouped summary (0.57.0 item 6), and the invocations it used to list
+/// are in `prikk <command> --help`. The command names come from the top-level help's group lines.
+fn all_command_help() -> String {
+    let top = Command::new(env!("CARGO_BIN_EXE_prikk"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(top.status.success(), "prikk --help must succeed");
+    let top = String::from_utf8_lossy(&top.stdout).into_owned();
+    let names: Vec<&str> = top
+        .lines()
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert!(
+        names.len() > 30,
+        "parsed {} command names from --help",
+        names.len()
+    );
+    let mut all = String::new();
+    for name in names {
+        let output = Command::new(env!("CARGO_BIN_EXE_prikk"))
+            .args([name, "--help"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "prikk {name} --help must succeed");
+        all.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    all
 }

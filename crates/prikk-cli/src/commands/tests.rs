@@ -108,6 +108,11 @@ const DECLARED_DOCUMENTS: &[&str] = &[
 /// only to be re-added under pressure the next time a gap appears.
 const DECLARED_UNDOCUMENTED: &[(&str, &str)] = &[];
 
+/// Words after `prikk` that the documents may use and that are not registry entries: meta-arms handled in `main.rs::run` before
+/// the table is consulted (RFC 118 stage 1: "meta-arms are not commands"). `prikk help [command]` (0.57.0 item 6) is one; `--help`,
+/// `-h` and `--version` start with `-` and never match a token at all.
+const META_ARMS: &[&str] = &["help"];
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -349,7 +354,8 @@ fn rule_a_every_documented_command_names_a_real_registry_entry() {
         for region in code_regions(&text) {
             for token in command_tokens(region) {
                 assert!(
-                    COMMANDS.iter().any(|command| command.name == token),
+                    META_ARMS.contains(&token)
+                        || COMMANDS.iter().any(|command| command.name == token),
                     "{path} documents `prikk {token}`, which is not a real registry command name"
                 );
             }

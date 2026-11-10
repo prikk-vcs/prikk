@@ -9,17 +9,47 @@
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::println;
 
-/// Print top-level help.
-pub(crate) fn print_help(version: &str) {
-    println!("prikk {version}");
-    println!();
-    println!("Usage:");
-    for command in crate::commands::COMMANDS {
-        for line in command.help_lines {
-            println!("{line}");
+/// The documentation's address, printed as the top-level help's last line.
+const DOCS_URL: &str = "https://prikk.org/docs/";
+
+/// The top-level help (0.57.0 item 6): the commands grouped in the order of a day's work, one line each -- the name and the
+/// registry's own `summary`. The full synopses are `prikk <command> --help` (also `prikk help <command>`). Built as text so a test
+/// can read it without a process.
+pub(crate) fn help_text(version: &str) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::new();
+    let _ = writeln!(text, "prikk {version}\n");
+    let _ = writeln!(text, "Usage: prikk <command> [arguments]");
+    let _ = writeln!(
+        text,
+        "       prikk help <command>        (the same as: prikk <command> --help)"
+    );
+    let _ = writeln!(text, "       prikk --version");
+    // The name column is as wide as the longest name, so every summary lines up.
+    let width = crate::commands::COMMANDS
+        .iter()
+        .map(|command| command.name.len())
+        .max()
+        .unwrap_or(0);
+    for group in crate::commands::Group::ALL {
+        let _ = writeln!(text, "\n{}", group.title());
+        for command in crate::commands::COMMANDS
+            .iter()
+            .filter(|command| command.group == group)
+        {
+            let _ = writeln!(text, "  {:<width$}  {}", command.name, command.summary);
         }
     }
-    println!("  prikk --version                           Print version");
+    let _ = writeln!(text, "\nEvery command's arguments: prikk help <command>");
+    let _ = writeln!(text, "Guides and reference: {DOCS_URL}");
+    text
+}
+
+/// Print top-level help.
+pub(crate) fn print_help(version: &str) {
+    for line in help_text(version).lines() {
+        println!("{line}");
+    }
 }
 
 /// Print one command's own `--help`/`-h` output (RFC 121 §2.5) -- its `help_lines` verbatim, the

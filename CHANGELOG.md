@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed — the top-level help is a grouped summary, and `prikk help [command]` works
+
+`prikk`, `prikk --help` and `prikk -h` now print the commands in groups, in the order of a day's work (start; record your work;
+read history and files; branches and tags; share with others; trust; merge; undo sealed work; check and repair), one line each:
+the name and a summary. It was 101 lines, up to 622 columns wide, with every full synopsis; it is about 60 lines, none longer than
+80 columns. **`prikk <command> --help` is unchanged** and carries every synopsis and note. `prikk help <command>` is an exact
+alias of it (the same text and exit code), `prikk help` alone is the top-level help, and `prikk help <unknown>` is the
+unknown-command error; before, `prikk help` failed with "unknown command: help". The groups and summaries are fields of the one
+command table that dispatch uses. A script that read the invocations from the top-level `--help` reads them from each command's own
+`--help` now.
+
 ### Added — `prikk uncommit <patch-id> [--plan-only]` takes back your newest unsealed commit
 
 Promised to inklkunn (2026-10-31, §4: "it acts on a patch named exactly; it has `--plan-only`, and a recovery record so the

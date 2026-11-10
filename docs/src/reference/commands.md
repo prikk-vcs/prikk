@@ -4,11 +4,19 @@ Every command prikk accepts, in one place. This page is an inventory, not a tuto
 own behaviour, refusals, and worked examples live in the [guide](../guide/tutorial.md), and the
 [Git→prikk mapping](git-mapping.md) explains where the vocabulary differs from Git's.
 
-Every command accepts `--help` for its own usage:
+Every command accepts `--help` for its own usage, and `prikk help <command>` is the same thing (one code path: the same
+text and exit code):
 
 ```text
 prikk <command> --help
+prikk help <command>
 ```
+
+`prikk`, `prikk --help`, `prikk -h` and `prikk help` print the top-level help: the commands in groups (start; record your work;
+read history and files; branches and tags; share with others; trust; merge; undo sealed work; check and repair), one line each,
+in under 80 columns. Each command's full synopses are in its own help. `prikk help <unknown>` is the unknown-command error (exit
+2). The groups and each one-line summary are fields of the same command table dispatch uses, so the help cannot list a command
+that does not exist or miss one that does; this page's list below stays a flat inventory of invocations.
 
 ```text
 prikk init [path]

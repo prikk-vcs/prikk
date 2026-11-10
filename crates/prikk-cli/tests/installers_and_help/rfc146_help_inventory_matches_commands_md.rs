@@ -57,12 +57,16 @@ fn help_heads(help: &str) -> BTreeSet<String> {
 /// The inventory block: the fenced list that opens the page. Lines elsewhere on the page mention
 /// commands inside prose and are not claims of inventory membership.
 fn documented_heads(markdown: &str) -> BTreeSet<String> {
-    heads(
+    // `prikk help <command>` (0.57.0 item 6) is a meta-arm, shown in the page's opening example beside `prikk <command> --help`; it
+    // is not an invocation of the command table, so it is not an inventory claim.
+    let mut documented = heads(
         markdown
             .lines()
             .filter(|line| line.starts_with("prikk "))
             .map(str::to_string),
-    )
+    );
+    documented.remove("help");
+    documented
 }
 
 fn commands_md() -> String {
@@ -74,13 +78,35 @@ fn commands_md() -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
 }
 
+/// Every command's own help, joined: the top-level help is a grouped summary (0.57.0 item 6), and the invocations it used to list
+/// are in `prikk <command> --help`. The command names come from the top-level help's group lines.
 fn binary_help() -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_prikk"))
+    let top = Command::new(env!("CARGO_BIN_EXE_prikk"))
         .arg("--help")
         .output()
         .unwrap();
-    assert!(output.status.success(), "prikk --help must succeed");
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    assert!(top.status.success(), "prikk --help must succeed");
+    let top = String::from_utf8_lossy(&top.stdout).into_owned();
+    let names: Vec<&str> = top
+        .lines()
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    assert!(
+        names.len() > 30,
+        "parsed {} command names from --help",
+        names.len()
+    );
+    let mut all = String::new();
+    for name in names {
+        let output = Command::new(env!("CARGO_BIN_EXE_prikk"))
+            .args([name, "--help"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "prikk {name} --help must succeed");
+        all.push_str(&String::from_utf8_lossy(&output.stdout));
+    }
+    all
 }
 
 #[test]

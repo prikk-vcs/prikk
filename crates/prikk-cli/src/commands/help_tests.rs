@@ -42,3 +42,78 @@ fn every_command_has_at_least_one_usage_line_naming_itself() {
         );
     }
 }
+
+// ---- 0.57.0 item 6: the grouped top-level help -----------------------------------------------------------------------
+
+use super::Group;
+
+/// Every group has at least one command, and every command's group is one the help prints. (Each entry has exactly one group by
+/// construction: `group` is a required field of an enum, so a command cannot lack one or spell it wrongly.)
+#[test]
+fn every_group_is_non_empty_and_every_command_is_in_a_printed_group() {
+    for group in Group::ALL {
+        assert!(
+            COMMANDS.iter().any(|command| command.group == group),
+            "the group {:?} has no command, so the help would print an empty heading",
+            group.title()
+        );
+    }
+    for command in COMMANDS {
+        assert!(
+            Group::ALL.contains(&command.group),
+            "`{}`'s group is not in Group::ALL, so the help would never print it",
+            command.name
+        );
+    }
+}
+
+/// The top-level help names every command exactly once, in its group, and no line is longer than 80 columns.
+#[test]
+fn the_top_level_help_lists_every_command_once_within_eighty_columns() {
+    let text = crate::output::help_text("0.0.0");
+    for line in text.lines() {
+        assert!(
+            line.chars().count() <= 80,
+            "{} columns: {line}",
+            line.chars().count()
+        );
+    }
+    for command in COMMANDS {
+        let listed = text
+            .lines()
+            .filter(|line| {
+                line.starts_with("  ")
+                    && !line.starts_with("   ")
+                    && line.split_whitespace().next() == Some(command.name)
+            })
+            .count();
+        assert_eq!(listed, 1, "`{}` is listed {listed} times", command.name);
+    }
+    assert!(text.contains("prikk help <command>") && text.contains("https://prikk.org/docs/"));
+}
+
+/// A summary is one short line: not empty, at most 60 columns, a capital first letter, no full stop. (Whether it is *true* of the
+/// whole command is read by a person against the command's own help: the report lists each beside its source.)
+#[test]
+fn every_summary_is_one_short_line() {
+    for command in COMMANDS {
+        let summary = command.summary;
+        assert!(!summary.is_empty(), "`{}` has no summary", command.name);
+        assert!(
+            summary.chars().count() <= 60,
+            "`{}`'s summary is {} columns",
+            command.name,
+            summary.chars().count()
+        );
+        assert!(
+            !summary.contains('\n') && !summary.ends_with('.'),
+            "`{}`: {summary}",
+            command.name
+        );
+        assert!(
+            summary.chars().next().is_some_and(char::is_uppercase),
+            "`{}`: {summary}",
+            command.name
+        );
+    }
+}
