@@ -15,8 +15,7 @@ curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/install.s
 that platform's release archive and its `.sha256` file from the same release page URLs the manual
 path uses; verifies the checksum with `sha256sum -c` (or `shasum -a 256 -c` on macOS, which has no
 `sha256sum` by default) and **installs nothing if verification fails**; extracts the `prikk` binary
-to `~/.local/bin` (`chmod +x`) and the two licence files to `~/.local/share/licenses/prikk` (see
-[Licences](#licences)); and, if that directory is not already on `PATH`, appends one clearly
+to `~/.local/bin` (`chmod +x`) and the two licence files beside it (see [Licences](#licences)); and, if that directory is not already on `PATH`, appends one clearly
 marked block to your shell's startup file so a later uninstall can find and remove exactly that
 block, and nothing else.
 
@@ -196,9 +195,11 @@ version, its SPDX licence expression, the targets that link it) and reproduces t
 ships. The notices are generated from the dependency graph and checked on every change (`notices-check`, one of the project's
 gates), so a dependency cannot land without them. `prikk` and `prikk-bin` from the AUR install both files under
 `/usr/share/licenses/prikk/`. **The installer scripts install both files too:**
-- `install.sh` puts them in `share/licenses/prikk` beside the install directory when that directory is named `bin` (the default
-  `~/.local/bin` gives `~/.local/share/licenses/prikk`, as `/usr/bin` has `/usr/share/licenses/prikk`), and in
-  `<install directory>/share/licenses/prikk` otherwise; `--prefix` and `PRIKK_INSTALL_DIR` move them with the binary.
+- `install.sh` puts them in `<parent>/share/licenses/prikk` when the install directory is named `bin` **and `<parent>/share` already
+  exists** (the default `~/.local/bin` on an ordinary system gives `~/.local/share/licenses/prikk`, as `/usr/bin` has
+  `/usr/share/licenses/prikk`), and otherwise in `<install directory>/share/licenses/prikk`. The rule is chosen so that an uninstall
+  can undo the install exactly: it never creates a directory outside the one you named unless `share` was already there, so
+  `--prefix ~/bin` makes no `~/share`. `--prefix` and `PRIKK_INSTALL_DIR` move them with the binary.
 - `install.ps1` puts them in the install folder beside `prikk.exe`.
 - An archive from a release before 0.57.0 has neither file; the installer says so and still installs the binary.
 
@@ -341,7 +342,11 @@ walks through your first commit and seal, key setup included, using disposable p
 ## Uninstalling
 
 Prikk places nothing outside its own binary, its two licence files (see [Licences](#licences)) and, inside each repository it
-manages, a `.prikk` directory. `uninstall.sh` and `uninstall.ps1` remove exactly the binary, those two files (and the
-`share/licenses/prikk` directory the installer created, only if it is then empty), and what the installer added to `PATH`;
-pass the same `--prefix` or `PRIKK_INSTALL_DIR` you installed with. By hand: delete the binary and the licence files, and remove
-`.prikk` from any repository whose history you no longer want tracked — there is nothing else to clean up.
+manages, a `.prikk` directory. `uninstall.sh` and `uninstall.ps1` (pass the same `--prefix` or `PRIKK_INSTALL_DIR` you installed with)
+remove exactly the binary, those two files, and what the installer added to `PATH`. **After an install and an uninstall the file system
+is as it was**, with one exception stated here: the install directory itself, which the installer makes if it is missing, is left
+(`install.ps1`'s folder is removed when empty). The directories the installer made for the licence files go too, each only when
+empty and only after the one below it went: `prikk`, then `licenses`, and, when they were put inside the install directory, `share`.
+The `share` that existed before is never removed. One corner the script cannot see: a `licenses` directory that was already there and
+empty is removed with `prikk`. By hand: delete the binary and the licence files, and remove `.prikk` from any repository whose history
+you no longer want tracked.

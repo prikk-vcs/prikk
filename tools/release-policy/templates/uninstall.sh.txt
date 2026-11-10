@@ -79,25 +79,36 @@ else
   echo "prikk-uninstall: no binary found at $binary_path (nothing to remove there)"
 fi
 
-# 0.57.0 item 5b: the two licence files install.sh put under share/licenses/prikk, found the same way
-# (a `bin` directory has its share/ beside it; any other directory holds its own), and nothing else
-# in that directory. The directory itself goes only if it is then empty; the share/licenses above it
-# is left, since other software may use it.
-case "$(basename "$install_dir")" in
-  bin) licence_dir="$(dirname "$install_dir")/share/licenses/prikk" ;;
-  *) licence_dir="$install_dir/share/licenses/prikk" ;;
-esac
+# 0.57.0 item 5b/5c: the two licence files install.sh put under share/licenses/prikk, and nothing else
+# in that directory. install.sh chose one of two places (see its comment), so both are looked at:
+#   - beside a `bin` install directory: <parent>/share/licenses/prikk. After the files, `prikk` goes
+#     if empty, then `licenses` if that is then empty; `share` is never removed (it existed first);
+#   - inside the install directory: <install dir>/share/licenses/prikk, then `licenses`, then `share`,
+#     each only if empty.
+# A directory is removed only after the one below it was removed here, so an empty `licenses` or `share`
+# that belongs to something else, and was never ours to open, is left alone.
 removed_licences=0
-for licence_file in LICENSE THIRD-PARTY-NOTICES; do
-  if [ -f "$licence_dir/$licence_file" ]; then
-    rm -f "$licence_dir/$licence_file"
-    removed_licences=1
-    echo "prikk-uninstall: removed $licence_dir/$licence_file"
+remove_licences_from() {
+  licence_dir="$1"
+  top_level="$2"
+  for licence_file in LICENSE THIRD-PARTY-NOTICES; do
+    if [ -f "$licence_dir/$licence_file" ]; then
+      rm -f "$licence_dir/$licence_file"
+      removed_licences=1
+      echo "prikk-uninstall: removed $licence_dir/$licence_file"
+    fi
+  done
+  if [ -d "$licence_dir" ] && rmdir "$licence_dir" 2>/dev/null; then
+    licenses_dir="$(dirname "$licence_dir")"
+    if rmdir "$licenses_dir" 2>/dev/null && [ "$top_level" = "inside" ]; then
+      rmdir "$(dirname "$licenses_dir")" 2>/dev/null || true
+    fi
   fi
-done
-if [ -d "$licence_dir" ]; then
-  rmdir "$licence_dir" 2>/dev/null || true
+}
+if [ "$(basename "$install_dir")" = "bin" ] && [ -d "$(dirname "$install_dir")/share" ]; then
+  remove_licences_from "$(dirname "$install_dir")/share/licenses/prikk" beside
 fi
+remove_licences_from "$install_dir/share/licenses/prikk" inside
 
 removed_path_entry=0
 for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do

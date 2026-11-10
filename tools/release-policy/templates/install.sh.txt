@@ -138,15 +138,20 @@ chmod +x "$install_dir/prikk"
 
 echo "prikk-install: installed to $install_dir/prikk"
 
-# 0.57.0 item 5b: the licence files travel with the binary. They go to share/licenses/prikk beside
-# the install prefix -- a binary directory named `bin` has its `share` next to it (the default
-# $HOME/.local/bin puts them in $HOME/.local/share/licenses/prikk, as /usr/bin does /usr/share/licenses/prikk);
-# any other directory holds its own share/. uninstall.sh derives the same directory from the same
-# --prefix / PRIKK_INSTALL_DIR and removes exactly these two files.
-case "$(basename "$install_dir")" in
-  bin) licence_dir="$(dirname "$install_dir")/share/licenses/prikk" ;;
-  *) licence_dir="$install_dir/share/licenses/prikk" ;;
-esac
+# 0.57.0 item 5b/5c: the licence files travel with the binary. Where they go is chosen so that
+# uninstall.sh can leave the file system as it found it:
+#   - beside the install directory, in <parent>/share/licenses/prikk, when the directory is named `bin`
+#     and <parent>/share already exists (the default $HOME/.local/bin on an ordinary system: this is
+#     where /usr/bin has /usr/share/licenses/prikk). Only `prikk` (and `licenses`, if it is missing)
+#     is created, both removed again when empty; `share` existed first and is never removed;
+#   - otherwise inside the directory the user named, in <install dir>/share/licenses/prikk, so that
+#     nothing is created outside it (`--prefix ~/bin` must not make ~/share). All three levels are
+#     ours and are removed again, innermost first, when empty.
+# uninstall.sh looks in both places, from the same --prefix / PRIKK_INSTALL_DIR.
+licence_dir="$install_dir/share/licenses/prikk"
+if [ "$(basename "$install_dir")" = "bin" ] && [ -d "$(dirname "$install_dir")/share" ]; then
+  licence_dir="$(dirname "$install_dir")/share/licenses/prikk"
+fi
 for licence_file in LICENSE THIRD-PARTY-NOTICES; do
   if [ -f "$work_dir/$licence_file" ]; then
     mkdir -p "$licence_dir"

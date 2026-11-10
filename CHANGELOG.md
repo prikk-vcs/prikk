@@ -16,10 +16,12 @@ file (naming it). It runs in the local gates and in CI's `policy` job. The three
 ### Added — the installers put `LICENSE` and `THIRD-PARTY-NOTICES` on disk, and the uninstallers remove exactly them
 
 `install.sh` and `install.ps1` used to move only `prikk` out of the archive and delete the rest, so an installer user had neither licence
-file. `install.sh` now installs both into `share/licenses/prikk` beside the install directory when it is named `bin` (the default
-`~/.local/bin` gives `~/.local/share/licenses/prikk`; any other `--prefix` or `PRIKK_INSTALL_DIR` holds its own `share/licenses/prikk`);
+file. `install.sh` now installs both into `<parent>/share/licenses/prikk` when the install directory is named `bin` and `<parent>/share` already
+exists (the default `~/.local/bin` on an ordinary system gives `~/.local/share/licenses/prikk`), and otherwise into
+`<install directory>/share/licenses/prikk`, so that `--prefix ~/bin` makes no `~/share`;
 `install.ps1` installs them beside `prikk.exe`. `uninstall.sh` and `uninstall.ps1` remove those two files and nothing else, and the
-directory the installer created only when it is then empty. An archive from a release before 0.57.0 has neither file: the installer
+directories the installer made for them, each only when empty: install then uninstall leaves the file system as it was (the install
+directory itself, which the installer makes if missing, stays on Unix). An archive from a release before 0.57.0 has neither file: the installer
 says so and installs the binary. See [Install](docs/src/guide/install.md#licences).
 
 ### Changed — the top-level help is a grouped summary, and `prikk help [command]` works

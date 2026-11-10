@@ -343,6 +343,35 @@ try {
   Remove-Item -Path $installDirA2 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Scenario A2b (0.57.0 item 5c): install, then uninstall, leaves the file system as it was. The tree under the scratch root is
+# listed before the install and after the uninstall and must be identical: the install folder (made by install.ps1) and the two
+# licence files (put in it) are all gone, and nothing else was made or removed.
+Write-Section "Scenario A2b: install then uninstall leaves the file system as it was"
+
+$installDirA2b = Join-Path $scratchRoot "install-a2b"
+$treeBeforeA2b = (@(Get-ChildItem -Path $scratchRoot -Recurse -Force | ForEach-Object { $_.FullName }) | Sort-Object) -join "|"
+$env:PRIKK_INSTALL_DIR = $installDirA2b
+$env:PRIKK_INSTALL_BASE_URL = "http://localhost:18098"
+$serverA2b = Start-StaticFileServer -Directory $distDirResolved -Port 18098
+try {
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "A2b: install.ps1 exited 0"
+  Assert-True (Test-Path -Path (Join-Path $installDirA2b "THIRD-PARTY-NOTICES") -PathType Leaf) "A2b: the licence files were installed"
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $perturbedUninstallPathA2
+  $treeRedA2b = (@(Get-ChildItem -Path $scratchRoot -Recurse -Force | ForEach-Object { $_.FullName }) | Sort-Object) -join "|"
+  Assert-True (-not ($treeRedA2b -ceq $treeBeforeA2b)) "A2b RED: the perturbed uninstall.ps1 (licence step emptied) leaves the tree changed -- the control can fail"
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "A2b: uninstall.ps1 exited 0"
+  $treeAfterA2b = (@(Get-ChildItem -Path $scratchRoot -Recurse -Force | ForEach-Object { $_.FullName }) | Sort-Object) -join "|"
+  Assert-True ($treeAfterA2b -ceq $treeBeforeA2b) "A2b: the tree under the scratch root is identical after install then uninstall"
+} finally {
+  Stop-StaticFileServer $serverA2b
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  Remove-UserPathEntryIfPresent $installDirA2b
+  Remove-Item -Path $installDirA2b -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # ---------------------------------------------------------------------------
 # Control 1: a corrupted zip must install nothing. Shown red first: a perturbed install.ps1 with
 # the checksum comparison forced to "always matches" is run against the same corrupted zip, and

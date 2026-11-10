@@ -388,9 +388,10 @@ fn uninstall_powershell_refuses_any_argument_in_its_generated_text() {
     );
 }
 
-// 0.57.0 item 5b: install.sh and uninstall.sh carry the licence files. Like the uninstall tests above, these run the real generated
-// scripts with `sh` against scratch directories -- install.sh against a fixture release served from a `file://` URL (its own
-// `PRIKK_INSTALL_BASE_URL` seam), with a real archive and the checksum line it verifies. Unix-only, for the same reason.
+// 0.57.0 items 5b and 5c: install.sh and uninstall.sh carry the licence files, and install followed by uninstall leaves the file
+// system as it was. Like the uninstall tests above, these run the real generated scripts with `sh` against scratch directories --
+// install.sh against a fixture release served from a `file://` URL (its own `PRIKK_INSTALL_BASE_URL` seam), with a real archive and
+// the checksum line it verifies. Unix-only, for the same reason.
 #[cfg(unix)]
 mod licence_files_execution {
     use super::generate;
@@ -456,11 +457,14 @@ mod licence_files_execution {
         (dist, path)
     }
 
-    fn run_install(script: &Path, release: &Path, home: &Path, prefix: &Path) -> Output {
-        Command::new("sh")
-            .arg(script)
-            .arg("--prefix")
-            .arg(prefix)
+    /// `prefix` of `None` is the default (`$HOME/.local/bin`): neither the flag nor the variable is given.
+    fn run_install(script: &Path, release: &Path, home: &Path, prefix: Option<&Path>) -> Output {
+        let mut command = Command::new("sh");
+        command.arg(script);
+        if let Some(prefix) = prefix {
+            command.arg("--prefix").arg(prefix);
+        }
+        command
             .env("HOME", home)
             .env_remove("SHELL")
             .env_remove("PRIKK_INSTALL_DIR")
@@ -472,11 +476,13 @@ mod licence_files_execution {
             .unwrap()
     }
 
-    fn run_uninstall(script: &Path, home: &Path, prefix: &Path) -> Output {
-        Command::new("sh")
-            .arg(script)
-            .arg("--prefix")
-            .arg(prefix)
+    fn run_uninstall(script: &Path, home: &Path, prefix: Option<&Path>) -> Output {
+        let mut command = Command::new("sh");
+        command.arg(script);
+        if let Some(prefix) = prefix {
+            command.arg("--prefix").arg(prefix);
+        }
+        command
             .env("HOME", home)
             .env_remove("PRIKK_INSTALL_DIR")
             .output()
@@ -491,10 +497,33 @@ mod licence_files_execution {
         )
     }
 
-    /// Where the licences land for a `bin` directory: `share/licenses/prikk` beside it (as /usr/bin has /usr/share/licenses/prikk).
-    #[test]
-    fn a_bin_prefix_puts_the_licences_in_the_share_directory_beside_it_and_uninstall_removes_exactly_them()
-     {
+    /// Every path under `root` (directories marked), sorted: the file system as a comparison sees it.
+    fn tree(root: &Path) -> Vec<String> {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+            let mut entries: Vec<_> = fs::read_dir(dir).unwrap().flatten().collect();
+            entries.sort_by_key(std::fs::DirEntry::file_name);
+            for entry in entries {
+                let path = entry.path();
+                let relative = path.strip_prefix(root).unwrap().display().to_string();
+                if entry.file_type().unwrap().is_dir() {
+                    out.push(format!("{relative}/"));
+                    walk(&path, root, out);
+                } else {
+                    out.push(relative);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out
+    }
+
+    /// **The 5c property**: install, then uninstall, leaves the tree as it was. `build` makes the directories the user already had
+    /// under the scratch root `home`, and returns the prefix to use (`None` for the default).
+    fn install_then_uninstall_leaves_the_tree(
+        build: impl Fn(&Path) -> Option<PathBuf>,
+        what: &str,
+    ) {
         let Some(target) = host_target().filter(|_| curl_exists()) else {
             return;
         };
@@ -502,32 +531,118 @@ mod licence_files_execution {
         let (_i, install) = generated("install.sh");
         let (_u, uninstall) = generated("uninstall.sh");
         let home = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let prefix = root.path().join("bin");
+        let prefix = build(home.path());
+        let before = tree(home.path());
 
-        let output = run_install(&install, release.path(), home.path(), &prefix);
+        let output = run_install(&install, release.path(), home.path(), prefix.as_deref());
+        assert!(output.status.success(), "{what}: {}", stdout(&output));
+        let during = tree(home.path());
+        assert!(
+            during
+                .iter()
+                .any(|path| path.ends_with("licenses/prikk/LICENSE")),
+            "{what}: the licences are installed: {during:?}"
+        );
+        let output = run_uninstall(&uninstall, home.path(), prefix.as_deref());
+        assert!(output.status.success(), "{what}: {}", stdout(&output));
+        assert_eq!(
+            tree(home.path()),
+            before,
+            "{what}: install then uninstall leaves the file system as it was"
+        );
+    }
+
+    #[test]
+    fn install_then_uninstall_leaves_the_tree_as_it_was_for_every_prefix_shape() {
+        // The default, on an ordinary system: ~/.local/share exists (licenses does not), so the licences go beside the binary directory.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join(".local/bin")).unwrap();
+                fs::create_dir_all(home.join(".local/share")).unwrap();
+                None
+            },
+            "default with ~/.local/share",
+        );
+        // The default where there is no share/: the licences stay inside ~/.local/bin, and ~/.local/share is never made.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join(".local/bin")).unwrap();
+                None
+            },
+            "default without share",
+        );
+        // A bin prefix whose parent has share/ and already has a licenses/ holding another program's.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join("opt/bin")).unwrap();
+                fs::create_dir_all(home.join("opt/share/licenses/other")).unwrap();
+                fs::write(home.join("opt/share/licenses/other/LICENSE"), "other").unwrap();
+                Some(home.join("opt/bin"))
+            },
+            "bin prefix, parent has share/licenses",
+        );
+        // `~/bin`: the parent (the home directory) has no share/, and ~/share must not appear.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join("bin")).unwrap();
+                Some(home.join("bin"))
+            },
+            "~/bin",
+        );
+        // A prefix that is not named bin.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join("tools")).unwrap();
+                Some(home.join("tools"))
+            },
+            "non-bin prefix",
+        );
+        // A bin prefix whose parent has share/ but no licenses/: `licenses` is made for the install and removed with it.
+        install_then_uninstall_leaves_the_tree(
+            |home| {
+                fs::create_dir_all(home.join("usr/bin")).unwrap();
+                fs::create_dir_all(home.join("usr/share/man")).unwrap();
+                Some(home.join("usr/bin"))
+            },
+            "bin prefix, parent has share without licenses",
+        );
+    }
+
+    /// Where the licences land, and that a file nobody named, and another program's licences, are left alone.
+    #[test]
+    fn the_licences_land_where_the_rule_says_and_uninstall_removes_exactly_them() {
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            return;
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let (_u, uninstall) = generated("uninstall.sh");
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("root");
+        let prefix = root.join("bin");
+        fs::create_dir_all(&prefix).unwrap();
+        fs::create_dir_all(root.join("share")).unwrap();
+
+        // Beside: <parent>/share exists.
+        let output = run_install(&install, release.path(), home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
-        let licences = root.path().join("share/licenses/prikk");
+        let licences = root.join("share/licenses/prikk");
         for name in FILES {
             assert_eq!(
                 fs::read_to_string(licences.join(name)).unwrap(),
                 format!("text of {name}\n")
             );
         }
-        assert!(prefix.join("prikk").is_file());
         assert_eq!(
             fs::read_dir(&prefix).unwrap().count(),
             1,
-            "the binary directory holds the binary and nothing else"
+            "the binary directory holds the binary only"
         );
-
-        // A file nobody named, in the same directory, and a sibling program's licences above it.
         fs::write(licences.join("NOTES"), "mine").unwrap();
-        let sibling = root.path().join("share/licenses/other");
+        let sibling = root.join("share/licenses/other");
         fs::create_dir_all(&sibling).unwrap();
         fs::write(sibling.join("LICENSE"), "other").unwrap();
-
-        let output = run_uninstall(&uninstall, home.path(), &prefix);
+        let output = run_uninstall(&uninstall, home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         assert!(!prefix.join("prikk").exists());
         for name in FILES {
@@ -535,58 +650,32 @@ mod licence_files_execution {
         }
         assert!(
             licences.join("NOTES").is_file(),
-            "a file it did not name stays"
-        );
-        assert!(
-            licences.is_dir(),
-            "and so does the directory that still holds it"
+            "a file it did not name stays, and keeps its directory"
         );
         assert!(
             sibling.join("LICENSE").is_file(),
             "another program's licences are untouched"
         );
+        assert!(root.join("share/licenses").is_dir());
 
-        // With nothing else in it, the directory it created goes too.
-        fs::remove_file(licences.join("NOTES")).unwrap();
-        let output = run_install(&install, release.path(), home.path(), &prefix);
-        assert!(output.status.success(), "{}", stdout(&output));
-        let output = run_uninstall(&uninstall, home.path(), &prefix);
-        assert!(output.status.success(), "{}", stdout(&output));
-        assert!(
-            !licences.exists(),
-            "the directory install created is removed when empty"
-        );
-        assert!(
-            root.path().join("share/licenses").is_dir(),
-            "its parents stay"
-        );
-    }
-
-    /// A prefix that is not named `bin` holds its own `share/licenses/prikk`.
-    #[test]
-    fn any_other_prefix_holds_its_own_share_directory() {
-        let Some(target) = host_target().filter(|_| curl_exists()) else {
-            return;
-        };
-        let release = fixture_release(target, &FILES);
-        let (_i, install) = generated("install.sh");
-        let (_u, uninstall) = generated("uninstall.sh");
-        let home = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let prefix = root.path().join("tools");
-
-        let output = run_install(&install, release.path(), home.path(), &prefix);
+        // Inside: the parent has no share/, so the named directory holds its own.
+        let other_root = home.path().join("other-root");
+        let other_prefix = other_root.join("bin");
+        fs::create_dir_all(&other_prefix).unwrap();
+        let output = run_install(&install, release.path(), home.path(), Some(&other_prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         for name in FILES {
-            assert!(prefix.join("share/licenses/prikk").join(name).is_file());
+            assert!(
+                other_prefix
+                    .join("share/licenses/prikk")
+                    .join(name)
+                    .is_file()
+            );
         }
         assert!(
-            !root.path().join("share").exists(),
+            !other_root.join("share").exists(),
             "nothing is written outside the named directory"
         );
-        let output = run_uninstall(&uninstall, home.path(), &prefix);
-        assert!(output.status.success(), "{}", stdout(&output));
-        assert!(!prefix.join("share/licenses/prikk").exists());
     }
 
     /// An archive from before 0.57.0 carries neither file: the install still succeeds and says so.
@@ -598,12 +687,19 @@ mod licence_files_execution {
         let release = fixture_release(target, &[]);
         let (_i, install) = generated("install.sh");
         let home = tempfile::tempdir().unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let prefix = root.path().join("bin");
-        let output = run_install(&install, release.path(), home.path(), &prefix);
+        let root = home.path().join("root");
+        let prefix = root.join("bin");
+        fs::create_dir_all(&prefix).unwrap();
+        let before = tree(home.path());
+        let output = run_install(&install, release.path(), home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         assert!(prefix.join("prikk").is_file());
-        assert!(!root.path().join("share").exists());
+        let after = tree(home.path());
+        assert_eq!(
+            after.len(),
+            before.len() + 1,
+            "only the binary is added: {after:?}"
+        );
         assert!(
             stdout(&output).contains("this archive has no LICENSE"),
             "{}",
@@ -611,7 +707,7 @@ mod licence_files_execution {
         );
     }
 
-    /// Controls: the same tests fail on a script with the licence step taken out.
+    /// Controls: the tree-equality property fails on scripts with the cleanup taken out, and the placement on scripts without it.
     #[test]
     fn the_controls_fail_on_scripts_without_the_licence_steps() {
         let Some(target) = host_target().filter(|_| curl_exists()) else {
@@ -619,36 +715,36 @@ mod licence_files_execution {
         };
         let release = fixture_release(target, &FILES);
         let home = tempfile::tempdir().unwrap();
+        let anchor = "for licence_file in LICENSE THIRD-PARTY-NOTICES; do";
 
-        // install.sh without the move of the licence files installs none.
+        // install.sh without the licence loop installs none.
         let (dir, install) = generated("install.sh");
         let text = fs::read_to_string(&install).unwrap();
-        let anchor = "for licence_file in LICENSE THIRD-PARTY-NOTICES; do";
         assert!(text.contains(anchor));
         let perturbed = dir.path().join("install-perturbed.sh");
         fs::write(&perturbed, text.replace(anchor, "for licence_file in; do")).unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let prefix = root.path().join("bin");
-        let output = run_install(&perturbed, release.path(), home.path(), &prefix);
+        let prefix = home.path().join("root/bin");
+        fs::create_dir_all(&prefix).unwrap();
+        let output = run_install(&perturbed, release.path(), home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         assert!(
-            !root.path().join("share").exists(),
+            !prefix.join("share").exists() && !home.path().join("root/share").exists(),
             "RED: the perturbed install.sh installs no licence file"
         );
 
         // uninstall.sh without the removal leaves them.
         let (_i, install) = generated("install.sh");
-        let output = run_install(&install, release.path(), home.path(), &prefix);
+        let output = run_install(&install, release.path(), home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         let (udir, uninstall) = generated("uninstall.sh");
         let text = fs::read_to_string(&uninstall).unwrap();
         assert!(text.contains(anchor));
         let perturbed = udir.path().join("uninstall-perturbed.sh");
         fs::write(&perturbed, text.replace(anchor, "for licence_file in; do")).unwrap();
-        let output = run_uninstall(&perturbed, home.path(), &prefix);
+        let output = run_uninstall(&perturbed, home.path(), Some(&prefix));
         assert!(output.status.success(), "{}", stdout(&output));
         assert!(
-            root.path()
+            prefix
                 .join("share/licenses/prikk/THIRD-PARTY-NOTICES")
                 .is_file(),
             "RED: the perturbed uninstall.sh leaves the licence files"
