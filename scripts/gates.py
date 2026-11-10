@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The 14 local gates (`rfcs/EXECUTION-ORDER.md` §6 rule 9), run as one script (0.49.0 step 5, D8).
+"""The 15 local gates (`rfcs/EXECUTION-ORDER.md` §6 rule 9), run as one script (0.49.0 step 5, D8).
 
 Not a shell script. This repository's own `release-policy boundary-check`/`reference-check` scan every
 `.sh`/`.yml`/`.yaml` file under `.github`, `scripts`, and `release` against a closed, line-based command
@@ -73,6 +73,13 @@ GATES = [
         ["cargo", "run", "--locked", "-p", "prikk-release-policy", "--", "size-check"],
         None,
     ),
+    # 0.57.0 item 5: THIRD-PARTY-NOTICES is regenerated from the dependency graph and compared; a dependency
+    # change cannot land without its notices, and a linked crate that ships no licence file fails by name.
+    (
+        "notices-check",
+        ["cargo", "run", "--locked", "-p", "prikk-release-policy", "--", "notices-check"],
+        None,
+    ),
     (
         "clippy",
         [
@@ -133,7 +140,7 @@ GATES = [
 ]
 
 # RFC 160 §9 R1: every local gate, test, probe and perturbation runs under an R1 cgroup scope with a
-# memory ceiling and a timeout. The ceiling and timeout are shared across all 14 rather than tuned per
+# memory ceiling and a timeout. The ceiling and timeout are shared across all 15 rather than tuned per
 # gate -- the slowest (a from-scratch MSRV toolchain build, or the cross-target clippy checks) still
 # finishes well inside it, and a single shared number is one thing to justify, not fourteen.
 R1_MEMORY_MAX = "8G"
@@ -207,7 +214,7 @@ def run_gate(name, argv, env_overrides, tmpdir):
 
 
 # 0.52.0 step 1 Part B, item 2: the only argument this script understands. An unrecognized one
-# (a typo, or `--only <gate-name>`, which Part W's own report found silently ran the full 14-gate
+# (a typo, or `--only <gate-name>`, which Part W's own report found silently ran the full 15-gate
 # suite anyway) used to be ignored outright by `main`'s own `if "--list" in sys.argv[1:]:` check,
 # which inspects argv for one known flag and never objects to anything else present. Refused instead,
 # by name, at exit code 2 -- the same "bad usage" code `prikk`'s own CLI uses for an unrecognized

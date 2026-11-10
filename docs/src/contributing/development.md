@@ -31,7 +31,7 @@ scanner (`tools/release-policy/src/command_scan/`) has no model of shell control
 exit codes) cannot be expressed as a `.sh` file without being read as a wall of unclassified
 commands under that scanner's own, deliberately simple grammar.
 
-The 14 gates, verbatim:
+The 15 gates, verbatim:
 
 ```sh
 cargo fmt --all -- --check
@@ -46,14 +46,25 @@ cargo run --locked -p prikk-release-policy -- check
 cargo run --locked -p prikk-release-policy -- boundary-check
 cargo run --locked -p prikk-release-policy -- reference-check
 cargo run --locked -p prikk-release-policy -- size-check
+cargo run --locked -p prikk-release-policy -- notices-check
 cargo clippy --workspace --all-targets --all-features --locked --target x86_64-pc-windows-gnu -- -D warnings
 cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
 ```
 
+### `notices-check`
+
+`THIRD-PARTY-NOTICES`, at the repository root, is **generated** (`cargo run -p prikk-release-policy -- notices-generate`) from the
+resolved graph: every crate linked into the `prikk` binary on any of the four release targets (normal dependencies only; no
+proc-macro, build or development crates; not the workspace's own crates), with its SPDX expression, the targets that link it, and
+the full text of each licence file its published package ships. `notices-check` regenerates it and fails when the committed file
+differs, so changing a dependency means regenerating and committing the notices in the same change. It also fails, naming the
+crate, when a linked crate's package ships no licence file: there is no fallback text. The same file is copied into every release
+archive and installed by both AUR packages.
+
 ### The cross-target rows
 
 The last two gates above (Windows and macOS `clippy`) run every time now, not only when a change
-touches `#[cfg(target_os)]`-gated code: running them always costs little next to the other twelve,
+touches `#[cfg(target_os)]`-gated code: running them always costs little next to the other thirteen,
 and making them conditional already let a Windows failure through twice.
 
 They exist because "touching cfg-gated code" is broader than adding a `#[cfg(target_os)]` line

@@ -186,6 +186,15 @@ paru -S prikk   # or: yay -S prikk
 does not verify never reaches `cargo build`. That check accepts a signature only from a fingerprint
 actually listed in the PKGBUILD's own `validpgpkeys` — importing the wrong key cannot pass it.
 
+## Licences
+
+Prikk is licensed under the Apache License 2.0. **Every release archive carries two licence files beside the binary:**
+`LICENSE` (prikk's own) and `THIRD-PARTY-NOTICES`, which names each crate linked into the binary on any release target (its
+version, its SPDX licence expression, the targets that link it) and reproduces the full text of each licence file that crate
+ships. The notices are generated from the dependency graph and checked on every change (`notices-check`, one of the project's
+gates), so a dependency cannot land without them. `prikk` and `prikk-bin` from the AUR install both files under
+`/usr/share/licenses/prikk/`. The installer scripts install the binary only; the archives they download hold the licence files.
+
 ## Verify the checksum
 
 Every downloaded release archive ships beside a `.sha256` file recording its SHA-256 digest —

@@ -5,6 +5,7 @@ use crate::boundary;
 use crate::ci_status_check;
 use crate::error::{Error, Result};
 use crate::installer;
+use crate::notices;
 use crate::oracle;
 use crate::policy;
 use crate::reference;
@@ -21,6 +22,9 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         "boundary-check" => boundary_check(&root, rest),
         "reference-check" => reference_check(&root, rest),
         "size-check" => size_check(&root, rest),
+        // 0.57.0 item 5: the third-party notices, regenerated and compared (the gate), or rewritten.
+        "notices-check" if rest.is_empty() => notices::check(&root),
+        "notices-generate" if rest.is_empty() => notices::write(&root),
         "produce-release-evidence" => produce_release_evidence_command(&root, rest),
         "release-notes" => release_notes_command(&root, rest),
         "generate-installer" => generate_installer_command(rest),
@@ -215,5 +219,5 @@ fn repository_root() -> Result<PathBuf> {
 }
 
 fn usage() -> &'static str {
-    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check|size-check> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>\n       prikk-release-policy generate-aur <tag> <dist-dir>"
+    "usage: prikk-release-policy <check|oracle-check|boundary-check|reference-check|size-check|notices-check|notices-generate> [--format json] [--self-test]\n       prikk-release-policy boundary-check --graph\n       prikk-release-policy produce-release-evidence --observations <path> [--prior <path> --expect-prior-sha256 <hex>] [--out <path>]\n       prikk-release-policy release-notes <tag> <dist-dir>\n       prikk-release-policy generate-installer <dist-dir>\n       prikk-release-policy generate-aur <tag> <dist-dir>"
 }

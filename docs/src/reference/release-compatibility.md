@@ -200,7 +200,7 @@ untagged build is a development build even when `prikk --version` equals the lat
 ## How prikk releases
 
 A release is **a theme delivered**, not a date reached: the owner authorizes a cut and names its theme,
-and `main` is the next release in progress — every commit on it has passed the fourteen local gates and
+and `main` is the next release in progress — every commit on it has passed the fifteen local gates and
 CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/152-how-prikk-releases.md)):
 
 1. **Readiness.** The dev team checks every `--help` synopsis and description against the binary, the
@@ -209,7 +209,7 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    feature that runs against any `prikk` binary. Findings are fixed as their own commits. The release
    commit is exactly three files: the version and its pins, the lockfile's member versions, and the
    CHANGELOG heading dated the day it is prepared.
-2. **Review.** The architect reviews the sweep and the commit, runs the fourteen gates on that exact
+2. **Review.** The architect reviews the sweep and the commit, runs the fifteen gates on that exact
    commit, and runs the smoke script against a release build of it.
 3. **Push, then CI green** on every job, including the Windows and macOS suites — the only place
    platform code runs.
@@ -277,9 +277,8 @@ integrity of transport. Whatever you obtain, verify its content with `prikk veri
 Run `cargo run --locked -p prikk-release-policy -- check` from the repository root to execute the
 release-evidence schema and sequence fixture tables. It asserts date-time formats, rejects unknown
 schema assertions, fails when computed validity differs from a fixture's expected outcome, and leaves
-the worktree unchanged. It is one of the fourteen gates every candidate runs locally
-(`rfcs/EXECUTION-ORDER.md` §6 rule 9), and CI's `policy` job runs it with the other three
-release-policy gates on every push.
+the worktree unchanged. It is one of the fifteen gates every candidate runs locally
+(`rfcs/EXECUTION-ORDER.md` §6 rule 9), and CI's `policy` job runs it with the other release-policy gates on every push.
 
 Every review and release record states the commands actually observed, and what was unavailable or
 inapplicable. Nothing — `cargo audit`, registry publication, a GitHub Release, Pages — is reported as

@@ -278,8 +278,8 @@ fn dc70_file_utility_inert_heads_tolerate_any_arguments_including_dynamic_ones()
 #[test]
 fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
     for command in [
-        "tar -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk LICENSE",
-        "tar -C stage -czf dist/prikk-aarch64-unknown-linux-gnu.tar.gz prikk LICENSE",
+        "tar -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk LICENSE THIRD-PARTY-NOTICES",
+        "tar -C stage -czf dist/prikk-aarch64-unknown-linux-gnu.tar.gz prikk LICENSE THIRD-PARTY-NOTICES",
         "rustc -vV >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt",
         "rustc -vV >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt",
         "gh release create \"$TAG\" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.zip dist/*.zip.sha256 dist/*.build-info.txt dist/*.sh dist/*.sh.sha256 dist/*.ps1 dist/*.ps1.sha256 --repo prikk-vcs/prikk --title \"$TAG\" --notes-file release-notes.md",
@@ -291,6 +291,9 @@ fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
     }
 
     for command in [
+        // 0.57.0 item 5: an archive that leaves the notices out is no longer the accepted procedure.
+        "tar -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk LICENSE",
+        "tar -C stage -czf dist/prikk-aarch64-apple-darwin.tar.gz prikk LICENSE",
         "tar -C stage -czf \"dist/${asset}.tar.gz\" prikk LICENSE",
         "tar --to-command=sh -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk",
         "tar -I 'sh -c \"cargo publish\"' -cf out.tar prikk",
@@ -329,7 +332,7 @@ fn dc70_tar_rustc_gh_require_exact_procedure_match_not_blanket_inertness() {
 #[test]
 fn recognizes_rfc107_macos_package_procedure() {
     for command in [
-        "tar -C stage -czf dist/prikk-aarch64-apple-darwin.tar.gz prikk LICENSE",
+        "tar -C stage -czf dist/prikk-aarch64-apple-darwin.tar.gz prikk LICENSE THIRD-PARTY-NOTICES",
         "rustc -vV >> dist/prikk-aarch64-apple-darwin.build-info.txt",
         "shasum -a 256 prikk-aarch64-apple-darwin.tar.gz",
         "shasum -a 256 anything.tar.gz > anything.tar.gz.sha256",
@@ -365,7 +368,8 @@ fn recognizes_rfc107_windows_package_procedure() {
         "New-Item -ItemType Directory -Force -Path stage, dist",
         "Copy-Item target/x86_64-pc-windows-msvc/release/prikk.exe stage/prikk.exe",
         "Copy-Item LICENSE stage/LICENSE",
-        "Compress-Archive -Path stage/prikk.exe, stage/LICENSE -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip",
+        "Copy-Item THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES",
+        "Compress-Archive -Path stage/prikk.exe, stage/LICENSE, stage/THIRD-PARTY-NOTICES -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip",
         "Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.zip.sha256 -Value \"$((Get-FileHash dist/prikk-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower())  prikk-x86_64-pc-windows-msvc.zip\" -NoNewline",
         "Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.build-info.txt -Value \"target: x86_64-pc-windows-msvc\"",
         "Add-Content -Path dist/prikk-x86_64-pc-windows-msvc.build-info.txt -Value \"commit: $env:GITHUB_SHA\"",

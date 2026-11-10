@@ -7,11 +7,17 @@ fn cargo_allowed(line: &str) -> bool {
     allowed(&tokens, 0, "cargo")
 }
 
-/// RFC 141 increment 4: CI's `policy` job. `check` is accepted through `rust_policy`; the other three
-/// only in exactly the form the job spells, so a flag or a different subcommand is still refused.
+/// RFC 141 increment 4 (and 0.57.0 item 5's `notices-check`): CI's `policy` job. `check` is accepted through `rust_policy`; the
+/// others only in exactly the form the job spells, so a flag or a different subcommand is still refused.
 #[test]
-fn the_four_policy_gates_are_accepted_exactly() {
-    for gate in ["check", "boundary-check", "reference-check", "size-check"] {
+fn the_five_policy_gates_are_accepted_exactly() {
+    for gate in [
+        "check",
+        "boundary-check",
+        "reference-check",
+        "size-check",
+        "notices-check",
+    ] {
         assert!(
             cargo_allowed(&format!(
                 "cargo run --locked -p prikk-release-policy -- {gate}"
@@ -22,6 +28,8 @@ fn the_four_policy_gates_are_accepted_exactly() {
     for refused in [
         "cargo run --locked -p prikk-release-policy -- boundary-check --graph",
         "cargo run --locked -p prikk-release-policy -- size-check extra",
+        "cargo run --locked -p prikk-release-policy -- notices-check extra",
+        "cargo run --locked -p prikk-release-policy -- notices-generate",
         "cargo run -p prikk-release-policy -- reference-check",
         "cargo run --locked -p prikk-release-policy -- release-evidence",
         "cargo run --locked -p prikk-release-policy -- publish-check",

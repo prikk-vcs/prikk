@@ -105,6 +105,10 @@ jobs:
         run: cargo run --locked -p prikk-release-policy -- reference-check
       - name: Size
         run: cargo run --locked -p prikk-release-policy -- size-check
+      # 0.57.0 item 5: THIRD-PARTY-NOTICES is regenerated from the dependency graph and compared. It reads the
+      # graph for every release target offline, which the `cargo fetch --locked` above already fetched.
+      - name: Third-party notices
+        run: cargo run --locked -p prikk-release-policy -- notices-check
       - name: gates.py's own test (0.53.0 step 1, item 2)
         run: python3 scripts/gates_test.py
 
@@ -357,7 +361,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path stage, dist
           Copy-Item target/x86_64-pc-windows-msvc/release/prikk.exe stage/prikk.exe
           Copy-Item LICENSE stage/LICENSE
-          Compress-Archive -Path stage/prikk.exe, stage/LICENSE -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip
+          Copy-Item THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES
+          Compress-Archive -Path stage/prikk.exe, stage/LICENSE, stage/THIRD-PARTY-NOTICES -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip
           Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.zip.sha256 -Value "$((Get-FileHash dist/prikk-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower())  prikk-x86_64-pc-windows-msvc.zip" -NoNewline
       - name: Generate installer scripts
         run: cargo run -p prikk-release-policy --locked -- generate-installer dist

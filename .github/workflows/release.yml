@@ -82,7 +82,8 @@ jobs:
           mkdir -p stage dist
           cp target/x86_64-unknown-linux-gnu/release/prikk stage/prikk
           cp LICENSE stage/LICENSE
-          tar -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk LICENSE
+          cp THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES
+          tar -C stage -czf dist/prikk-x86_64-unknown-linux-gnu.tar.gz prikk LICENSE THIRD-PARTY-NOTICES
           ( cd dist && sha256sum prikk-x86_64-unknown-linux-gnu.tar.gz > prikk-x86_64-unknown-linux-gnu.tar.gz.sha256 )
           echo "target: x86_64-unknown-linux-gnu" > dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
           echo "commit: ${GITHUB_SHA}" >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
@@ -95,7 +96,8 @@ jobs:
           mkdir -p stage dist
           cp target/aarch64-unknown-linux-gnu/release/prikk stage/prikk
           cp LICENSE stage/LICENSE
-          tar -C stage -czf dist/prikk-aarch64-unknown-linux-gnu.tar.gz prikk LICENSE
+          cp THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES
+          tar -C stage -czf dist/prikk-aarch64-unknown-linux-gnu.tar.gz prikk LICENSE THIRD-PARTY-NOTICES
           ( cd dist && sha256sum prikk-aarch64-unknown-linux-gnu.tar.gz > prikk-aarch64-unknown-linux-gnu.tar.gz.sha256 )
           echo "target: aarch64-unknown-linux-gnu" > dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
           echo "commit: ${GITHUB_SHA}" >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
@@ -116,7 +118,8 @@ jobs:
           mkdir -p stage dist
           cp target/aarch64-apple-darwin/release/prikk stage/prikk
           cp LICENSE stage/LICENSE
-          tar -C stage -czf dist/prikk-aarch64-apple-darwin.tar.gz prikk LICENSE
+          cp THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES
+          tar -C stage -czf dist/prikk-aarch64-apple-darwin.tar.gz prikk LICENSE THIRD-PARTY-NOTICES
           ( cd dist && shasum -a 256 prikk-aarch64-apple-darwin.tar.gz > prikk-aarch64-apple-darwin.tar.gz.sha256 )
           echo "target: aarch64-apple-darwin" > dist/prikk-aarch64-apple-darwin.build-info.txt
           echo "commit: ${GITHUB_SHA}" >> dist/prikk-aarch64-apple-darwin.build-info.txt
@@ -149,7 +152,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path stage, dist
           Copy-Item target/x86_64-pc-windows-msvc/release/prikk.exe stage/prikk.exe
           Copy-Item LICENSE stage/LICENSE
-          Compress-Archive -Path stage/prikk.exe, stage/LICENSE -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip
+          Copy-Item THIRD-PARTY-NOTICES stage/THIRD-PARTY-NOTICES
+          Compress-Archive -Path stage/prikk.exe, stage/LICENSE, stage/THIRD-PARTY-NOTICES -DestinationPath dist/prikk-x86_64-pc-windows-msvc.zip
           Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.zip.sha256 -Value "$((Get-FileHash dist/prikk-x86_64-pc-windows-msvc.zip -Algorithm SHA256).Hash.ToLower())  prikk-x86_64-pc-windows-msvc.zip" -NoNewline
           Set-Content -Path dist/prikk-x86_64-pc-windows-msvc.build-info.txt -Value "target: x86_64-pc-windows-msvc"
           Add-Content -Path dist/prikk-x86_64-pc-windows-msvc.build-info.txt -Value "commit: $env:GITHUB_SHA"

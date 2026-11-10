@@ -12,6 +12,7 @@ mod command_scan;
 mod error;
 mod installer;
 mod json;
+mod notices;
 mod oracle;
 mod policy;
 mod reference;

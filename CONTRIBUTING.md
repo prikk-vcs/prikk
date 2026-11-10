@@ -55,7 +55,7 @@ Run the whole gate set with one script:
 scripts/gates.py
 ```
 
-It runs all 14 gates below, prints one `<name> <exit>` line per gate as it finishes (and again as a
+It runs all 15 gates below, prints one `<name> <exit>` line per gate as it finishes (and again as a
 summary), and exits 0 only when every one of them does. Each runs under an R1 (`systemd-run --user`)
 scope when that is on `PATH`; the script says plainly when it is not, rather than silently running
 without one.
@@ -76,11 +76,11 @@ cargo clippy --workspace --all-targets --all-features --locked --target x86_64-p
 cargo clippy --workspace --all-targets --all-features --locked --target x86_64-apple-darwin -- -D warnings
 ```
 
-Plus release-policy `check`, `boundary-check`, `reference-check`, and `size-check` — see the
+Plus release-policy `check`, `boundary-check`, `reference-check`, `size-check`, and `notices-check` — see the
 Development page for what those verify. The two cross-target `clippy` runs above run every time, not
 only on a change touching platform-conditional (`#[cfg(target_os)]`) code — this project has been
 caught by CI going red from exactly that gap before, on a change that carried no `cfg(target_os)` of
-its own, and running them always costs little next to the other twelve.
+its own, and running them always costs little next to the other thirteen.
 
 In restricted environments where the default temporary directory is read-only, use a workspace-local
 one for the integration tests:

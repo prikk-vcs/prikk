@@ -64,6 +64,7 @@ package() {
   cd "$pkgname"
   install -Dm755 target/release/prikk "$pkgdir/usr/bin/prikk"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/prikk/LICENSE"
+  install -Dm644 THIRD-PARTY-NOTICES "$pkgdir/usr/share/licenses/prikk/THIRD-PARTY-NOTICES"
 }
 "#
     );
@@ -108,6 +109,7 @@ sha256sums_aarch64=('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 package() {
   install -Dm755 prikk "$pkgdir/usr/bin/prikk"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/prikk/LICENSE"
+  install -Dm644 THIRD-PARTY-NOTICES "$pkgdir/usr/share/licenses/prikk/THIRD-PARTY-NOTICES"
 }
 "#
     );

@@ -49,7 +49,7 @@ class CountingRunGateStub:
     """Replaces `gates.run_gate` for the duration of one test -- every call is recorded, and none of
     them ever spawns a real subprocess. A script that correctly refuses an unknown argument must leave
     this stub's own call count at zero; one that does not (the bug this part fixes) calls it once per
-    entry in `GATES.GATES` (14, on the real script)."""
+    entry in `GATES.GATES` (15, on the real script)."""
 
     def __init__(self):
         self.calls = []
@@ -88,7 +88,7 @@ class ListArgument(unittest.TestCase):
 class UnknownArgument(unittest.TestCase):
     """The behaviour this part adds: an argument that is not `--list` must be refused outright, by
     name, at exit code 2 -- never silently accepted and never left to fall through into running the
-    full 14-gate suite regardless (the exact shape Part W's own report found: `--only <gate-name>`
+    full 15-gate suite regardless (the exact shape Part W's own report found: `--only <gate-name>`
     looked like it selected a subset, and instead ran everything)."""
 
     def test_an_unknown_argument_is_refused_naming_itself_and_runs_no_gate(self):

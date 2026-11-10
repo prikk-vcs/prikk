@@ -55,7 +55,13 @@ fn deleting_any_one_policy_step_fails_naming_it() {
 /// missing.
 #[test]
 fn a_commented_or_altered_policy_step_does_not_count() {
-    let temporary = workflow_with_steps(&REQUIRED_CI_POLICY_STEPS[..3]);
+    // Every required step except `size-check`, which the commented and altered lines below fail to supply.
+    let present: Vec<&str> = REQUIRED_CI_POLICY_STEPS
+        .iter()
+        .copied()
+        .filter(|step| !step.ends_with("size-check"))
+        .collect();
+    let temporary = workflow_with_steps(&present);
     let path = temporary.path().join(CI_WORKFLOW);
     let mut text = fs::read_to_string(&path).unwrap();
     text.push_str("      # - run: cargo run --locked -p prikk-release-policy -- size-check\n");
@@ -65,7 +71,7 @@ fn a_commented_or_altered_policy_step_does_not_count() {
         required_ci_policy_steps(temporary.path()),
         [format!(
             "required-procedure-missing:{CI_WORKFLOW}:{}",
-            REQUIRED_CI_POLICY_STEPS[3]
+            "cargo run --locked -p prikk-release-policy -- size-check"
         )]
     );
 }

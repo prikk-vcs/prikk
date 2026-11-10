@@ -228,6 +228,7 @@ fn windows_copy_item(tail: &[String]) -> bool {
         "target/x86_64-pc-windows-msvc/release/prikk.exe",
         "stage/prikk.exe",
     ] || tail == ["LICENSE", "stage/LICENSE"]
+        || tail == ["THIRD-PARTY-NOTICES", "stage/THIRD-PARTY-NOTICES"]
 }
 
 fn windows_compress_archive(tail: &[String]) -> bool {
@@ -235,6 +236,7 @@ fn windows_compress_archive(tail: &[String]) -> bool {
         "-Path",
         "stage/prikk.exe",
         "stage/LICENSE",
+        "stage/THIRD-PARTY-NOTICES",
         "-DestinationPath",
         "dist/prikk-x86_64-pc-windows-msvc.zip",
     ]
@@ -283,6 +285,7 @@ fn tar(tail: &[String]) -> bool {
         "dist/prikk-x86_64-unknown-linux-gnu.tar.gz",
         "prikk",
         "LICENSE",
+        "THIRD-PARTY-NOTICES",
     ] || tail
         == [
             "-C",
@@ -291,6 +294,7 @@ fn tar(tail: &[String]) -> bool {
             "dist/prikk-aarch64-unknown-linux-gnu.tar.gz",
             "prikk",
             "LICENSE",
+            "THIRD-PARTY-NOTICES",
         ]
         // RFC 107 Stage 2: macOS's package step, identical shape to the two Linux targets above.
         || tail
@@ -301,6 +305,7 @@ fn tar(tail: &[String]) -> bool {
                 "dist/prikk-aarch64-apple-darwin.tar.gz",
                 "prikk",
                 "LICENSE",
+                "THIRD-PARTY-NOTICES",
             ]
         // DC-71 B2 ruling: the CI fixture round-trip through tar, not the artifact zip, which
         // does not preserve empty directories — create on the fixture job, extract on the
@@ -582,15 +587,16 @@ fn aur_git(tail: &[String]) -> bool {
         || tail == ["-C", "aur-prikk-bin", "push"]
 }
 
-/// RFC 141 §2.4, closed: the four steps CI's `policy` job must run, each as one whole `run:` script
+/// RFC 141 §2.4, closed: the five steps (0.57.0 item 5 added `notices-check`) CI's `policy` job must run, each as one whole `run:` script
 /// in `.github/workflows/ci.yml`. `policy_gate_procedure` below only *permits* them, so without this
 /// list any one could be deleted from the job and no gate would notice; `boundary-check` now
 /// requires every one and names the one missing.
-pub(crate) const REQUIRED_CI_POLICY_STEPS: [&str; 4] = [
+pub(crate) const REQUIRED_CI_POLICY_STEPS: [&str; 5] = [
     "cargo run --locked -p prikk-release-policy -- check",
     "cargo run --locked -p prikk-release-policy -- boundary-check",
     "cargo run --locked -p prikk-release-policy -- reference-check",
     "cargo run --locked -p prikk-release-policy -- size-check",
+    "cargo run --locked -p prikk-release-policy -- notices-check",
 ];
 
 /// Every `run:` script in a workflow, as the scanner extracts it -- the same parse the procedure
@@ -614,7 +620,7 @@ fn policy_gate_procedure(tail: &[String]) -> bool {
         && separator == "--"
         && matches!(
             gate.as_str(),
-            "boundary-check" | "reference-check" | "size-check"
+            "boundary-check" | "reference-check" | "size-check" | "notices-check"
         )
 }
 

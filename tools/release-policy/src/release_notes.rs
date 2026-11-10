@@ -151,7 +151,7 @@ fn platform_paragraph(dist_dir: &Path) -> Result<String> {
     Ok(format!(
         "## Prebuilt binaries\n\
          \n\
-         {summary}. Each archive contains the `prikk` binary, `LICENSE`, and a sibling `.sha256`\n\
+         {summary}. Each archive contains the `prikk` binary, `LICENSE`, `THIRD-PARTY-NOTICES` (the licences of the crates linked into the binary), and a sibling `.sha256`\n\
          checksum plus `.build-info.txt` recording the exact toolchain and command used to build\n\
          it — reproduce with:\n\
          \n\
