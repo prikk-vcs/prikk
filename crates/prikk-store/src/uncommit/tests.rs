@@ -733,7 +733,7 @@ fn latest_run(layout: &RepositoryLayout) -> Option<String> {
 /// round, and no acknowledged commit is lost.
 #[test]
 fn uncommit_raced_against_a_commit_ends_in_one_of_two_states_every_round() {
-    let rounds = 20;
+    let rounds = 200;
     let mut uncommit_first = 0;
     let mut commit_first = 0;
     for round in 0..rounds {
