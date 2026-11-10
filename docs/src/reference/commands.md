@@ -125,6 +125,9 @@ sealed, and nothing is wrong when you run it: it is not a repair, and it shares 
 - **The undo.** `prikk doctor --recovery-restore <run>` puts the WAL, the witness, `ref-name`, the worktree's record and the
   rename declarations back byte for byte. It refuses once anything has changed since (a commit that landed, say) and says
   which file moved. The recovery-log restore now includes the worktree's record and the rename declarations.
+- **Unblocking `sync seal --claim`.** A queued commit blocks it (`sealing from an accepted claim requires an empty active WAL`), so
+  taking the commit back clears that refusal. The files stay in the worktree, though, and `sync seal` onto the current branch
+  needs a clean worktree: remove them (or keep them elsewhere) before sealing the claim.
 - **A binary file's blob stays.** The blob a commit wrote stays in the object store; committing the same file again reuses it,
   and one that nothing else reaches shows in `verify` and `doctor` as an unreached object (a warning, `verify` exit 0) until
   reclamation exists. Since 0.57.0 that line says a blob has no publication trust to check, instead of saying a trust was not

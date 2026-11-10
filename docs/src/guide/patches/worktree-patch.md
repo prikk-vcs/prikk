@@ -37,6 +37,9 @@ happen, including what the next `commit` does about each operation, and a run pr
 same command again. To undo it: `prikk doctor --recovery-restore <run>` (the run id is printed), which refuses once anything has
 changed since.
 
+Taking a commit back also clears the refusal `sync seal --claim` gives while a commit is queued. The files stay in your
+worktree, and `sync seal` onto the current branch needs a clean worktree, so remove them (or keep them elsewhere) first.
+
 ## Baseline
 
 Authoring compares the worktree against a baseline node lifecycle state:
