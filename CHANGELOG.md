@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added — `prikk uncommit <patch-id> [--plan-only]` takes back your newest unsealed commit
+
+Promised to inklkunn (2026-10-31, §4: "it acts on a patch named exactly; it has `--plan-only`, and a recovery record so the
+discard can be undone"). It is the inverse of `commit` for work that has not been sealed, and nothing is wrong when you run
+it: the newest queued patch leaves the queue and is kept in the recovery log, the files in your worktree are not changed (the
+next `commit` includes them), and sealed history is never touched (for that, `rollback-draft`).
+- **Newest only, healthy queue only.** A patch with others queued after it is refused, naming them; a sealed patch, a block,
+  another object and an unknown id are each refused by what they are; a damaged or lost-commit queue refuses with its own row's
+  sentence and its own `doctor` verb.
+- **The next `commit` authors the same operations.** The plan says, per operation, whether the worktree still holds the change.
+  A rename is put back into the rename declarations (so the next `commit` authors a rename again, not a delete and a create
+  with a new identity); a rename declared since that overlaps refuses before anything is written.
+- **A re-run finishes an interrupted run** and says so. Between the WAL cut and the witness rewrite, `verify` and `doctor` read
+  the queue as a lost commit and now add that running `prikk uncommit` again finishes it.
+- **After the only queued patch leaves, the session is an empty queue**, the state `seal` leaves, and the worktree's record
+  matches it.
+- **The undo** is `prikk doctor --recovery-restore <run>` (the run id is printed). It now also restores the worktree's record
+  and the rename declarations, and refuses once anything has changed since. Each recovery entry is saved just before the write
+  it undoes.
+- Text only, with the exit codes of the other repairs (0 done, 1 refused, 2 usage); no `--format json` until the CLI's JSON
+  tier is decided (0.59.0). Raced against a `commit` loop (300 rounds): each ended in one of its two allowed states and `verify`
+  read clean every time. See [Commands](docs/src/reference/commands.md) and [Worktree patch
+  authoring](docs/src/guide/patches/worktree-patch.md).
+
+### Changed — `verify` and `doctor` no longer say a blob's "publication trust was not checked"
+
+An unreached object that is a Patch or a Blob (a blob a commit wrote and `prikk uncommit` or a rollback left behind) is reported
+as before, a warning that leaves `verify` at exit 0, but the sentence now says nothing was published under it, so there is no
+publication trust to check. A Block or a RefState keeps the old sentence. The bytes stay, and no command removes them yet.
+
 ### Added — `cat --output` applies the recorded mode, and `cat --format json` refusals are `refusal-v1`
 
 Promised in stikk letter 029 (§4.5). `prikk cat --path <p> --output <file>` now writes the file with the mode

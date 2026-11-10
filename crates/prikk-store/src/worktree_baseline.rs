@@ -227,20 +227,64 @@ pub(crate) fn write_worktree_baseline_identity(
     identity: &WorktreeBaselineIdentity,
     layout: &RepositoryLayout,
 ) -> Result<()> {
+    rewrite_in_place_or_create_required(
+        layout.repository_mutation_root(),
+        baseline_record_path(),
+        &encode_record(identity),
+    )
+}
+
+/// The record's one line, as bytes: the single encoding both [`write_worktree_baseline_identity`] and a caller that must save the
+/// bytes first (`prikk uncommit`'s recovery entry) use, so what is saved is what is written.
+pub(crate) fn encode_record(identity: &WorktreeBaselineIdentity) -> Vec<u8> {
     let baseline_field = identity
         .baseline
         .map_or_else(|| GENESIS_MARKER.to_string(), |id| id.to_string());
-    let record = format!(
+    format!(
         "{RECORD_MAGIC} {} {baseline_field} {} {}\n",
         identity.ref_name,
         identity.wal_sequence,
         digest_to_hex(&identity.queued_fold)
-    );
-    rewrite_in_place_or_create_required(
-        layout.repository_mutation_root(),
-        baseline_record_path(),
-        record.as_bytes(),
     )
+    .into_bytes()
+}
+
+/// What taking the newest queued patch out of the queue does to the worktree's record (0.57.0 step 3, S5b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecordRewrite {
+    /// No record exists (a repository from before 0.56.0): there is nothing to bring up to date.
+    NoRecord,
+    /// The record is not the queue as it stood before the removal -- it was already behind the ref, or it names another ref -- so
+    /// it is left exactly as it is: this verb does not paper over a state it did not make.
+    NotThisQueue,
+    /// The record equals the queue as it stood: rewritten to the queue as it will stand.
+    Rewrite(WorktreeBaselineIdentity),
+}
+
+/// Decide the record's fate. `before` is the queued patch ids as they stand now, `after` as they will stand; `after_last_seq` the
+/// WAL sequence of the newest patch that stays (`0` for none). `queue_ref` is the queue's owner when one is recorded: a record that
+/// names a different ref is not this queue's. The record is rewritten **only** when its fold equals `before`'s -- the same fact a
+/// re-run uses to tell that an earlier, interrupted run had not yet reached it.
+pub(crate) fn plan_record_rewrite(
+    layout: &RepositoryLayout,
+    queue_ref: Option<&str>,
+    before: &[ObjectId],
+    after: &[ObjectId],
+    after_last_seq: u64,
+) -> Result<RecordRewrite> {
+    let Some(recorded) = read_worktree_baseline(layout)? else {
+        return Ok(RecordRewrite::NoRecord);
+    };
+    if recorded.queued_fold != queued_fold_digest(before)
+        || queue_ref.is_some_and(|owner| owner != recorded.ref_name)
+    {
+        return Ok(RecordRewrite::NotThisQueue);
+    }
+    Ok(RecordRewrite::Rewrite(WorktreeBaselineIdentity {
+        wal_sequence: after_last_seq,
+        queued_fold: queued_fold_digest(after),
+        ..recorded
+    }))
 }
 
 /// Read the worktree's recorded baseline. `None` when the file is absent or empty (no record has ever

@@ -251,7 +251,9 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
   names and the WAL no longer holds soundly (RFC 166 D5, `doctor/discard_damaged_commits.rs`).
 - `--restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]`: gives an active queue back its
   owner when its ref metadata is missing or does not match.
-- `--recovery-list`, `--recovery-restore <id>`, and `--recovery-clear`: work with the recovery log.
+- `--recovery-list`, `--recovery-restore <id>`, and `--recovery-clear`: work with the recovery log. A restore writes only files on its
+  repair list, which since 0.57.0 includes the worktree's record (`worktree.baseline`) and the rename declarations, because
+  [`prikk uncommit`](commands.md) rewrites them along with the queue.
 - `--repair-main-ref`: a recognized input that performs no repair and is always refused
   (`doctor.rs:1263-1269`).
 

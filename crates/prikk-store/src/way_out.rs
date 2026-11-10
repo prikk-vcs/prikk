@@ -124,7 +124,8 @@ impl WayOut {
             Self::AcknowledgedCommit => {
                 "run `prikk doctor --discard-damaged-commits --plan-only`, then the same command without \
                  `--plan-only`: it removes the acknowledged commit the queue no longer holds soundly, or declares \
-                 it lost, saving what it removed to the recovery log, and clears this"
+                 it lost, saving what it removed to the recovery log, and clears this. If this follows an \
+                 interrupted `prikk uncommit`, running that same command again finishes it"
                     .to_string()
             }
             Self::SubstitutedRecord => format!(

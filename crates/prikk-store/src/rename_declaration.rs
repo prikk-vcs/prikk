@@ -28,8 +28,8 @@ use std::collections::BTreeMap;
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{
-    append_file_required, create_new_file_required, read_file_if_exists,
-    truncate_file_empty_required,
+    append_file_required, create_new_file_required, overwrite_in_place_required,
+    read_file_if_exists, truncate_existing_file_required, truncate_file_empty_required,
 };
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
@@ -103,6 +103,23 @@ fn read_declarations_map(layout: &RepositoryLayout) -> Result<BTreeMap<String, S
 }
 
 fn write_declarations_map(layout: &RepositoryLayout, map: &BTreeMap<String, String>) -> Result<()> {
+    write_declaration_bytes(layout, &encode_declarations(map))
+}
+
+/// The store's bytes for `map`: one `old_path\tnew_path` line each, in `old_path` order.
+fn encode_declarations(map: &BTreeMap<String, String>) -> Vec<u8> {
+    let mut content = String::new();
+    for (old_path, new_path) in map {
+        content.push_str(old_path);
+        content.push('\t');
+        content.push_str(new_path);
+        content.push('\n');
+    }
+    content.into_bytes()
+}
+
+/// Replace the store with `content`, wholesale (truncate, then append). The one writer of the file's bytes.
+pub(crate) fn write_declaration_bytes(layout: &RepositoryLayout, content: &[u8]) -> Result<()> {
     layout.require_current_format()?;
     let relative = layout.repository_relative(&layout.default_declarations_path())?;
     // A repository initialized before this file existed has no `declarations` on disk yet (`init`
@@ -115,22 +132,72 @@ fn write_declarations_map(layout: &RepositoryLayout, map: &BTreeMap<String, Stri
     if read_file_if_exists(layout.repository_mutation_root(), &relative)?.is_none() {
         create_new_file_required(layout.repository_mutation_root(), &relative, &[])?;
     }
-    let mut content = String::new();
-    for (old_path, new_path) in map {
-        content.push_str(old_path);
-        content.push('\t');
-        content.push_str(new_path);
-        content.push('\n');
-    }
     truncate_file_empty_required(layout.repository_mutation_root(), &relative)?;
     if !content.is_empty() {
-        append_file_required(
-            layout.repository_mutation_root(),
-            &relative,
-            content.as_bytes(),
-        )?;
+        append_file_required(layout.repository_mutation_root(), &relative, content)?;
     }
     Ok(())
+}
+
+/// Replace the store with `content` **in place**: the new bytes overwrite the old from offset 0 and the length is then set, never
+/// truncating first, so a torn write leaves a store with some old and some new lines in it (which the recovery entry saved before
+/// it restores), never an empty one. The writer `prikk uncommit` uses; `prikk mv` and `commit` keep [`write_declaration_bytes`].
+pub(crate) fn overwrite_declaration_bytes(layout: &RepositoryLayout, content: &[u8]) -> Result<()> {
+    layout.require_current_format()?;
+    let relative = layout.repository_relative(&layout.default_declarations_path())?;
+    let root = layout.repository_mutation_root();
+    if read_file_if_exists(root, &relative)?.is_none() {
+        return Ok(create_new_file_required(root, &relative, content)?);
+    }
+    overwrite_in_place_required(root, &relative, 0, content)?;
+    truncate_existing_file_required(root, &relative, content.len() as u64)?;
+    Ok(())
+}
+
+/// What putting a removed patch's renames back into the store does (0.57.0 step 3, S5b: `prikk uncommit`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeclarationMerge {
+    /// Every rename is already declared, exactly: nothing to write.
+    Unchanged,
+    /// The store's bytes with the renames added.
+    Merged(Vec<u8>),
+    /// A rename declared since overlaps one of the removed patch's: they cannot both stand, and which one wins is the user's.
+    Conflict(String),
+}
+
+/// Add `additions` to the live declarations without changing the meaning of any already there. An identical pair is already
+/// declared; an addition whose source, or whose destination, another live declaration already uses -- or whose source is another
+/// declaration's destination, which `prikk mv` would have chained -- is a conflict, never resolved by choosing one.
+pub(crate) fn plan_declaration_merge(
+    layout: &RepositoryLayout,
+    additions: &[RenameDeclaration],
+) -> Result<DeclarationMerge> {
+    let mut map = read_declarations_map(layout)?;
+    let mut changed = false;
+    for addition in additions {
+        if map.get(&addition.old_path) == Some(&addition.new_path) {
+            continue;
+        }
+        let clashes = map.iter().find(|(old, new)| {
+            **old == addition.old_path
+                || **new == addition.new_path
+                || **new == addition.old_path
+                || **old == addition.new_path
+        });
+        if let Some((old, new)) = clashes {
+            return Ok(DeclarationMerge::Conflict(format!(
+                "the rename {} -> {} declared since overlaps the removed commit's {} -> {}",
+                old, new, addition.old_path, addition.new_path
+            )));
+        }
+        map.insert(addition.old_path.clone(), addition.new_path.clone());
+        changed = true;
+    }
+    Ok(if changed {
+        DeclarationMerge::Merged(encode_declarations(&map))
+    } else {
+        DeclarationMerge::Unchanged
+    })
 }
 
 /// Record a declared move from `old_path` to `new_path`, collapsing a chain to its net effect

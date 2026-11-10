@@ -146,7 +146,7 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                 &run,
                 format!(
                     "a restore does not write {}: it is not on the repair list (the WAL, the pointer index, the ref log, the trust and \
-                     received files, their generation logs, the commit witness and ref-name), so this run cannot be restored",
+                     received files, their generation logs, the commit witness and ref-name, the rename declarations and the worktree's record), so this run cannot be restored",
                     entry.source
                 ),
             );

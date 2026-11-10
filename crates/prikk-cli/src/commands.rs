@@ -146,6 +146,13 @@ pub(crate) const COMMANDS: &[Command] = &[
         ],
     },
     Command {
+        name: "uncommit",
+        run: crate::uncommit::run_uncommit,
+        help_lines: &[
+            "  prikk uncommit <patch-id> [--plan-only]   Take back your newest unsealed commit: nothing is wrong, your files in the worktree are not changed, and sealed history is never touched (for that, `prikk rollback-draft`)",
+        ],
+    },
+    Command {
         name: "mv",
         run: crate::mv::run_mv,
         help_lines: &[

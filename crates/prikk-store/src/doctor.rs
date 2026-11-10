@@ -1538,16 +1538,21 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // leftover objects); this loop needed no change at all to pick them up -- it already
             // formats `object_type`/`object_id` generically, with no type-specific branch. The
             // message's own "its publication trust was not checked" reads literally true for a
-            // Patch/Blob too (neither type has a publication-trust concept to check in the first
-            // place, so it genuinely never was), so it is left unchanged rather than split into a
-            // second message for two types that would just restate the same fact two ways.
+            // Patch/Blob too -- but a blob `prikk uncommit` leaves behind made that sentence read as
+            // a check that was skipped, so since 0.57.0 step 3 (S5b) a Patch or a Blob says there is no
+            // publication trust to check, and a Block or RefState keeps the old sentence.
             for unreached in &verification.unreached_objects {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREACHED-OBJECT",
                     format!(
-                        "{} {} is reached by nothing in this repository; its publication trust was \
-                         not checked",
-                        unreached.object_type, unreached.object_id
+                        "{} {} is reached by nothing in this repository; {}",
+                        unreached.object_type,
+                        unreached.object_id,
+                        if unreached.has_publication_trust() {
+                            "its publication trust was not checked"
+                        } else {
+                            "nothing was published under it, so there is no publication trust to check"
+                        }
                     ),
                     "the bytes stay; no command removes them yet",
                 ));

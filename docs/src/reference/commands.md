@@ -21,6 +21,7 @@ prikk trust maintainer remove --key-id ID
 prikk trust maintainer list [--format json]
 prikk trust maintainer check --key-id ID [--format json]
 prikk commit [--from-worktree] [--text-edits] [--ref heads/<branch>] -m <message>
+prikk uncommit <patch-id> [--plan-only]
 prikk mv <old> <new>
 prikk seal --allow-no-audit [--ref heads/<branch>]
 prikk status [--format json]
@@ -97,6 +98,39 @@ prikk compact --received-index|--trust-policy --keep-slot a|b [--plan-only]
 prikk received remove <remotes/…> [--plan-only]
 prikk --version
 ```
+
+**`uncommit <patch-id>` takes back your newest unsealed commit.** It is the inverse of `commit` for work that has not been
+sealed, and nothing is wrong when you run it: it is not a repair, and it shares no verb with `doctor --discard-damaged-commits`.
+- **What it does.** The patch leaves the active WAL and is kept in the recovery log; the files in your worktree are not changed,
+  so the next `commit` includes them; sealed history is never touched (for that, `rollback-draft`).
+- **Newest only, and only from a healthy queue.** The id is required. A patch with others queued after it is refused, naming
+  them (take those back first, newest first; committing them again gives them new patch ids, because a patch id covers the patch
+  before it). A sealed patch, a block, any other object and an unknown id are each refused by what the id is. A damaged or
+  lost-commit queue (the rows of RFC 166) refuses with that row's own sentence and its own `doctor` verb.
+- **The next `commit` authors the same operations.** The plan lists the patch's operations and, for each, whether the worktree
+  still holds the change (so the next `commit` authors it again) or not (so it does not). A rename is put back into the rename
+  declarations, so the next `commit` authors a rename again (keeping the file's identity) and not a delete and a create. A rename
+  declared since that overlaps one of the patch's refuses, before anything is written. `commit` does not author a symlink, so a
+  patch from another producer that holds one is told so.
+- **The write, in order.** The active lock `commit` takes; the plan re-derived under it (`--plan-only` takes the same lock and
+  writes nothing, and prints what a run prints); the renames merged back; the WAL cut at the patch's frame (the bytes saved to
+  the recovery log first); the commit witness rewritten over what stays; when nothing stays, `ref-name` cleared, as `seal` clears
+  it (so the session reads as an empty queue); the worktree's record last, and only when it equals the queue as it stood. Each
+  recovery entry is saved just before the write it undoes.
+- **A re-run finishes it.** If a run was interrupted, typing `prikk uncommit <patch-id>` again finishes it and says so (`already
+  out of the queue; finishing an interrupted prikk uncommit`). The state is recognised from the WAL, the witness and the
+  worktree's record, never from the recovery log, which only names the run. Between the WAL cut and the witness rewrite,
+  `verify` and `doctor` read the queue as RFC 166's lost-commit row and say that running `uncommit` again finishes it. A
+  re-run after completion says the patch is not queued and names the run.
+- **The undo.** `prikk doctor --recovery-restore <run>` puts the WAL, the witness, `ref-name`, the worktree's record and the
+  rename declarations back byte for byte. It refuses once anything has changed since (a commit that landed, say) and says
+  which file moved. The recovery-log restore now includes the worktree's record and the rename declarations.
+- **A binary file's blob stays.** The blob a commit wrote stays in the object store; committing the same file again reuses it,
+  and one that nothing else reaches shows in `verify` and `doctor` as an unreached object (a warning, `verify` exit 0) until
+  reclamation exists. Since 0.57.0 that line says a blob has no publication trust to check, instead of saying a trust was not
+  checked.
+- **Output.** Text only, with the other repairs' exit codes: 0 done, 1 refused, 2 usage. No `--format json`: the JSON tier of
+  the whole CLI is decided once, not command by command.
 
 **`doctor --rebuild-caches` rebuilds every derived cache that has a divergence check.** There are two,
 `.prikk/cache/commit-index.v1` and `.prikk/cache/lifecycle-state.v1`; both only save `commit` work and hold

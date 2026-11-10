@@ -755,9 +755,16 @@ pub(crate) fn print_verify_report(
     // per-object warning line below, which already carries it.
     println!("unreached objects: {}", report.unreached_objects.len());
     for unreached in &report.unreached_objects {
+        // A Block or RefState is published under a seal, whose trust was therefore not checked; a Patch or a Blob never is
+        // (a blob `prikk uncommit` leaves behind is one), so for those the sentence says only what is true of them.
+        let why = if unreached.has_publication_trust() {
+            "its publication trust was not checked"
+        } else {
+            "nothing was published under it, so there is no publication trust to check"
+        };
         println!(
-            "warning: {} {} is reached by nothing in this repository -- its publication trust was \
-             not checked; the bytes stay, and no command removes them yet",
+            "warning: {} {} is reached by nothing in this repository -- {why}; the bytes stay, and \
+             no command removes them yet",
             unreached.object_type, unreached.object_id
         );
     }

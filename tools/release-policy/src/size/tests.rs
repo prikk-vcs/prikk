@@ -163,7 +163,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.57.0 step 3 (S3): `BlockSealers`, `RepositoryVerification::block_sealers` and
         // `ObjectVerification::block_sealers` (every reached Block's recorded sealers and per-signature
         // outcomes), 2,837 -> 2,867.
-        detail.contains("2867"),
+        // 0.57.0 step 3 (S5b): `UnreachedObject::has_publication_trust`, so a blob an uncommit leaves is not said to have had
+        // a trust skipped, 2,867 -> 2,877.
+        detail.contains("2877"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -402,8 +404,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // separate production file): 173 -> 174.
     // 0.57.0 step 0c added `node_authoring/cache_rebuild.rs` (`doctor --rebuild-caches`; `index_rebuild.rs` until 0.57.0 step 1d): 174 -> 175.
     // 0.57.0 step 1e added `way_out.rs`: 175 -> 176.
-    // 0.57.0 step 2 (L1) added `lock_holder.rs`: 176 -> 177.
-    assert_eq!(store.production_files, 177);
+    // 0.57.0 step 2 (L1) added `lock_holder.rs`: 176 -> 177. 0.57.0 step 3 (S5b) added `uncommit.rs` (`prikk uncommit`): 177 -> 178.
+    assert_eq!(store.production_files, 178);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

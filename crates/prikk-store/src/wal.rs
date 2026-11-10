@@ -145,6 +145,21 @@ pub struct WalRepair {
     pub complete_records_removed: usize,
 }
 
+/// What removing the newest queued record removes (0.57.0 step 3, S5b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalNewestRemoval {
+    /// The removed record's Patch id.
+    pub(crate) patch_id: ObjectId,
+    /// Its WAL sequence number.
+    pub(crate) sequence: u64,
+    /// The bytes of its frame.
+    pub(crate) removed_bytes: usize,
+    /// The patch ids that stay queued, in WAL order.
+    pub(crate) remaining_patch_ids: Vec<ObjectId>,
+    /// The recovery-log entry holding exactly those bytes. `None` in a preview.
+    pub(crate) recovery: Option<RecoveryRef>,
+}
+
 /// File-backed active-session WAL.
 #[derive(Debug, Clone)]
 pub struct Wal {
@@ -376,6 +391,79 @@ impl Wal {
             recovery: Some(recovery),
             complete_records_removed,
         })
+    }
+
+    /// The newest queued record, removed whole (0.57.0 step 3, S5b: `prikk uncommit`). **Only a wholly sound WAL**: no damaged
+    /// record, no torn tail (those are the repairs', not this). `expected` is the Patch id the caller named; a different newest
+    /// record refuses and nothing is written. The bytes removed go to `recovery/log` first, durably, then the file is cut at the
+    /// record's start -- the same order [`Self::truncate_trailing_partial`] keeps -- so the cut is undone by the recovery log's
+    /// ordinary restore.
+    pub(crate) fn remove_newest_record(&self, expected: ObjectId) -> Result<WalNewestRemoval> {
+        let _run = recovery_log::begin_run();
+        self.require_current_format()?;
+        let (bytes, removal, cut_at) = self.newest_removal(expected)?;
+        let (root, relative) = self.mutation()?;
+        let recovery = self.save_removed_bytes(root, relative, &bytes, cut_at)?;
+        truncate_existing_file_required(root, relative, cut_at)?;
+        Ok(WalNewestRemoval {
+            recovery: Some(recovery),
+            ..removal
+        })
+    }
+
+    /// What [`Self::remove_newest_record`] would remove, without writing anything (the same read, the same refusals).
+    pub(crate) fn preview_remove_newest_record(
+        &self,
+        expected: ObjectId,
+    ) -> Result<WalNewestRemoval> {
+        self.require_current_format()?;
+        self.newest_removal(expected).map(|(_, removal, _)| removal)
+    }
+
+    /// The one computation both of the above share: the file's bytes, what removing the newest record removes, and the cut offset.
+    fn newest_removal(&self, expected: ObjectId) -> Result<(Vec<u8>, WalNewestRemoval, u64)> {
+        let bytes = self.read_bytes()?.unwrap_or_default();
+        let replay = decode_records(&bytes)?;
+        if replay.has_item_failure() || replay.trailing_partial_bytes != 0 {
+            return Err(PrikkError::Precondition(
+                "the queue is not wholly sound, and removing a record from it is not this command's job".to_string(),
+            ));
+        }
+        let (Some(newest), Some(start)) = (
+            replay.records.last(),
+            replay
+                .record_outcomes
+                .iter()
+                .rev()
+                .find(|outcome| outcome.status == WalRecordStatus::Evaluated)
+                .map(|outcome| outcome.offset),
+        ) else {
+            return Err(PrikkError::Precondition(
+                "the queue holds no commits".to_string(),
+            ));
+        };
+        if newest.envelope.object_id() != expected {
+            return Err(PrikkError::Precondition(format!(
+                "the newest queued commit is {}, not {expected}; the queue changed",
+                newest.envelope.object_id()
+            )));
+        }
+        let cut_at = u64::try_from(start)
+            .map_err(|_| PrikkError::MalformedData("WAL offset does not fit u64".to_string()))?;
+        let removed_bytes = bytes.len().saturating_sub(start);
+        let removal = WalNewestRemoval {
+            patch_id: expected,
+            sequence: newest.seq,
+            removed_bytes,
+            remaining_patch_ids: replay
+                .records
+                .iter()
+                .take(replay.records.len().saturating_sub(1))
+                .map(|record| record.envelope.object_id())
+                .collect(),
+            recovery: None,
+        };
+        Ok((bytes, removal, cut_at))
     }
 
     /// Append the bytes a repair is about to truncate to `recovery/log` (RFC 168 §3.1), before the truncate.

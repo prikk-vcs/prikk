@@ -49,6 +49,7 @@ mod stdout;
 mod sync;
 mod tag;
 mod tree;
+mod uncommit;
 mod unlock;
 mod verify_verdict;
 

@@ -336,7 +336,8 @@ pub fn write_refusal_reason(
             "a queued commit you were told had succeeded (sequence {witnessed_seq}) is no \
              longer present at all; it was already acknowledged, so it cannot be removed as a \
              crash leftover -- run `prikk doctor --discard-damaged-commits` to declare it lost \
-             instead"
+             instead. If this follows an interrupted `prikk uncommit`, running that same command \
+             again finishes it"
         )),
         Verdict::SubstitutedRecord { witnessed_seq } => Some(format!(
             "sequence {witnessed_seq} does not match the queued commit you were told had \

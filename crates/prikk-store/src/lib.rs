@@ -109,6 +109,8 @@ mod tag_travel;
 mod text_span;
 mod trust;
 mod trust_index;
+// 0.57.0 step 3, S5b: `prikk uncommit`, the inverse of `commit` for work that has not been sealed.
+mod uncommit;
 mod unlock;
 pub(crate) mod verify;
 mod wal;
@@ -409,6 +411,9 @@ pub use trust::{
     classify_publication_signatures, load_maintainer_trust_policy,
     load_maintainer_trust_policy_or_empty, refuse_forged_publication_signature,
     remove_trusted_maintainer, verify_signer_trusted, verify_trusted_publication_envelope,
+};
+pub use uncommit::{
+    OperationFate, RecordOutcome, UncommitOperation, UncommitPlan, plan_uncommit, uncommit,
 };
 pub use unlock::{
     HeldLock, LivenessReason, PidLiveness, clear_lock, find_held_lock, list_held_locks,

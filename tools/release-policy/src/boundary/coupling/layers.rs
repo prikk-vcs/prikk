@@ -12,7 +12,7 @@
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-pub(super) const UPPER_LAYER: [&str; 32] = [
+pub(super) const UPPER_LAYER: [&str; 33] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
@@ -67,6 +67,10 @@ pub(super) const UPPER_LAYER: [&str; 32] = [
     "show",
     "sync_negotiation",
     "tag_travel",
+    // 0.57.0 step 3, S5b: `prikk uncommit`, taking back the newest queued patch. Built on `worktree_status` (upper, for what
+    // the next commit does about each operation), `wal`, `recovery_log`, `rename_declaration`, `worktree_baseline` and
+    // `commit_boundary` (all lower); reached only by the CLI.
+    "uncommit",
     "unlock",
     "verify",
     // 0.56.0 step W3b: the shared "clean against the record, mark dirty, materialize through the

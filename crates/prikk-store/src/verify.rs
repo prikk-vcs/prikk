@@ -1220,6 +1220,16 @@ pub struct UnreachedObject {
     pub object_type: ObjectType,
 }
 
+impl UnreachedObject {
+    /// Whether this kind of object has a publication trust to check at all. A Block or a RefState is published under a seal; a
+    /// Patch or a Blob is not, so for those the warning must not say a trust "was not checked" (0.57.0 step 3, S5b: a blob a
+    /// `prikk uncommit` leaves behind is one).
+    #[must_use]
+    pub fn has_publication_trust(&self) -> bool {
+        matches!(self.object_type, ObjectType::Block | ObjectType::RefState)
+    }
+}
+
 /// RFC 164 Rule E: `reachable`, `remnants` and `unreached` threaded together purely to keep the
 /// surrounding functions' own argument counts low (`clippy::too_many_arguments`). `reachable` is
 /// shared, read-only state computed once per `verify` run; `remnants` and `unreached` each

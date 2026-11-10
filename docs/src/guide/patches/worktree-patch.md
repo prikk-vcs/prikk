@@ -19,6 +19,24 @@ prikk commit --ref heads/topic -m "start topic"
 `--from-worktree` is still accepted for backward compatibility but is now the only behavior, so it can
 be omitted.
 
+## Taking back your newest commit
+
+`prikk commit` queues a patch; until `prikk seal` seals the queue, you can take back the newest one:
+
+```sh
+prikk status --format json        # lists the queued commits, with their patch ids
+prikk uncommit <patch-id> --plan-only
+prikk uncommit <patch-id>
+```
+
+Nothing is wrong when you do this. The patch leaves the queue (and is kept in the recovery log), the files in your worktree are
+not changed, and the next `prikk commit` includes them. Sealed history is never touched; to undo a sealed change, use
+[`prikk rollback-draft`](../rollback/rollback-draft.md). Only the newest queued commit can be taken back: if others were queued
+after the one you mean, take those back first (committing them again gives them new patch ids). `--plan-only` says what will
+happen, including what the next `commit` does about each operation, and a run prints the same. If it is interrupted, type the
+same command again. To undo it: `prikk doctor --recovery-restore <run>` (the run id is printed), which refuses once anything has
+changed since.
+
 ## Baseline
 
 Authoring compares the worktree against a baseline node lifecycle state:

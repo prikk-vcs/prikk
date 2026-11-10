@@ -583,7 +583,10 @@ pub(crate) fn repairable_sources(layout: &RepositoryLayout) -> Result<Vec<String
     // this file, taken together as one resource (`layout.rs`'s own doc note) -- `cancel_import`
     // cuts it back too, alongside whichever type container(s) grew.
     paths.push(layout.container_index_path());
-    paths
+    // 0.57.0 step 3, S5b: `prikk uncommit` rewrites the rename declarations and the worktree's record along with the queue, so
+    // a restore of its run must be able to write them back.
+    paths.push(layout.default_declarations_path());
+    let mut sources: Vec<String> = paths
         .iter()
         .map(|path| {
             Ok(layout
@@ -591,8 +594,13 @@ pub(crate) fn repairable_sources(layout: &RepositoryLayout) -> Result<Vec<String
                 .to_string_lossy()
                 .replace('\\', "/"))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    sources.push(WORKTREE_RECORD_SOURCE.to_string());
+    Ok(sources)
 }
+
+/// The worktree's record (`worktree_baseline.rs`), relative to `.prikk` as every source here is: a plain, fixed name.
+pub(crate) const WORKTREE_RECORD_SOURCE: &str = "worktree.baseline";
 
 /// **The meaning-file table (RFC 168 §3.2), one row per repair writer.** Each row names the files whose state gives the
 /// removed bytes their meaning; their identities are recorded in the entry and checked before a restore. Derived from the
@@ -605,6 +613,8 @@ pub(crate) fn repairable_sources(layout: &RepositoryLayout) -> Result<Vec<String
 /// | the ref log | the pointer index's live slot | the ref log's publications are what the pointer index names (`refs/pointer_index.rs:18-20`) |
 /// | trust policy (either slot) | the trust policy generation log | the generation log selects the live slot (`foundation/generation.rs:407`) |
 /// | received index (either slot) | the received index generation log | the same resolver |
+/// | the rename declarations | the WAL | `prikk uncommit` merges a removed patch's renames back; they are the intent of the queue they came from (0.57.0 step 3, S5b) |
+/// | the worktree's record (`worktree.baseline`) | the WAL, the witness | its queued-fold digest says what the queue was when it was written |
 /// | trust keys, author keys, the pointer-index, received-index and trust-policy generation logs | none | each file is read by its own frames; no other file changes what its bytes mean |
 pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Result<Vec<String>> {
     let relative = |path: &Path| -> Result<String> {
@@ -622,8 +632,21 @@ pub(crate) fn meaning_paths_for(layout: &RepositoryLayout, source: &str) -> Resu
                 .join("witness"),
         )?
         || source == relative(&layout.default_active_ref_name_path())?
+        || source == relative(&layout.default_declarations_path())?
     {
         return Ok(vec![wal_relative]);
+    }
+    // 0.57.0 step 3, S5b: the worktree's record says what the queue was when it was written, so the queue (the WAL and the
+    // witness that acknowledges it) is what gives its bytes their meaning.
+    if source == WORKTREE_RECORD_SOURCE {
+        return Ok(vec![
+            wal_relative,
+            relative(
+                &layout
+                    .active_session_dir(DEFAULT_ACTIVE_NAME)
+                    .join("witness"),
+            )?,
+        ]);
     }
     if source == relative(&layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME))? {
         return Ok(vec![
@@ -826,15 +849,25 @@ pub(crate) fn save_ref_name_replace(layout: &RepositoryLayout, written: &[u8]) -
     save_current_replace(layout, &path, written, "ref-name")
 }
 
-fn save_current_replace(
+pub(crate) fn save_current_replace(
     layout: &RepositoryLayout,
     path: &Path,
     written: &[u8],
     label: &str,
 ) -> Result<()> {
     let relative = layout.repository_relative(path)?;
+    save_current_replace_relative(layout, &relative, written, label)
+}
+
+/// [`save_current_replace`] for a file already named relative to `.prikk`.
+pub(crate) fn save_current_replace_relative(
+    layout: &RepositoryLayout,
+    relative: &Path,
+    written: &[u8],
+    label: &str,
+) -> Result<()> {
     let previous =
-        read_file_if_exists(layout.repository_mutation_root(), &relative)?.unwrap_or_default();
+        read_file_if_exists(layout.repository_mutation_root(), relative)?.unwrap_or_default();
     let source = relative.to_string_lossy().replace('\\', "/");
     save_replace(layout, &source, &previous, written, label)?;
     Ok(())
