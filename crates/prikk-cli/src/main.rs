@@ -1375,15 +1375,27 @@ fn run_recovery_command(
                     plan.would_write,
                     if total == 1 { "" } else { "s" }
                 );
-                println!(
-                    "The file now holds what it held before the repair, damage included. `verify` will report that damage again, and commands that refused before the repair will refuse again."
-                );
+                if plan.undoes_uncommit {
+                    println!(
+                        "The files now hold what they held before `prikk uncommit`: the commit is queued again."
+                    );
+                } else {
+                    println!(
+                        "The file now holds what it held before the repair, damage included. `verify` will report that damage again, and commands that refused before the repair will refuse again."
+                    );
+                }
             } else {
                 println!(
                     "plan only -- nothing written; this restore would write {} bytes",
                     plan.would_write
                 );
-                println!("{after}");
+                if plan.undoes_uncommit {
+                    println!(
+                        "After this, the commit is queued again, and the files hold what they held before `prikk uncommit`."
+                    );
+                } else {
+                    println!("{after}");
+                }
             }
             Ok(())
         }

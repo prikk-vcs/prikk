@@ -14,13 +14,14 @@ next `commit` includes them), and sealed history is never touched (for that, `ro
 - **The next `commit` authors the same operations.** The plan says, per operation, whether the worktree still holds the change.
   A rename is put back into the rename declarations (so the next `commit` authors a rename again, not a delete and a create
   with a new identity); a rename declared since that overlaps refuses before anything is written.
-- **A re-run finishes an interrupted run** and says so. Between the WAL cut and the witness rewrite, `verify` and `doctor` read
+- **A re-run finishes an interrupted run** and says so (naming the earlier run when the recovery log holds it; the same state is also what a lost acknowledged commit looks like, and then the sentence says both). Between the WAL cut and the witness rewrite, `verify` and `doctor` read
   the queue as a lost commit and now add that running `prikk uncommit` again finishes it.
 - **After the only queued patch leaves, the session is an empty queue**, the state `seal` leaves, and the worktree's record
   matches it.
 - **The undo** is `prikk doctor --recovery-restore <run>` (the run id is printed). It now also restores the worktree's record
   and the rename declarations, and refuses once anything has changed since. Each recovery entry is saved just before the write
-  it undoes.
+  it undoes. Each run records its kind in its entries, and the restore's closing sentence follows it (after an `uncommit` it
+  says the commit is queued again, not that damage is back).
 - Text only, with the exit codes of the other repairs (0 done, 1 refused, 2 usage); no `--format json` until the CLI's JSON
   tier is decided (0.59.0). Raced against a `commit` loop (300 rounds): each ended in one of its two allowed states and `verify`
   read clean every time. See [Commands](docs/src/reference/commands.md) and [Worktree patch

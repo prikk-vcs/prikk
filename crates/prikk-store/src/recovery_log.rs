@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 mod restore;
-pub(crate) use restore::restore;
+pub(crate) use restore::{UNCOMMIT_RUN_KIND, begin_run_as, restore};
 
 use prikk_error::{PrikkError, Result};
 
@@ -246,6 +246,7 @@ impl Drop for RunScope {
     fn drop(&mut self) {
         if self.owned {
             CURRENT_RUN.with(|current| current.set(None));
+            restore::clear_run_kind();
         }
     }
 }
@@ -334,6 +335,9 @@ fn decode_body(body: &[u8]) -> Option<Entry> {
 pub(crate) fn append(root: &MutationRoot, entry: &Entry) -> Result<RecoveryRef> {
     let mut stamped = entry.clone();
     stamped.run = run_for_append();
+    if let Some(kind) = restore::run_kind() {
+        stamped.label = kind.to_string();
+    }
     let framed = frame(&stamped);
     ensure_directory_required(root, Path::new("recovery"))?;
     let path = Path::new(LOG_PATH);
@@ -1219,6 +1223,8 @@ pub struct RestorePlanView {
     pub refusal: Option<String>,
     /// Whether the bytes were written.
     pub written: bool,
+    /// The run is a `prikk uncommit`'s (its entries' recorded label), so undoing it removes no damage.
+    pub undoes_uncommit: bool,
 }
 
 /// One entry `--recovery-clear` removes, listed before it does (RFC 168 F9).
@@ -1334,7 +1340,9 @@ pub fn recovery_restore(
 ) -> Result<RestorePlanView> {
     let _locks = repair_locks(layout)?;
     let plan = restore(layout, id, plan_only)?;
+    let undoes_uncommit = restore::run_is_uncommit(layout, &plan.id)?;
     Ok(RestorePlanView {
+        undoes_uncommit,
         steps: plan
             .steps
             .iter()

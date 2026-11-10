@@ -119,6 +119,10 @@ pub struct UncommitPlan {
     pub record: RecordOutcome,
     /// The recovery run that holds what was removed. `None` in a plan; set by a real run that wrote.
     pub recovery_run: Option<String>,
+    /// When finishing: the earlier `prikk uncommit` run, found in the recovery log, that cut this patch out. `None` when the log
+    /// has none (it was cleared, or the patch was a lost acknowledged commit and not an interrupted uncommit). **Chooses only the
+    /// wording**: no decision reads it.
+    pub earlier_run: Option<String>,
 }
 
 enum Mode {
@@ -149,7 +153,8 @@ enum Found {
 fn run(layout: &RepositoryLayout, patch_id: ObjectId, mode: Mode) -> Result<UncommitPlan> {
     let executing = matches!(mode, Mode::Execute);
     // A plan opens no run: only a run that writes has an id to name.
-    let _run = executing.then(crate::recovery_log::begin_run);
+    let _run = executing
+        .then(|| crate::recovery_log::begin_run_as(crate::recovery_log::UNCOMMIT_RUN_KIND));
     // The lock `commit` takes: the two cannot interleave, so the plan re-derived here is the plan applied.
     let _active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     if executing {
@@ -354,7 +359,9 @@ fn last_run_that_removed(layout: &RepositoryLayout, patch_id: ObjectId) -> Resul
         return Ok(None);
     };
     for listed in listing.entries.iter().rev() {
-        if listed.entry.source != wal_source {
+        if listed.entry.source != wal_source
+            || listed.entry.label != crate::recovery_log::UNCOMMIT_RUN_KIND
+        {
             continue;
         }
         let Ok(cut) = crate::wal::decode_records(&listed.entry.removed) else {
@@ -559,6 +566,7 @@ fn newest(
         clears_owner,
         record: record_outcome,
         recovery_run: None,
+        earlier_run: None,
     };
     if !executing {
         return Ok(plan);
@@ -725,6 +733,7 @@ fn finish(
         clears_owner,
         record: record_outcome,
         recovery_run: None,
+        earlier_run: last_run_that_removed(layout, patch_id)?,
     };
     if !executing {
         return Ok(plan);

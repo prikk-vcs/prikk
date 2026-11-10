@@ -89,10 +89,17 @@ fn print_plan(plan: &UncommitPlan, plan_only: bool) {
         ("commits", "remain")
     };
     if plan.finishing {
-        println!(
-            "commit {} is already out of the queue; finishing an interrupted `prikk uncommit`",
-            plan.patch_id
-        );
+        match &plan.earlier_run {
+            Some(run) => println!(
+                "commit {} is already out of the queue; finishing an interrupted `prikk uncommit` (recovery run {run})",
+                plan.patch_id
+            ),
+            // The recovery log has no `uncommit` run for it: the same state is what a lost acknowledged commit looks like.
+            None => println!(
+                "commit {} is already out of the queue (an interrupted `prikk uncommit`, or an acknowledged commit that was lost); taking it out of the record",
+                plan.patch_id
+            ),
+        }
     } else {
         let on = plan
             .ref_name

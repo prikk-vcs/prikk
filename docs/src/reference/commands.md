@@ -120,11 +120,15 @@ sealed, and nothing is wrong when you run it: it is not a repair, and it shares 
 - **A re-run finishes it.** If a run was interrupted, typing `prikk uncommit <patch-id>` again finishes it and says so (`already
   out of the queue; finishing an interrupted prikk uncommit`). The state is recognised from the WAL, the witness and the
   worktree's record, never from the recovery log, which only names the run. Between the WAL cut and the witness rewrite,
-  `verify` and `doctor` read the queue as RFC 166's lost-commit row and say that running `uncommit` again finishes it. A
-  re-run after completion says the patch is not queued and names the run.
+  `verify` and `doctor` read the queue as RFC 166's lost-commit row and say that running `uncommit` again finishes it. When the
+  recovery log holds an `uncommit` run that cut the patch out, the re-run names it; when it holds none, the same state is what a
+  lost acknowledged commit looks like, and the re-run says both (`an interrupted prikk uncommit, or an acknowledged commit that
+  was lost`) and takes it out of the record. The log chooses the wording, never the action. A re-run after completion says the
+  patch is not queued and names the run.
 - **The undo.** `prikk doctor --recovery-restore <run>` puts the WAL, the witness, `ref-name`, the worktree's record and the
   rename declarations back byte for byte. It refuses once anything has changed since (a commit that landed, say) and says
-  which file moved. The recovery-log restore now includes the worktree's record and the rename declarations.
+  which file moved. The restore's closing sentence follows the kind of run its entries recorded: after undoing an `uncommit` it
+  says the commit is queued again, and only after undoing a damage repair does it say the damage is back. The recovery-log restore now includes the worktree's record and the rename declarations.
 - **Unblocking `sync seal --claim`.** A queued commit blocks it (`sealing from an accepted claim requires an empty active WAL`), so
   taking the commit back clears that refusal. The files stay in the worktree, though, and `sync seal` onto the current branch
   needs a clean worktree: remove them (or keep them elsewhere) before sealing the claim.

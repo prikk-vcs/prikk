@@ -477,10 +477,14 @@ fn typing_the_same_command_again_finishes_an_interrupted_run_and_says_so() {
         "{way_out}"
     );
 
+    // The log holds no `uncommit` run for it (the state was made by hand): the same state is what a lost acknowledged commit looks
+    // like, and the sentence says both.
     let rerun = uncommit(&repo, &[&second]);
     assert_eq!(code(&rerun), 0, "{}", text(&rerun));
     assert!(
-        text(&rerun).contains("already out of the queue"),
+        text(&rerun).contains(
+            "already out of the queue (an interrupted `prikk uncommit`, or an acknowledged commit that was lost); taking it out of the record"
+        ),
         "{}",
         text(&rerun)
     );
@@ -701,4 +705,116 @@ fn uncommit_against_a_commit_loop_ends_in_one_of_two_states_every_round_and_veri
     eprintln!(
         "uncommit race: {taken_back_first} taken back first, {commit_first} commit first, {rounds}/{rounds} rounds in an allowed state"
     );
+}
+
+fn run_id_in(list: &str) -> String {
+    list.lines()
+        .find_map(|line| line.strip_prefix("run "))
+        .and_then(|rest| rest.split(':').next())
+        .expect("the list names a run")
+        .to_string()
+}
+
+/// S5c: with an `uncommit` run for this patch in the log, the re-run names it (a real interruption: the files a crash after the WAL
+/// cut leaves, rebuilt from the run's own pre-state).
+#[test]
+fn a_rerun_with_the_earlier_run_in_the_log_names_it() {
+    let repo = repo_with("s5c-named");
+    commit_file(&repo, "a.txt", b"one", "one");
+    let second = commit_file(&repo, "b.txt", b"two", "two");
+    let pre = files(&repo);
+    ok(&uncommit(&repo, &[&second]), "uncommit");
+    // Back to the state after the WAL cut: the witness, the owner and the record as they were before the run.
+    let prikk = repo.join(".prikk");
+    for (path, bytes) in [
+        "active/default/witness",
+        "active/default/ref-name",
+        "worktree.baseline",
+    ]
+    .iter()
+    .zip([&pre[1], &pre[2], &pre[3]])
+    {
+        std::fs::write(prikk.join(path), bytes).unwrap();
+    }
+    let list = support::prikk(&repo)
+        .args(["doctor", "--recovery-list"])
+        .output()
+        .unwrap();
+    let run = run_id_in(&text(&list));
+
+    let rerun = uncommit(&repo, &[&second]);
+    assert_eq!(code(&rerun), 0, "{}", text(&rerun));
+    assert!(
+        text(&rerun).contains(&format!(
+            "finishing an interrupted `prikk uncommit` (recovery run {run})"
+        )),
+        "{}",
+        text(&rerun)
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S5c: the restore's closing sentence follows the run's own recorded kind. After undoing an `uncommit` it says the commit is queued
+/// again and does not talk of damage; after undoing a damage repair it still says the damage is back.
+#[test]
+fn the_restore_closing_sentence_follows_the_kind_of_the_run() {
+    let repo = repo_with("s5c-closing-uncommit");
+    commit_file(&repo, "a.txt", b"one", "one");
+    let second = commit_file(&repo, "b.txt", b"two", "two");
+    ok(&uncommit(&repo, &[&second]), "uncommit");
+    let list = support::prikk(&repo)
+        .args(["doctor", "--recovery-list"])
+        .output()
+        .unwrap();
+    let run = run_id_in(&text(&list));
+    let plan = support::prikk(&repo)
+        .args(["doctor", "--recovery-restore", &run, "--plan-only"])
+        .output()
+        .unwrap();
+    assert!(
+        text(&plan).contains("the commit is queued again"),
+        "{}",
+        text(&plan)
+    );
+    assert!(!text(&plan).contains("damage"), "{}", text(&plan));
+    let done = support::prikk(&repo)
+        .args(["doctor", "--recovery-restore", &run])
+        .output()
+        .unwrap();
+    assert_eq!(code(&done), 0, "{}", text(&done));
+    assert!(
+        text(&done).contains("the commit is queued again"),
+        "{}",
+        text(&done)
+    );
+    assert!(!text(&done).contains("damage"), "{}", text(&done));
+    let _ = std::fs::remove_dir_all(&repo);
+
+    let repo = repo_with("s5c-closing-repair");
+    commit_file(&repo, "a.txt", b"one", "one");
+    let wal = repo.join(".prikk/active/default/queue.wal");
+    let mut bytes = std::fs::read(&wal).unwrap();
+    let at = bytes.len() - 5;
+    bytes[at] ^= 0xFF;
+    std::fs::write(&wal, &bytes).unwrap();
+    ok(
+        &support::prikk(&repo)
+            .args(["doctor", "--discard-damaged-commits"])
+            .output()
+            .unwrap(),
+        "discard the damaged commit",
+    );
+    let list = support::prikk(&repo)
+        .args(["doctor", "--recovery-list"])
+        .output()
+        .unwrap();
+    let run = run_id_in(&text(&list));
+    let done = support::prikk(&repo)
+        .args(["doctor", "--recovery-restore", &run])
+        .output()
+        .unwrap();
+    assert_eq!(code(&done), 0, "{}", text(&done));
+    assert!(text(&done).contains("damage included"), "{}", text(&done));
+    assert!(!text(&done).contains("queued again"), "{}", text(&done));
+    let _ = std::fs::remove_dir_all(&repo);
 }

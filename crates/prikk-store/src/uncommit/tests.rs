@@ -889,3 +889,71 @@ fn a_rename_survives_a_crash_at_every_write() {
         "the sweep crashed the run at several writes ({crashes})"
     );
 }
+
+/// S5c: the wording of a finishing run is chosen by the recovery log, and only the wording. An `uncommit` run that cut this patch out
+/// is named; with none in the log (the same state is what a lost acknowledged commit looks like) the plan says so. The action is the
+/// same either way.
+#[test]
+fn a_finishing_run_names_the_earlier_uncommit_run_only_when_the_log_holds_one() {
+    for (named, tag) in [(true, "s5c-named"), (false, "s5c-unnamed")] {
+        let (root, layout) = new_repo(tag);
+        commit(&layout, "a.txt", b"one");
+        let second = commit(&layout, "b.txt", b"two");
+        let wal = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME);
+        let run = if named {
+            let _scope = crate::recovery_log::begin_run_as(crate::recovery_log::UNCOMMIT_RUN_KIND);
+            wal.remove_newest_record(second).unwrap();
+            crate::recovery_log::current_run_id_hex()
+        } else {
+            wal.remove_newest_record(second).unwrap();
+            None
+        };
+
+        let planned = plan_uncommit(&layout, second).unwrap();
+        assert!(planned.finishing);
+        assert_eq!(planned.earlier_run, run, "the log chooses the wording");
+        let done = uncommit(&layout, second).unwrap();
+        assert_eq!(done.earlier_run, run);
+        assert_eq!(
+            queue(&layout).len(),
+            1,
+            "the action is the same either way: it is taken out of the record"
+        );
+        assert!(matches!(
+            classify_now(&layout),
+            Verdict::Healthy { last_seq: 1 }
+        ));
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// S5c: a run's kind is what its entries recorded. An `uncommit` run says so; a damage repair's does not.
+#[test]
+fn a_restore_knows_an_uncommit_run_from_a_damage_repair_by_what_the_entries_recorded() {
+    let (root, layout) = new_repo("s5c-kind-uncommit");
+    commit(&layout, "a.txt", b"one");
+    let second = commit(&layout, "b.txt", b"two");
+    let run = uncommit(&layout, second).unwrap().recovery_run.unwrap();
+    assert!(
+        crate::recovery_log::recovery_restore(&layout, &run, true)
+            .unwrap()
+            .undoes_uncommit
+    );
+    std::fs::remove_dir_all(&root).ok();
+
+    let (root, layout) = new_repo("s5c-kind-repair");
+    commit(&layout, "a.txt", b"one");
+    let wal_path = layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME);
+    let mut bytes = std::fs::read(&wal_path).unwrap();
+    let at = bytes.len() - 5;
+    bytes[at] ^= 0xFF;
+    std::fs::write(&wal_path, &bytes).unwrap();
+    let repaired = crate::discard_damaged_commits(&layout).unwrap();
+    let run = repaired.recovery.unwrap().id;
+    assert!(
+        !crate::recovery_log::recovery_restore(&layout, &run, true)
+            .unwrap()
+            .undoes_uncommit
+    );
+    std::fs::remove_dir_all(&root).ok();
+}

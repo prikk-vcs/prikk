@@ -3,6 +3,39 @@
 
 use super::*;
 
+std::thread_local! {
+    /// The kind the open run was begun as ([`begin_run_as`]): stamped on every entry it appends, as the entry's label.
+    static CURRENT_KIND: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+}
+
+/// The kind of a run `prikk uncommit` writes. Recorded in each entry's label, so a restore tells the run apart by what it recorded.
+pub(crate) const UNCOMMIT_RUN_KIND: &str = "uncommit";
+
+/// [`begin_run`], recording what kind of run it is: every entry it appends carries `kind` as its label (0.57.0 step 3, S5c).
+pub(crate) fn begin_run_as(kind: &'static str) -> RunScope {
+    let scope = begin_run();
+    if scope.owned {
+        CURRENT_KIND.with(|current| current.set(Some(kind)));
+    }
+    scope
+}
+
+pub(super) fn run_kind() -> Option<&'static str> {
+    CURRENT_KIND.with(std::cell::Cell::get)
+}
+
+pub(super) fn clear_run_kind() {
+    CURRENT_KIND.with(|current| current.set(None));
+}
+
+/// Whether run `id`'s entries recorded the `uncommit` kind.
+pub(super) fn run_is_uncommit(layout: &RepositoryLayout, id: &str) -> Result<bool> {
+    Ok(list(layout.repository_mutation_root())?
+        .entries
+        .iter()
+        .any(|listed| listed.id == id && listed.entry.label == UNCOMMIT_RUN_KIND))
+}
+
 /// One restore condition: the fact it found, in the words the plan prints, and whether it holds (RFC 168 F2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Condition {
