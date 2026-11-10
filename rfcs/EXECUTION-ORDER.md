@@ -365,7 +365,7 @@ These apply to all work above and are not restated in each handoff.
    `cargo audit --no-fetch`; `RUSTDOCFLAGS="-D rustdoc::private_intra_doc_links" cargo doc
    --workspace --no-deps` (RFC 126 §4 — added 2026-09-02 after this exact lint sat unchecked at 7
    live warnings, since `cargo doc` had never run anywhere, local gate set or CI, before then);
-   release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13). Use a writable `TMPDIR`:
+   release-policy `check`, `boundary-check`, `reference-check`, `size-check` (RFC 130 §8, added 2026-09-13), `notices-check` (0.57.0 item 5, added 2026-11-10: regenerates `THIRD-PARTY-NOTICES` from the crates linked into `prikk` on the four release targets and compares). Use a writable `TMPDIR`:
    an existing one if set, else the system temp directory, and the repository-local `.git-exclude/tmp` only where neither is
    writable (amended 2026-10-06: a deep checkout path can push a Unix socket path past `SUN_LEN`, so the repository-local
    directory is not the default). `scripts/gates.py` makes this choice and prints which one it used. **This deliberately keeps
@@ -377,7 +377,7 @@ These apply to all work above and are not restated in each handoff.
    artifact, and speed for the small, disposable one.**
 
    **0.54.0 Part G1b, C1: `scripts/gates.py` now makes a fresh, short-named subdirectory under the chosen `TMPDIR` for
-   every gate run, and cleans it up itself** -- removed after a run where all 14 gates exit 0, kept (with its path
+   every gate run, and cleans it up itself** -- removed after a run where all 15 gates exit 0 (14 until 2026-11-10), kept (with its path
    printed) after any run with a failure. This is new, gate-run-specific cleanup; it is not a property of `TMPDIR` or of
    `cargo test` in general. **A plain `cargo test` invoked directly, outside `gates.py`** -- the normal case while
    iterating on a change -- **still writes its own temp fixtures straight into `TMPDIR`, uncleaned, same as always.**
@@ -386,10 +386,10 @@ These apply to all work above and are not restated in each handoff.
    This is exactly why `gates.py`'s own per-run cleanup matters specifically for gate runs: a gate run is the one case
    this project can make leave nothing behind on its own, without waiting on the OS's own reaping window.
 
-   **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 14 gates below
-   (the twelve above, plus the two cross-target Clippy rows next), each under an R1 scope when
+   **Run as one script: `scripts/gates.py`** (0.49.0 step 5, D8 — added 2026-10-05). All 15 gates below
+   (the thirteen above, plus the two cross-target Clippy rows next; 14 until `notices-check` joined on 2026-11-10), each under an R1 scope when
    `systemd-run` is on `PATH` (stated plainly when it is not), with one machine-readable `<name> <exit>`
-   summary line per gate and an overall exit status that is 0 only when every one of the 14 is. **Not a
+   summary line per gate and an overall exit status that is 0 only when every one of the 15 is. **Not a
    `.sh` file**: this project's own governed-procedure scanner
    (`tools/release-policy/src/command_scan/`) is a closed, line-based grammar built for the literal,
    branch-free commands a CI workflow step already is, with no model of shell control flow — a real
