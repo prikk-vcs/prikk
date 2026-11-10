@@ -16,8 +16,9 @@ that platform's release archive and its `.sha256` file from the same release pag
 path uses; verifies the checksum with `sha256sum -c` (or `shasum -a 256 -c` on macOS, which has no
 `sha256sum` by default) and **installs nothing if verification fails**; extracts the `prikk` binary
 to `~/.local/bin` (`chmod +x`) and the two licence files beside it (see [Licences](#licences)); and, if that directory is not already on `PATH`, appends one clearly
-marked block to your shell's startup file so a later uninstall can find and remove exactly that
-block, and nothing else.
+marked block to your shell's startup file (`~/.bashrc` for bash, `~/.zshrc` for zsh) so a later uninstall can find and remove exactly that
+block, and nothing else. **It never creates a startup file:** when the file is missing, or your shell is another one, the installer
+prints the `export PATH=...` line for you to add, and writes nothing.
 
 **Generated, not hand-maintained.** `install.sh`/`uninstall.sh` are produced by
 `prikk-release-policy generate-installer` and attached as release assets at publish time, the same
@@ -55,9 +56,10 @@ not duplicate the marked `PATH` block if one already exists.
 curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall.sh | sh
 ```
 
-Removes the binary from its install directory and the marked `PATH` block from whichever shell
-startup file has it, and nothing else — an unrelated file in the same directory, or unrelated lines
-in the same startup file, are left untouched. If you installed with a custom directory, name the same
+Removes the binary from its install directory and the marked `PATH` block (with the one blank line the installer wrote above it) from
+whichever shell startup file has it, and nothing else — an unrelated file in the same directory, or unrelated lines
+in the same startup file, are left untouched. The startup file is rewritten in place, so its mode and any symlink to it (a dotfiles
+manager's layout) are kept; one corner: a file that did not end in a newline ends in one afterwards. If you installed with a custom directory, name the same
 one to the uninstaller: `curl -fsSL <url> | sh -s -- --prefix /custom/path`, or
 `PRIKK_INSTALL_DIR=/custom/path` in the environment. Giving both is accepted only when they agree. The
 uninstaller refuses, and removes nothing, when `--prefix` has no value or an empty one, when `--prefix`
@@ -68,7 +70,7 @@ longer want that history tracked.
 
 **One real caveat about the `PATH` edit**: macOS Terminal starts a login shell, which reads
 `~/.bash_profile`, not `~/.bashrc`, unless your own `~/.bash_profile` already sources it. The
-installer still writes to `~/.bashrc` (or `~/.zshrc` for zsh) — the file an interactive non-login
+installer still writes to `~/.bashrc` (or `~/.zshrc` for zsh), when that file exists — the file an interactive non-login
 shell reads on Linux, and the common case this script optimizes for — and says so when it runs; if
 your `~/.bash_profile` does not source `~/.bashrc`, add the `PATH` line manually, or add
 `. ~/.bashrc` to `~/.bash_profile` yourself.
@@ -343,7 +345,8 @@ walks through your first commit and seal, key setup included, using disposable p
 
 Prikk places nothing outside its own binary, its two licence files (see [Licences](#licences)) and, inside each repository it
 manages, a `.prikk` directory. `uninstall.sh` and `uninstall.ps1` (pass the same `--prefix` or `PRIKK_INSTALL_DIR` you installed with)
-remove exactly the binary, those two files, and what the installer added to `PATH`. **After an install and an uninstall the file system
+remove exactly the binary, those two files, and what the installer added to `PATH` (a block in a startup file that already existed:
+the installer never creates one). **After an install and an uninstall the file system
 is as it was**, with one exception stated here: the install directory itself, which the installer makes if it is missing, is left
 (`install.ps1`'s folder is removed when empty). The directories the installer made for the licence files go too, each only when
 empty and only after the one below it went: `prikk`, then `licenses`, and, when they were put inside the install directory, `share`.

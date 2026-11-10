@@ -457,17 +457,45 @@ mod licence_files_execution {
         (dist, path)
     }
 
+    /// The environment the scripts run in, pinned so no branch depends on the machine's: `HOME` is the scratch home, `SHELL` is
+    /// given explicitly (never removed: macOS's `sh` is bash, and bash sets `SHELL` itself when it is unset, which is how a
+    /// CI runner once reached the `.bashrc` branch that Linux's dash never does), and `PATH` is the system directories plus
+    /// whatever `on_path` adds. A shell no branch knows is `UNKNOWN_SHELL`.
+    const UNKNOWN_SHELL: &str = "/bin/unknown-shell";
+    const SYSTEM_PATH: &str = "/usr/bin:/bin";
+
+    fn pinned(command: &mut Command, home: &Path, shell: &str, on_path: Option<&Path>) {
+        let path = match on_path {
+            Some(directory) => format!("{}:{SYSTEM_PATH}", directory.display()),
+            None => SYSTEM_PATH.to_string(),
+        };
+        command
+            .env("HOME", home)
+            .env("SHELL", shell)
+            .env("PATH", path)
+            .env_remove("PRIKK_INSTALL_DIR");
+    }
+
     /// `prefix` of `None` is the default (`$HOME/.local/bin`): neither the flag nor the variable is given.
     fn run_install(script: &Path, release: &Path, home: &Path, prefix: Option<&Path>) -> Output {
+        run_install_in(script, release, home, prefix, UNKNOWN_SHELL, None)
+    }
+
+    fn run_install_in(
+        script: &Path,
+        release: &Path,
+        home: &Path,
+        prefix: Option<&Path>,
+        shell: &str,
+        on_path: Option<&Path>,
+    ) -> Output {
         let mut command = Command::new("sh");
         command.arg(script);
         if let Some(prefix) = prefix {
             command.arg("--prefix").arg(prefix);
         }
+        pinned(&mut command, home, shell, on_path);
         command
-            .env("HOME", home)
-            .env_remove("SHELL")
-            .env_remove("PRIKK_INSTALL_DIR")
             .env(
                 "PRIKK_INSTALL_BASE_URL",
                 format!("file://{}", release.display()),
@@ -482,11 +510,8 @@ mod licence_files_execution {
         if let Some(prefix) = prefix {
             command.arg("--prefix").arg(prefix);
         }
-        command
-            .env("HOME", home)
-            .env_remove("PRIKK_INSTALL_DIR")
-            .output()
-            .unwrap()
+        pinned(&mut command, home, UNKNOWN_SHELL, None);
+        command.output().unwrap()
     }
 
     fn stdout(output: &Output) -> String {
@@ -497,19 +522,34 @@ mod licence_files_execution {
         )
     }
 
-    /// Every path under `root` (directories marked), sorted: the file system as a comparison sees it.
+    /// Every path under `root`, sorted, as a comparison sees it: a directory marked `/`; a symlink with its target; a file with its
+    /// mode and the SHA-256 of its content (so a startup file that comes back with a different byte, or mode, is not equal).
     fn tree(root: &Path) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
         fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
             let mut entries: Vec<_> = fs::read_dir(dir).unwrap().flatten().collect();
             entries.sort_by_key(std::fs::DirEntry::file_name);
             for entry in entries {
                 let path = entry.path();
                 let relative = path.strip_prefix(root).unwrap().display().to_string();
-                if entry.file_type().unwrap().is_dir() {
+                let kind = entry.file_type().unwrap();
+                if kind.is_dir() {
                     out.push(format!("{relative}/"));
                     walk(&path, root, out);
+                } else if kind.is_symlink() {
+                    out.push(format!(
+                        "{relative} -> {}",
+                        fs::read_link(&path).unwrap().display()
+                    ));
                 } else {
-                    out.push(relative);
+                    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o7777;
+                    let digest = Sha256::digest(fs::read(&path).unwrap());
+                    let hex: String = digest
+                        .iter()
+                        .take(6)
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    out.push(format!("{relative} [{mode:o} {hex}]"));
                 }
             }
         }
@@ -540,7 +580,7 @@ mod licence_files_execution {
         assert!(
             during
                 .iter()
-                .any(|path| path.ends_with("licenses/prikk/LICENSE")),
+                .any(|path| path.contains("licenses/prikk/LICENSE")),
             "{what}: the licences are installed: {during:?}"
         );
         let output = run_uninstall(&uninstall, home.path(), prefix.as_deref());
@@ -606,6 +646,145 @@ mod licence_files_execution {
             },
             "bin prefix, parent has share without licenses",
         );
+    }
+
+    /// The startup file the installer names for each shell (`None`: the shell is not one it edits).
+    const SHELLS: [(&str, Option<&str>); 4] = [
+        ("/bin/bash", Some(".bashrc")),
+        ("/usr/bin/zsh", Some(".zshrc")),
+        ("/usr/bin/fish", None),
+        (UNKNOWN_SHELL, None),
+    ];
+
+    /// **The 5d property**: for every shell, with the startup file missing and with it present (several shapes), install then
+    /// uninstall leaves the tree byte for byte as it was. A missing file is never created; the installer prints the line instead.
+    #[test]
+    fn a_startup_file_is_never_created_and_a_present_one_comes_back_as_it_was() {
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            return;
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let (_u, uninstall) = generated("uninstall.sh");
+        // What the file holds before the install; `None` is "there is no such file".
+        let contents: [Option<&str>; 5] = [
+            None,
+            Some(""),
+            Some("alias ll='ls -l'\n"),
+            Some("first\n\nsecond\n\n\n"),
+            Some("# mine\nexport EDITOR=vi\n\n"),
+        ];
+        for (shell, startup) in SHELLS {
+            for before_content in contents {
+                let what = format!("{shell}, startup file {before_content:?}");
+                let home = tempfile::tempdir().unwrap();
+                fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+                if let (Some(name), Some(text)) = (startup, before_content) {
+                    fs::write(home.path().join(name), text).unwrap();
+                }
+                let before = tree(home.path());
+                let output =
+                    run_install_in(&install, release.path(), home.path(), None, shell, None);
+                assert!(output.status.success(), "{what}: {}", stdout(&output));
+                let said = stdout(&output);
+                match (startup, before_content) {
+                    (Some(name), None) => {
+                        assert!(
+                            !home.path().join(name).exists(),
+                            "{what}: the file is not created"
+                        );
+                        assert!(
+                            said.contains(&format!("{name} does not exist, so it was not created"))
+                                && said.contains("export PATH="),
+                            "{what}: the install prints the line to add: {said}"
+                        );
+                    }
+                    (Some(name), Some(_)) => {
+                        let text = fs::read_to_string(home.path().join(name)).unwrap();
+                        assert!(
+                            text.contains("# >>> prikk installer >>>")
+                                && text.contains("export PATH="),
+                            "{what}: the block is added to a file that exists: {text}"
+                        );
+                    }
+                    (None, _) => assert!(
+                        said.contains("could not detect your shell"),
+                        "{what}: an unknown shell gets the line to add: {said}"
+                    ),
+                }
+                let output = run_uninstall(&uninstall, home.path(), None);
+                assert!(output.status.success(), "{what}: {}", stdout(&output));
+                assert_eq!(
+                    tree(home.path()),
+                    before,
+                    "{what}: install then uninstall leaves the tree as it was"
+                );
+            }
+        }
+    }
+
+    /// The startup file keeps its mode, and stays a symlink to its target (a dotfiles manager's layout), through install and uninstall.
+    #[test]
+    fn a_startup_file_keeps_its_mode_and_stays_a_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            return;
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let (_u, uninstall) = generated("uninstall.sh");
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+        fs::create_dir_all(home.path().join("dotfiles")).unwrap();
+        let real = home.path().join("dotfiles/zshrc");
+        fs::write(&real, "export A=1\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&real, home.path().join(".zshrc")).unwrap();
+        let before = tree(home.path());
+        let output = run_install_in(
+            &install,
+            release.path(),
+            home.path(),
+            None,
+            "/usr/bin/zsh",
+            None,
+        );
+        assert!(output.status.success(), "{}", stdout(&output));
+        assert!(
+            fs::read_to_string(&real).unwrap().contains("export PATH="),
+            "the block is written through the link"
+        );
+        let output = run_uninstall(&uninstall, home.path(), None);
+        assert!(output.status.success(), "{}", stdout(&output));
+        assert_eq!(tree(home.path()), before, "mode and link survive");
+    }
+
+    /// When the install directory is already on `PATH` the startup file is not touched at all, present or not.
+    #[test]
+    fn a_directory_already_on_path_touches_no_startup_file() {
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            return;
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(home.path().join(".bashrc"), "keep\n").unwrap();
+        let output = run_install_in(
+            &install,
+            release.path(),
+            home.path(),
+            None,
+            "/bin/bash",
+            Some(&bin),
+        );
+        assert!(output.status.success(), "{}", stdout(&output));
+        assert_eq!(
+            fs::read_to_string(home.path().join(".bashrc")).unwrap(),
+            "keep\n"
+        );
+        assert!(!home.path().join(".zshrc").exists());
     }
 
     /// Where the licences land, and that a file nobody named, and another program's licences, are left alone.

@@ -24,6 +24,15 @@ directories the installer made for them, each only when empty: install then unin
 directory itself, which the installer makes if missing, stays on Unix). An archive from a release before 0.57.0 has neither file: the installer
 says so and installs the binary. See [Install](docs/src/guide/install.md#licences).
 
+### Fixed — `install.sh` no longer creates a shell startup file, and `uninstall.sh` returns the file it edited as it was
+
+Until now `install.sh` created `~/.bashrc` (or `~/.zshrc`) to hold its `PATH` block when the file did not exist, and `uninstall.sh`
+removed the block and left the new, empty file; on macOS, where `sh` is bash, that was an extra `.bashrc` after an uninstall. The
+installer now adds its block only to a startup file that already exists; when the file is missing, or the shell is not bash or zsh, it prints
+the `export PATH=...` line instead. `uninstall.sh` removes the block together with the blank line the installer wrote above it, and rewrites
+the file in place, so its mode and any symlink to it are kept (it replaced the file before, which made it mode 600 and ended a link). See
+[Install](docs/src/guide/install.md#uninstalling).
+
 ### Changed — the top-level help is a grouped summary, and `prikk help [command]` works
 
 `prikk`, `prikk --help` and `prikk -h` now print the commands in groups, in the order of a day's work (start; record your work;

@@ -114,12 +114,18 @@ removed_path_entry=0
 for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [ -f "$rc_file" ] && grep -qF "$path_marker_begin" "$rc_file" 2>/dev/null; then
     work_file="$(mktemp)"
+    # The block goes with the one blank line the installer wrote above it. The file is rewritten in
+    # place (not replaced), so its mode, owner and any symlink to it are kept.
     awk -v begin="$path_marker_begin" -v end="$path_marker_end" '
-      $0 == begin { skipping = 1; next }
+      $0 == begin { skipping = 1; held = 0; next }
       $0 == end { skipping = 0; next }
-      !skipping { print }
+      skipping { next }
+      $0 == "" { if (held) print ""; held = 1; next }
+      { if (held) { print ""; held = 0 } print }
+      END { if (held) print "" }
     ' "$rc_file" > "$work_file"
-    mv "$work_file" "$rc_file"
+    cat "$work_file" > "$rc_file"
+    rm -f "$work_file"
     removed_path_entry=1
     echo "prikk-uninstall: removed the PATH entry from $rc_file"
   fi

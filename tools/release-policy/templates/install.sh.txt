@@ -183,8 +183,14 @@ if [ "$on_path" -eq 0 ]; then
     *) rc_file="" ;;
   esac
 
-  if [ -n "$rc_file" ]; then
-    if [ -f "$rc_file" ] && grep -qF "$path_marker_begin" "$rc_file" 2>/dev/null; then
+  # The installer only adds a block to a startup file that already exists: it never creates one, so an
+  # uninstall can leave the file system as it was. When the file is missing it prints the line instead.
+  if [ -n "$rc_file" ] && [ ! -f "$rc_file" ]; then
+    echo "prikk-install: $rc_file does not exist, so it was not created; add this line to your shell's"
+    echo "prikk-install: startup file yourself:"
+    echo "prikk-install:   export PATH=\"$install_dir:\$PATH\""
+  elif [ -n "$rc_file" ]; then
+    if grep -qF "$path_marker_begin" "$rc_file" 2>/dev/null; then
       echo "prikk-install: $rc_file already has a PATH entry from a previous install"
     else
       # The literal $PATH below is meant to land in the rc file unexpanded, so it re-evaluates at
