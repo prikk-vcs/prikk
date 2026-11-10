@@ -133,6 +133,18 @@ if (Test-Path -Path $binaryPath -PathType Leaf) {
   Write-Host "prikk-uninstall: no binary found at $binaryPath (nothing to remove there)"
 }
 
+# 0.57.0 item 5b: the two licence files install.ps1 put beside the binary, and nothing else in the
+# folder (the folder itself goes below only if it is then empty).
+$removedLicences = $false
+foreach ($licenceName in @("LICENSE", "THIRD-PARTY-NOTICES")) {
+  $licencePath = Join-Path $installDir $licenceName
+  if (Test-Path -Path $licencePath -PathType Leaf) {
+    Remove-Item -Path $licencePath -Force
+    $removedLicences = $true
+    Write-Host "prikk-uninstall: removed $licencePath"
+  }
+}
+
 # The marker's presence is the only signal this script trusts for whether *this installer* added
 # the PATH entry -- a pre-existing entry the user had for an unrelated reason has no marker next
 # to it and is left untouched, exactly as the handoff requires.
@@ -194,7 +206,7 @@ if (Test-Path -Path $markerPath -PathType Leaf) {
   Remove-Item -Path $markerPath -Force
 }
 
-if (-not $removedBinary -and -not $removedPathEntry) {
+if (-not $removedBinary -and -not $removedPathEntry -and -not $removedLicences) {
   Write-Host "prikk-uninstall: found nothing to remove"
 }
 

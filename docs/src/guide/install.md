@@ -15,7 +15,8 @@ curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/install.s
 that platform's release archive and its `.sha256` file from the same release page URLs the manual
 path uses; verifies the checksum with `sha256sum -c` (or `shasum -a 256 -c` on macOS, which has no
 `sha256sum` by default) and **installs nothing if verification fails**; extracts the `prikk` binary
-to `~/.local/bin` (`chmod +x`); and, if that directory is not already on `PATH`, appends one clearly
+to `~/.local/bin` (`chmod +x`) and the two licence files to `~/.local/share/licenses/prikk` (see
+[Licences](#licences)); and, if that directory is not already on `PATH`, appends one clearly
 marked block to your shell's startup file so a later uninstall can find and remove exactly that
 block, and nothing else.
 
@@ -83,7 +84,8 @@ irm https://github.com/prikk-vcs/prikk/releases/latest/download/install.ps1 | ie
 variables (`$env:PROCESSOR_ARCHITEW6432` when set, else `$env:PROCESSOR_ARCHITECTURE` — never a
 .NET API); downloads that platform's release `.zip` and its `.sha256` from the same release
 page URLs the manual path uses; verifies the checksum with `Get-FileHash` and **installs nothing if
-verification fails**; extracts `prikk.exe` to `%LOCALAPPDATA%\Programs\prikk`; and, if that
+verification fails**; extracts `prikk.exe`, `LICENSE` and `THIRD-PARTY-NOTICES` to
+`%LOCALAPPDATA%\Programs\prikk`; and, if that
 directory is not already on your user `PATH`, adds it — see **The `PATH` change**, below.
 
 **Generated, not hand-maintained.** Exactly like `install.sh`/`uninstall.sh` above,
@@ -193,7 +195,12 @@ Prikk is licensed under the Apache License 2.0. **Every release archive carries 
 version, its SPDX licence expression, the targets that link it) and reproduces the full text of each licence file that crate
 ships. The notices are generated from the dependency graph and checked on every change (`notices-check`, one of the project's
 gates), so a dependency cannot land without them. `prikk` and `prikk-bin` from the AUR install both files under
-`/usr/share/licenses/prikk/`. The installer scripts install the binary only; the archives they download hold the licence files.
+`/usr/share/licenses/prikk/`. **The installer scripts install both files too:**
+- `install.sh` puts them in `share/licenses/prikk` beside the install directory when that directory is named `bin` (the default
+  `~/.local/bin` gives `~/.local/share/licenses/prikk`, as `/usr/bin` has `/usr/share/licenses/prikk`), and in
+  `<install directory>/share/licenses/prikk` otherwise; `--prefix` and `PRIKK_INSTALL_DIR` move them with the binary.
+- `install.ps1` puts them in the install folder beside `prikk.exe`.
+- An archive from a release before 0.57.0 has neither file; the installer says so and still installs the binary.
 
 ## Verify the checksum
 
@@ -333,6 +340,8 @@ walks through your first commit and seal, key setup included, using disposable p
 
 ## Uninstalling
 
-Prikk places nothing outside its own binary and, inside each repository it manages, a `.prikk`
-directory. Delete the binary, and remove `.prikk` from any repository whose history you no longer
-want tracked — there is nothing else to clean up.
+Prikk places nothing outside its own binary, its two licence files (see [Licences](#licences)) and, inside each repository it
+manages, a `.prikk` directory. `uninstall.sh` and `uninstall.ps1` remove exactly the binary, those two files (and the
+`share/licenses/prikk` directory the installer created, only if it is then empty), and what the installer added to `PATH`;
+pass the same `--prefix` or `PRIKK_INSTALL_DIR` you installed with. By hand: delete the binary and the licence files, and remove
+`.prikk` from any repository whose history you no longer want tracked — there is nothing else to clean up.

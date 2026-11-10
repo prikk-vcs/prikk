@@ -264,6 +264,18 @@ try {
 
   Write-Host "prikk-install: installed to $installDir\prikk.exe"
 
+  # 0.57.0 item 5b: the licence files travel with the binary, into the install folder beside it.
+  # uninstall.ps1 removes exactly these two. A release before 0.57.0 ships neither: said, not fatal.
+  foreach ($licenceName in @("LICENSE", "THIRD-PARTY-NOTICES")) {
+    $extractedLicence = Join-Path $workDir $licenceName
+    if (Test-Path -Path $extractedLicence -PathType Leaf) {
+      Copy-Item -Path $extractedLicence -Destination (Join-Path $installDir $licenceName) -Force
+      Write-Host "prikk-install: installed $installDir\$licenceName"
+    } else {
+      Write-Host "prikk-install: this archive has no $licenceName (releases before 0.57.0 ship neither licence file)"
+    }
+  }
+
   $markerPath = Join-Path $installDir "path-added-by-install.marker"
   $rawPath = Get-RawUserPathEntry
   $pathEntries = @()

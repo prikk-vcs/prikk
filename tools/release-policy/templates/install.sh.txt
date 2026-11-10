@@ -138,6 +138,25 @@ chmod +x "$install_dir/prikk"
 
 echo "prikk-install: installed to $install_dir/prikk"
 
+# 0.57.0 item 5b: the licence files travel with the binary. They go to share/licenses/prikk beside
+# the install prefix -- a binary directory named `bin` has its `share` next to it (the default
+# $HOME/.local/bin puts them in $HOME/.local/share/licenses/prikk, as /usr/bin does /usr/share/licenses/prikk);
+# any other directory holds its own share/. uninstall.sh derives the same directory from the same
+# --prefix / PRIKK_INSTALL_DIR and removes exactly these two files.
+case "$(basename "$install_dir")" in
+  bin) licence_dir="$(dirname "$install_dir")/share/licenses/prikk" ;;
+  *) licence_dir="$install_dir/share/licenses/prikk" ;;
+esac
+for licence_file in LICENSE THIRD-PARTY-NOTICES; do
+  if [ -f "$work_dir/$licence_file" ]; then
+    mkdir -p "$licence_dir"
+    mv "$work_dir/$licence_file" "$licence_dir/$licence_file"
+    echo "prikk-install: installed $licence_dir/$licence_file"
+  else
+    echo "prikk-install: this archive has no $licence_file (releases before 0.57.0 ship neither licence file)" >&2
+  fi
+done
+
 path_marker_begin="# >>> prikk installer >>>"
 path_marker_end="# <<< prikk installer <<<"
 

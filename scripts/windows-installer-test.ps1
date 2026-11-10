@@ -274,6 +274,8 @@ try {
   Assert-True ($LASTEXITCODE -eq 0) "install.ps1 exited 0"
   Assert-True (Test-Path -Path (Join-Path $installDirA "prikk.exe") -PathType Leaf) "prikk.exe is present after install"
   Assert-True (Test-Path -Path (Join-Path $installDirA "path-added-by-install.marker") -PathType Leaf) "the PATH marker file was written"
+  Assert-True (Test-Path -Path (Join-Path $installDirA "LICENSE") -PathType Leaf) "LICENSE is present beside prikk.exe after install (0.57.0 item 5b)"
+  Assert-True (Test-Path -Path (Join-Path $installDirA "THIRD-PARTY-NOTICES") -PathType Leaf) "THIRD-PARTY-NOTICES is present beside prikk.exe after install (0.57.0 item 5b)"
   Assert-True (Test-UserPathContains $installDirA) "the install directory is on the user PATH"
 
   $versionResult = Invoke-WithReconstructedPath -ArgumentList @("prikk.exe", "--version")
@@ -284,6 +286,8 @@ try {
   Assert-True ($LASTEXITCODE -eq 0) "uninstall.ps1 exited 0"
   Assert-True (-not (Test-Path -Path (Join-Path $installDirA "prikk.exe"))) "prikk.exe is gone after uninstall"
   Assert-True (-not (Test-Path -Path (Join-Path $installDirA "path-added-by-install.marker"))) "the marker file is gone after uninstall"
+  Assert-True (-not (Test-Path -Path (Join-Path $installDirA "LICENSE"))) "LICENSE is gone after uninstall (0.57.0 item 5b)"
+  Assert-True (-not (Test-Path -Path (Join-Path $installDirA "THIRD-PARTY-NOTICES"))) "THIRD-PARTY-NOTICES is gone after uninstall (0.57.0 item 5b)"
   Assert-True (-not (Test-Path -Path $installDirA)) "the install folder itself is gone (it was left empty)"
   Assert-True (-not (Test-UserPathContains $installDirA)) "the install directory is no longer on the user PATH"
 } finally {
@@ -291,6 +295,52 @@ try {
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
   Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
   Remove-UserPathEntryIfPresent $installDirA
+}
+
+# ---------------------------------------------------------------------------
+# Scenario A2 (0.57.0 item 5b): the licence files are installed beside the binary, and uninstall.ps1
+# removes exactly those two and nothing else. Shown red first: a perturbed uninstall.ps1 with the
+# licence step emptied is run and must be seen to leave the files -- proving the control can fail --
+# before the real uninstall.ps1 is run and must remove them while a file it did not install (and so
+# the install folder holding it) survives.
+# ---------------------------------------------------------------------------
+Write-Section "Scenario A2: licence files installed and uninstalled alone (red before green)"
+
+$uninstallScriptContentA2 = Get-Content -Path $uninstallScriptPath -Raw
+$licenceLoopTextA2 = 'foreach ($licenceName in @("LICENSE", "THIRD-PARTY-NOTICES")) {'
+if (-not $uninstallScriptContentA2.Contains($licenceLoopTextA2)) {
+  throw "scenario A2's perturbation text was not found in uninstall.ps1 -- the template changed shape; update this script"
+}
+$perturbedUninstallPathA2 = Join-Path $scratchRoot "uninstall-perturbed-a2.ps1"
+Set-Content -Path $perturbedUninstallPathA2 -Value $uninstallScriptContentA2.Replace($licenceLoopTextA2, 'foreach ($licenceName in @()) {')
+
+$installDirA2 = Join-Path $scratchRoot "install-a2"
+$env:PRIKK_INSTALL_DIR = $installDirA2
+$env:PRIKK_INSTALL_BASE_URL = "http://localhost:18097"
+$serverA2 = Start-StaticFileServer -Directory $distDirResolved -Port 18097
+try {
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "A2: install.ps1 exited 0"
+  Assert-True (Test-Path -Path (Join-Path $installDirA2 "LICENSE") -PathType Leaf) "A2: LICENSE is installed in the install folder"
+  Assert-True (Test-Path -Path (Join-Path $installDirA2 "THIRD-PARTY-NOTICES") -PathType Leaf) "A2: THIRD-PARTY-NOTICES is installed in the install folder"
+  Set-Content -Path (Join-Path $installDirA2 "stranger.txt") -Value "not installed by prikk"
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $perturbedUninstallPathA2
+  Assert-True (Test-Path -Path (Join-Path $installDirA2 "LICENSE") -PathType Leaf) "A2 RED: the perturbed uninstall.ps1 (licence step emptied) leaves LICENSE -- the control can fail"
+  Assert-True (Test-Path -Path (Join-Path $installDirA2 "THIRD-PARTY-NOTICES") -PathType Leaf) "A2 RED: the perturbed uninstall.ps1 (licence step emptied) leaves THIRD-PARTY-NOTICES -- the control can fail"
+
+  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $uninstallScriptPath
+  Assert-True ($LASTEXITCODE -eq 0) "A2 GREEN: the real uninstall.ps1 exited 0"
+  Assert-True (-not (Test-Path -Path (Join-Path $installDirA2 "LICENSE"))) "A2 GREEN: LICENSE is removed"
+  Assert-True (-not (Test-Path -Path (Join-Path $installDirA2 "THIRD-PARTY-NOTICES"))) "A2 GREEN: THIRD-PARTY-NOTICES is removed"
+  Assert-True (Test-Path -Path (Join-Path $installDirA2 "stranger.txt") -PathType Leaf) "A2 GREEN: a file the installer did not name survives"
+  Assert-True (Test-Path -Path $installDirA2 -PathType Container) "A2 GREEN: the install folder stays while it holds a file the installer did not install"
+} finally {
+  Stop-StaticFileServer $serverA2
+  Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
+  Remove-Item Env:\PRIKK_INSTALL_BASE_URL -ErrorAction SilentlyContinue
+  Remove-UserPathEntryIfPresent $installDirA2
+  Remove-Item -Path $installDirA2 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
