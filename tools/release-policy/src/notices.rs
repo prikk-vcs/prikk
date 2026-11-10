@@ -61,23 +61,19 @@ pub(crate) struct LinkedCrate {
     pub(crate) files: Vec<(String, String)>,
 }
 
-/// `(name, version)` of each registry crate a `cargo tree --prefix none --format "{p}"` listing names. A line ending in a
-/// parenthesised path is a workspace crate and is skipped; so is a `(*)` repeat marker.
+/// `(name, version)` of each crate a `cargo tree --prefix none --format "{p}"` listing names -- **all of them, the workspace's own
+/// included**. Which of them are the workspace's is decided by identity (the package's `source` in `cargo metadata`), never by how
+/// the line spells a path: on Windows that path prints with backslashes (`(D:\a\prikk\crates\prikk-cli)`), and a test of the
+/// spelling is a test of the platform.
 pub(crate) fn parse_tree(listing: &str) -> BTreeSet<(String, String)> {
     let mut crates = BTreeSet::new();
     for line in listing.lines() {
         let mut words = line.split_whitespace();
-        let (Some(name), Some(version)) = (words.next(), words.next()) else {
-            continue;
-        };
-        let Some(version) = version.strip_prefix('v') else {
-            continue;
-        };
-        let source = words.find(|word| *word != "(*)");
-        if source.is_some_and(|word| word.starts_with('(') && word.contains('/')) {
-            continue;
+        if let (Some(name), Some(version)) = (words.next(), words.next()) {
+            if let Some(version) = version.strip_prefix('v') {
+                crates.insert((name.to_string(), version.to_string()));
+            }
         }
-        crates.insert((name.to_string(), version.to_string()));
     }
     crates
 }
@@ -202,35 +198,42 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<LinkedCrate>> {
 
     targets_of
         .into_iter()
-        .map(|((name, version), targets)| {
-            let package = packages
-                .get(&(name.clone(), version.clone()))
-                .ok_or_else(|| {
-                    Error::new(format!(
-                        "{name} {version} is in the tree but not in the metadata"
-                    ))
-                })?;
-            let dir = package
-                .manifest_path
-                .as_std_path()
-                .parent()
-                .ok_or_else(|| {
-                    Error::new(format!("{name} {version}: manifest has no directory"))
-                })?;
-            let extra = package
-                .license_file
-                .as_ref()
-                .map(|path| path.as_str().to_string());
-            let files = licence_files(dir, extra.as_deref(), &format!("{name} {version}"))?;
-            Ok(LinkedCrate {
-                name,
-                version,
-                license: package.license.clone(),
-                targets,
-                files,
-            })
+        .filter_map(|((name, version), targets)| {
+            let Some(package) = packages.get(&(name.clone(), version.clone())) else {
+                return Some(Err(Error::new(format!(
+                    "{name} {version} is in the tree but not in the metadata"
+                ))));
+            };
+            // The workspace's own crates are prikk, covered by LICENSE: by identity, a package with no `source` (a path crate).
+            package.source.as_ref()?;
+            Some(linked_crate(package, name, version, targets))
         })
         .collect()
+}
+
+fn linked_crate(
+    package: &cargo_metadata::Package,
+    name: String,
+    version: String,
+    targets: BTreeSet<String>,
+) -> Result<LinkedCrate> {
+    let dir = package
+        .manifest_path
+        .as_std_path()
+        .parent()
+        .ok_or_else(|| Error::new(format!("{name} {version}: manifest has no directory")))?;
+    let extra = package
+        .license_file
+        .as_ref()
+        .map(|path| path.as_str().to_string());
+    let files = licence_files(dir, extra.as_deref(), &format!("{name} {version}"))?;
+    Ok(LinkedCrate {
+        name,
+        version,
+        license: package.license.clone(),
+        targets,
+        files,
+    })
 }
 
 const RULE: &str =
@@ -342,12 +345,18 @@ pub(crate) fn compare(generated: &str, committed: &str) -> Result<()> {
     )))
 }
 
+/// The committed file as the gate compares it: LF line endings.
+pub(crate) fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 /// The gate: regenerate, and compare with the committed file.
 pub(crate) fn check(root: &Path) -> Result<()> {
     let generated = generate(root)?;
+    // A checkout that converts line endings (Windows `core.autocrlf`) must not fail the gate: the file is LF by definition.
     let committed = std::fs::read_to_string(root.join(FILE_NAME))
         .map_err(|error| Error::new(format!("{FILE_NAME} cannot be read: {error}")))?;
-    compare(&generated, &committed)
+    compare(&generated, &lf(&committed))
 }
 
 /// Write the file.

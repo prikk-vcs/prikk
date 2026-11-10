@@ -25,22 +25,51 @@ fn linked(name: &str, version: &str, targets: &[&str]) -> LinkedCrate {
 }
 
 #[test]
-fn the_tree_parser_keeps_registry_crates_and_drops_workspace_crates_and_repeat_markers() {
+fn the_tree_parser_lists_every_crate_once_whatever_the_platform_spells_for_a_path() {
+    // Linux/macOS and Windows spellings of a workspace crate's path, and a registry crate; a repeat marker; noise.
     let listing = "prikk v0.56.0 (/work/crates/prikk-cli)\n\
-                   prikk-store v0.56.0 (/work/crates/prikk-store)\n\
+                   prikk-store v0.56.0 (D:\\a\\prikk\\prikk\\crates\\prikk-store)\n\
                    ed25519-dalek v3.0.0\n\
                    digest v0.11.3 (*)\n\
                    ed25519-dalek v3.0.0 (*)\n\
                    \n\
                    not a crate line\n";
-    let parsed = parse_tree(listing);
     assert_eq!(
-        parsed,
+        parse_tree(listing),
         BTreeSet::from([
+            ("prikk".to_string(), "0.56.0".to_string()),
+            ("prikk-store".to_string(), "0.56.0".to_string()),
             ("digest".to_string(), "0.11.3".to_string()),
             ("ed25519-dalek".to_string(), "3.0.0".to_string()),
-        ])
+        ]),
+        "the parser reads names and versions only: which crates are the workspace's is metadata's to say"
     );
+}
+
+/// The Windows failure of 0.57.0 item 5 (CI run 42829516211): the workspace's own crates must not reach the notices however the
+/// platform prints their path. The real graph never lists one, on any release target.
+#[test]
+fn no_workspace_crate_is_ever_listed_as_a_third_party_one() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap()
+        .to_path_buf();
+    let crates = collect(&root).unwrap();
+    assert!(
+        crates.iter().all(|c| !c.name.starts_with("prikk")),
+        "{:?}",
+        crates.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+}
+
+/// A checkout that turned LF into CRLF (Windows `core.autocrlf`) is still the committed file once read the way the gate reads it.
+#[test]
+fn a_crlf_checkout_of_the_committed_file_passes_only_through_the_lf_reading() {
+    let generated = render(&[linked("alpha", "1.0.0", &["aarch64-apple-darwin"])]);
+    let crlf = generated.replace('\n', "\r\n");
+    assert!(compare(&generated, &crlf).is_err());
+    assert!(compare(&generated, &lf(&crlf)).is_ok());
 }
 
 #[test]
