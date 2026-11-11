@@ -168,6 +168,26 @@ the safe direction.
 The `.prikk` rejection applies to the first component only. A later `.prikk` component is not rejected
 by that specific validator rule. Worktree authoring separately skips the top-level `.prikk/` directory.
 
+### Unicode paths, by platform and command (0.57.0)
+
+What each command does with a non-ASCII name, as tested (`A` accepts, `R` refuses). The Linux rows run in CI on the file system the runner has; the macOS and
+Windows jobs run the same tests, and a row that needs a file system able to hold two names that only differ by case or form **skips there and says why** instead of
+passing vacuously.
+
+| name, on disk | `commit` | `seal` | `extract` / `checkout` | import into format 8 | import into format 6 or 7 |
+|---|---|---|---|---|---|
+| NFC `é` (Linux, macOS APFS, Windows NTFS) | A, stored as given | A | written as given | A | R, names the path and `prikk format upgrade` |
+| NFD `e` + U+0301 | R, names it and its NFC spelling | never recorded | n/a | accepted if the artifact has it (decoding never asks for NFC) | R |
+| NFC and NFD of one visible name side by side (Linux, Windows) | R, names both | n/a | n/a | n/a | n/a |
+| `straße` beside `STRASSE`, `École` beside `école` | A (`commit` has no collision rule) | R, names both paths | R, before the first write | not judged at import (a collision is judged at `seal` and when files are written) | R (a non-ASCII path) |
+| `COM¹.txt`, `con.txt` | R (reserved) | R | R | R | R |
+| a control, bidirectional control, noncharacter or listed invisible character (ZWJ, ZWNJ included) | R, the character written `\u{..}` | R | R | R | R |
+| an unassigned code point | A | A | A | A | R |
+
+On macOS (APFS preserves the form but compares canonically) an NFD name another tool made must be renamed to NFC before `commit`. The end-to-end test
+(`u5_unicode_paths_end_to_end`) walks one NFC name from `commit` through `seal`, `verify`, `tree`, `cat`, `extract`, a bundle and an archive, a format-7
+receiver's refusal (nothing written), `format upgrade`, `archive import --adopt` and the far end's `extract`.
+
 ## Snapshot Manifest Paths
 
 Snapshot manifests decode path bytes as UTF-8 text, parse each path through `RepoPath`, and then
@@ -278,7 +298,7 @@ the same id is still refused even after removal.
 
 ## Deferred and Not Promised
 
-Still deferred: Unicode-aware collision comparison of ref names and key ids, symlink authoring, symlink materialization, full platform path matrix, Git path compatibility, path-policy configuration, stable
+Still deferred: Unicode-aware collision comparison of ref names and key ids, symlink authoring, symlink materialization, Git path compatibility, path-policy configuration, stable
 repository-format migration, complete checkout pruning, complete branch switching, production merge
 execution, and race-free worktree mutation hardening.
 

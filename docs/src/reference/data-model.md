@@ -73,6 +73,11 @@ later design defines their state derivation.
 
 **No block, patch or ref record carries a time.** Signatures and RefUpdates have a `created_at` field, and every current writer sets it to 0 (and the current ref log refuses any other value at write time), so a record says what happened and in what order, never when.
 
+**Paths are UTF-8, and at format 8 may be non-ASCII.** A path's bytes are what the state root commits to; prikk records a non-ASCII name only in Unicode
+normalization form C (checked where a name is authored, never rewritten, never asked at decode) and refuses the characters in the frozen decode table. Whether two
+paths collide is a policy of the writers that protect the disk, judged by a canonical caseless key, and is **not** part of a Block's integrity: `verify` re-derives
+the state root without it. See [Path and Worktree Safety](path-safety.md).
+
 The state root commits to the complete replay-derived live-node set in canonical path order.
 Each leaf binds the exact repository path, nonzero NodeId, node kind, normalized mode, and either the
 file Blob ObjectId or opaque UTF-8 symlink target. Binary Merkle reduction promotes an odd final hash

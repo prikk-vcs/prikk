@@ -1,7 +1,8 @@
 //! 0.57.0 S5d: the one count line for unreached **content** -- the Patches and Blobs that nothing reaches.
 //!
-//! Almost every `prikk uncommit` leaves one (a text `create-file` writes a blob too), and `received remove` and
-//! `doctor --discard-damaged-commits` leave them as well. Nothing was *published* under a Patch or a Blob, so there is no trust
+//! Almost every `prikk uncommit` leaves one (a text `create-file` writes a blob too). Measured sources (each has a test): a commit
+//! taken back, a received ref removed, a rolled-back block, a claimless accepted patch, discarded commits, and an import that was
+//! interrupted or refused after it had written its objects. The sentence says "for example", because the list is not closed. Nothing was *published* under a Patch or a Blob, so there is no trust
 //! question to warn about, and a warning per object buried the ones that matter. A Block or a RefState keeps its per-object
 //! warning (its publication trust was not checked); `unreached_objects` in `verify --format json` still lists every object with
 //! its type, so this only moves the detail to where a tool reads it. `verify` and `doctor` print the same sentence, built here.
@@ -53,9 +54,10 @@ impl UnreachedContent {
     #[must_use]
     pub fn sentence(&self) -> String {
         format!(
-            "unreached content: {total} object(s) ({patches} patch(es), {blobs} blob(s)) that nothing reaches -- content kept from \
-             commits taken back (`prikk uncommit`), from received refs removed, or from discarded commits. Nothing was published \
-             under them, so there is no trust to check; they are harmless, and no command removes them yet. \
+            "unreached content: {total} object(s) ({patches} patch(es), {blobs} blob(s)) that nothing reaches -- content left behind, \
+             for example, by a commit taken back (`prikk uncommit`), a received ref removed, a rolled-back block, discarded commits, \
+             or an import that was refused or interrupted after its objects were written. Nothing was published under them, so \
+             there is no trust to check; they are harmless, and no command removes them yet. \
              `prikk verify --format json` lists each one under `unreached_objects`",
             total = self.total(),
             patches = self.patches,

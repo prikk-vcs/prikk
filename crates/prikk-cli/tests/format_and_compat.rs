@@ -23,3 +23,5 @@ mod u2_content_half;
 mod u4_artifact_format;
 #[path = "format_and_compat/u4b_refusal_ids.rs"]
 mod u4b_refusal_ids;
+#[path = "format_and_compat/u5_unicode_paths_end_to_end.rs"]
+mod u5_unicode_paths_end_to_end;

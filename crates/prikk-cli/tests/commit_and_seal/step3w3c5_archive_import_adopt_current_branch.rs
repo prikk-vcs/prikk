@@ -480,6 +480,11 @@ fn archive_import_adopt_onto_current_branch_a_file_in_the_way_with_the_early_che
          leaving every one of them locally present but unreached, matching checked objects \
          exactly: {after_refusal}"
     );
+    assert!(
+        after_refusal.contains("unreached content:")
+            && after_refusal.contains("refused or interrupted after its objects were written"),
+        "the count line names a refused import as a source of unreached content (0.57.0 U5): {after_refusal}"
+    );
     let doctor = support::prikk(&dest).arg("doctor").output().unwrap();
     assert!(
         !doctor.status.success(),

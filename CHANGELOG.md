@@ -176,7 +176,7 @@ next `commit` includes them), and sealed history is never touched (for that, `ro
 
 Almost every `prikk uncommit` leaves a blob (a text `create-file` writes one too), and `received remove` and `doctor --discard-damaged-commits` leave patches and blobs, each of which was a warning
 line of its own although nothing was published under it and there is no trust question. They are now **one line**: `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …`,
-saying what they are, that they are harmless, that no command removes them yet and that `prikk verify --format json` lists each one; `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`.
+saying what they are (for example, left behind by a commit taken back, a received ref removed, a rolled-back block, discarded commits, or an import refused or interrupted after writing), that they are harmless, that no command removes them yet and that `prikk verify --format json` lists each one; `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`.
 It is not a warning, and exit codes are unchanged. **A Block or a RefState that nothing reaches keeps its per-object warning** (its publication trust was not checked), `unreached objects: N` stays the
 total, and `unreached_objects` in `--format json` is unchanged: every object, each with its type. A script that matched `warning: blob …` or `warning: patch …` in `verify` text, or counted
 `PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the count line (text) or `unreached_objects` (JSON) instead.
@@ -479,6 +479,22 @@ sender's. The sync guide states the step.
 - **A path with a character the decode table refuses is reported by name.** The reading sentence for history is now `<path> contains U+200D (invisible format
   character), which is outside what this version of prikk accepts, and a newer version of prikk may have written it` (it named only the path before); the
   `refusal-v1` id (`outside-version-rule`) and the not-damage classification are unchanged.
+- **New repositories are format 8, and what that means for every binary and repository you have (Unicode repository paths).** Format 8 admits a non-ASCII path
+  (NFC, authored at `commit`); nothing stored differs from format 7.
+  - **`prikk init` and `prikk setup` create format 8.** A repository you already have stays at 6 or 7, works exactly as before for ASCII names, and is **never
+    upgraded as a side effect**. `prikk format upgrade` moves a verified format-6 or format-7 repository to 8 in place (one byte of `.prikk/FORMAT`, idempotent on 8,
+    no downgrade). `commit` is the only place prikk suggests it, and only when you commit a non-ASCII name.
+  - **An older prikk cannot open a format-8 repository.** Measured on the published binaries: 0.55.0 and 0.56.0 print `error: unsupported format version: 8` and exit
+    `1` on every command, and name nothing typeable (those binaries cannot change). Upgrade only repositories that only this release or a later one will touch.
+  - **A bundle or archive declares its sending repository's format.** A format-6 or format-7 receiver refuses a format-8 artifact, and any artifact that
+    carries a non-ASCII path whatever it declares, before the first write, naming the format and `prikk format upgrade` (`--format json`: `"refusal":
+    "repository-format-too-old"`); a declaration this build does not know is refused as `outside-version-rule`, not damage. Sending **to** an older prikk (measured on 0.55.0 and 0.56.0): an archive that declares format 8 is refused
+    before any write, **even when it holds only ASCII names**, so an archive exported from a format-8 repository cannot go back to those binaries; they ignore a bundle's
+    declaration and refuse a bundle that carries a non-ASCII path for the path itself (a bundle with ASCII names only is read as before, by reading the code, not run).
+  - **Names:** a non-ASCII name must be NFC (`commit` refuses another form, naming its NFC spelling and never rewriting it); U+200C and U+200D are refused with the
+    other invisible format characters (a Persian or Indic spelling or an emoji sequence that needs one cannot be committed; revisited if a consumer asks); two names
+    that are one name under Unicode case folding and normalization (`straße` and `strasse`) collide at `seal`, `extract`, every checkout and `branch switch`, a
+    deliberate over-refusal. History sealed earlier is never failed for it: `verify` warns once (the sealed-path-collision entry above).
 
 ## 0.56.0 — 2026-11-08
 

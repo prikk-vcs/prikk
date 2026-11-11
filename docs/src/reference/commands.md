@@ -979,9 +979,9 @@ removes one received ref's own pointer from the received-index container — the
 `RefState`, `Patch` or `Blob` nothing else reaches any more is reported by `prikk verify` as an
 **unreached object** (`unreached_objects`, with `object_type` one of `"block"`, `"ref-state"`,
 `"patch"` or `"blob"`) and by `prikk doctor` — never a failure (see `verify`'s own entry above). **Since 0.57.0 a
-`Patch` or a `Blob` that nothing reaches is one count line, not a warning each** (content kept from commits taken back with
-`prikk uncommit`, from received refs removed, or from discarded commits: nothing was published under it, so there is no trust
-question): `verify` prints `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …` (no line at all when
+`Patch` or a `Blob` that nothing reaches is one count line, not a warning each** (content left behind, for example, by a commit taken back with
+`prikk uncommit`, a received ref removed, a rolled-back block, discarded commits, or an import that was refused or interrupted
+after its objects were written: nothing was published under it, so there is no trust question): `verify` prints `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …` (no line at all when
 there are none), `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`, and `verify --format json` is unchanged:
 `unreached_objects` still lists **every** object with its `object_type`, so the detail moved to where a tool reads it. The `unreached
 objects: N` line stays the total. A `Block` or a `RefState` keeps its per-object warning (`PRIKK-DOCTOR-UNREACHED-OBJECT` for
