@@ -663,25 +663,42 @@ impl BlockStateStatus {
     }
 }
 
+/// 0.57.0 U4b: **the one rule** for a finding that an object is outside this version's path rule
+/// (`DecodeFailureKind::OutsideVersionRule`): it is excused -- held as an unreached object, with a warning -- exactly when
+/// nothing reaches the object, and never otherwise. Genuine damage (`DecodeFailureKind::Corrupt`) is never excused, and an
+/// object that **is** reached keeps its failure, because history a ref reaches and this version cannot read is history the
+/// reader cannot use. `verify`'s reclassifier ([`excuse_unreached_outside_version_rule`]) and `archive verify` / `archive
+/// import` (which judge a carried `Patch` by it, against the archive's own carried refs) both ask this function; neither has
+/// its own copy, so the source's `verify` and the receiver's cannot disagree about the same bytes.
+#[must_use]
+pub(crate) fn outside_version_rule_is_excused(
+    kind: prikk_error::DecodeFailureKind,
+    reached: bool,
+) -> bool {
+    !reached && kind == prikk_error::DecodeFailureKind::OutsideVersionRule
+}
+
 /// 0.57.0 U4: turn each outcome that is an outside-version-rule finding **on an unreached block** into
 /// [`BlockStateStatus::UnreachedOutsideVersionRule`]. `outcomes` is in the order `verify_blocks_topological` resolved
 /// them (a state-derivation parent before its children), so a child blocked by an excused parent is excused in the
-/// same pass. A block that is reached, and any other failure, is left exactly as it was.
+/// same pass. A block that is reached, and any other failure, is left exactly as it was. The decision itself is
+/// [`outside_version_rule_is_excused`].
 pub(crate) fn excuse_unreached_outside_version_rule(
     outcomes: &mut [BlockStateOutcome],
     unreached_blocks: &BTreeSet<ObjectId>,
 ) {
     let mut excused: BTreeSet<ObjectId> = BTreeSet::new();
     for outcome in outcomes {
-        if !unreached_blocks.contains(&outcome.block_id) {
-            continue;
-        }
+        let reached = !unreached_blocks.contains(&outcome.block_id);
         let message = match &outcome.status {
-            BlockStateStatus::Failed {
-                message,
-                kind: prikk_error::DecodeFailureKind::OutsideVersionRule,
-            } => message.clone(),
-            BlockStateStatus::NotEvaluated { blocked_by } if excused.contains(blocked_by) => {
+            BlockStateStatus::Failed { message, kind }
+                if outside_version_rule_is_excused(*kind, reached) =>
+            {
+                message.clone()
+            }
+            BlockStateStatus::NotEvaluated { blocked_by }
+                if !reached && excused.contains(blocked_by) =>
+            {
                 format!(
                     "state root not evaluated: its state-derivation parent {blocked_by} is outside what this \
                      version of prikk accepts"

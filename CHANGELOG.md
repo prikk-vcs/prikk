@@ -22,7 +22,12 @@ A bundle or archive declares its **sending repository's** format (a format-8 rep
 object, journal or pointer is written, with a precondition naming both formats, `prikk format upgrade` and that a prikk older than this one cannot open a
 format-8 repository; an upgrade followed by the same import succeeds. An artifact from a format-6 or format-7 repository is received by every format.
 The bundle's declared format used to be informational, so a bundle could declare anything: `bundle verify`, `bundle preview` and `bundle import` now
-refuse a number this build does not know, as `archive verify` always did. `--format json` prints no `refusal-v1` document for either refusal (stderr and exit `1`).
+refuse a number this build does not know, as `archive verify` always did. **That refusal is no longer worded as damage:** an archive's sentence began
+`malformed persisted data:` and now reads `archive declares repository format N, which this build does not know how to read; … so this is not damage` (a
+scripted consumer that matched the old prefix must match the new text). Under `--format json`, `bundle import`, `bundle preview` and `archive import` now
+print a `refusal-v1` document for both refusals: `"refusal": "repository-format-too-old"` for the receiver older than the artifact, and the existing
+`"outside-version-rule"` for an unknown declared number (a different version of prikk wrote it; not damage). Both keep stderr's text and exit `1`.
+`bundle preview --format json` prints `refusal-v1` documents (`"command": "bundle-preview"`) for these two ids.
 See [Release Compatibility](docs/src/reference/release-compatibility.md#bundle-format-transitions) and [Troubleshooting](docs/src/guide/troubleshooting.md).
 
 ### Fixed — a block this version cannot read, that nothing reaches, no longer keeps `verify` red
@@ -32,8 +37,11 @@ state root (`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`, exit `1`), a
 other unreached object: `verify` prints `warning: block <id>: state root not verified: …` and exits `0`, `doctor` gives the new
 `PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE` warning, and the block stays in `unreached_objects`. While something reaches the block it
 still fails, and an unreached block whose state root does not verify is still damage. A scripted consumer that counted a failed block-state item for
-this case will see it as a warning now. The bytes stay; no command removes them yet. `archive export` of such a repository still carries the block, and
-`archive verify` and `archive import` still refuse that export while the path is outside the rule.
+this case will see it as a warning now. The bytes stay; no command removes them yet. `archive export` of such a repository carries the block's patch (an
+archive carries every stored object), and `archive verify` and `archive import` now accept it the way `verify` does: a patch outside the version rule that no
+ref the archive carries reaches is held as an unreached object, with a `warning: patch <id>: …` (and `unreached_outside_version_rule` in `archive verify
+--format json`), and the receiving repository's `verify` passes. Reached by a carried ref, it still refuses the archive; damage is never held. Before this,
+the backup of a repository that `verify` passed was refused by `archive verify` and `archive import`.
 
 ### Added — every release archive carries `THIRD-PARTY-NOTICES`, and a gate keeps it true
 

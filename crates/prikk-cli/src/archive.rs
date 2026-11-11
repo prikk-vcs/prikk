@@ -318,6 +318,14 @@ fn print_verify_report(report: &prikk_store::ArchiveVerifyReport, key_statuses: 
     for line in &report.interrupted_appends {
         println!("warning: {line}");
     }
+    // 0.57.0 U4b: a carried patch this version's path rule cannot read, that no ref the archive carries reaches: held as an
+    // unreached object (as the source's `verify` holds it), a warning and never a failure.
+    for patch in &report.unreached_outside_version_rule {
+        println!(
+            "warning: patch {patch}: a path in it is outside what this version of prikk accepts; nothing this archive \
+             carries reaches it, so it is held as an unreached object and this is not a failure"
+        );
+    }
     // RFC 164 Rule E, carried by the archive (0.52.0 step 0, Part C1 round 2, finding C1-4): the
     // store's own warning shape, not a second wording.
     for remnant in &report.unreferenced_remnants {
@@ -437,6 +445,16 @@ fn print_verify_report_json(
         "  \"unreferenced_remnants\": [{}],\n",
         unreferenced_remnants.join(", ")
     ));
+    // Additive key (0.57.0 U4b): carried patches outside this version's path rule that nothing the archive carries reaches.
+    let unreached_outside_version_rule: Vec<String> = report
+        .unreached_outside_version_rule
+        .iter()
+        .map(|id| escape_json_string(&id.to_string()))
+        .collect();
+    json.push_str(&format!(
+        "  \"unreached_outside_version_rule\": [{}],\n",
+        unreached_outside_version_rule.join(", ")
+    ));
     let maintainer_keys: Vec<String> = report
         .maintainer_keys
         .iter()
@@ -554,13 +572,12 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
                         &err.to_string(),
                     );
                 }
-            } else if err.decode_failure_kind()
-                == prikk_error::DecodeFailureKind::OutsideVersionRule
-            {
+            } else if let Some(id) = crate::bundle::artifact_version_refusal_id(&err) {
                 // 0.56.0 step F (from the 3f2 report): `archive import --format json` used to
-                // print nothing at all for this cause -- `extract`'s own precedent
-                // (`classify_prikk_error_fallback`) is what names the id.
-                print_archive_import_refusal_json("outside-version-rule", &err.to_string());
+                // print nothing at all for `outside-version-rule` -- `extract`'s own precedent
+                // (`classify_prikk_error_fallback`) is what names the id. 0.57.0 U4b: the function
+                // `bundle import` and `bundle preview` ask also names `repository-format-too-old`.
+                print_archive_import_refusal_json(id, &err.to_string());
             }
         }
         err.to_string()

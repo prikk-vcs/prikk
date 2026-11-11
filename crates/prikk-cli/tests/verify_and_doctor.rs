@@ -71,3 +71,5 @@ mod step3_s3_verify_json_item_level;
 mod torn_tail_is_one_frame;
 #[path = "verify_and_doctor/u4_unreached_outside_version_rule.rs"]
 mod u4_unreached_outside_version_rule;
+#[path = "verify_and_doctor/u4b_archive_unreached_outside_version_rule.rs"]
+mod u4b_archive_unreached_outside_version_rule;

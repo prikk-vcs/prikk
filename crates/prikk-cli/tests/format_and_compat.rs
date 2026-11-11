@@ -19,3 +19,5 @@ mod support;
 mod u1_format_8;
 #[path = "format_and_compat/u4_artifact_format.rs"]
 mod u4_artifact_format;
+#[path = "format_and_compat/u4b_refusal_ids.rs"]
+mod u4b_refusal_ids;

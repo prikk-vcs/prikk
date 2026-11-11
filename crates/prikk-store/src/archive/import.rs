@@ -845,11 +845,21 @@ pub fn import_archive<R: Read + Seek>(
             // `decode_patch_operations_for_admission`'s own doc comment for why this must be the
             // same function `archive verify` calls too, not a second copy that happens to call
             // the same lower-level decoder.
+            // 0.57.0 U4b: a patch outside this version's rule that stage 0 judged unreached (`verify_report`) is written
+            // and held, as the source held it; one stage 0 did not list refuses, as before.
             if object_type == ObjectType::Patch {
-                crate::patch_replay::decode::decode_patch_operations_for_admission(
-                    &admitted.envelope.canonical_payload,
-                    admitted.envelope.schema_version,
-                )?;
+                if let Some(error) =
+                    super::verify::admission_decode_outside_rule(&admitted.envelope)?
+                {
+                    if !crate::block_state::outside_version_rule_is_excused(
+                        error.decode_failure_kind(),
+                        !verify_report
+                            .unreached_outside_version_rule
+                            .contains(&admitted.envelope.object_id()),
+                    ) {
+                        return Err(error);
+                    }
+                }
             }
             let id = admitted.envelope.object_id();
             let already_present = object_store.contains_object(object_type, id)?;

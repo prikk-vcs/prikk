@@ -727,10 +727,89 @@ fn latest_run(layout: &RepositoryLayout) -> Option<String> {
         .map(|listed| listed.id.clone())
 }
 
+/// How long a racer waits through lock conflicts before the test fails. A **time**, not an iteration count: an iteration budget
+/// (the first form of this test: 2,000 `yield_now` retries) is spent in microseconds when a loaded runner lets the other side hold
+/// the lock a while, and the test's real assertions never run. A held lock is released in milliseconds, so a minute means a
+/// lock that is not being released.
+const LOCK_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The pause between two attempts. It lets the lock holder run instead of spinning against it.
+const LOCK_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// A racer that waited out its whole budget: how many attempts, how long it waited, and the last conflict it saw.
+#[derive(Debug)]
+struct StuckOnLock {
+    attempts: u32,
+    waited: std::time::Duration,
+    last: String,
+}
+
+/// Run `attempt` until `conflict` finds no lock conflict in its result, or `budget` passes. `conflict` returns the conflict's text
+/// when the result is one, and `None` when it is a real outcome (success or any other refusal).
+fn retry_through_lock_conflicts<R>(
+    budget: std::time::Duration,
+    mut attempt: impl FnMut() -> R,
+    conflict: impl Fn(&R) -> Option<String>,
+) -> Result<R, StuckOnLock> {
+    let started = std::time::Instant::now();
+    let mut attempts = 0_u32;
+    loop {
+        let result = attempt();
+        attempts += 1;
+        let Some(last) = conflict(&result) else {
+            return Ok(result);
+        };
+        if started.elapsed() >= budget {
+            return Err(StuckOnLock {
+                attempts,
+                waited: started.elapsed(),
+                last,
+            });
+        }
+        std::thread::sleep(LOCK_RETRY_PAUSE);
+    }
+}
+
+/// The helper's own two rows: a conflict that clears is waited out and its real outcome returned; a conflict that never clears
+/// ends at the budget, naming the attempts, the time and the last conflict -- not after a fixed number of tries.
+#[test]
+fn the_lock_retry_is_bounded_by_time_and_names_what_it_waited_for() {
+    let mut conflicts_left = 40;
+    let waited_out = retry_through_lock_conflicts(
+        std::time::Duration::from_secs(30),
+        || {
+            if conflicts_left > 0 {
+                conflicts_left -= 1;
+                Err("lock held".to_string())
+            } else {
+                Ok(7)
+            }
+        },
+        |result: &Result<i32, String>| result.as_ref().err().cloned(),
+    )
+    .expect("forty conflicts clear well inside thirty seconds");
+    assert_eq!(waited_out, Ok(7));
+
+    let budget = std::time::Duration::from_millis(60);
+    let stuck = retry_through_lock_conflicts(
+        budget,
+        || Err::<i32, String>("lock held by the racing commit".to_string()),
+        |result| result.as_ref().err().cloned(),
+    )
+    .expect_err("a lock that is never released ends at the budget");
+    assert!(
+        stuck.waited >= budget,
+        "it waited the whole budget, not a fixed number of tries: {stuck:?}"
+    );
+    assert!(stuck.attempts > 1, "it retried before giving up: {stuck:?}");
+    assert_eq!(stuck.last, "lock held by the racing commit");
+}
+
 /// **The race.** `uncommit` of the newest patch against a thread committing: both take the active lock, so each round ends in one
 /// of two states -- the commit landed first (and `uncommit` of the older patch then refuses, naming it as not the newest), or
 /// `uncommit` ran first (and the commit then queued on what was left). The queue is readable and classifies healthy after every
-/// round, and no acknowledged commit is lost.
+/// round, and no acknowledged commit is lost. Both sides retry through lock conflicts for up to [`LOCK_WAIT_BUDGET`] (time, not
+/// tries); a side that never gets the lock fails the test naming the round and how long it waited.
 #[test]
 fn uncommit_raced_against_a_commit_ends_in_one_of_two_states_every_round() {
     let rounds = 200;
@@ -743,34 +822,49 @@ fn uncommit_raced_against_a_commit_ends_in_one_of_two_states_every_round() {
         let committer_layout = layout.clone();
         let handle = std::thread::spawn(move || {
             // Retry through lock conflicts, as a user would.
-            for _ in 0..2000 {
-                std::fs::write(committer_layout.root().join("racing.txt"), b"racing").unwrap();
-                match commit_worktree_changes_signed(
-                    &committer_layout,
-                    "heads/main",
-                    "racing",
-                    WorktreePatchCommitOptions::file_level(),
-                    &signer(),
-                ) {
-                    Ok(report) => return Some(report.patch_id),
-                    Err(_) => std::thread::yield_now(),
-                }
-            }
-            None
+            retry_through_lock_conflicts(
+                LOCK_WAIT_BUDGET,
+                || {
+                    std::fs::write(committer_layout.root().join("racing.txt"), b"racing").unwrap();
+                    commit_worktree_changes_signed(
+                        &committer_layout,
+                        "heads/main",
+                        "racing",
+                        WorktreePatchCommitOptions::file_level(),
+                        &signer(),
+                    )
+                },
+                |result| result.as_ref().err().map(ToString::to_string),
+            )
+            .map(|result| result.map(|report| report.patch_id))
         });
-        let mut outcome = None;
-        for _ in 0..2000 {
-            match uncommit(&layout, target) {
-                Err(error) if error.to_string().contains("lock") => std::thread::yield_now(),
-                other => {
-                    outcome = Some(other);
-                    break;
-                }
-            }
-        }
-        let raced = handle.join().unwrap().expect("the commit landed");
+        let outcome = retry_through_lock_conflicts(
+            LOCK_WAIT_BUDGET,
+            || uncommit(&layout, target),
+            |result| {
+                result
+                    .as_ref()
+                    .err()
+                    .map(ToString::to_string)
+                    .filter(|text| text.contains("lock"))
+            },
+        );
+        let raced = handle
+            .join()
+            .unwrap()
+            .unwrap_or_else(|stuck| {
+                panic!(
+                    "round {round}: the racing commit never got the lock: {stuck:?} (uncommit held it, or never released it)"
+                )
+            })
+            .expect("the racing commit landed");
+        let outcome = outcome.unwrap_or_else(|stuck| {
+            panic!(
+                "round {round}: uncommit never got the lock: {stuck:?} (the racing commit held it, or never released it)"
+            )
+        });
         let ids = queue(&layout);
-        match outcome.expect("uncommit finished") {
+        match outcome {
             Ok(_) => {
                 uncommit_first += 1;
                 assert!(!ids.contains(&target), "round {round}: taken back");

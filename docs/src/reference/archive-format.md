@@ -121,7 +121,11 @@ Reads the end trailer and the manifest first (seek, never scan), then checks:
 - **reference closure**, in two passes over the seven object sections: the first builds a set of
   every carried object's own id (32 bytes each, never the object's bytes); the second re-streams and
   checks every reference a `Block`/`Patch`/`Tag`/`Attestation`/`RefState`/`RecognitionClaim` makes
-  against that set, naming any that is absent;
+  against that set, naming any that is absent. The second pass also decodes every carried `Patch`'s operations. A path this
+  version's rule refuses (a newer prikk may have written it) is judged once reachability from the carried refs is known: reached,
+  it refuses the archive; **reached by nothing, it is listed (`unreached_outside_version_rule`) and the archive stays internally
+  consistent**, because the source's own `verify` holds the same patch as an unreached object and an archive carries every stored
+  object. Any other decode failure refuses at once;
 - **every signature**, against the archive's own carried author-key and maintainer material — small
   key material, decoded once into memory, never the local repository's. A signature by a key this
   archive carries, that fails to verify, is damage, named, and refuses the whole archive — the one

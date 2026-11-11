@@ -31,7 +31,7 @@ use prikk_store::{
     author_signature, compute_state_root, maintainer_signature,
 };
 
-fn text(output: &std::process::Output) -> String {
+pub(super) fn text(output: &std::process::Output) -> String {
     format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -41,7 +41,11 @@ fn text(output: &std::process::Output) -> String {
 
 /// A `CreateFile` patch at `path`, written with `CanonicalWriter` directly (no validation, as no honest `commit`
 /// can author a non-ASCII path).
-fn write_create_file_patch(store: &mut FileObjectStore, path: &str, node_byte: u8) -> ObjectId {
+pub(super) fn write_create_file_patch(
+    store: &mut FileObjectStore,
+    path: &str,
+    node_byte: u8,
+) -> ObjectId {
     let author = Ed25519AuthorSigner::from_seed("u4-author", &[0x71; 32]).unwrap();
     let mut create_file = CanonicalWriter::new();
     create_file.field_repo_path(1, path).unwrap();
@@ -71,13 +75,13 @@ fn write_create_file_patch(store: &mut FileObjectStore, path: &str, node_byte: u
     store.write_object(&patch).unwrap()
 }
 
-fn maintainer() -> Ed25519MaintainerSigner {
+pub(super) fn maintainer() -> Ed25519MaintainerSigner {
     Ed25519MaintainerSigner::from_seed(support::MAINTAINER_KEY_ID, &support::MAINTAINER_SEED)
         .unwrap()
 }
 
 /// A maintainer-signed Block over `parent` carrying `patch_ids`, written and published nowhere.
-fn write_block(
+pub(super) fn write_block(
     store: &mut FileObjectStore,
     parent: ObjectId,
     patch_ids: Vec<ObjectId>,
@@ -100,7 +104,11 @@ fn write_block(
     store.write_object(&block).unwrap()
 }
 
-fn write_ref_state(store: &mut FileObjectStore, ref_name: &str, target: ObjectId) -> ObjectId {
+pub(super) fn write_ref_state(
+    store: &mut FileObjectStore,
+    ref_name: &str,
+    target: ObjectId,
+) -> ObjectId {
     let payload = RefStatePayload {
         ref_name: ref_name.to_string(),
         kind: RefKind::Branch,
@@ -122,7 +130,7 @@ fn write_ref_state(store: &mut FileObjectStore, ref_name: &str, target: ObjectId
     store.write_object(&state).unwrap()
 }
 
-fn genesis_block(repo: &Path) -> ObjectId {
+pub(super) fn genesis_block(repo: &Path) -> ObjectId {
     let output = support::prikk(repo)
         .args(["log", "--format", "json"])
         .output()
@@ -133,7 +141,7 @@ fn genesis_block(repo: &Path) -> ObjectId {
     stdout[at..at + 64].parse().unwrap()
 }
 
-fn fresh(tag: &str) -> (PathBuf, FileObjectStore, ObjectId) {
+pub(super) fn fresh(tag: &str) -> (PathBuf, FileObjectStore, ObjectId) {
     let repo = support::unique_repo(tag);
     support::init(&repo);
     support::generation(&repo, "heads/main", "README.md", b"genesis\n", "genesis");
@@ -142,16 +150,16 @@ fn fresh(tag: &str) -> (PathBuf, FileObjectStore, ObjectId) {
     (repo, store, genesis)
 }
 
-fn verify(repo: &Path) -> std::process::Output {
+pub(super) fn verify(repo: &Path) -> std::process::Output {
     support::prikk(repo).args(["verify"]).output().unwrap()
 }
 
-fn doctor(repo: &Path) -> std::process::Output {
+pub(super) fn doctor(repo: &Path) -> std::process::Output {
     support::prikk(repo).args(["doctor"]).output().unwrap()
 }
 
 /// The chain the 0.55.0 hole admitted: a received ref `remotes/heads/side` at a block with a non-ASCII path.
-fn received_non_ascii_chain(tag: &str) -> (PathBuf, ObjectId, ObjectId) {
+pub(super) fn received_non_ascii_chain(tag: &str) -> (PathBuf, ObjectId, ObjectId) {
     let (repo, mut store, genesis) = fresh(tag);
     let patch = write_create_file_patch(&mut store, "pages/日本語.md", 0x72);
     let block = write_block(&mut store, genesis, vec![patch]);
@@ -165,7 +173,7 @@ fn received_non_ascii_chain(tag: &str) -> (PathBuf, ObjectId, ObjectId) {
     (repo, block, patch)
 }
 
-fn remove_received(repo: &Path) {
+pub(super) fn remove_received(repo: &Path) {
     let output = support::prikk(repo)
         .args(["received", "remove", "remotes/heads/side"])
         .output()

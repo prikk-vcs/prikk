@@ -127,13 +127,13 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
                 // 0.56.0 step F: the new forged-publication-signature refusal, classified the
                 // identical way -- by variant, never by message text.
                 print_bundle_import_refusal_json("forged-publication-signature", &err.to_string());
-            } else if err.decode_failure_kind()
-                == prikk_error::DecodeFailureKind::OutsideVersionRule
-            {
+            } else if let Some(id) = artifact_version_refusal_id(&err) {
                 // 0.56.0 step F (from the 3f2 report): `bundle import --format json` used to
-                // print nothing at all for this cause -- `extract`'s own precedent
-                // (`classify_prikk_error_fallback`) is what names the id.
-                print_bundle_import_refusal_json("outside-version-rule", &err.to_string());
+                // print nothing at all for `outside-version-rule` -- `extract`'s own precedent
+                // (`classify_prikk_error_fallback`) is what names the id. 0.57.0 U4b: the same
+                // function also names `repository-format-too-old`, and an unknown declared format
+                // number is `outside-version-rule` too.
+                print_bundle_import_refusal_json(id, &err.to_string());
             }
         }
         render_incoming_error(err, &object_bound)
@@ -210,10 +210,33 @@ fn print_bundle_import_plain(report: &prikk_store::BundleImportReport) {
 /// prefix the top-level stderr printer adds, the same convention `extract`'s own
 /// `print_refusal_json` uses.
 fn print_bundle_import_refusal_json(id: &str, message: &str) {
+    print_bundle_refusal_json("bundle-import", id, message);
+}
+
+/// 0.57.0 U4b: which `refusal-v1` id a version- or format-shaped refusal of an exchange artifact carries, decided from
+/// the error's variant and kind, never from its text; `None` for every other refusal. **Shared by `bundle import`,
+/// `bundle preview` and `archive import`**, so the three name the same cause with the same id:
+/// - `"repository-format-too-old"`: the artifact comes from a repository that can hold non-ASCII paths and this one
+///   cannot (`prikk format upgrade` moves it);
+/// - `"outside-version-rule"`: a path this version's rule refuses, or a declared repository format number this build does
+///   not know -- a different version of `prikk` wrote it, and it is not damage.
+pub(crate) fn artifact_version_refusal_id(err: &prikk_error::PrikkError) -> Option<&'static str> {
+    if matches!(err, prikk_error::PrikkError::RepositoryFormatTooOld { .. }) {
+        Some("repository-format-too-old")
+    } else if err.decode_failure_kind() == prikk_error::DecodeFailureKind::OutsideVersionRule {
+        Some("outside-version-rule")
+    } else {
+        None
+    }
+}
+
+/// The one `refusal-v1` printer for the two bundle commands that have `--format json`; `command` is `"bundle-import"` or
+/// `"bundle-preview"`.
+fn print_bundle_refusal_json(command: &str, id: &str, message: &str) {
     let mut json = String::new();
-    json.push_str(
-        "{\"schema_version\": \"refusal-v1\", \"command\": \"bundle-import\", \"refusal\": ",
-    );
+    json.push_str("{\"schema_version\": \"refusal-v1\", \"command\": ");
+    json.push_str(&escape_json_string(command));
+    json.push_str(", \"refusal\": ");
     json.push_str(&escape_json_string(id));
     json.push_str(", \"reason\": null, \"message\": ");
     json.push_str(&escape_json_string(message));
@@ -237,9 +260,21 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
     let options = bundle_import_options(&object_bound)?;
     // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
     let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
+    let format_json = parsed.format_json;
     let (report, anchor_fallbacks) =
         prikk_store::preview_bundle_reporting_anchor(&layout, &mut source, &options, &ref_name)
-            .map_err(|err| render_incoming_error(err, &object_bound))?;
+            .map_err(|err| {
+                // 0.57.0 U4b: `bundle preview --format json` prints a `refusal-v1` document
+                // (`"command": "bundle-preview"`) for the two refusals `bundle import` also names by
+                // variant: a receiver older than the bundle's declared format, and a bundle outside
+                // this version's rules.
+                if format_json {
+                    if let Some(id) = artifact_version_refusal_id(&err) {
+                        print_bundle_refusal_json("bundle-preview", id, &err.to_string());
+                    }
+                }
+                render_incoming_error(err, &object_bound)
+            })?;
     // RFC 136 §10.3b.4: a snapshot the preview could not anchor at is named on stderr.
     crate::warn_anchor_fallbacks(anchor_fallbacks.iter());
     if parsed.format_json {

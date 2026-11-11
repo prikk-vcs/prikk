@@ -6,7 +6,8 @@
 //! place that states them, for both artifacts:
 //!
 //! 1. **A number this build does not know is refused.** The archive has always done this; the bundle's
-//!    `repository_format` was informational until now, so a bundle could declare anything.
+//!    `repository_format` was informational until now, so a bundle could declare anything. It is not damage (a different
+//!    version of prikk may have written it), so it reads as outside this version's rules: `UnknownArtifactFormat`.
 //! 2. **A receiver that cannot hold non-ASCII paths refuses an artifact from a repository that can** (format 8 and
 //!    later), before the first write, naming both formats and the command that moves the receiver
 //!    (`prikk format upgrade`). It is a precondition -- the caller can fix it -- not damage and not a malformed file.
@@ -47,17 +48,17 @@ impl ArtifactKind {
     }
 }
 
-/// Rule 1: refuse a declared number this build does not know how to read. The archive's sentence, unchanged, with the
-/// bundle saying "bundle".
+/// Rule 1: refuse a declared number this build does not know how to read. Not damage (the file's checksum was sound; a
+/// different version of prikk may have written it), so [`PrikkError::UnknownArtifactFormat`] and not `MalformedData`: the
+/// sentence and the `refusal-v1` id (`outside-version-rule`) agree.
 pub(crate) fn require_known_declared_format(kind: ArtifactKind, declared: u32) -> Result<()> {
     if known_repository_format_numbers().contains(&declared) {
         return Ok(());
     }
-    Err(PrikkError::MalformedData(format!(
-        "{noun} declares repository format {declared}, which this build does not know how to read -- refusing the \
-         whole {noun}",
-        noun = kind.noun()
-    )))
+    Err(PrikkError::UnknownArtifactFormat {
+        artifact: kind.noun(),
+        declared,
+    })
 }
 
 /// Rule 2: refuse an artifact that declares a format able to hold non-ASCII paths when `receiver` cannot.
@@ -72,15 +73,20 @@ pub(crate) fn require_receiver_can_hold(
     if declared < first_non_ascii_format.number() || receiver.admits_non_ascii_paths() {
         return Ok(());
     }
-    Err(PrikkError::Precondition(format!(
-        "this {noun} declares repository format {declared}, and this repository is format {have}; a format-{declared} \
-         repository may hold non-ASCII paths, which format {have} cannot. Run `prikk format upgrade` to move this \
-         repository to format {want} (a prikk older than this one cannot open a format-{want} repository), then \
-         import again; nothing was written",
-        noun = kind.noun(),
-        have = receiver.number(),
-        want = first_non_ascii_format.number(),
-    )))
+    let have = receiver.number();
+    let want = first_non_ascii_format.number();
+    let noun = kind.noun();
+    Err(PrikkError::RepositoryFormatTooOld {
+        artifact: noun,
+        declared,
+        have,
+        message: format!(
+            "this {noun} declares repository format {declared}, and this repository is format {have}; a format-{declared} \
+             repository may hold non-ASCII paths, which format {have} cannot. Run `prikk format upgrade` to move this \
+             repository to format {want} (a prikk older than this one cannot open a format-{want} repository), then \
+             import again; nothing was written"
+        ),
+    })
 }
 
 #[cfg(test)]

@@ -430,10 +430,14 @@ history relates to the pointer it would replace, which can disagree with the cla
   older than this one cannot open a format-8 repository. It is a precondition (exit `1`), not damage, and an upgrade followed by the
   same import succeeds. An artifact from a format-6 or format-7 repository is received by every format. A declared format this build
   does not know is refused by `bundle verify`, `bundle preview` and `bundle import` as `archive verify` always refused it (the
-  bundle's declared format was informational before 0.57.0). `verify` has no receiving repository, so it checks only the number.
+  bundle's declared format was informational before 0.57.0). That refusal is **not damage**: the file's checksum was sound and a
+  different version of `prikk` may have written it, so the sentence says so (`… which this build does not know how to read; that is
+  outside what this version … so this is not damage`; an archive's used to begin `malformed persisted data:`).
+  `verify` has no receiving repository, so it checks only the number.
   Every artifact from a format-8 repository declares 8, even one with only ASCII paths (the declaration is the repository's, which
-  costs nothing to read; the archive writer does not decode history). `--format json` prints no `refusal-v1` document for this
-  refusal: stderr and exit `1` only.
+  costs nothing to read; the archive writer does not decode history). Under `--format json`, `bundle import`, `bundle preview` and
+  `archive import` print a `refusal-v1` document for both refusals, with `"refusal": "repository-format-too-old"` for the first and
+  `"refusal": "outside-version-rule"` for an unknown declared number (the table below); stderr and exit `1` are unchanged.
 - **`bundle import` refuses a `rollback`, a `diverged` delivery, or one that `does-not-connect`,
   whenever a received pointer already exists for that name** — naming the class, exit `1` — unless
   `--allow-non-fast-forward` is given. A delivery with no existing pointer to replace, or one that
@@ -456,7 +460,8 @@ itself is unchanged by this.
   `extract`'s own `refusal-v1` uses, see below) with `"command": "bundle-import"`, to stdout, on
   stderr and the exit code otherwise unchanged — for exactly the three refusals above
   (`"refusal"`: `"rollback"`, `"diverged"`, or `"does-not-connect"`), and for the two refusals
-  described further below (`"forged-publication-signature"`, `"outside-version-rule"`), never for
+  described further below (`"forged-publication-signature"`, `"outside-version-rule"`), for `"repository-format-too-old"` (0.57.0),
+  never for
   `bundle import`'s other refusals (a damaged bundle, a digest mismatch, an author-key conflict, and
   so on), which print no document. `"reason"` is always `null`.
 
@@ -489,10 +494,33 @@ itself is unchanged by this.
   values described above, for every landing, not only a refused one), and a refusal prints the
   same `refusal-v1` document described above, with `"command": "archive-import"`.
 
+**The `refusal-v1` ids of the exchange commands** (`"reason"` is `null` for all of them; `"message"` is stderr's text without its
+`error: ` prefix; stdout holds that one document and nothing else):
+
+| `refusal` | `bundle import` | `bundle preview` | `archive import` | meaning |
+|---|---|---|---|---|
+| `rollback`, `diverged`, `does-not-connect` | yes | no | yes | the delivery's relation to the existing received pointer, without `--allow-non-fast-forward` |
+| `forged-publication-signature` | yes | no | yes | a delivered tip's MAINTAINER signature names an adopted key and does not verify |
+| `outside-version-rule` | yes | yes | yes | a path this version's rule refuses, **or a repository format number this build does not know** (0.57.0): a different version of `prikk` wrote it, and it is not damage |
+| `repository-format-too-old` (0.57.0) | yes | yes | yes | the artifact comes from a format-8 repository and this one is format 6 or 7; `prikk format upgrade` moves it, and nothing was written |
+
+`bundle preview` has `"command": "bundle-preview"`. `repository-format-too-old` is true of the receiving repository's state, so the
+sentence beside it names the command that changes the state. Every other refusal of these commands (a damaged artifact, a digest
+mismatch, an author-key conflict, and so on) prints no document.
+
 **`archive import` and `archive verify` refuse a `Patch` whose own operations do not decode,
 before anything is written** — the identical check `bundle import`'s own admission runs. All three
 commands apply the same check, so a change `bundle import` would refuse is refused by
 `archive import`/`archive verify` too, never landed or reported as internally consistent.
+
+**One case is held, not refused (0.57.0): a carried `Patch` outside this version's path rule that no ref the archive carries
+reaches.** An archive carries every stored object, so the backup of a repository whose `received remove` left such a patch
+unreached carries it too, and that repository's own `verify` passes. `archive verify` and `archive import` judge the patch by
+the same rule `verify` does: reached by a carried ref, it refuses the archive as above; reached by nothing, it is admitted and held
+as an unreached object, with a `warning: patch <id>: a path in it is outside what this version …` line saying that nothing the archive
+carries reaches it, so it is held as an unreached object and this is not a failure (and `"unreached_outside_version_rule":
+["<id>"]` in `--format json`), and the receiving repository's `verify` then passes with the warning for the block, as the
+source's did. Damage (an empty path, say) is never held. Before 0.57.0 such an archive was refused by both commands.
 
 **`archive verify` reports each carried maintainer key's real status in the receiving repository.**
 Both the text form and `--format json`'s `"status"` field carry one of four fixed strings, computed against the repository `archive verify` runs from, never against the
@@ -913,7 +941,8 @@ outside what this version of `prikk` accepts, as 0.55.0 let an archive land) **a
 (0.57.0): `verify` prints `warning: block <id>: state root not verified: …` and exits `0`, and `doctor` gives
 `PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE`, so `received remove` of the ref that reached it is the way out.
 While something reaches such a block it still fails `verify`; genuine damage (a state root that does not verify) in an unreached
-block still fails. When `verify` also reports a
+block still fails. `archive export` of such a repository carries the block's patch, and `archive verify` and `archive import` accept
+it as unreached (see "One case is held, not refused", above). When `verify` also reports a
 damaged object, the walk cannot read past it: objects reached only through the damaged one are
 counted as unreached, and their publication trust is not checked, so the count can include objects
 that are in fact reached. `verify` still fails on the damage itself (`verify/reachability.rs`,

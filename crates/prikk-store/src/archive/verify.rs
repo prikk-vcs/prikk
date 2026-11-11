@@ -173,6 +173,14 @@ pub struct ArchiveVerifyReport {
     /// standing example (§5): no command removes the remnant it leaves, and an honest export of
     /// that repository carries it forward, same as the store's own `verify` already does.
     pub unreferenced_remnants: Vec<ArchiveUnreferencedRemnant>,
+    /// 0.57.0 U4b: each carried `Patch` whose operations this version's path rule cannot read **and that no ref this
+    /// archive carries reaches**. An archive carries every stored object (RFC 155 R1), so the backup of a repository that
+    /// holds such a patch (a received ref was removed, say) carries it too; the source's own `verify` holds it as an
+    /// unreached object with a warning, and so does this. Never part of [`Self::is_internally_consistent`]: nothing
+    /// reachable needs it, so it is not damage. One that **is** reached is not listed here -- it refuses the archive
+    /// (`verify_archive` returns the path-rule error), exactly as `bundle import` refuses it. The decision is
+    /// `block_state::outside_version_rule_is_excused`, the function `verify` asks.
+    pub unreached_outside_version_rule: Vec<ObjectId>,
     /// Every maintainer key this archive carries, listed for inspection -- never adopted by this
     /// call.
     pub maintainer_keys: Vec<CarriedMaintainerKeySummary>,
@@ -240,11 +248,10 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                 // admission runs, so `archive verify` refuses exactly what `bundle verify`
                 // refuses for a `Patch` whose operations do not decode -- see
                 // `decode_patch_operations_for_admission`'s own doc comment.
+                // 0.57.0 U4b: a path outside this version's rule is judged after reachability is known (pass 2 collects
+                // it, below); any other decode failure refuses here, as before.
                 if object_type == ObjectType::Patch {
-                    crate::patch_replay::decode::decode_patch_operations_for_admission(
-                        &envelope.canonical_payload,
-                        envelope.schema_version,
-                    )?;
+                    admission_decode_outside_rule(envelope)?;
                 }
                 ids.insert(envelope.object_id());
                 Ok(())
@@ -342,6 +349,8 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     // archive's own total patch volume, not the largest single object (§9.2).
     let mut id_to_envelope: HashMap<ObjectId, ObjectEnvelope> = HashMap::new();
     let mut block_candidates: Vec<(ObjectId, &'static str, ObjectId)> = Vec::new();
+    // 0.57.0 U4b: every carried `Patch` this version's path rule cannot read, with the refusal it would raise.
+    let mut outside_rule_patches: Vec<(ObjectId, PrikkError)> = Vec::new();
     for entry in &manifest.entries {
         let ArchiveSectionKind::ObjectContainer(object_type) = entry.kind else {
             continue;
@@ -351,10 +360,9 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
             // here since this pass re-streams the section independently -- see
             // `decode_patch_operations_for_admission`'s own doc comment.
             if object_type == ObjectType::Patch {
-                crate::patch_replay::decode::decode_patch_operations_for_admission(
-                    &envelope.canonical_payload,
-                    envelope.schema_version,
-                )?;
+                if let Some(error) = admission_decode_outside_rule(envelope)? {
+                    outside_rule_patches.push((envelope.object_id(), error));
+                }
             }
             id_to_expansion.insert(envelope.object_id(), expand_frontier(envelope));
             classify_references(envelope, &ids, &mut block_candidates)?;
@@ -377,6 +385,19 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
     // 0, Part C1) -- in-memory only, no further archive bytes read, O(objects) memory, the same
     // order as the id set §9.2 already bounds.
     let reachable = compute_archive_reachability(&reachability_roots, &id_to_expansion);
+    // 0.57.0 U4b: a carried patch outside this version's path rule is held when no carried ref reaches it, and refuses the
+    // archive when one does -- by the one function `verify` asks (`outside_version_rule_is_excused`).
+    let mut unreached_outside_version_rule: Vec<ObjectId> = Vec::new();
+    for (patch_id, error) in outside_rule_patches {
+        if crate::block_state::outside_version_rule_is_excused(
+            error.decode_failure_kind(),
+            reachable.contains(&patch_id),
+        ) {
+            unreached_outside_version_rule.push(patch_id);
+        } else {
+            return Err(error);
+        }
+    }
     let mut unreferenced_remnants = Vec::new();
     for (owner_object_id, missing_role, missing_object_id) in block_candidates {
         if reachable.contains(&owner_object_id) {
@@ -505,6 +526,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
         damaged,
         interrupted_appends,
         unreferenced_remnants,
+        unreached_outside_version_rule,
         maintainer_keys,
         note: None,
     };
@@ -617,6 +639,30 @@ struct ArchiveObjectReader<'a> {
 impl ObjectReader for ArchiveObjectReader<'_> {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
         Ok(self.envelopes.get(&id).cloned())
+    }
+}
+
+/// 0.57.0 U4b: the admission decode of one carried `Patch` -- `decode_patch_operations_for_admission`, the one name every
+/// admission site shares -- with a path outside this version's rule told apart from every other failure. `Ok(None)`: the
+/// operations decode. `Ok(Some(error))`: they fail **only** because a path is outside this version's rule; the caller
+/// judges that by reachability (`block_state::outside_version_rule_is_excused`), which is known only once the whole
+/// archive has been read. `Err`: any other failure (real damage), which refuses at once. `pub(super)`: `archive::import`'s
+/// write loop decodes the same way.
+pub(super) fn admission_decode_outside_rule(
+    envelope: &ObjectEnvelope,
+) -> Result<Option<PrikkError>> {
+    match crate::patch_replay::decode::decode_patch_operations_for_admission(
+        &envelope.canonical_payload,
+        envelope.schema_version,
+    ) {
+        Ok(_) => Ok(None),
+        Err(error)
+            if error.decode_failure_kind()
+                == prikk_error::DecodeFailureKind::OutsideVersionRule =>
+        {
+            Ok(Some(error))
+        }
+        Err(error) => Err(error),
     }
 }
 

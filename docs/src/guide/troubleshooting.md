@@ -945,13 +945,24 @@ prikk format upgrade
 then repeat the import. `format upgrade` verifies the repository first and changes only the `FORMAT` marker, and there is no
 downgrade: a prikk older than this one (0.56.0 and earlier) cannot open the repository afterwards. Every artifact from a format-8
 repository declares 8, even one with only ASCII paths, because the declaration is the repository's. `bundle verify` and `archive
-verify` need no repository and still pass; `bundle preview` gives the same refusal as `bundle import`.
+verify` need no repository and still pass; `bundle preview` gives the same refusal as `bundle import`. Under `--format json`, the
+three import and preview commands print a `refusal-v1` document with `"refusal": "repository-format-too-old"`.
 
-## `error: malformed persisted data: bundle declares repository format 9, which this build does not know how to read …`
+## `error: bundle declares repository format 9, which this build does not know how to read; … so this is not damage …`
 
-The bundle's manifest names a repository format this prikk does not know: it was written by a newer prikk, or the file was damaged
-(`bundle verify` reads nothing else, so it says the same). `archive verify` always refused an unknown number; the bundle's was only
-informational before 0.57.0. Use a prikk that knows the format, or export the bundle again.
+A bundle or an archive (the message says which) names a repository format this prikk does not know. This is not damage: the file's
+checksum was sound, and a different, newer prikk wrote it. (An archive's message used to begin `malformed persisted data:`, which
+read as damage.) `archive verify` always refused an unknown number; the bundle's was only informational before 0.57.0. Use a prikk
+that knows the format, or export again from a repository this prikk can read. Under `--format json`, `bundle import`, `bundle
+preview` and `archive import` print a `refusal-v1` document with `"refusal": "outside-version-rule"`.
+
+## `warning: patch <id>: a path in it is outside what this version …; nothing this archive carries reaches it …`
+
+`archive verify` found a patch in the backup whose path this version's rule refuses (a newer prikk, or 0.55.0, let it into the
+repository), and no ref the archive carries reaches it, so it is held as an unreached object, as the repository's own `verify` holds
+it. This is a warning, not a failure: the archive is internally consistent, `archive import` accepts it, and the receiving
+repository's `verify` passes. If a carried ref **does** reach the patch, `archive verify` and `archive import` refuse the archive,
+naming the path: read that history with a newer prikk.
 
 ## `error: precondition not met: <type> <id> would carry at least 5 counted signatures, above the limit of 4 per object …`
 

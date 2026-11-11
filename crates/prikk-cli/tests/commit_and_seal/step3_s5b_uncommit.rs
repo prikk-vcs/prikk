@@ -631,6 +631,12 @@ fn accept_one_claim(repo: &Path, path: &str, content: &[u8]) -> String {
     claim
 }
 
+/// How long either side of the race waits through lock conflicts before the test fails: a time, never an iteration count.
+const LOCK_WAIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The pause between two attempts.
+const LOCK_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// The race, through the binary: `uncommit` of the newest patch against a `commit` loop, N rounds. Each round ends in one of two
 /// states, `verify` exits 0 after every round, and no acknowledged commit is lost. (The owner's rule: state n/N.)
 #[test]
@@ -649,27 +655,45 @@ fn uncommit_against_a_commit_loop_ends_in_one_of_two_states_every_round_and_veri
         let racing_repo = repo.clone();
         let racer = std::thread::spawn(move || {
             std::fs::write(racing_repo.join("racing.txt"), b"racing").unwrap();
-            for _ in 0..200 {
+            // Retry through lock conflicts for a **time**, not a number of tries (a loaded runner spends any iteration count at once).
+            let started = std::time::Instant::now();
+            let mut attempts = 0_u32;
+            loop {
                 let output = support::commit(&racing_repo, "heads/main", "racing");
+                attempts += 1;
                 if output.status.success() {
-                    return Some(patch_id_of(&output));
+                    return Ok(patch_id_of(&output));
                 }
-                std::thread::yield_now();
+                if started.elapsed() >= LOCK_WAIT_BUDGET {
+                    return Err(format!(
+                        "{attempts} attempts over {:?}; last: {}",
+                        started.elapsed(),
+                        text(&output)
+                    ));
+                }
+                std::thread::sleep(LOCK_RETRY_PAUSE);
             }
-            None
         });
-        let mut outcome = None;
-        for _ in 0..200 {
+        let started = std::time::Instant::now();
+        let mut attempts = 0_u32;
+        let output = loop {
             let output = uncommit(&repo, &[&target]);
-            if text(&output).contains("lock") && !output.status.success() {
-                std::thread::yield_now();
-                continue;
+            attempts += 1;
+            if !(text(&output).contains("lock") && !output.status.success()) {
+                break output;
             }
-            outcome = Some(output);
-            break;
-        }
-        let raced = racer.join().unwrap().expect("the racing commit landed");
-        let output = outcome.expect("uncommit finished");
+            assert!(
+                started.elapsed() < LOCK_WAIT_BUDGET,
+                "round {round}: uncommit never got the lock: {attempts} attempts over {:?}; last: {}",
+                started.elapsed(),
+                text(&output)
+            );
+            std::thread::sleep(LOCK_RETRY_PAUSE);
+        };
+        let raced = racer
+            .join()
+            .unwrap()
+            .unwrap_or_else(|why| panic!("round {round}: the racing commit never landed: {why}"));
         let ids = queued(&repo);
         if output.status.success() {
             taken_back_first += 1;

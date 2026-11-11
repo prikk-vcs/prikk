@@ -167,6 +167,36 @@ pub enum PrikkError {
         /// The fully rendered message, naming both possible causes.
         message: String,
     },
+    /// 0.57.0 U4b: a bundle or archive declares a repository format that can hold non-ASCII paths (8 and later), and the
+    /// receiving repository is older (6 or 7). Exists apart from [`Self::Precondition`] for the same reason
+    /// [`Self::BundleNonFastForward`] does: `prikk-cli`'s own `refusal-v1` document classifies it
+    /// (`"repository-format-too-old"`) by the variant, never by the text. Its `Display` keeps the `precondition not
+    /// met:` prefix, so stderr and exit code `1` are what [`Self::Precondition`] gave before.
+    ///
+    /// **One variant for `bundle import`, `bundle preview` and `archive import`**: the three differ only in which
+    /// command raised it, which the caller knows.
+    RepositoryFormatTooOld {
+        /// `"bundle"` or `"archive"`.
+        artifact: &'static str,
+        /// The format the artifact declares.
+        declared: u32,
+        /// The format of the repository that was asked to receive it.
+        have: u32,
+        /// The fully rendered message: both formats, `prikk format upgrade`, the cost, and that nothing was written.
+        message: String,
+    },
+    /// 0.57.0 U4b: a bundle or archive declares a repository format number this build does not know. A number outside
+    /// what this version accepts, not damage: a different version of `prikk` may have written it, and the file's
+    /// checksum was sound. [`Self::decode_failure_kind`] says [`DecodeFailureKind::OutsideVersionRule`], so every
+    /// surface that tells "outside this version" from "damaged" (the `refusal-v1` id `"outside-version-rule"`) gets it
+    /// from the variant, never from text. Replaces the `MalformedData` the archive used to raise, whose `malformed
+    /// persisted data:` prefix read as damage.
+    UnknownArtifactFormat {
+        /// `"bundle"` or `"archive"`.
+        artifact: &'static str,
+        /// The number the artifact declares.
+        declared: u32,
+    },
     /// 0.56.0 step T: `trust maintainer add` refused because the key id is already bound to a
     /// different public key (trust on first use). Exists apart from [`Self::Precondition`] for the
     /// same reason [`Self::BundleNonFastForward`] does: `prikk-cli`'s own `refusal-v1` document
@@ -234,6 +264,15 @@ impl fmt::Display for PrikkError {
             Self::MaintainerKeyIdBound { message, .. } => {
                 write!(f, "precondition not met: {message}")
             }
+            Self::RepositoryFormatTooOld { message, .. } => {
+                write!(f, "precondition not met: {message}")
+            }
+            Self::UnknownArtifactFormat { artifact, declared } => write!(
+                f,
+                "{artifact} declares repository format {declared}, which this build does not know how to read; that \
+                 is outside what this version of prikk accepts, and a different version of prikk may have written it, \
+                 so this is not damage -- refusing the whole {artifact}"
+            ),
             Self::AmbiguousGenerationLog(msg) => write!(f, "ambiguous generation log: {msg}"),
             Self::UnsupportedObjectType(msg) => write!(f, "unsupported object type: {msg}"),
             Self::ObjectOverBound {
@@ -289,7 +328,9 @@ impl PrikkError {
     #[must_use]
     pub fn decode_failure_kind(&self) -> DecodeFailureKind {
         match self {
-            Self::NonAsciiRepoPath { .. } => DecodeFailureKind::OutsideVersionRule,
+            Self::NonAsciiRepoPath { .. } | Self::UnknownArtifactFormat { .. } => {
+                DecodeFailureKind::OutsideVersionRule
+            }
             _ => DecodeFailureKind::Corrupt,
         }
     }
