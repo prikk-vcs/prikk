@@ -703,6 +703,12 @@ pub struct RepositoryVerification {
     /// is not checked, so it cannot contribute to `publication_trust_issues`; reported here as a
     /// counted, non-blocking warning instead. Empty when the objects stage did not evaluate.
     pub unreached_objects: Vec<UnreachedObject>,
+    /// 0.57.0 U3: a stored `Patch` that names a non-ASCII path **in a repository whose format does not admit one** (format 6
+    /// or 7: the 0.55.0 hole let such a path in from an archive). One entry per patch, naming its first such path. Never a
+    /// failure -- the history reads clean, and the repository works -- but format 7's own rule is that it holds none, and
+    /// an older prikk opening it sees what it cannot read; `prikk format upgrade` is the fix, because the format then makes an
+    /// older prikk refuse the repository cleanly. Empty in a format-8 repository and when the objects stage did not evaluate.
+    pub non_ascii_paths_in_old_format: Vec<NonAsciiPathInOldFormat>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -1227,6 +1233,40 @@ impl UnreachedObject {
     #[must_use]
     pub fn has_publication_trust(&self) -> bool {
         matches!(self.object_type, ObjectType::Block | ObjectType::RefState)
+    }
+}
+
+/// A stored patch naming a non-ASCII path in a format-6 or format-7 repository (0.57.0 U3); see
+/// [`RepositoryVerification::non_ascii_paths_in_old_format`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NonAsciiPathInOldFormat {
+    /// The patch whose operations name the path.
+    pub patch_id: ObjectId,
+    /// The first non-ASCII path it names.
+    pub path: String,
+    /// The repository's format number (6 or 7).
+    pub repository_format: u32,
+}
+
+impl NonAsciiPathInOldFormat {
+    /// The one warning sentence `verify` and `doctor` both give for the repository's findings (`count` of them, this one
+    /// first): the path, the format, the fix, and why it is a warning and not a failure.
+    #[must_use]
+    pub fn warning(&self, count: usize) -> String {
+        let others = match count {
+            0 | 1 => String::new(),
+            more => format!(" (and {} more patch(es) like it)", more - 1),
+        };
+        format!(
+            "this format-{format} repository holds the non-ASCII path {path} in patch {patch}{others}, which format {format} does \
+             not admit; it reads fine here, but a prikk older than this one would meet history it cannot read. Run `prikk \
+             format upgrade` to move it to format 8, after which an older prikk refuses the repository cleanly instead (and \
+             cannot open it at all)",
+            format = self.repository_format,
+            path = prikk_error::escape_non_ascii(&self.path),
+            patch = self.patch_id,
+        )
     }
 }
 
@@ -1892,6 +1932,10 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.unreached_objects.clone())
         .unwrap_or_default();
+    let non_ascii_paths_in_old_format = object_summary
+        .as_ref()
+        .map(|summary| summary.non_ascii_paths_in_old_format.clone())
+        .unwrap_or_default();
     let trailing_partial_object_index_bytes = object_summary
         .as_ref()
         .map(|summary| summary.trailing_partial_index_bytes);
@@ -2306,6 +2350,7 @@ pub fn verify_repository_with_options(
         object_container_tails,
         unreferenced_remnants,
         unreached_objects,
+        non_ascii_paths_in_old_format,
         // 0.51.0 step 1 Part B item 1 (020's grade): a record the commit witness explains as
         // acknowledged damage is not a tail -- it is complete, written, and already named by the
         // witness, not an unresolved crash shape -- so it is not counted as trailing partial bytes.

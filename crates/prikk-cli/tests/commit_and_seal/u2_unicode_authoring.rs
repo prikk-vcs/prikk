@@ -212,6 +212,18 @@ fn a_refused_character_is_refused_in_every_format_and_names_the_character() {
         let said = text(&output);
         assert_eq!(output.status.code(), Some(1), "{kind}: {said}");
         assert!(said.contains(code), "{kind}: {said}");
+        // The path in the sentence shows the refused character escaped: a raw ZWJ prints as nothing, so `a<ZWJ>b.md` would read
+        // `ab.md` (the U2 review's item 1).
+        let refused = name.chars().nth(1).unwrap();
+        let escaped = format!("a\\u{{{:x}}}b.md", u32::from(refused));
+        assert!(
+            said.contains(&escaped),
+            "{kind}: the path is written with the character escaped ({escaped}): {said}"
+        );
+        assert!(
+            !said.contains(refused),
+            "{kind}: the raw character is never printed: {said}"
+        );
         assert!(
             !said.contains("format upgrade"),
             "{kind}: an upgrade would not help, so it is not suggested: {said}"
@@ -225,6 +237,10 @@ fn a_refused_character_is_refused_in_every_format_and_names_the_character() {
         assert!(
             line.contains("\"authoring\": \"refused\""),
             "{kind}: {line}"
+        );
+        assert!(
+            line.contains(&escaped.replace('\\', "\\\\")),
+            "{kind}: the refusal text in the JSON is escaped too: {line}"
         );
         let _ = std::fs::remove_dir_all(&repo);
     }

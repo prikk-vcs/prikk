@@ -422,10 +422,10 @@ pub use unlock::{
 pub use verify::{
     ActiveWalMetadataStatus, ActiveWalOrderingIssue, AppendedFileTailStatus,
     AuthorSignatureVerification, BlockSealVerification, BlockSealers, ConnectivityIssue,
-    ContainerInteriorDamage, GenerationLogDeductionNote, InterruptedAppend, ObjectItemOutcome,
-    ObjectItemStatus, ObjectVerification, RepositoryVerification, StageOutcome, StageStatus,
-    UnreachedObject, UnreferencedRemnant, VerificationStage, VerifyOptions, verify_repository,
-    verify_repository_with_options,
+    ContainerInteriorDamage, GenerationLogDeductionNote, InterruptedAppend,
+    NonAsciiPathInOldFormat, ObjectItemOutcome, ObjectItemStatus, ObjectVerification,
+    RepositoryVerification, StageOutcome, StageStatus, UnreachedObject, UnreferencedRemnant,
+    VerificationStage, VerifyOptions, verify_repository, verify_repository_with_options,
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};

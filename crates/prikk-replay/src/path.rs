@@ -2,8 +2,8 @@
 //!
 //! This module owns the canonical repository-relative path value used by replay/lifecycle semantic
 //! state. Filesystem layout, materialization policy, and worktree ownership remain in `prikk-store`.
-//! The path subset is intentionally ASCII-only until Unicode NFC normalization is designed and
-//! tested.
+//! Since repository format 8 (0.57.0) a path may be non-ASCII; what it may not contain is the decode table of
+//! `prikk-object`, and collisions are judged by the canonical caseless key.
 //!
 //! The lexical grammar itself (`validate_repo_path`) moved to `prikk-object` (DC-54): object
 //! envelope encoders need to call it without creating a `prikk-object -> prikk-replay` dependency
@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use prikk_error::{PrikkError, Result};
 
-use prikk_object::ascii_fold;
+use prikk_object::canonical_caseless_key;
 pub use prikk_object::validate_repo_path;
 
 /// A validated repository-relative path.
@@ -51,7 +51,11 @@ impl RepoPath {
     }
 }
 
-/// Reject duplicate paths and case-insensitive collisions.
+/// Reject duplicate paths and collisions: two paths whose **canonical caseless key** is the same
+/// (`NFD(fold(NFD(path)))`, full Unicode case folding), so they are one name to a case-insensitive or normalizing file
+/// system. That is a **deliberate over-refusal**: `straße` and `strasse` collide, as do `É` and `é`, `ẞ` and `ss`, an NFC and
+/// an NFD spelling, and `K` and the Kelvin sign. A collision check protects the disk, so refusing more is the safe direction,
+/// and it **may tighten across Unicode versions** (the crates' tables only gain mappings).
 ///
 /// # Examples
 ///
@@ -75,7 +79,7 @@ impl RepoPath {
 /// ```
 pub fn validate_no_path_collisions(paths: &[RepoPath]) -> Result<()> {
     let mut exact = BTreeSet::<&str>::new();
-    let mut folded = BTreeSet::<String>::new();
+    let mut folded = std::collections::BTreeMap::<String, &str>::new();
     for path in paths {
         let exact_value = path.as_str();
         if !exact.insert(exact_value) {
@@ -83,10 +87,12 @@ pub fn validate_no_path_collisions(paths: &[RepoPath]) -> Result<()> {
                 "duplicate repository path: {exact_value}"
             )));
         }
-        let folded_value = ascii_fold(exact_value);
-        if !folded.insert(folded_value) {
+        if let Some(earlier) = folded.insert(canonical_caseless_key(exact_value), exact_value) {
             return Err(PrikkError::InvalidName(format!(
-                "case-insensitive path collision involving: {exact_value}"
+                "case-insensitive path collision involving: {} and {}; the two are one name once Unicode case folding and \
+                 normalization are applied, so a case-insensitive or normalizing file system would make them one file",
+                prikk_error::escape_non_ascii(earlier),
+                prikk_error::escape_non_ascii(exact_value)
             )));
         }
     }

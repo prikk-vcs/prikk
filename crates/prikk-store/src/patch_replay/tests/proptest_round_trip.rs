@@ -803,7 +803,9 @@ fn decode_patch_operations_for_admission_gives_the_reading_sentence_for_a_non_as
     .expect_err("a non-ASCII path must still refuse admission, not be admitted silently");
     let rendered = err.to_string();
     assert!(
-        rendered.contains("pages/zw\u{200d}j.md")
+        // The path is written with its invisible character escaped, never raw (a raw ZWJ would read `pages/zwj.md`).
+        rendered.contains("pages/zw\\u{200d}j.md")
+            && !rendered.contains('\u{200d}')
             && rendered.contains("outside what this version of prikk accepts")
             && rendered.contains("newer version of prikk may have written it"),
         "expected the reading sentence naming the path, got: {rendered}"

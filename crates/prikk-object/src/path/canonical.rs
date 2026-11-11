@@ -31,23 +31,15 @@ pub fn non_nfc_spelling(value: &str) -> Option<String> {
 /// have the same key, as do `ẞ` and `ss`). Two repository paths with the same key collide.
 #[must_use]
 pub fn canonical_caseless_key(value: &str) -> String {
+    // ASCII fast path: NFD leaves ASCII alone and its full case folding is `to_ascii_lowercase`, so the key is the same
+    // either way (a test checks all 128 ASCII scalars and mixed strings). Almost every path is ASCII, and `seal` asks the key
+    // of every live path.
+    if value.is_ascii() {
+        return value.to_ascii_lowercase();
+    }
     let decomposed: String = value.nfd().collect();
     let folded = UniCase::unicode(decomposed.as_str()).to_folded_case();
     folded.nfd().collect()
 }
 
-/// `value` with every non-ASCII character written `\u{..}`, so two spellings that look identical on screen (an NFC and an NFD
-/// `é`) can be told apart in a sentence.
-#[must_use]
-pub fn escape_non_ascii(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii() {
-                character.to_string()
-            } else {
-                character.escape_unicode().to_string()
-            }
-        })
-        .collect()
-}
+pub use prikk_error::escape_non_ascii;

@@ -262,6 +262,8 @@ pub fn switch_branch(
     // above instead of reaching this point.
     let recorded_queued_ids: Vec<ObjectId> = Vec::new();
     let recorded_wal_sequence: u64 = 0;
+    // 0.57.0 U3: the same collision rule every other materializer asks, before any decision below and any write.
+    crate::worktree::refuse_colliding_manifest_paths(&target_manifest)?;
     let target_files: BTreeMap<&str, &ReplayManifestEntry> = target_manifest
         .files
         .iter()

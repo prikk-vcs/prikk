@@ -73,3 +73,5 @@ mod step3w3c5_archive_import_adopt_current_branch;
 mod support;
 #[path = "commit_and_seal/u2_unicode_authoring.rs"]
 mod u2_unicode_authoring;
+#[path = "commit_and_seal/u3_collisions.rs"]
+mod u3_collisions;

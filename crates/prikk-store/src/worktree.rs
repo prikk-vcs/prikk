@@ -291,6 +291,7 @@ pub(crate) fn refuse_manifest_conflicts(
     layout: &RepositoryLayout,
     manifest: &ReplayManifest,
 ) -> Result<()> {
+    refuse_colliding_manifest_paths(manifest)?;
     let root = layout.root();
     let mut conflicts = Vec::new();
     for entry in &manifest.files {
@@ -311,6 +312,24 @@ pub(crate) fn refuse_manifest_conflicts(
         conflicts.len(),
         conflicts.join(", ")
     )))
+}
+
+/// 0.57.0 U3: **a checkout protects the disk, so it asks the collision rule too.** Two manifest paths with the same canonical
+/// caseless key (`Straße` and `STRASSE`, an NFC and an NFD `é`, `K` and the Kelvin sign) are one file on a case-insensitive or
+/// normalizing file system: the second write would silently replace the first. `seal` refuses such a state, but a state sealed
+/// by another version, or imported, reaches the disk only through here. Refused before any marker and any write. Shared by every
+/// materializer (`--patch-materialize*`, `--snapshot-materialize`, and `branch switch`).
+pub(crate) fn refuse_colliding_manifest_paths(manifest: &ReplayManifest) -> Result<()> {
+    let paths: Vec<crate::path::RepoPath> = manifest
+        .files
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    crate::path::validate_no_path_collisions(&paths).map_err(|err| {
+        PrikkError::Precondition(format!(
+            "refusing to materialize: {err}; nothing was written"
+        ))
+    })
 }
 
 /// Why writing `bytes` at `relative` would refuse, if it would: a parent that is a symlink or not a
@@ -379,3 +398,6 @@ thread_local! {
 pub(crate) fn before_stat_for_test(change: impl FnOnce() + 'static) {
     BEFORE_STAT.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
+
+#[cfg(test)]
+mod tests;

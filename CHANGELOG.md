@@ -32,7 +32,28 @@ declares (this closes the corner where a format-7 repository exported what 0.55.
 Two crates join the binary, exact versions: `unicode-normalization =0.1.26` (and `tinyvec`, transitive) and `unicase =2.10.0`, both Unicode 18.0.0 (so
 `THIRD-PARTY-NOTICES` lists 26 crates); the only `unsafe` is five bounded sites in `unicode-normalization`'s Hangul code, covered by a test of all 11,172
 syllables. Their NFC and folding behaviour is pinned by tests, so an upgrade of either cannot change it silently. Comparing paths for collisions with Unicode case
-folding is the next step: until it lands the collision rule is still ASCII case-folding. See [Path and Worktree Safety](docs/src/reference/path-safety.md).
+folding is the next entry. See [Path and Worktree Safety](docs/src/reference/path-safety.md).
+
+### Changed — repository-path collisions are judged by Unicode case folding over NFD, a deliberate over-refusal
+
+`seal` (and `verify`, which re-derives the state root), `extract`, every checkout (`--patch-materialize*`, `--snapshot-materialize`, `branch switch`) and the `.prikk`
+first-component rule now compare repository paths by the **canonical caseless key**, `NFD(fold(NFD(path)))` with full Unicode case folding (one function in `prikk-object`,
+pinned by tests), instead of ASCII case alone. Two paths with one key are one name to a case-insensitive or normalizing file system, so they must not both exist: **`straße` and
+`strasse` collide**, as do `É` and `é`, `ẞ` and `ss`, an NFC and an NFD spelling of one name, and `K` and the Kelvin sign. This is stricter than necessary on a case-sensitive file
+system, on purpose: a check that protects the disk errs toward refusing, and it **may tighten across Unicode versions**. The refusal names both paths, the non-ASCII characters written
+`\u{..}`. A checkout now refuses a colliding state before its first write, naming both paths and writing nothing. `.pri` + U+212A + `k` is refused as the `.prikk` metadata directory.
+Branch and tag ref names and maintainer key ids keep ASCII case-folding, unchanged.
+
+### Changed — a refusal that names an invisible character writes the path with it escaped
+
+`this version of prikk does not accept U+200D (invisible format character) in a repository path: a\u{200d}b.md` (and the reading sentence for history, and `worktree-status`'s refusal text)
+now write every non-ASCII character of the path as `\u{..}`; printed raw, a ZWJ is nothing and `a<ZWJ>b.md` read as `ab.md`.
+
+### Added — `verify` and `doctor` warn once when a format-6 or format-7 repository holds a non-ASCII path
+
+A repository that 0.55.0 let admit a non-ASCII path from an archive reads clean now that format 8 admits non-ASCII paths, but format 7's own rule is that it holds none, and an older prikk would meet
+history it cannot read. `verify` prints one `warning:` naming the first path and `prikk format upgrade` (and why: after the upgrade the format makes an older prikk refuse the repository cleanly),
+`--format json` gains an additive `non_ascii_paths_in_old_format` array, and `doctor` gives `PRIKK-DOCTOR-NON-ASCII-PATH-IN-OLD-FORMAT` as a warning. Neither fails: both exit `0`.
 
 ### Changed — a bundle or archive from a format-8 repository is refused by a format-6 or format-7 one, and a bundle's declared format is checked
 

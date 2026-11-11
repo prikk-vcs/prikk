@@ -966,6 +966,15 @@ suggested. The reason these are refused is that two names differing only by an i
 needed to spell some scripts and emoji; they are refused on purpose for now, and that is revisited if a consumer asks. The same
 character in history written by another version is reported as outside what this version accepts, not as damage.
 
+## `error: invalid name: case-insensitive path collision involving: <path> and <path> …`
+
+`seal` (or `checkout`, `branch switch`, `extract`) found two paths that are the same name once Unicode case folding and normalization
+are applied, so a case-insensitive or normalizing file system (macOS, Windows) would make them one file. The check is deliberately
+strict: `straße` and `strasse`, `É` and `é`, and an NFC and an NFD spelling of one name all collide, even where your file system keeps
+them apart. The message names both paths, with non-ASCII characters written `\u{..}`. Nothing was sealed or written. Rename or remove one
+of the two files (for a checkout, the history itself holds both, and was sealed by another version), then try again. `commit` records
+both without complaint; the refusal comes at `seal`, as it always has for case collisions.
+
 ## `error: bundle declares repository format 9, which this build does not know how to read; … so this is not damage …`
 
 A bundle or an archive (the message says which) names a repository format this prikk does not know. This is not damage: the file's

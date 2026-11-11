@@ -67,7 +67,8 @@ pub(super) fn write_outside_version_rule(
 ) -> std::fmt::Result {
     write!(
         f,
-        "lifecycle replay: patch {patch_id}: {path} contains U+{:04X} ({reason}), which is outside what this version of prikk accepts, and a newer version of prikk may have written it",
+        "lifecycle replay: patch {patch_id}: {} contains U+{:04X} ({reason}), which is outside what this version of prikk accepts, and a newer version of prikk may have written it",
+        prikk_error::escape_non_ascii(path),
         u32::from(character)
     )
 }

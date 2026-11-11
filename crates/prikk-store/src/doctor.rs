@@ -1555,6 +1555,15 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // Patch/Blob too -- but a blob `prikk uncommit` leaves behind made that sentence read as
             // a check that was skipped, so since 0.57.0 step 3 (S5b) a Patch or a Blob says there is no
             // publication trust to check, and a Block or RefState keeps the old sentence.
+            // 0.57.0 U3: a format-6 or format-7 repository that holds a non-ASCII path (the 0.55.0 hole): one warning,
+            // never an error, naming the first path and `prikk format upgrade` (the same sentence `verify` prints).
+            if let Some(first) = verification.non_ascii_paths_in_old_format.first() {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-NON-ASCII-PATH-IN-OLD-FORMAT",
+                    first.warning(verification.non_ascii_paths_in_old_format.len()),
+                    "run `prikk format upgrade`; nothing else is needed, and the repository works as it is",
+                ));
+            }
             for unreached in &verification.unreached_objects {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREACHED-OBJECT",

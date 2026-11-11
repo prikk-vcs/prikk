@@ -1745,3 +1745,34 @@ fn apply_queued_patch_envelopes_classifies_a_non_ascii_path_as_outside_version_r
         "the classification must survive to `PrikkError`, not just the rendered text: {err:?}"
     );
 }
+
+/// 0.57.0 U3: the lineage error's own sentence writes the path with its refused character escaped, never raw (a raw ZWJ is
+/// nothing, so `a<ZWJ>b.md` would read `ab.md`), and converts to the `PrikkError` that carries the same fields.
+#[test]
+fn the_lineage_error_names_the_refused_character_and_escapes_the_path() {
+    let error = LifecycleReplayError::OutsideVersionRuleInLineage {
+        patch_id: ObjectId::from_bytes([9; 32]),
+        path: "pages/a\u{200d}b.md".to_string(),
+        character: '\u{200d}',
+        reason: "invisible format character",
+    };
+    let said = error.to_string();
+    assert!(
+        said.contains("pages/a\\u{200d}b.md")
+            && !said.contains('\u{200d}')
+            && said.contains("U+200D (invisible format character)")
+            && said.contains("outside what this version of prikk accepts"),
+        "{said}"
+    );
+    let converted = prikk_error::PrikkError::from(error);
+    assert!(
+        matches!(
+            &converted,
+            prikk_error::PrikkError::RefusedPathCharacter {
+                character: '\u{200d}',
+                ..
+            }
+        ),
+        "{converted:?}"
+    );
+}

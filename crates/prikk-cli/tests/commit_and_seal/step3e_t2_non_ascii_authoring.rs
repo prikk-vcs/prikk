@@ -36,7 +36,8 @@ fn commit_of_a_worktree_file_with_a_refused_character_gives_the_authoring_senten
     assert!(
         stderr.contains(
             "this version of prikk does not accept U+200D (invisible format character) in a repository path"
-        ) && stderr.contains("pages/zw\u{200d}j.md"),
+        ) && stderr.contains("pages/zw\\u{200d}j.md")
+            && !stderr.contains('\u{200d}'),
         "expected the authoring sentence naming the file, got: {stderr}"
     );
     assert!(
@@ -70,7 +71,7 @@ fn worktree_status_of_a_worktree_file_with_a_refused_character_gives_the_authori
     assert!(
         stdout.contains(
             "this version of prikk does not accept U+200D (invisible format character) in a repository path"
-        ) && stdout.contains("zw\u{200d}j.txt"),
+        ) && stdout.contains("zw\\u{200d}j.txt"),
         "expected the authoring sentence naming the file, got: {stdout}"
     );
     assert!(

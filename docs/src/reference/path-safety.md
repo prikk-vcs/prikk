@@ -21,15 +21,18 @@ For physical repository layout and `.prikk/` authority boundaries, see
   paths (DC-54), and its reason is in "NFC is checked where a name is authored", below.
 - Cross-platform conservative checks are enforced even on Unix, including Windows reserved names and
   case-insensitive collision rejection.
-- The collision-rejection rule is ASCII case-folding only (`to_ascii_lowercase`), applied uniformly
-  to repository paths, branch ref names, tag ref names, and maintainer trust key ids (DC-72). It is
-  **not** Unicode case folding or normalization. For repository paths that now matters: `commit` refuses a
-  non-NFC name, which keeps an NFC and an NFD twin from being recorded together by `commit`, but the collision
-  rule itself still compares ASCII-lowercased bytes, so `É` and `é`, or `straße` and `strasse`, are not yet
-  recognized as colliding. (The two Unicode crates the canonical comparison needs are in the build and their
-  behaviour is pinned by tests; the comparison itself is the next step.) Branch and tag ref names have no ASCII
-  restriction, so an NFC/NFD pair there is a live, recorded, un-rejected collision, as before; ref names and key ids
-  are not part of this change.
+- **Repository-path collisions are judged by the canonical caseless key** (0.57.0): `NFD(fold(NFD(path)))`, with full
+  Unicode case folding, one function in `prikk-object`. Two paths with the same key are one name to a case-insensitive or
+  normalizing file system, so they must not both exist. **This is a deliberate over-refusal:** `straße` and `strasse` collide,
+  and so do `É` and `é`, `ẞ` and `ss`, an NFC and an NFD spelling of one name, and `K` and the Kelvin sign (U+212A). The check
+  protects the disk, so refusing more is the safe direction, and **it may tighten across Unicode versions**: the pinned crates'
+  tables only gain mappings, and a later Unicode version can make two names collide that did not. (Reading stored history is
+  different: it never asks the Unicode data, see "The decode table".) The key is asked at every site that protects the disk:
+  `seal` (and so `verify`, which re-derives the state root), `extract`, every checkout (`--patch-materialize*`,
+  `--snapshot-materialize`, `branch switch`, before any write), and the `.prikk` first-component rule, which now refuses
+  `.pri` + U+212A + `k` as the metadata directory. **Branch and tag ref names and maintainer trust key ids keep the ASCII
+  case-folding rule** (`to_ascii_lowercase`), unchanged by ruling; an NFC/NFD pair of ref names is still a live,
+  recorded, un-rejected collision.
 - Repository-path collisions are rejected at `seal`, not at `commit` (DC-72) — `commit` records a
   case-colliding pair into the active WAL without error; `seal` computes the full state root over all
   live paths and rejects there. Nothing enters sealed, verifiable history either way, but the
@@ -85,7 +88,7 @@ The current validator rejects:
   `LPT9`, and the superscript forms `COM¹ COM² COM³ LPT¹ LPT² LPT³` that Windows also reserves in every directory
   (0.57.0; they are reachable now that a path may be non-ASCII);
 - duplicate paths in a path set; and
-- case-insensitive collisions in a path set.
+- collisions in a path set under the canonical caseless key (full Unicode case folding over NFD).
 
 ### Length Caps
 
@@ -266,8 +269,7 @@ the same id is still refused even after removal.
 
 ## Deferred and Not Promised
 
-Still deferred: Unicode-aware collision comparison of repository paths (full case folding over the canonical form), symlink
-authoring, symlink materialization, full platform path matrix, Git path compatibility, path-policy configuration, stable
+Still deferred: Unicode-aware collision comparison of ref names and key ids, symlink authoring, symlink materialization, full platform path matrix, Git path compatibility, path-policy configuration, stable
 repository-format migration, complete checkout pruning, complete branch switching, production merge
 execution, and race-free worktree mutation hardening.
 

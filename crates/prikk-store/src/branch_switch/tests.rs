@@ -30,6 +30,18 @@ fn publish_branch(
     seed: u8,
     files: Files<'_>,
 ) -> prikk_error::Result<()> {
+    publish_branch_claiming_state(layout, ref_name, seed, files, None)
+}
+
+/// [`publish_branch`], optionally with the block claiming `claimed_state` instead of the state root its patch derives. Needed to
+/// publish a history whose state cannot be derived (it holds two names for one file), which `seal` would never author.
+fn publish_branch_claiming_state(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    seed: u8,
+    files: Files<'_>,
+    claimed_state: Option<prikk_object::MerkleRoot>,
+) -> prikk_error::Result<()> {
     let mut object_store = FileObjectStore::new(layout.clone());
     let mut operations = Vec::new();
     for (index, (path, bytes)) in files.iter().enumerate() {
@@ -58,7 +70,10 @@ fn publish_branch(
     let mut patch = ObjectEnvelope::unsigned(ObjectType::Patch, 1, payload.to_canonical_bytes()?);
     patch.add_signature(dummy_signature())?;
     let patch_id = object_store.write_object(&patch)?;
-    let state = crate::derive_next_state_root(&object_store, None, &[patch_id])?;
+    let state = match claimed_state {
+        Some(claimed) => claimed,
+        None => crate::derive_next_state_root(&object_store, None, &[patch_id])?,
+    };
     let block =
         signed_block_with_state_root(BlockKind::Root, Vec::new(), vec![patch_id], None, state);
     let block_id = object_store.write_object(&block)?;
@@ -345,5 +360,45 @@ fn a_switch_interrupted_while_writing_leaves_every_old_file_and_resumes() {
     assert_on_other(&root);
     assert_eq!(pointer(&root), "heads/other\n");
     assert!(!worktree_is_dirty(&layout).unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.57.0 U3: a switch to a branch whose history holds two names for one file (`Straße.txt` and `STRASSE.txt`) is refused before it
+/// writes anything. `seal` would never author that state; a history sealed elsewhere or imported can hold it.
+#[test]
+fn a_switch_to_a_history_with_two_names_for_one_file_is_refused_before_any_write() {
+    let root = unique_temp_dir("switch-collision");
+    let layout = RepositoryLayout::init(root.clone()).expect("init");
+    publish_branch(&layout, "heads/main", 0x51, MAIN).expect("publish main");
+    publish_branch_claiming_state(
+        &layout,
+        "heads/other",
+        0x52,
+        &[("Stra\u{df}e.txt", b"upper\n"), ("STRASSE.txt", b"lower\n")],
+        Some(crate::compute_state_root(&[]).expect("the empty tree's root")),
+    )
+    .expect("publish other");
+    materialize_patch_checkout(&layout, "heads/main").expect("materialize main");
+    let before = pointer(&root);
+    let result = switch_branch(&layout, Some("heads/main"), "heads/other");
+    let message = match &result {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("the switch must be refused"),
+    };
+    assert!(
+        message.contains("case-insensitive path collision") || message.contains("collision"),
+        "{message}"
+    );
+    assert_eq!(pointer(&root), before, "the pointer did not move");
+    assert_eq!(
+        read(&root, "a.txt").as_deref(),
+        Some(&b"a\n"[..]),
+        "main's files are untouched"
+    );
+    assert_eq!(
+        read(&root, "Stra\u{df}e.txt"),
+        None,
+        "nothing of the target was written"
+    );
     let _ = std::fs::remove_dir_all(root);
 }

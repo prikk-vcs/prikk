@@ -8,6 +8,24 @@ use core::fmt;
 /// Shared result type.
 pub type Result<T> = core::result::Result<T, PrikkError>;
 
+/// `value` with every non-ASCII character written `\u{..}` (0.57.0 U2/U3). A sentence that names a path must show the
+/// characters that make it refused: an invisible one (ZWJ, a bidirectional control) prints as nothing, so `a<ZWJ>b.md` would
+/// read as `ab.md`, and an NFC and an NFD `é` print identically. ASCII is left readable. Lives here, the lowest crate, so
+/// the error's own `Display` and every sentence above it use the one definition.
+#[must_use]
+pub fn escape_non_ascii(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii() {
+                character.to_string()
+            } else {
+                character.escape_unicode().to_string()
+            }
+        })
+        .collect()
+}
+
 /// Error type used by the initial implementation crates.
 ///
 /// `#[non_exhaustive]` (RFC 132 increment 1): `prikk-error` is published, and until this attribute
@@ -256,8 +274,9 @@ impl fmt::Display for PrikkError {
                 reason,
             } => write!(
                 f,
-                "invalid name: {path} contains U+{:04X} ({reason}), which is outside what this version of prikk \
+                "invalid name: {} contains U+{:04X} ({reason}), which is outside what this version of prikk \
                  accepts, and a newer version of prikk may have written it",
+                escape_non_ascii(path),
                 u32::from(*character)
             ),
             Self::ObjectTypeMismatch { expected, actual } => {

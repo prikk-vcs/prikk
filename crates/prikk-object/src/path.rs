@@ -23,7 +23,8 @@ pub use decode_table::{first_refused_character, refusal_reason};
 ///
 /// Deliberately ASCII-only, not Unicode normalization: an NFC-composed and NFD-decomposed spelling
 /// of the same visible name are different byte sequences and are not folded together here. Recorded
-/// as a known limitation, not an oversight, at `docs/src/reference/path-safety.md`.
+/// as a known limitation, not an oversight, at `docs/src/reference/path-safety.md`. **Repository paths no longer use this**
+/// (0.57.0 U3: they use [`canonical_caseless_key`]); branch and tag ref names and maintainer key ids still do, by ruling.
 #[must_use]
 pub fn ascii_fold(name: &str) -> String {
     name.to_ascii_lowercase()
@@ -109,7 +110,11 @@ pub fn validate_repo_path(value: &str) -> Result<()> {
         });
     }
     for (index, component) in value.split('/').enumerate() {
-        if index == 0 && component.eq_ignore_ascii_case(".prikk") {
+        // 0.57.0 U3: asked of the canonical caseless key, not ASCII case alone. On a case-insensitive, normalizing file system
+        // `.pri` + U+212A (Kelvin sign) + `k` is the `.prikk` directory (the Kelvin sign case-folds to `k`). This is the one
+        // decode-time check that folds; it is version-stable in the direction that matters (the fold of a character that
+        // reaches ASCII letters is fixed, and a later Unicode version can only add such characters, which tightens).
+        if index == 0 && canonical_caseless_key(component) == ".prikk" {
             return Err(PrikkError::InvalidName(
                 "repository paths must not target the .prikk metadata directory".to_string(),
             ));

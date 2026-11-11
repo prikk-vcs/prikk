@@ -156,6 +156,85 @@ fn prepare_extract_plan_refuses_case_colliding_paths() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// `prepare_extract_plan` refuses the whole point, before any write, when two of its own paths
+/// collide under the canonical caseless key (0.57.0 U3: full Unicode case folding over NFD, a deliberate over-refusal: `straße` and `STRASSE` are one name) -- the shape `commit` lets into its own active WAL today without
+/// error (`path-safety.md`), which received history can carry too.
+#[test]
+fn prepare_extract_plan_refuses_paths_that_collide_under_unicode_case_folding() {
+    let root = unique_temp_dir("extract-plan-unicode-collision");
+    let layout = RepositoryLayout::init(root.clone()).unwrap();
+    let mut store = FileObjectStore::new(layout.clone());
+    let upper_blob = write_blob(&mut store, b"upper").unwrap();
+    let lower_blob = write_blob(&mut store, b"lower").unwrap();
+    let patch_payload = PatchPayload {
+        operations: vec![
+            Operation {
+                op_seq: 1,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "Stra\u{df}e.txt".to_string(),
+                    node_id: NodeId::from_bytes([0x01; 32]),
+                    blob_id: upper_blob,
+                    mode: 0o100644,
+                }),
+            },
+            Operation {
+                op_seq: 2,
+                op_id: None,
+                preconditions: Vec::new(),
+                kind: OperationKind::CreateFile(CreateFile {
+                    path: "STRASSE.txt".to_string(),
+                    node_id: NodeId::from_bytes([0x02; 32]),
+                    blob_id: lower_blob,
+                    mode: 0o100644,
+                }),
+            },
+        ],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: None,
+    };
+    let mut patch = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        1,
+        patch_payload.to_canonical_bytes().unwrap(),
+    );
+    patch.add_signature(dummy_signature()).unwrap();
+    let patch_id = store.write_object(&patch).unwrap();
+    // No real state root is needed: this crafted block is never admitted as an anchor either way
+    // (it carries no snapshot), so `prepare_extract_plan` replays its one patch directly from
+    // genesis and must refuse on the collision it finds there, regardless of what the block's own
+    // (here, unchecked) root claims.
+    let block = signed_block(BlockKind::Root, Vec::new(), vec![patch_id], None);
+    let block_id = store.write_object(&block).unwrap();
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let point = Point {
+        name: block_id.to_string(),
+        kind: PointKind::Block,
+        block_id,
+    };
+    let err = prepare_extract_plan(&layout, &reader, &point, false).unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("case-insensitive") || message.contains("collision"),
+        "{message}"
+    );
+    assert!(
+        message.contains("STRASSE.txt") && message.contains("Stra\\u{df}e.txt"),
+        "the sentence names both paths, the non-ASCII one escaped: {message}"
+    );
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::CaseCollision),
+        "{err}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// The whole plan, end to end: one admitted anchor, one entry, right content, `provisional: no`.
 #[test]
 fn prepare_extract_plan_builds_a_plan_from_an_admitted_anchor() {

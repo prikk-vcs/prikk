@@ -254,6 +254,25 @@ pub(crate) fn print_verify_report_json(
         json.push_str("\n  ");
     }
     json.push_str("],\n");
+    // 0.57.0 U3: additive. A format-6 or format-7 repository's stored patches that name a non-ASCII path (a warning, not a failure).
+    json.push_str("  \"non_ascii_paths_in_old_format\": [");
+    for (index, finding) in report.non_ascii_paths_in_old_format.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"patch_id\": ");
+        json.push_str(&escape_json_string(&finding.patch_id.to_string()));
+        json.push_str(", \"path\": ");
+        json.push_str(&escape_json_string(&finding.path));
+        json.push_str(&format!(
+            ", \"repository_format\": {}}}",
+            finding.repository_format
+        ));
+    }
+    if !report.non_ascii_paths_in_old_format.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push_str("],\n");
     push_item_level_fields(&mut json, report);
     json.push_str("\n}");
     println!("{json}");
@@ -762,6 +781,13 @@ pub(crate) fn print_verify_report(
     // non-blocking warning, never failing `verify`. The bytes stay; no command removes them yet.
     // Part 1b: terse, like `unreferenced remnants` above -- the explanation lives on the
     // per-object warning line below, which already carries it.
+    // 0.57.0 U3: one warning, never a failure, when a format-6 or format-7 repository holds a non-ASCII path (the 0.55.0 hole).
+    if let Some(first) = report.non_ascii_paths_in_old_format.first() {
+        println!(
+            "warning: {}",
+            first.warning(report.non_ascii_paths_in_old_format.len())
+        );
+    }
     println!("unreached objects: {}", report.unreached_objects.len());
     for unreached in &report.unreached_objects {
         // A Block or RefState is published under a seal, whose trust was therefore not checked; a Patch or a Blob never is

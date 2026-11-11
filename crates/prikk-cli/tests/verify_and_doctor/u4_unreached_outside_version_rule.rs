@@ -191,6 +191,11 @@ fn a_block_reached_by_a_received_ref_still_fails_verify() {
         said.contains(&format!("block {block}: state-root failed")),
         "history this version cannot read, and something reaches it: still a failure\n{said}"
     );
+    // The lineage sentence writes the path with its invisible character escaped (a raw ZWJ would print as nothing).
+    assert!(
+        said.contains("pages/zw\\u{200d}j.md") && !said.contains('\u{200d}'),
+        "{said}"
+    );
     let _ = std::fs::remove_dir_all(&repo);
 }
 

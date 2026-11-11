@@ -133,6 +133,8 @@ pub(super) struct ObjectSummary {
     /// identical reachability test above, applied to the object itself rather than one of its
     /// references.
     pub(super) unreached_objects: Vec<super::UnreachedObject>,
+    /// 0.57.0 U3: a patch naming a non-ASCII path in a repository whose format does not admit one.
+    pub(super) non_ascii_paths_in_old_format: Vec<super::NonAsciiPathInOldFormat>,
 }
 
 impl ObjectSummary {
@@ -152,6 +154,7 @@ impl ObjectSummary {
             object_container_tails: Vec::new(),
             unreferenced_remnants: Vec::new(),
             unreached_objects: Vec::new(),
+            non_ascii_paths_in_old_format: Vec::new(),
         }
     }
 
@@ -188,6 +191,8 @@ impl ObjectSummary {
         self.object_container_tails
             .extend(other.object_container_tails);
         self.unreached_objects.extend(other.unreached_objects);
+        self.non_ascii_paths_in_old_format
+            .extend(other.non_ascii_paths_in_old_format);
         self.unreferenced_remnants
             .extend(other.unreferenced_remnants);
     }
@@ -470,6 +475,7 @@ fn verify_object_type_container(
         // rather than propagated -- every *other* record in this and every other container is
         // still attempted.
         let mut ctx = ObjectRecordContext {
+            non_ascii_in_old_format: &mut summary.non_ascii_paths_in_old_format,
             pending_v3_blocks: &mut *pending_v3_blocks,
             classifier: super::ReachabilityClassifier {
                 reachable,
@@ -549,6 +555,7 @@ fn latest_per_block<T>(items: Vec<T>, id_of: impl Fn(&T) -> ObjectId) -> Vec<T> 
 /// `pending_v3_blocks` and the RFC 164 Rule E classifier, bundled purely to keep
 /// `verify_object_record`'s own argument count low (`clippy::too_many_arguments`).
 struct ObjectRecordContext<'a> {
+    non_ascii_in_old_format: &'a mut Vec<super::NonAsciiPathInOldFormat>,
     pending_v3_blocks: &'a mut Vec<(ObjectId, BlockPayload)>,
     classifier: super::ReachabilityClassifier<'a>,
 }
@@ -629,6 +636,32 @@ fn verify_object_record(
     // signature that fails to verify against *recorded* material propagates as an `Err` via `?`
     // below -- it never reaches `author_verification` -- because that outcome is a genuine
     // authorship-integrity defect (forgery or corruption), not a trust opinion (D3).
+    if object_type == ObjectType::Patch && !layout.format().admits_non_ascii_paths() {
+        // 0.57.0 U3: a path format 6 or 7 does not admit (the 0.55.0 hole). A patch that does not decode names nothing here --
+        // its block's state check reports that; this only looks for the warning.
+        if let Some(path) = crate::patch_replay::decode::decode_patch_operations(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )
+        .ok()
+        .and_then(|operations| {
+            operations.iter().find_map(|operation| {
+                operation
+                    .kind
+                    .paths()
+                    .into_iter()
+                    .find(|path| !path.is_ascii())
+                    .map(str::to_string)
+            })
+        }) {
+            ctx.non_ascii_in_old_format
+                .push(super::NonAsciiPathInOldFormat {
+                    patch_id: object_id,
+                    path,
+                    repository_format: layout.format().number(),
+                });
+        }
+    }
     let author_verification = if object_type == ObjectType::Patch {
         crate::author::author_key_index::verify_author_signature(layout, envelope)?.map(
             |(key_id, sound)| {

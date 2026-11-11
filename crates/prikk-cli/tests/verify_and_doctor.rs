@@ -69,6 +69,8 @@ mod step1e_every_finding_names_a_true_way_out;
 mod step3_s3_verify_json_item_level;
 #[path = "verify_and_doctor/torn_tail_is_one_frame.rs"]
 mod torn_tail_is_one_frame;
+#[path = "verify_and_doctor/u3_non_ascii_in_old_format.rs"]
+mod u3_non_ascii_in_old_format;
 #[path = "verify_and_doctor/u4_unreached_outside_version_rule.rs"]
 mod u4_unreached_outside_version_rule;
 #[path = "verify_and_doctor/u4b_archive_unreached_outside_version_rule.rs"]

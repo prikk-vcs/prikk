@@ -189,6 +189,11 @@ fn a_patch_a_carried_ref_reaches_still_refuses_archive_verify_and_import_and_wri
         "the refusal names the path: {}",
         text(&said)
     );
+    assert!(
+        text(&said).contains("pages/zw\\u{200d}j.md") && !text(&said).contains('\u{200d}'),
+        "the invisible character is written out, never printed raw: {}",
+        text(&said)
+    );
 
     let target = receiver("u4b-reached-target");
     let before = store_bytes(&target);

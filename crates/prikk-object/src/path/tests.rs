@@ -211,6 +211,9 @@ fn a_refused_character_is_outside_the_version_rule_naming_the_character_never_da
         said.contains("U+200D (invisible format character)"),
         "{said}"
     );
+    // The path is written with the invisible character escaped; printed raw it would read `pages/ab.md`.
+    assert!(said.contains("pages/a\\u{200d}b.md"), "{said}");
+    assert!(!said.contains('\u{200d}'), "{said}");
     assert!(
         said.contains("outside what this version of prikk accepts"),
         "{said}"
@@ -279,5 +282,68 @@ fn a_component_is_bounded_in_bytes_and_so_in_utf16_units() {
     // The property the dropped check relied on, over every width: UTF-16 units never exceed UTF-8 bytes.
     for character in ['a', '\u{e9}', '\u{65e5}', '\u{1f600}'] {
         assert!(character.len_utf16() <= character.len_utf8());
+    }
+}
+
+// ---- 0.57.0 U3: the `.prikk` check folds ----
+
+#[test]
+fn the_prikk_metadata_directory_is_refused_under_unicode_case_folding_as_first_component_only() {
+    // On a case-insensitive, normalizing file system these are the `.prikk` directory (the Kelvin sign folds to `k`).
+    for refused in [
+        ".prikk/x",
+        ".PRIKK/x",
+        ".Prikk",
+        ".pri\u{212a}k/x",
+        ".PRI\u{212a}K",
+    ] {
+        let err = validate_repo_path(refused).expect_err(refused);
+        assert!(
+            matches!(&err, PrikkError::InvalidName(text) if text.contains(".prikk metadata directory")),
+            "{refused:?}: {err:?}"
+        );
+    }
+    // Only the first component; and a different name is a different name.
+    for accepted in [
+        "sub/.prikk",
+        "sub/.pri\u{212a}k",
+        ".prikk.md",
+        ".prikk\u{301}/x",
+        ".pri/x",
+        ".prikks",
+    ] {
+        assert!(validate_repo_path(accepted).is_ok(), "{accepted:?}");
+    }
+}
+
+#[test]
+fn the_canonical_key_of_an_ascii_string_is_the_same_by_the_fast_path_and_the_full_computation() {
+    use unicode_normalization::UnicodeNormalization;
+    let full = |value: &str| -> String {
+        let decomposed: String = value.nfd().collect();
+        let folded = unicase::UniCase::unicode(decomposed.as_str()).to_folded_case();
+        folded.nfd().collect()
+    };
+    for code in 0u8..128 {
+        let single = char::from(code).to_string();
+        assert_eq!(
+            super::canonical_caseless_key(&single),
+            full(&single),
+            "U+{code:04X}"
+        );
+    }
+    for sample in [
+        "README.md",
+        "src/Main.RS",
+        ".PRIKK",
+        "A-b_C.1",
+        "",
+        "zzzZZZ",
+    ] {
+        assert_eq!(
+            super::canonical_caseless_key(sample),
+            full(sample),
+            "{sample:?}"
+        );
     }
 }

@@ -46,8 +46,9 @@ pub fn authoring_path_error(err: PrikkError) -> PrikkError {
             character,
             reason,
         } => PrikkError::InvalidName(format!(
-            "this version of prikk does not accept U+{:04X} ({reason}) in a repository path: {path}",
-            u32::from(character)
+            "this version of prikk does not accept U+{:04X} ({reason}) in a repository path: {}",
+            u32::from(character),
+            prikk_error::escape_non_ascii(&path)
         )),
         other => other,
     }
@@ -473,7 +474,8 @@ mod tests {
         assert!(
             rendered.contains(
                 "this version of prikk does not accept U+200D (invisible format character)"
-            ) && rendered.contains("pages/zw\u{200d}j.md"),
+            ) && rendered.contains("pages/zw\\u{200d}j.md")
+                && !rendered.contains('\u{200d}'),
             "expected the authoring sentence naming the file, got: {rendered}"
         );
         assert!(
