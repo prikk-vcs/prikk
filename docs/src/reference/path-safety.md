@@ -28,11 +28,20 @@ For physical repository layout and `.prikk/` authority boundaries, see
   protects the disk, so refusing more is the safe direction, and **it may tighten across Unicode versions**: the pinned crates'
   tables only gain mappings, and a later Unicode version can make two names collide that did not. (Reading stored history is
   different: it never asks the Unicode data, see "The decode table".) The key is asked at every site that protects the disk:
-  `seal` (and so `verify`, which re-derives the state root), `extract`, every checkout (`--patch-materialize*`,
+  `seal`, `extract`, every checkout (`--patch-materialize*`,
   `--snapshot-materialize`, `branch switch`, before any write), and the `.prikk` first-component rule, which now refuses
   `.pri` + U+212A + `k` as the metadata directory. **Branch and tag ref names and maintainer trust key ids keep the ASCII
   case-folding rule** (`to_ascii_lowercase`), unchanged by ruling; an NFC/NFD pair of ref names is still a live,
   recorded, un-rejected collision.
+- **`verify` judges a sealed block's integrity, not today's collision rule** (0.57.0). It re-derives a block's state root
+  without the collision policy: the root is a function of the manifest, a real mismatch is still a failure, and a later Unicode
+  version (or a crate upgrade) can therefore never turn valid sealed history into a state-root failure that reads as damage.
+  What it reports instead is **one warning per distinct pair** for a sealed *tip* (a reached block no other block derives its
+  state from) whose paths collide under this version's rule: it names both paths (escaped), says that `extract`, `checkout`
+  and `branch switch` will refuse to write them, and gives the way out, `prikk mv <one> <new name>`, then `commit` and `seal`.
+  Exit `0`; `verify --format json` carries an additive `sealed_path_collisions` array and `doctor` gives
+  `PRIKK-DOCTOR-SEALED-PATH-COLLISION`. An earlier block of a branch that has since renamed one of the paths is history, and is
+  not reported. Only the writers refuse.
 - Repository-path collisions are rejected at `seal`, not at `commit` (DC-72) — `commit` records a
   case-colliding pair into the active WAL without error; `seal` computes the full state root over all
   live paths and rejects there. Nothing enters sealed, verifiable history either way, but the

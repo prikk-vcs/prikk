@@ -709,6 +709,12 @@ pub struct RepositoryVerification {
     /// an older prikk opening it sees what it cannot read; `prikk format upgrade` is the fix, because the format then makes an
     /// older prikk refuse the repository cleanly. Empty in a format-8 repository and when the objects stage did not evaluate.
     pub non_ascii_paths_in_old_format: Vec<NonAsciiPathInOldFormat>,
+    /// 0.57.0 U3b: sealed blocks whose live paths **collide under this version's collision rule** (two different paths that are
+    /// one name under Unicode case folding and normalization). One entry per distinct pair. Valid history, never damage and never a
+    /// failure: `verify` re-derives a block's state root without the collision rule, so a later Unicode version cannot make sealed
+    /// history read as damaged; the sites that write the disk (`extract`, every checkout, `branch switch`) refuse the paths. Empty
+    /// when the objects stage did not evaluate.
+    pub sealed_path_collisions: Vec<SealedPathCollision>,
     /// Number of trailing bytes in the active WAL that look like an incomplete final record. `None`
     /// when the WAL-replay stage did not evaluate to completion.
     pub trailing_partial_wal_bytes: Option<usize>,
@@ -1233,6 +1239,38 @@ impl UnreachedObject {
     #[must_use]
     pub fn has_publication_trust(&self) -> bool {
         matches!(self.object_type, ObjectType::Block | ObjectType::RefState)
+    }
+}
+
+/// Two paths of a sealed block's state that collide under this version's collision rule (0.57.0 U3b); see
+/// [`RepositoryVerification::sealed_path_collisions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SealedPathCollision {
+    /// The first tip block whose state holds both paths.
+    pub block_id: ObjectId,
+    /// The path met first.
+    pub first_path: String,
+    /// The path met second.
+    pub second_path: String,
+    /// How many tip blocks (reached, with no block deriving its state from them: one per branch that still holds the pair) hold it.
+    pub blocks: usize,
+}
+
+impl SealedPathCollision {
+    /// The one warning sentence `verify` and `doctor` share: both paths (escaped), what is and is not affected, and the way out.
+    #[must_use]
+    pub fn warning(&self) -> String {
+        let first = prikk_error::escape_non_ascii(&self.first_path);
+        let second = prikk_error::escape_non_ascii(&self.second_path);
+        format!(
+            "the sealed tip block {block} (and {more} other tip(s) like it) holds two paths that are one name under this version's Unicode \
+             case folding and normalization: {first} and {second}. The history is valid and `verify` is not failing it, but \
+             `extract`, `checkout` and `branch switch` will refuse to write both, because a case-insensitive or normalizing \
+             file system would make them one file. Rename one: `prikk mv {second} <new name>`, then `commit` and `seal`",
+            block = self.block_id,
+            more = self.blocks.saturating_sub(1),
+        )
     }
 }
 
@@ -1936,6 +1974,10 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.non_ascii_paths_in_old_format.clone())
         .unwrap_or_default();
+    let sealed_path_collisions = object_summary
+        .as_ref()
+        .map(|summary| summary.sealed_path_collisions.clone())
+        .unwrap_or_default();
     let trailing_partial_object_index_bytes = object_summary
         .as_ref()
         .map(|summary| summary.trailing_partial_index_bytes);
@@ -2351,6 +2393,7 @@ pub fn verify_repository_with_options(
         unreferenced_remnants,
         unreached_objects,
         non_ascii_paths_in_old_format,
+        sealed_path_collisions,
         // 0.51.0 step 1 Part B item 1 (020's grade): a record the commit witness explains as
         // acknowledged damage is not a tail -- it is complete, written, and already named by the
         // witness, not an unresolved crash shape -- so it is not counted as trailing partial bytes.

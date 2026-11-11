@@ -42,9 +42,12 @@ fn names(repo: &Path) -> Vec<String> {
 fn commit_then_seal(tag: &str, left: &str, right: &str) -> Option<(std::path::PathBuf, Output)> {
     let repo = support::unique_repo(tag);
     support::init(&repo);
+    // A first sealed generation, so the colliding one is an ordinary block and not the root block (a root block also encodes a
+    // snapshot manifest, which asks the collision rule on its own: two different sites, each with its own control).
+    support::generation(&repo, "heads/main", "base.txt", b"base\n", "base");
     std::fs::write(repo.join(left), b"left\n").unwrap();
     let wrote_right = std::fs::write(repo.join(right), b"right\n").is_ok();
-    if !wrote_right || names(&repo).len() != 2 {
+    if !wrote_right || names(&repo).len() != 3 {
         eprintln!("skipped {tag}: this file system treats {left:?} and {right:?} as one name");
         let _ = std::fs::remove_dir_all(&repo);
         return None;

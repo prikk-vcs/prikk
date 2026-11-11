@@ -3,7 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
-pub use prikk_replay::{RepoPath, validate_no_path_collisions, validate_repo_path};
+pub use prikk_replay::{
+    RepoPath, first_path_collision, validate_no_duplicate_paths, validate_no_path_collisions,
+    validate_repo_path,
+};
 
 /// Join a validated repository-relative path to a worktree/repository root.
 pub(crate) fn join_repo_path_to_root(path: &RepoPath, root: &Path) -> PathBuf {

@@ -424,8 +424,9 @@ pub use verify::{
     AuthorSignatureVerification, BlockSealVerification, BlockSealers, ConnectivityIssue,
     ContainerInteriorDamage, GenerationLogDeductionNote, InterruptedAppend,
     NonAsciiPathInOldFormat, ObjectItemOutcome, ObjectItemStatus, ObjectVerification,
-    RepositoryVerification, StageOutcome, StageStatus, UnreachedObject, UnreferencedRemnant,
-    VerificationStage, VerifyOptions, verify_repository, verify_repository_with_options,
+    RepositoryVerification, SealedPathCollision, StageOutcome, StageStatus, UnreachedObject,
+    UnreferencedRemnant, VerificationStage, VerifyOptions, verify_repository,
+    verify_repository_with_options,
 };
 pub use wal::{Wal, WalRecord, WalRepair, WalReplay};
 pub use worktree::{SnapshotMaterializationReport, materialize_snapshot_checkout};

@@ -273,6 +273,24 @@ pub(crate) fn print_verify_report_json(
         json.push_str("\n  ");
     }
     json.push_str("],\n");
+    // 0.57.0 U3b: additive. Sealed blocks whose paths collide under this version's collision rule (a warning, not a failure).
+    json.push_str("  \"sealed_path_collisions\": [");
+    for (index, collision) in report.sealed_path_collisions.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        json.push_str("\n    {\"block_id\": ");
+        json.push_str(&escape_json_string(&collision.block_id.to_string()));
+        json.push_str(", \"first_path\": ");
+        json.push_str(&escape_json_string(&collision.first_path));
+        json.push_str(", \"second_path\": ");
+        json.push_str(&escape_json_string(&collision.second_path));
+        json.push_str(&format!(", \"blocks\": {}}}", collision.blocks));
+    }
+    if !report.sealed_path_collisions.is_empty() {
+        json.push_str("\n  ");
+    }
+    json.push_str("],\n");
     push_item_level_fields(&mut json, report);
     json.push_str("\n}");
     println!("{json}");
@@ -787,6 +805,11 @@ pub(crate) fn print_verify_report(
             "warning: {}",
             first.warning(report.non_ascii_paths_in_old_format.len())
         );
+    }
+    // 0.57.0 U3b: a sealed block whose paths collide under this version's rule is valid history -- a warning (one per distinct
+    // pair), never a failure.
+    for collision in &report.sealed_path_collisions {
+        println!("warning: {}", collision.warning());
     }
     println!("unreached objects: {}", report.unreached_objects.len());
     for unreached in &report.unreached_objects {

@@ -15,6 +15,7 @@ mod ref_cluster;
 mod retired_slot_tail;
 mod root_authority;
 mod row10_substituted_earlier_record;
+mod sealed_path_collisions;
 mod stage_containment;
 mod trust;
 mod unreached_objects;

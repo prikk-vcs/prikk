@@ -166,8 +166,9 @@ fn removing_a_declaration_names_its_file() {
         // 0.57.0 step 3 (S5b): `UnreachedObject::has_publication_trust`, so a blob an uncommit leaves is not said to have had
         // a trust skipped, 2,867 -> 2,877. 0.57.0 U1 (format 8): the format-6/7 matches accept format 8 too (a longer
         // pattern each, re-wrapped by `cargo fmt`), 2,877 -> 2,884. 0.57.0 U3: `NonAsciiPathInOldFormat`, its warning sentence, and
-        // the report field that carries it, 2,884 -> 2,929.
-        detail.contains("2929"),
+        // the report field that carries it, 2,884 -> 2,929. 0.57.0 U3b: `SealedPathCollision`, its warning sentence, and the report
+        // field that carries it, 2,929 -> 2,972.
+        detail.contains("2972"),
         "the line count is in the message: {detail}"
     );
     assert!(

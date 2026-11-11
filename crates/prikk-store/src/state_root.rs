@@ -7,7 +7,7 @@ use prikk_hash::sha256;
 use prikk_object::{MerkleRoot, NodeId, NodeKind, ObjectId};
 
 use crate::node::node_lifecycle::{NodeContent, NodeLifecycleState};
-use crate::path::{RepoPath, validate_no_path_collisions};
+use crate::path::{RepoPath, validate_no_duplicate_paths, validate_no_path_collisions};
 
 const LEAF_DOMAIN: &[u8] = b"PRIKK-STATE-LEAF-v2";
 const NODE_DOMAIN: &[u8] = b"PRIKK-STATE-NODE-v2";
@@ -207,12 +207,16 @@ pub(crate) fn entries_from_state(state: &NodeLifecycleState) -> Result<Vec<State
     Ok(entries)
 }
 
+/// **Integrity only** (0.57.0 U3b): the same path twice, canonical byte order, a repeated node id, each entry. It does **not**
+/// ask the collision policy (two different paths that are one name under Unicode case folding), because this is what `verify`
+/// re-derives a sealed block's state root through, and a later Unicode version must never turn valid sealed history into a
+/// state-root failure. The sites that protect the disk ask [`refuse_colliding_entries`] as well.
 pub(crate) fn validate_entries(entries: &[StateRootEntry]) -> Result<()> {
     let paths = entries
         .iter()
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
-    validate_no_path_collisions(&paths)?;
+    validate_no_duplicate_paths(&paths)?;
     if !entries.windows(2).all(
         |pair| matches!(pair, [left, right] if left.path.as_str().as_bytes() < right.path.as_str().as_bytes()),
     ) {
@@ -230,6 +234,27 @@ pub(crate) fn validate_entries(entries: &[StateRootEntry]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// **The collision policy** (0.57.0 U3b), asked where a state is *authored or written*: `seal`'s derivation, a snapshot manifest's
+/// encoding, `extract`'s fold. Two different paths with one canonical caseless key are refused, naming both. `verify` does not
+/// ask this; it reports the same finding as a warning (`first_collision`).
+pub(crate) fn refuse_colliding_entries(entries: &[StateRootEntry]) -> Result<()> {
+    let paths = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    validate_no_path_collisions(&paths)
+}
+
+/// The first two different paths of `entries` that collide under this version's rule (the policy, as a finding rather than a
+/// refusal); `None` when none do.
+pub(crate) fn first_collision(entries: &[StateRootEntry]) -> Option<(String, String)> {
+    let paths = entries
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    crate::path::first_path_collision(&paths)
 }
 
 fn validate_entry(entry: &StateRootEntry) -> Result<()> {

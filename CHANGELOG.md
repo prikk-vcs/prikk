@@ -36,13 +36,22 @@ folding is the next entry. See [Path and Worktree Safety](docs/src/reference/pat
 
 ### Changed — repository-path collisions are judged by Unicode case folding over NFD, a deliberate over-refusal
 
-`seal` (and `verify`, which re-derives the state root), `extract`, every checkout (`--patch-materialize*`, `--snapshot-materialize`, `branch switch`) and the `.prikk`
+`seal`, `extract`, every checkout (`--patch-materialize*`, `--snapshot-materialize`, `branch switch`) and the `.prikk`
 first-component rule now compare repository paths by the **canonical caseless key**, `NFD(fold(NFD(path)))` with full Unicode case folding (one function in `prikk-object`,
 pinned by tests), instead of ASCII case alone. Two paths with one key are one name to a case-insensitive or normalizing file system, so they must not both exist: **`straße` and
 `strasse` collide**, as do `É` and `é`, `ẞ` and `ss`, an NFC and an NFD spelling of one name, and `K` and the Kelvin sign. This is stricter than necessary on a case-sensitive file
 system, on purpose: a check that protects the disk errs toward refusing, and it **may tighten across Unicode versions**. The refusal names both paths, the non-ASCII characters written
 `\u{..}`. A checkout now refuses a colliding state before its first write, naming both paths and writing nothing. `.pri` + U+212A + `k` is refused as the `.prikk` metadata directory.
-Branch and tag ref names and maintainer key ids keep ASCII case-folding, unchanged.
+Branch and tag ref names and maintainer key ids keep ASCII case-folding, unchanged. **`verify` does not ask this rule** (next entry).
+
+### Changed — `verify` judges a sealed block's integrity, and a collision under today's rule is one warning
+
+`verify` re-derives each sealed block's state root **without the collision rule**: a real mismatch still fails, but history that was valid when sealed can never be failed by a
+later Unicode version or a crate upgrade that makes two old paths collide (that would read as damage). A sealed tip whose paths collide under this version's rule (a reached block no other
+block derives its state from) is instead **one warning per distinct pair** in `verify` and `doctor` (`PRIKK-DOCTOR-SEALED-PATH-COLLISION`; `verify --format json` gains an additive
+`sealed_path_collisions` array), exit `0`, naming both paths escaped, saying that `extract`, `checkout` and `branch switch` will refuse to write them, and giving the way out:
+`prikk mv <one> <new name>`, then `commit` and `seal`. `seal`, `extract`, every checkout and `branch switch` keep refusing, unchanged. A snapshot manifest still refuses a colliding
+state when it is encoded (sealing a checkpoint) and no longer when it is decoded (reading one).
 
 ### Changed — a refusal that names an invisible character writes the path with it escaped
 

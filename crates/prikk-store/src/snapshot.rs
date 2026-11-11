@@ -128,6 +128,8 @@ impl SnapshotManifest {
     /// Encode the manifest. Refuses entries the state root itself would refuse.
     pub fn encode(&self) -> Result<Vec<u8>> {
         validate_entries(&self.entries)?;
+        // Encoding is authoring a checkpoint's state (0.57.0 U3b): the collision policy applies. Decoding does not ask it.
+        crate::state_root::refuse_colliding_entries(&self.entries)?;
         let mut out = SNAPSHOT_MAGIC.to_vec();
         for entry in &self.entries {
             out.extend_from_slice(&state_leaf_fields(entry)?);

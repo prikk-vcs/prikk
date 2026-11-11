@@ -24,7 +24,7 @@ keywords.workspace      = true
 # never exercised -- so a violation of that condition would silently make feature-gated code
 # load-bearing for ordinary compilation without any build ever failing to reveal it. Checkable only
 # by review; must be checked, not assumed.
-test-support = []
+test-support = ["prikk-object/test-support"]
 
 [dependencies]
 prikk-crypto                = { workspace = true }

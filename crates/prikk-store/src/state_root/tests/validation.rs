@@ -14,7 +14,18 @@ fn rejects_noncanonical_order_collisions_and_duplicate_node_ids() -> prikk_error
     };
     first.path = RepoPath::parse("A.txt")?;
     second.path = RepoPath::parse("a.txt")?;
-    assert!(compute_state_root(&reversed).is_err());
+    // 0.57.0 U3b: two different paths that are one name under this version's collision rule are **policy**, not integrity. The
+    // state root is still computed (it is what `verify` re-derives a sealed block through, and a later Unicode version must not
+    // make valid history fail), and the collision is refused where a state is authored or written.
+    assert!(compute_state_root(&reversed).is_ok());
+    assert!(crate::state_root::refuse_colliding_entries(&reversed).is_err());
+    assert!(crate::state_root::first_collision(&reversed).is_some());
+    // The same path twice is integrity, and stays a refusal everywhere.
+    let mut twice = reversed.clone();
+    if let Some(entry) = twice.get_mut(1) {
+        entry.path = RepoPath::parse("A.txt")?;
+    }
+    assert!(compute_state_root(&twice).is_err());
 
     let mut duplicate_node = vec![text_entry()?, binary_entry()?];
     let [first, second] = duplicate_node.as_mut_slice() else {

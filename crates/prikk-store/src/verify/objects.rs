@@ -135,6 +135,8 @@ pub(super) struct ObjectSummary {
     pub(super) unreached_objects: Vec<super::UnreachedObject>,
     /// 0.57.0 U3: a patch naming a non-ASCII path in a repository whose format does not admit one.
     pub(super) non_ascii_paths_in_old_format: Vec<super::NonAsciiPathInOldFormat>,
+    /// 0.57.0 U3b: sealed blocks whose paths collide under this version's rule (a warning).
+    pub(super) sealed_path_collisions: Vec<super::SealedPathCollision>,
 }
 
 impl ObjectSummary {
@@ -155,6 +157,7 @@ impl ObjectSummary {
             unreferenced_remnants: Vec::new(),
             unreached_objects: Vec::new(),
             non_ascii_paths_in_old_format: Vec::new(),
+            sealed_path_collisions: Vec::new(),
         }
     }
 
@@ -193,6 +196,8 @@ impl ObjectSummary {
         self.unreached_objects.extend(other.unreached_objects);
         self.non_ascii_paths_in_old_format
             .extend(other.non_ascii_paths_in_old_format);
+        self.sealed_path_collisions
+            .extend(other.sealed_path_collisions);
         self.unreferenced_remnants
             .extend(other.unreferenced_remnants);
     }
@@ -372,6 +377,38 @@ pub(super) fn verify_objects(
         &mut topological.outcomes,
         &unreached_blocks,
     );
+    // 0.57.0 U3b: one finding per distinct colliding pair, counting the **tip** blocks whose state holds it. Only a reached block
+    // that no other block derives its state from is a tip: that is the state `extract`, a checkout and `branch switch` would
+    // write, and the one a rename-and-reseal changes. An earlier block of a branch that has since renamed one of the two paths is
+    // immutable history, its collision is no longer anyone's to fix, and it is not reported.
+    let derived_from: std::collections::BTreeSet<ObjectId> = pending_v3_blocks
+        .iter()
+        .filter_map(|(_, payload)| crate::block_state::state_derivation_parent(payload))
+        .collect();
+    for outcome in &topological.outcomes {
+        let Some((first, second)) = &outcome.path_collision else {
+            continue;
+        };
+        if derived_from.contains(&outcome.block_id) || unreached_blocks.contains(&outcome.block_id)
+        {
+            continue;
+        }
+        match summary
+            .sealed_path_collisions
+            .iter_mut()
+            .find(|found| &found.first_path == first && &found.second_path == second)
+        {
+            Some(found) => found.blocks += 1,
+            None => summary
+                .sealed_path_collisions
+                .push(super::SealedPathCollision {
+                    block_id: outcome.block_id,
+                    first_path: first.clone(),
+                    second_path: second.clone(),
+                    blocks: 1,
+                }),
+        }
+    }
     summary.topological_outcomes = topological.outcomes;
     Ok(summary)
 }

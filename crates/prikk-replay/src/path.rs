@@ -78,25 +78,54 @@ impl RepoPath {
 /// );
 /// ```
 pub fn validate_no_path_collisions(paths: &[RepoPath]) -> Result<()> {
+    validate_no_duplicate_paths(paths)?;
+    match first_path_collision(paths) {
+        Some((earlier, later)) => Err(PrikkError::InvalidName(format!(
+            "case-insensitive path collision involving: {} and {}; the two are one name once Unicode case folding and \
+             normalization are applied, so a case-insensitive or normalizing file system would make them one file",
+            prikk_error::escape_non_ascii(&earlier),
+            prikk_error::escape_non_ascii(&later)
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Reject the **same** path twice. This is integrity, not policy: a state that lists one path twice is not a state, whatever
+/// Unicode version reads it. [`validate_no_path_collisions`] adds the policy half (two different paths that are one name).
+pub fn validate_no_duplicate_paths(paths: &[RepoPath]) -> Result<()> {
     let mut exact = BTreeSet::<&str>::new();
-    let mut folded = std::collections::BTreeMap::<String, &str>::new();
     for path in paths {
-        let exact_value = path.as_str();
-        if !exact.insert(exact_value) {
+        if !exact.insert(path.as_str()) {
             return Err(PrikkError::InvalidName(format!(
-                "duplicate repository path: {exact_value}"
-            )));
-        }
-        if let Some(earlier) = folded.insert(canonical_caseless_key(exact_value), exact_value) {
-            return Err(PrikkError::InvalidName(format!(
-                "case-insensitive path collision involving: {} and {}; the two are one name once Unicode case folding and \
-                 normalization are applied, so a case-insensitive or normalizing file system would make them one file",
-                prikk_error::escape_non_ascii(earlier),
-                prikk_error::escape_non_ascii(exact_value)
+                "duplicate repository path: {}",
+                path.as_str()
             )));
         }
     }
     Ok(())
+}
+
+/// The first two **different** paths of `paths` that share a canonical caseless key, as (the one met first, the one met
+/// second); `None` when no two collide. The policy half of [`validate_no_path_collisions`], on its own: `verify` asks it to
+/// *warn* (a sealed block whose paths collide under this version's rule is valid history, not damage), while `seal`,
+/// `extract` and every checkout ask the full check to *refuse*.
+#[must_use]
+pub fn first_path_collision(paths: &[RepoPath]) -> Option<(String, String)> {
+    let mut folded = std::collections::BTreeMap::<String, &str>::new();
+    for path in paths {
+        let value = path.as_str();
+        match folded.entry(canonical_caseless_key(value)) {
+            std::collections::btree_map::Entry::Occupied(earlier) => {
+                if *earlier.get() != value {
+                    return Some(((*earlier.get()).to_string(), value.to_string()));
+                }
+            }
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(value);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

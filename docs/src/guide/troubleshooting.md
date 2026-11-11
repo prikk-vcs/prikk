@@ -975,6 +975,13 @@ them apart. The message names both paths, with non-ASCII characters written `\u{
 of the two files (for a checkout, the history itself holds both, and was sealed by another version), then try again. `commit` records
 both without complaint; the refusal comes at `seal`, as it always has for case collisions.
 
+## `warning: the sealed tip block <id> … holds two paths that are one name under this version's Unicode case folding …`
+
+`verify` (and `doctor`) found a sealed branch tip that holds two paths a case-insensitive or normalizing file system would make one file,
+for example `straße` and `strasse`. The history is valid: `verify` does not fail it and exits `0`. But `extract`, `checkout` and `branch switch`
+refuse to write both, so that tip cannot be materialized as is. The message names both paths and the way out: rename one, `prikk mv <one> <new name>`, then
+`commit` and `seal`; the new tip no longer collides and the warning goes away. An older block of the same branch keeps its collision, which is history and is not reported.
+
 ## `error: bundle declares repository format 9, which this build does not know how to read; … so this is not damage …`
 
 A bundle or an archive (the message says which) names a repository format this prikk does not know. This is not damage: the file's

@@ -71,6 +71,8 @@ mod step3_s3_verify_json_item_level;
 mod torn_tail_is_one_frame;
 #[path = "verify_and_doctor/u3_non_ascii_in_old_format.rs"]
 mod u3_non_ascii_in_old_format;
+#[path = "verify_and_doctor/u3b_sealed_path_collision.rs"]
+mod u3b_sealed_path_collision;
 #[path = "verify_and_doctor/u4_unreached_outside_version_rule.rs"]
 mod u4_unreached_outside_version_rule;
 #[path = "verify_and_doctor/u4b_archive_unreached_outside_version_rule.rs"]

@@ -1111,6 +1111,53 @@ fn prepare_extract_plan_for_claim_follows_a_two_link_chain_to_a_sealed_root() {
     assert!(paths.contains("foot-link.txt"));
 }
 
+/// 0.57.0 U3b: the chain's **final** folded state is checked too. Each link's patch is fine alone (`Stra\u{df}e.txt` in one,
+/// `STRASSE.txt` in the other); the two together are one name under Unicode case folding, and the walk refuses the whole point.
+#[test]
+fn prepare_extract_plan_for_claim_refuses_a_two_link_chain_whose_final_state_collides() {
+    let (layout, maintainer, _author, genesis_block) =
+        admitted_repo_for_claim_fixtures("extract-claim-chain-collision");
+    let mut store = FileObjectStore::new(layout.clone());
+
+    let root_patch_id =
+        write_simple_create_file_patch(&mut store, "Stra\u{df}e.txt", 0x71, b"root link\n");
+    let intermediate_block = ObjectId::from_bytes([0x72; 32]);
+    let _root_claim_id = write_claim_signed_by(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: intermediate_block,
+            patch_ids: vec![root_patch_id],
+            parent_block_ids: vec![genesis_block],
+        },
+        &maintainer,
+    );
+
+    let foot_patch_id =
+        write_simple_create_file_patch(&mut store, "STRASSE.txt", 0x73, b"foot link\n");
+    let foot_target_block = ObjectId::from_bytes([0x74; 32]);
+    let foot_claim_id = write_claim(
+        &mut store,
+        RecognitionClaimPayload {
+            block_id: foot_target_block,
+            patch_ids: vec![foot_patch_id],
+            parent_block_ids: vec![intermediate_block],
+        },
+    );
+
+    let reader = ObjectReadSnapshot::open(&layout).unwrap();
+    let err = prepare_extract_plan_for_claim(&layout, &reader, foot_claim_id, false).unwrap_err();
+    assert_eq!(
+        err.kind,
+        Some(crate::ExtractRefusalKind::CaseCollision),
+        "{err}"
+    );
+    let message = err.to_string();
+    assert!(
+        message.contains("STRASSE.txt") && message.contains("Stra\\u{df}e.txt"),
+        "both paths, the non-ASCII one escaped: {message}"
+    );
+}
+
 /// **D1, the default**: two held claims recognize the same block, both `Unverifiable` -- refused,
 /// naming both candidates, rather than silently picking one.
 #[test]

@@ -13,6 +13,11 @@ homepage.workspace      = true
 categories.workspace    = true
 keywords.workspace      = true
 
+[features]
+# A test seam for the collision rule (`fold_one_more_pair_for_test`): never enabled in a shipped build, and a no-op unless a test
+# arms it. `prikk-store`'s `test-support` enables it.
+test-support = []
+
 [dependencies]
 prikk-error                 = { workspace = true }
 prikk-hash                  = { workspace = true }

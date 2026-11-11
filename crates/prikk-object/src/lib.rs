@@ -21,6 +21,8 @@ mod vectors;
 pub use canonical::{CanonicalEncode, CanonicalWriter, WireType};
 pub use envelope::{ObjectEnvelope, SignatureEnvelopeIssues};
 pub use id::{OBJECT_ID_DOMAIN, ObjectId, ObjectType};
+#[cfg(feature = "test-support")]
+pub use path::{StricterRuleGuard, fold_one_more_pair_for_test};
 pub use path::{
     ascii_fold, canonical_caseless_key, escape_non_ascii, first_refused_character,
     is_windows_reserved_name, non_nfc_spelling, refusal_reason, validate_repo_path,

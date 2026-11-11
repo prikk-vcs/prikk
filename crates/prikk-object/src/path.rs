@@ -12,6 +12,8 @@ use prikk_error::{PrikkError, Result};
 mod canonical;
 mod decode_table;
 
+#[cfg(feature = "test-support")]
+pub use canonical::{StricterRuleGuard, fold_one_more_pair_for_test};
 pub use canonical::{canonical_caseless_key, escape_non_ascii, non_nfc_spelling};
 pub use decode_table::{first_refused_character, refusal_reason};
 

@@ -1557,6 +1557,14 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             // publication trust to check, and a Block or RefState keeps the old sentence.
             // 0.57.0 U3: a format-6 or format-7 repository that holds a non-ASCII path (the 0.55.0 hole): one warning,
             // never an error, naming the first path and `prikk format upgrade` (the same sentence `verify` prints).
+            // 0.57.0 U3b: a sealed block whose paths collide under this version's rule: valid history, one warning per pair.
+            for collision in &verification.sealed_path_collisions {
+                issues.push(DoctorIssue::warning(
+                    "PRIKK-DOCTOR-SEALED-PATH-COLLISION",
+                    collision.warning(),
+                    "rename one of the two paths (`prikk mv`), then `commit` and `seal`; nothing is damaged",
+                ));
+            }
             if let Some(first) = verification.non_ascii_paths_in_old_format.first() {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-NON-ASCII-PATH-IN-OLD-FORMAT",

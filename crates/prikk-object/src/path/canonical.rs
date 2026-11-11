@@ -31,6 +31,13 @@ pub fn non_nfc_spelling(value: &str) -> Option<String> {
 /// have the same key, as do `ẞ` and `ss`). Two repository paths with the same key collide.
 #[must_use]
 pub fn canonical_caseless_key(value: &str) -> String {
+    let key = unseamed_canonical_caseless_key(value);
+    #[cfg(feature = "test-support")]
+    let key = seam::apply(key);
+    key
+}
+
+fn unseamed_canonical_caseless_key(value: &str) -> String {
     // ASCII fast path: NFD leaves ASCII alone and its full case folding is `to_ascii_lowercase`, so the key is the same
     // either way (a test checks all 128 ASCII scalars and mixed strings). Almost every path is ASCII, and `seal` asks the key
     // of every live path.
@@ -43,3 +50,53 @@ pub fn canonical_caseless_key(value: &str) -> String {
 }
 
 pub use prikk_error::escape_non_ascii;
+
+/// **A stricter rule, for tests** (0.57.0 U3b). The collision rule may tighten across Unicode versions, and `verify` must then
+/// warn about a sealed block that was valid when it was sealed, not fail it. No real input can show that today (the crates
+/// are pinned), so a test arms this to make the key fold one more pair of characters: history sealed under the real rule is then
+/// judged by a stricter one. Thread-local, restored when the guard drops, absent from a shipped build.
+#[cfg(feature = "test-support")]
+pub fn fold_one_more_pair_for_test(from: char, into: char) -> StricterRuleGuard {
+    seam::PAIRS.with(|pairs| pairs.borrow_mut().push((from, into)));
+    StricterRuleGuard(())
+}
+
+/// Disarms [`fold_one_more_pair_for_test`] when dropped.
+#[cfg(feature = "test-support")]
+#[derive(Debug)]
+pub struct StricterRuleGuard(());
+
+#[cfg(feature = "test-support")]
+impl Drop for StricterRuleGuard {
+    fn drop(&mut self) {
+        seam::PAIRS.with(|pairs| {
+            pairs.borrow_mut().pop();
+        });
+    }
+}
+
+#[cfg(feature = "test-support")]
+mod seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        pub(super) static PAIRS: RefCell<Vec<(char, char)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn apply(key: String) -> String {
+        PAIRS.with(|pairs| {
+            let pairs = pairs.borrow();
+            if pairs.is_empty() {
+                return key;
+            }
+            key.chars()
+                .map(|character| {
+                    pairs
+                        .iter()
+                        .find(|(from, _)| *from == character)
+                        .map_or(character, |(_, into)| *into)
+                })
+                .collect()
+        })
+    }
+}

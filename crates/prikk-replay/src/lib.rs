@@ -19,4 +19,7 @@ pub use node_lifecycle::{
     LiveNode, NodeContent, NodeLifecycleState, Tombstone, ensure_node_id_nonzero,
     validate_kind_content_shape,
 };
-pub use path::{RepoPath, validate_no_path_collisions, validate_repo_path};
+pub use path::{
+    RepoPath, first_path_collision, validate_no_duplicate_paths, validate_no_path_collisions,
+    validate_repo_path,
+};

@@ -46,15 +46,28 @@ pub(super) fn write_create_file_patch(
     path: &str,
     node_byte: u8,
 ) -> ObjectId {
+    write_create_file_patch_with_blob(
+        store,
+        path,
+        node_byte,
+        ObjectId::from_bytes([node_byte.wrapping_add(1); 32]),
+    )
+}
+
+/// [`write_create_file_patch`] naming a blob the caller wrote, for a fixture whose state must actually be derivable.
+pub(super) fn write_create_file_patch_with_blob(
+    store: &mut FileObjectStore,
+    path: &str,
+    node_byte: u8,
+    blob_id: ObjectId,
+) -> ObjectId {
     let author = Ed25519AuthorSigner::from_seed("u4-author", &[0x71; 32]).unwrap();
     let mut create_file = CanonicalWriter::new();
     create_file.field_repo_path(1, path).unwrap();
     create_file
         .field_bytes(2, NodeId::from_bytes([node_byte; 32]).as_bytes())
         .unwrap();
-    create_file
-        .field_object_id(3, &ObjectId::from_bytes([node_byte.wrapping_add(1); 32]))
-        .unwrap();
+    create_file.field_object_id(3, &blob_id).unwrap();
     create_file.field_u32(4, 0o100_644).unwrap();
     let create_file_bytes = create_file.finish();
     let mut operation = CanonicalWriter::new();

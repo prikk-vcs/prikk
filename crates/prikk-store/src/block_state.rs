@@ -15,7 +15,10 @@ use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::node::node_lifecycle::NodeLifecycleState;
 use crate::object_store::{ObjectReader, ObjectWriter};
 use crate::snapshot::{CHECKPOINT_CADENCE, write_checkpoint_snapshot};
-use crate::state_root::{StateRootEntry, compute_state_root, entries_from_state};
+use crate::state_root::{
+    StateRootEntry, compute_state_root, entries_from_state, first_collision,
+    refuse_colliding_entries,
+};
 
 /// Validate the format-2 Block kind and parent cardinality contract.
 pub fn validate_block_v2_shape(payload: &BlockPayload) -> Result<()> {
@@ -77,7 +80,7 @@ fn validate_merge_shape(payload: &BlockPayload) -> Result<()> {
 /// only for a `Merge` block (DC-75), the sole parent otherwise. Callers must have already run
 /// [`validate_block_v2_shape`] on `payload` — this trusts `mainline_parent_id` is `Some` and names a
 /// real parent for `Merge`, exactly as that validation requires.
-fn state_derivation_parent(payload: &BlockPayload) -> Option<ObjectId> {
+pub(crate) fn state_derivation_parent(payload: &BlockPayload) -> Option<ObjectId> {
     if payload.kind == BlockKind::Merge {
         payload.mainline_parent_id
     } else {
@@ -297,7 +300,11 @@ pub(crate) fn derive_candidate(
         };
     apply_candidate_patches(reader, &mut state, &mut text_cache, patch_ids)
         .map_err(CandidateStateDerivationError::Patch)?;
-    let entries = entries_from_state(&state).map_err(CandidateStateDerivationError::Lineage)?;
+    // 0.57.0 U3b: a state being *authored* (sealed) or written (extracted) asks the collision policy; `verify` re-derives
+    // the same roots without it (`verify_block_v2_state_reporting`) and reports a collision as a warning instead.
+    let entries = entries_from_state(&state)
+        .and_then(|entries| refuse_colliding_entries(&entries).map(|()| entries))
+        .map_err(CandidateStateDerivationError::Lineage)?;
     Ok(CandidateDerivation {
         entries,
         text_cache,
@@ -590,24 +597,41 @@ fn resolved_parent_state(
 /// verified state is inserted into `memo`, so a *later* block whose lineage passes through this one
 /// reuses it instead of re-deriving. Never inserted before success — see [`LineageStateMemo`]'s own
 /// doc for why that ordering is the entire point.
+#[cfg(test)]
 pub(crate) fn verify_block_v2_state(
     reader: &impl ObjectReader,
     block_id: ObjectId,
     payload: &BlockPayload,
     memo: &mut LineageStateMemo,
 ) -> Result<()> {
+    verify_block_v2_state_reporting(reader, block_id, payload, memo).map(|_| ())
+}
+
+/// [`verify_block_v2_state`], also returning the first two paths of the block's state that collide under **this version's
+/// collision rule**, if any (0.57.0 U3b). **The state root is judged without that rule**: its integrity is a function of the
+/// manifest, and a later Unicode version (or a crate upgrade) must never turn valid sealed history into a state-root failure.
+/// A real mismatch is still a failure; a collision is a finding the caller reports as a warning, because the protecting
+/// sites (`extract`, every checkout, `branch switch`) refuse to write those paths.
+pub(crate) fn verify_block_v2_state_reporting(
+    reader: &impl ObjectReader,
+    block_id: ObjectId,
+    payload: &BlockPayload,
+    memo: &mut LineageStateMemo,
+) -> Result<Option<(String, String)>> {
     validate_block_v2_shape(payload)?;
     let parent = state_derivation_parent(payload);
     let (mut state, mut text_cache) = resolved_parent_state(reader, parent, memo)?;
     apply_candidate_patches(reader, &mut state, &mut text_cache, &payload.patch_ids)?;
-    let computed = compute_state_root(&entries_from_state(&state)?)?;
+    let entries = entries_from_state(&state)?;
+    let computed = compute_state_root(&entries)?;
     if computed != payload.state_merkle_root {
         return Err(PrikkError::Integrity(format!(
             "format-2 Block {block_id} state root does not match authoritative replay"
         )));
     }
+    let collision = first_collision(&entries);
     memo.verified.insert(block_id, (state, text_cache));
-    Ok(())
+    Ok(collision)
 }
 
 /// Outcome of attempting to verify one `CurrentV6` Block's state root during
@@ -718,6 +742,9 @@ pub struct BlockStateOutcome {
     pub block_id: ObjectId,
     /// How that block's state-root check resolved.
     pub status: BlockStateStatus,
+    /// 0.57.0 U3b: for a block whose state root verified, the first two paths of its state that collide under this version's
+    /// collision rule (a warning, never a failure); `None` otherwise.
+    pub path_collision: Option<(String, String)>,
 }
 
 /// Result of [`verify_blocks_topological`]: one outcome per input block, plus its pre-existing
@@ -862,11 +889,15 @@ pub(crate) fn verify_blocks_topological(
                     | BlockStateStatus::UnreachedOutsideVersionRule { .. },
                 ) => Some(parent_id),
             });
+        let mut path_collision = None;
         let status = if let Some(blocked_by) = blocking_parent {
             BlockStateStatus::NotEvaluated { blocked_by }
         } else {
-            match verify_block_v2_state(reader, id, payload, memo) {
-                Ok(()) => BlockStateStatus::Verified,
+            match verify_block_v2_state_reporting(reader, id, payload, memo) {
+                Ok(collision) => {
+                    path_collision = collision;
+                    BlockStateStatus::Verified
+                }
                 Err(err) => {
                     // 0.56.0 step 3d (A6): classify before folding `err` into `message` below.
                     let kind = err.decode_failure_kind();
@@ -882,6 +913,7 @@ pub(crate) fn verify_blocks_topological(
         outcomes.push(BlockStateOutcome {
             block_id: id,
             status,
+            path_collision,
         });
         processed.insert(id);
 
