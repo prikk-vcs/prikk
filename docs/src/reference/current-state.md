@@ -405,7 +405,7 @@ planned for.
   received remove <remotes/…>` removes the pointer directly, the same consequence as replacing it
   (everything it alone reached becomes an unreached-object warning on the next `verify`), without
   waiting for a later, sound import to happen to supersede it. The objects themselves are still not
-  removed by this or any command. **`unreached_objects` and `PRIKK-DOCTOR-UNREACHED-OBJECT` count
+  removed by this or any command (since 0.57.0 a `Patch` or a `Blob` is one `unreached content:` count line, not a warning each). **`unreached_objects` and `PRIKK-DOCTOR-UNREACHED-OBJECT` count
   `Patch` and `Blob` objects as well as `Block` and `RefState`:** a rolled-back or `received remove`d
   block's own patch (and the blobs its own operations name), a claimless accepted patch, and a
   crashed or interrupted import's leftover patch and blob objects, and a blob that `prikk uncommit` leaves behind, are counted as unreached. Neither

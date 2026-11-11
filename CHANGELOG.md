@@ -172,6 +172,15 @@ next `commit` includes them), and sealed history is never touched (for that, `ro
   read clean every time. See [Commands](docs/src/reference/commands.md) and [Worktree patch
   authoring](docs/src/guide/patches/worktree-patch.md).
 
+### Changed — `verify` and `doctor` count unreached content in one line instead of warning about each Patch and Blob
+
+Almost every `prikk uncommit` leaves a blob (a text `create-file` writes one too), and `received remove` and `doctor --discard-damaged-commits` leave patches and blobs, each of which was a warning
+line of its own although nothing was published under it and there is no trust question. They are now **one line**: `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …`,
+saying what they are, that they are harmless, that no command removes them yet and that `prikk verify --format json` lists each one; `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`.
+It is not a warning, and exit codes are unchanged. **A Block or a RefState that nothing reaches keeps its per-object warning** (its publication trust was not checked), `unreached objects: N` stays the
+total, and `unreached_objects` in `--format json` is unchanged: every object, each with its type. A script that matched `warning: blob …` or `warning: patch …` in `verify` text, or counted
+`PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the count line (text) or `unreached_objects` (JSON) instead.
+
 ### Changed — `verify` and `doctor` no longer say a blob's "publication trust was not checked"
 
 An unreached object that is a Patch or a Blob (a blob a commit wrote and `prikk uncommit` or a rollback left behind) is reported

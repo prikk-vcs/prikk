@@ -1572,18 +1572,27 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "run `prikk format upgrade`; nothing else is needed, and the repository works as it is",
                 ));
             }
-            for unreached in &verification.unreached_objects {
+            // 0.57.0 S5d: a Patch or a Blob that nothing reaches (published under no seal, so no trust to check) is one count, not a
+            // warning each; a Block or a RefState keeps its own warning.
+            if let Some(content) =
+                crate::verify::UnreachedContent::of(&verification.unreached_objects)
+            {
+                issues.push(DoctorIssue::info(
+                    "PRIKK-DOCTOR-UNREACHED-CONTENT",
+                    content.sentence(),
+                    "nothing to do; the bytes stay until a command that reclaims them exists",
+                ));
+            }
+            for unreached in verification
+                .unreached_objects
+                .iter()
+                .filter(|object| !crate::verify::UnreachedContent::counts(object.object_type))
+            {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREACHED-OBJECT",
                     format!(
-                        "{} {} is reached by nothing in this repository; {}",
-                        unreached.object_type,
-                        unreached.object_id,
-                        if unreached.has_publication_trust() {
-                            "its publication trust was not checked"
-                        } else {
-                            "nothing was published under it, so there is no publication trust to check"
-                        }
+                        "{} {} is reached by nothing in this repository; its publication trust was not checked",
+                        unreached.object_type, unreached.object_id,
                     ),
                     "the bytes stay; no command removes them yet",
                 ));

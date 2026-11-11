@@ -141,9 +141,9 @@ sealed, and nothing is wrong when you run it: it is not a repair, and it shares 
   taking the commit back clears that refusal. The files stay in the worktree, though, and `sync seal` onto the current branch
   needs a clean worktree: remove them (or keep them elsewhere) before sealing the claim.
 - **A binary file's blob stays.** The blob a commit wrote stays in the object store; committing the same file again reuses it,
-  and one that nothing else reaches shows in `verify` and `doctor` as an unreached object (a warning, `verify` exit 0) until
-  reclamation exists. Since 0.57.0 that line says a blob has no publication trust to check, instead of saying a trust was not
-  checked.
+  and one that nothing else reaches is counted in `verify` and `doctor` (one `unreached content:` line, not a warning, `verify`
+  exit 0) until reclamation exists. Since 0.57.0 it is never a warning of its own and never says a trust was not checked: nothing
+  was published under a blob.
 - **Output.** Text only, with the other repairs' exit codes: 0 done, 1 refused, 2 usage. No `--format json`: the JSON tier of
   the whole CLI is decided once, not command by command.
 
@@ -978,8 +978,14 @@ removes one received ref's own pointer from the received-index container — the
 `remotes/…` point. **The objects it reached are not removed, only the pointer**: a stored `Block`,
 `RefState`, `Patch` or `Blob` nothing else reaches any more is reported by `prikk verify` as an
 **unreached object** (`unreached_objects`, with `object_type` one of `"block"`, `"ref-state"`,
-`"patch"` or `"blob"`) and by `prikk doctor` as a `PRIKK-DOCTOR-UNREACHED-OBJECT` warning — a
-non-blocking warning either way, never a failure (see `verify`'s own entry above). A rolled-back or
+`"patch"` or `"blob"`) and by `prikk doctor` — never a failure (see `verify`'s own entry above). **Since 0.57.0 a
+`Patch` or a `Blob` that nothing reaches is one count line, not a warning each** (content kept from commits taken back with
+`prikk uncommit`, from received refs removed, or from discarded commits: nothing was published under it, so there is no trust
+question): `verify` prints `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …` (no line at all when
+there are none), `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`, and `verify --format json` is unchanged:
+`unreached_objects` still lists **every** object with its `object_type`, so the detail moved to where a tool reads it. The `unreached
+objects: N` line stays the total. A `Block` or a `RefState` keeps its per-object warning (`PRIKK-DOCTOR-UNREACHED-OBJECT` for
+`doctor`), because its publication trust was not checked. Exit codes are unchanged. A rolled-back or
 `received remove`d block's own patch (and the blobs its own operations name), a claimless accepted
 patch, and a crashed or interrupted import's leftover patch and blob objects are counted too. An
 object counts when no tip, no WAL record and no pending patch (with the blobs its operations name)

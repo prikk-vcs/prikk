@@ -504,7 +504,7 @@ fn typing_the_same_command_again_finishes_an_interrupted_run_and_says_so() {
 
 /// The owner's check, item 3: a blob an uncommit leaves is not "a publication trust that was not checked".
 #[test]
-fn a_blob_left_behind_reads_as_an_unreached_blob_not_as_a_trust_that_was_not_checked() {
+fn a_blob_left_behind_is_counted_and_is_not_a_trust_that_was_not_checked() {
     let repo = repo_with("s5b-blob");
     let id = commit_file(&repo, "d.bin", b"bin\0\x01\x02", "binary");
     ok(&uncommit(&repo, &[&id]), "uncommit");
@@ -512,22 +512,20 @@ fn a_blob_left_behind_reads_as_an_unreached_blob_not_as_a_trust_that_was_not_che
     assert_eq!(
         code(&verify),
         0,
-        "an unreached blob is a warning, not a failure: {}",
+        "an unreached blob is not a failure: {}",
         text(&verify)
     );
     let words = text(&verify);
+    // 0.57.0 S5d: a blob nothing reaches is one count line (see `step3_s5d_unreached_content_count`), and it never says a trust
+    // "was not checked": nothing was published under it.
     let line = words
         .lines()
-        .find(|line| line.starts_with("warning: blob "))
-        .unwrap_or_else(|| panic!("verify names the blob: {words}"));
+        .find(|line| line.starts_with("unreached content: "))
+        .unwrap_or_else(|| panic!("verify counts the blob: {words}"));
+    assert!(line.contains("no trust to check"), "{line}");
     assert!(
-        line.contains("is reached by nothing in this repository"),
-        "{line}"
-    );
-    assert!(line.contains("no publication trust to check"), "{line}");
-    assert!(
-        !line.contains("was not checked"),
-        "a blob has no trust that was skipped: {line}"
+        !words.contains("publication trust was not checked"),
+        "a blob has no trust that was skipped: {words}"
     );
     let _ = std::fs::remove_dir_all(&repo);
 }

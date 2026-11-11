@@ -242,8 +242,9 @@ fn after_received_remove_the_unreached_block_is_a_warning_and_verify_passes() {
         "the existing unreached warning stays\n{said}"
     );
     assert!(
-        said.contains(&format!("patch {patch} is reached by nothing")),
-        "{said}"
+        said.contains("unreached content: 1 object(s) (1 patch(es), 0 blob(s))")
+            && !said.contains(&format!("patch {patch} is reached by nothing")),
+        "the patch is counted (0.57.0 S5d), not warned about on its own\n{said}"
     );
     assert!(
         said.contains("block state items: 2 checked, 0 incomplete"),

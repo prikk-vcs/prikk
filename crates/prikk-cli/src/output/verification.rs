@@ -812,19 +812,21 @@ pub(crate) fn print_verify_report(
         println!("warning: {}", collision.warning());
     }
     println!("unreached objects: {}", report.unreached_objects.len());
-    for unreached in &report.unreached_objects {
-        // A Block or RefState is published under a seal, whose trust was therefore not checked; a Patch or a Blob never is
-        // (a blob `prikk uncommit` leaves behind is one), so for those the sentence says only what is true of them.
-        let why = if unreached.has_publication_trust() {
-            "its publication trust was not checked"
-        } else {
-            "nothing was published under it, so there is no publication trust to check"
-        };
+    // A Block or RefState is published under a seal, whose trust was therefore not checked: one warning each. A Patch or a Blob
+    // never is (a blob `prikk uncommit` leaves behind is one), so those are one count line, not a warning (0.57.0 S5d).
+    for unreached in report
+        .unreached_objects
+        .iter()
+        .filter(|object| !prikk_store::UnreachedContent::counts(object.object_type))
+    {
         println!(
-            "warning: {} {} is reached by nothing in this repository -- {why}; the bytes stay, and \
+            "warning: {} {} is reached by nothing in this repository -- its publication trust was not checked; the bytes stay, and \
              no command removes them yet",
             unreached.object_type, unreached.object_id
         );
+    }
+    if let Some(content) = prikk_store::UnreachedContent::of(&report.unreached_objects) {
+        println!("{}", content.sentence());
     }
     for append in &report.object_interrupted_appends {
         let possibly_missing: Vec<_> = report

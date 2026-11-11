@@ -302,6 +302,7 @@ mod objects;
 pub(crate) mod reachability;
 mod ref_publication;
 mod trust;
+mod unreached_content;
 
 // 0.52.0 step 1 Part A round 3 (A-5): `archive::export_archive`'s own narrow blocking-ref-publication
 // refusal shares this one post-processing function, not a copy of its rule -- `mod ref_publication`
@@ -350,6 +351,7 @@ use crate::wal::{Wal, WalReplay};
 use objects::verify_objects;
 pub use objects::{InterruptedAppend, ObjectItemOutcome, ObjectItemStatus};
 use trust::PublicationTrustVerifier;
+pub use unreached_content::UnreachedContent;
 
 /// Verification summary for a single persisted object.
 #[derive(Debug, Clone, PartialEq, Eq)]

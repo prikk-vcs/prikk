@@ -167,8 +167,8 @@ fn removing_a_declaration_names_its_file() {
         // a trust skipped, 2,867 -> 2,877. 0.57.0 U1 (format 8): the format-6/7 matches accept format 8 too (a longer
         // pattern each, re-wrapped by `cargo fmt`), 2,877 -> 2,884. 0.57.0 U3: `NonAsciiPathInOldFormat`, its warning sentence, and
         // the report field that carries it, 2,884 -> 2,929. 0.57.0 U3b: `SealedPathCollision`, its warning sentence, and the report
-        // field that carries it, 2,929 -> 2,972.
-        detail.contains("2972"),
+        // field that carries it, 2,929 -> 2,972. 0.57.0 S5d: `mod unreached_content;` and its re-export, 2,972 -> 2,974.
+        detail.contains("2974"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -416,7 +416,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.57.0 U4 added `artifact_format.rs` (what an artifact's declared repository format means to a receiver; its `tests.rs` is
     // `cfg(test)`-invisible): 179 -> 180.
     // 0.57.0 S1b added `bundle/adopt.rs` (`bundle import --adopt`) and `bundle/adopt_local_ref.rs` (the halves both importers share): 180 -> 182.
-    assert_eq!(store.production_files, 182);
+    // 0.57.0 S5d added `verify/unreached_content.rs` (the one count line for unreached content): 182 -> 183.
+    assert_eq!(store.production_files, 183);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

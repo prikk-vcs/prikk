@@ -990,6 +990,14 @@ read as damage.) `archive verify` always refused an unknown number; the bundle's
 that knows the format, or export again from a repository this prikk can read. Under `--format json`, `bundle import`, `bundle
 preview` and `archive import` print a `refusal-v1` document with `"refusal": "outside-version-rule"`.
 
+## `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches …`
+
+`verify` (and `doctor`, as one `info`, `PRIKK-DOCTOR-UNREACHED-CONTENT`) found Patches or Blobs that no ref, queued commit or pending patch reaches. They are what
+`prikk uncommit` leaves of a commit you took back (a blob for a text file too), what `received remove` leaves of a received ref's content, and what discarded commits leave.
+Nothing was published under them, so there is no trust question: this is a count, not a warning, `verify` exits `0`, and nothing is wrong. No command removes them yet;
+committing the same file again reuses its blob. `prikk verify --format json` lists each one under `unreached_objects`, with its `object_type`. A **block** or **ref-state** that
+nothing reaches is different, and keeps its own `warning:` line (its publication trust was not checked).
+
 ## `warning: patch <id>: a path in it is outside what this version …; nothing this archive carries reaches it …`
 
 `archive verify` found a patch in the backup whose path this version's rule refuses (a newer prikk, or 0.55.0, let it into the
