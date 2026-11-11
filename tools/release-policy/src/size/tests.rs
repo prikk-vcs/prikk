@@ -415,7 +415,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // the 1,200-line limit: 178 -> 179.
     // 0.57.0 U4 added `artifact_format.rs` (what an artifact's declared repository format means to a receiver; its `tests.rs` is
     // `cfg(test)`-invisible): 179 -> 180.
-    assert_eq!(store.production_files, 180);
+    // 0.57.0 S1b added `bundle/adopt.rs` (`bundle import --adopt`) and `bundle/adopt_local_ref.rs` (the halves both importers share): 180 -> 182.
+    assert_eq!(store.production_files, 182);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

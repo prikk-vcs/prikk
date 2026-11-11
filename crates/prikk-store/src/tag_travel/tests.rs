@@ -185,6 +185,44 @@ fn row2_adoption_refuses_when_patch_set_is_not_held() -> Result<()> {
     Ok(())
 }
 
+/// 0.57.0 S1b (the owner's rule over every command that publishes a ref at a block): `sync adopt-tag` cannot reach a
+/// **received-only** block. It resolves a received tag against the blocks a *local* branch or tag reaches
+/// (`resolve_patch_set_digest`), so a patch set the receiver holds only through a received ref is `NotHeld`, exactly as if it
+/// were absent. The same two blocks that row 1 of the resolution test publishes as `heads/main` are here held only through
+/// `remotes/heads/main`.
+#[test]
+fn adoption_refuses_a_patch_set_held_only_through_a_received_ref() -> Result<()> {
+    let (_, _, _, bytes) = sender_with_one_tag("s1b-adopt-tag-received-only-sender", "tags/v1")?;
+    let receiver_signer = signer(0x63)?;
+    let receiver = fresh_receiver("s1b-adopt-tag-received-only-receiver", &receiver_signer)?;
+    accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits())?;
+
+    let mut store = FileObjectStore::new(receiver.clone());
+    let p1 = ObjectId::from_bytes([0xa1; 32]);
+    let p2 = ObjectId::from_bytes([0xa2; 32]);
+    let genesis = write_block(&mut store, BlockKind::Root, Vec::new(), vec![p1])?;
+    let tip = write_block(&mut store, BlockKind::Normal, vec![genesis], vec![p2])?;
+    let ref_state = signed_ref_state_envelope("heads/main", None, tip, 1);
+    let ref_state_id = store.write_object(&ref_state)?;
+    crate::write_received_pointer_for_test(&receiver, "remotes/heads/main", ref_state_id)?;
+
+    let error = adopt_tag(&receiver, "tags/v1", &receiver_signer).unwrap_err();
+    assert!(
+        error.to_string().contains("not held locally"),
+        "a patch set held only through a received ref is not held: {error}"
+    );
+    let ref_store = RefStore::new(receiver.clone());
+    assert!(ref_store.read_current_ref_state_id("tags/v1")?.is_none());
+
+    // The control: the same two blocks reached by a local branch resolve and adopt.
+    publish_branch(&ref_store, "heads/main", tip, 1)?;
+    adopt_tag(&receiver, "tags/v1", &receiver_signer)?;
+    assert!(ref_store.read_current_ref_state_id("tags/v1")?.is_some());
+
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}
+
 /// §5 row 3: adoption refuses on ambiguity, naming candidates -- T2's own refusal, propagated
 /// unchanged through `adopt_tag`, never softened into a pick.
 #[test]

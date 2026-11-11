@@ -448,6 +448,9 @@ pub enum GatedOperation {
     /// from [`verify_trusted_publication_envelope`]'s check of the *original* signer inside
     /// `plan_ref_completion`'s own condition (a).
     RefComplete,
+    /// `prikk bundle import --adopt` (0.57.0 S1b, `bundle/adopt.rs`): the receiver signs the `RefUpdate`s that publish an adopted
+    /// delivered branch, so its key is gated like every other publisher's.
+    BundleAdopt,
 }
 
 /// Verify that the signer matches one of the repository-local trust policy's adopted keys.

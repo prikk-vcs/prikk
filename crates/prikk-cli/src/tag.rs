@@ -173,11 +173,23 @@ fn resolve_target_block(
     target: &str,
 ) -> std::result::Result<ObjectId, String> {
     if let Ok(block_id) = target.parse::<ObjectId>() {
-        return object_store
+        let block_id = object_store
             .read_typed(block_id, ObjectType::Block)
             .map_err(|err| err.to_string())?
             .map(|_| block_id)
-            .ok_or_else(|| format!("--target block {block_id} does not exist"));
+            .ok_or_else(|| format!("--target block {block_id} does not exist"))?;
+        // 0.57.0 S1b (the owner's rule over every command that publishes a ref at a block): a bare block id is held to the same
+        // standing `branch create --from` demands -- reached by a local branch or tag. A block only a received ref, or nothing,
+        // reaches would otherwise be tagged without any importer's trust checks. A block a local branch or tag reaches is
+        // unaffected: that is the guide's case.
+        prikk_store::require_block_reached_locally(
+            ref_store.layout(),
+            block_id,
+            target,
+            &format!("tag create --target {target}"),
+        )
+        .map_err(|err| err.to_string())?;
+        return Ok(block_id);
     }
     // RFC 132 refusal sweep, rules 1, 2 and 6: absent and received names are refused by the one resolver.
     prikk_store::require_existing_ref(

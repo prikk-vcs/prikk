@@ -186,8 +186,8 @@ disagree. A sentence is always one of three things:
 
    `setup` makes `<new-dir>` a repository and adopts this installation's maintainer key; the key that sealed
    the history must be adopted there too, which `archive verify` reports. `archive import --adopt` makes the
-   backup's branch a local branch and writes its files (`prikk bundle import --input <bundle>` does the same for
-   one branch, as a received ref). **Only sealed history travels in a backup:** a commit still waiting for a
+   backup's branch a local branch and writes its files (`prikk bundle import --input <bundle> --adopt` does the same for
+   one branch; without `--adopt` the bundle's branch is a received ref only). **Only sealed history travels in a backup:** a commit still waiting for a
    `prikk seal` is made again in `<new-dir>`.
 3. **The honest sentence** that no command repairs it in place, followed by (2) — and where a command that
    looks relevant is known to refuse, the sentence says so (`--rebuild-pointer-index` over a damaged ref log,

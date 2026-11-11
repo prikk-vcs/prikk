@@ -33,6 +33,8 @@ mod rfc155_part_ie_overrun_cli;
 mod rfc155_part_ie_trust_note;
 #[path = "archive_and_bundle/rfc155_part_if_trust_note.rs"]
 mod rfc155_part_if_trust_note;
+#[path = "archive_and_bundle/s1b_bundle_adopt.rs"]
+mod s1b_bundle_adopt;
 #[path = "archive_and_bundle/step0_c1_closure_shapes.rs"]
 mod step0_c1_closure_shapes;
 #[path = "archive_and_bundle/step3b_bundle_import_json.rs"]

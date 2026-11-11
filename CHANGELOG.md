@@ -53,6 +53,19 @@ block derives its state from) is instead **one warning per distinct pair** in `v
 `prikk mv <one> <new name>`, then `commit` and `seal`. `seal`, `extract`, every checkout and `branch switch` keep refusing, unchanged. A snapshot manifest still refuses a colliding
 state when it is encoded (sealing a checkpoint) and no longer when it is decoded (reading one).
 
+### Added — `prikk bundle import --adopt` lands a delivered branch as a local branch, and `tag create --target <block id>` is held to the standing `branch create --from` demands
+
+`archive import --adopt` had no twin for a bundle: a branch delivered by `bundle import` was a received ref only, and a block it carried could not be branched from. `bundle import --adopt` closes that,
+under the conditions `archive import --adopt` holds, on shared code. A bundle carries RefStates but no RefUpdates, so adoption is by the **receiver's own signature**: every RefState in the delivered
+chain must be signed by a MAINTAINER key this repository has adopted (through `verify`'s predicate), the receiver's own maintainer key must be adopted too, the ref must be absent locally, no queued work
+may own the name, a non-fast-forward needs `--allow-non-fast-forward`, and (for the current branch) a dirty worktree or a file in the way refuses, all before the first write. It then signs a
+`RefUpdate` over each delivered RefState, oldest first, writes **no** `remotes/` pointer for the adopted branch, and materializes the current branch into the worktree. A delivery that cannot be adopted
+still lands under `remotes/` as without the flag, with a typeable reason in the text (`not adopted: …`) and in `--format json` (`landed_as`, `adopted`, `remote_reason`, `materialized_*`; additive).
+**`tag create --target <block id>` now demands the standing `branch create --from <block id>` demands:** a block only a received ref holds, or that nothing reaches, refuses by name before any write,
+naming `bundle import --adopt` and `archive import --adopt` (the received index records no arrival route, so both are named). Before, a tag could be written at such a block without any importer's trust
+checks. A block a local branch or tag reaches, and `--target <branch ref>`, are unaffected. `GatedOperation::BundleAdopt` joins the trust-gated list. See
+[Commands](docs/src/reference/commands.md) and [Trust and Threat Model](docs/src/reference/trust-threat-model.md).
+
 ### Changed — a refusal that names an invisible character writes the path with it escaped
 
 `this version of prikk does not accept U+200D (invisible format character) in a repository path: a\u{200d}b.md` (and the reading sentence for history, and `worktree-status`'s refusal text)
@@ -221,7 +234,7 @@ takes a tag you did not ask for. The id is resolved by the point resolver `cat`,
 (an id the store does not hold, or of another kind, refuses saying what it is); the RefState written is the
 one a ref route writes. A block held **only through a received ref**, or **reached by no ref**, refuses by
 name before anything is written, with the received ref(s) that hold it and the way forward
-(`prikk archive import <archive> --adopt`, then the same command): a branch published there would bypass
+(`prikk archive import <archive> --adopt` or `prikk bundle import --input <bundle> --adopt`, then the same command): a branch published there would bypass
 the trust checks `--adopt` makes. See
 [Commands](docs/src/reference/commands.md).
 

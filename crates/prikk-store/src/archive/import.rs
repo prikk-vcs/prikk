@@ -102,6 +102,10 @@ use prikk_object::{
 use crate::author::author_key_index::{
     check_author_key_conflict, lookup_author_key_entries, record_author_key_material,
 };
+use crate::bundle::adopt_local_ref::{
+    AdoptionInputs, AdoptionStart, Importer, begin_adoption, capture_for_current_branch,
+    refuse_current_branch_obstacles,
+};
 use crate::bundle::{
     BundleConnectivityClass, CarriedSignatureAdmitter, RefStateChainRelation,
     classify_connectivity_from_sets, classify_landing_connectivity, object_type_dependency_rank,
@@ -129,8 +133,13 @@ use crate::signature_admission::DroppedSignature;
 use crate::trust::{load_maintainer_trust_policy_or_empty, verify_trusted_publication_envelope};
 use crate::wal::Wal;
 use crate::worktree_materialize::{
-    CurrentBranchMaterializeReport, mark_current_branch_switch_pending, materialize_after_publish,
-    require_nothing_in_the_way_for_block, require_worktree_clean_and_capture,
+    CurrentBranchMaterializeReport, materialize_after_publish, require_worktree_clean_and_capture,
+};
+
+/// The archive importer's name, for the shared adoption sentences.
+const ARCHIVE_IMPORTER: Importer = Importer {
+    command: "archive-import",
+    verb: "archive import",
 };
 
 use super::ArchiveSectionKind;
@@ -684,22 +693,14 @@ pub fn import_archive<R: Read + Seek>(
                     if let Some(current_branch_landing) = landing.iter().find(|entry| {
                         entry.origin == LandingOrigin::Local && entry.ref_name == branch
                     }) {
-                        let active_replay =
-                            Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME)
-                                .replay()?;
-                        let pending = require_worktree_clean_and_capture(
-                            layout,
-                            branch,
-                            &active_replay,
-                            &format!("adopting {branch}"),
-                        )?;
-                        // 0.56.0 step W3c-5b's own red control: the one seam reachable from a
-                        // real, separately compiled `prikk` process (`feature = "test-support"`,
-                        // the same reason `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` above is
-                        // gated this way rather than `#[cfg(test)]`), so an integration test can
-                        // disable only this new check -- confirming the stage-3 backstop alone
-                        // (unchanged by this round) would let stage 1 and the journal write first,
-                        // the exact regression this check exists to prevent.
+                        // 0.57.0 S1b: shared half 2a -- the clean-worktree and nothing-in-the-way refusals are one function both
+                        // importers call (`adopt_local_ref::refuse_current_branch_obstacles`).
+                        //
+                        // 0.56.0 step W3c-5b's own red control: the one seam reachable from a real, separately compiled `prikk`
+                        // process (`feature = "test-support"`, the same reason `PRIKK_ARCHIVE_IMPORT_BLOCK_AFTER_N_FOR_TEST` above is
+                        // gated this way rather than `#[cfg(test)]`), so an integration test can disable only the in-the-way check --
+                        // confirming the stage-3 backstop alone would let stage 1 and the journal write first, the regression the
+                        // early check exists to prevent. The clean check still runs.
                         #[cfg(feature = "test-support")]
                         let skip_early_in_the_way_check = std::env::var(
                             "PRIKK_ARCHIVE_IMPORT_DISABLE_EARLY_IN_THE_WAY_CHECK_FOR_TEST",
@@ -707,24 +708,33 @@ pub fn import_archive<R: Read + Seek>(
                         .is_ok();
                         #[cfg(not(feature = "test-support"))]
                         let skip_early_in_the_way_check = false;
-                        if !skip_early_in_the_way_check {
+                        if skip_early_in_the_way_check {
+                            let active_replay = Wal::for_layout(
+                                layout,
+                                crate::foundation::layout::DEFAULT_ACTIVE_NAME,
+                            )
+                            .replay()?;
+                            drop(require_worktree_clean_and_capture(
+                                layout,
+                                branch,
+                                &active_replay,
+                                &format!("adopting {branch}"),
+                            )?);
+                        } else {
                             let graph = build_archive_ref_graph(source, &manifest)?;
                             let target_block_id = archive_resolve_tip_block(
                                 &graph,
                                 current_branch_landing.ref_state_id,
                             )?;
                             let archive_reader = ArchiveEarlyCheckReader::build(source, &manifest)?;
-                            require_nothing_in_the_way_for_block(
+                            refuse_current_branch_obstacles(
                                 layout,
-                                &pending,
-                                &archive_reader,
+                                Some(branch),
                                 branch,
+                                &archive_reader,
                                 target_block_id,
-                                &format!("adopting {branch}"),
-                                None,
                             )?;
                         }
-                        drop(pending);
                     }
                 }
             }
@@ -1610,77 +1620,40 @@ fn try_adopt_local_ref(
     {
         return already_completed_by_interrupted_run(layout, landing, options);
     }
-    if existing_ref_state_id.is_some() {
-        return Ok(AdoptOutcome::FellThrough {
-            reason: "a ref by this name already exists locally; adopting onto an existing ref \
-                     is RFC 154's"
-                .to_string(),
-        });
-    }
-
-    // 0.56.0 step W3 (R4): never adopt a ref name the active WAL already holds queued, unsealed
-    // work for -- e.g. `commit --ref heads/main` on a still-unborn `heads/main`, followed by this
-    // adopt landing a real tip at that same name before the queue is sealed. The queue was
-    // authored against an unborn ref with no content at all; adopting now gives that name a tip
-    // the queue never saw. `seal` first.
-    crate::commit_boundary::active::refuse_if_active_queue_owns_ref(
-        layout,
-        &landing.ref_name,
-        &format!("adopting {}", landing.ref_name),
-    )?;
-
-    // 0.56.0 step 3c (A3): `try_adopt_local_ref` used to read nothing from the received index at
-    // all (2A v2's own measured R1 finding) -- classify the archive's own delivered tip against
-    // the received pointer already held at this entry's own destination (`remotes/<ref_name>`,
-    // the name it would land under absent adoption), if one exists. A `rollback`/`diverged`/
-    // `does-not-connect` landing against it refuses, under the same `--allow-non-fast-forward`
-    // flag 3a built for `bundle import` and this round extended to received landings
-    // (`land_as_received_pointer`, above) -- adopting a real local ref must not silently erase
-    // what this repository had already received at that name.
-    let received_at_destination =
-        crate::received::read_received_pointer(layout, &landing.destination)?;
-    let mut adopt_remote_reason: Option<String> = None;
-    let mut adopt_class = BundleConnectivityClass::NoLocalHistory;
-    let mut adopt_chain: Option<RefStateChainRelation> = None;
-    if let Some(pointer) = &received_at_destination {
-        let (class, destination_chain) = classify_landing_connectivity(
-            &*object_store,
-            landing.ref_state_id,
-            pointer.ref_state_id,
-        )?;
-        adopt_class = class;
-        adopt_chain = Some(destination_chain);
-        if matches!(
-            class,
-            BundleConnectivityClass::Rollback
-                | BundleConnectivityClass::Diverged
-                | BundleConnectivityClass::DoesNotConnect
-        ) {
-            if !options.allow_non_fast_forward {
-                return Err(PrikkError::BundleNonFastForward {
-                    command: "archive-import",
-                    class: class.as_str(),
-                    message: format!(
-                        "archive import --adopt: adopting {} would be a {} against the received \
-                         pointer already held at {} -- refusing rather than silently rewriting \
-                         received history; pass --allow-non-fast-forward to adopt it anyway",
-                        landing.ref_name,
-                        class.as_str(),
+    // 0.57.0 S1b: the halves both importers share -- the ref is absent locally, the active queue does not own the name, and
+    // the received pointer's class decides (refusing a non-fast-forward without `--allow-non-fast-forward`) -- are one
+    // function (`adopt_local_ref::begin_adoption`); this importer supplies only its classifier.
+    let (adopt_remote_reason, adopt_class, adopt_chain) = match begin_adoption(
+        &AdoptionInputs {
+            layout,
+            ref_store,
+            importer: ARCHIVE_IMPORTER,
+            ref_name: &landing.ref_name,
+            destination: &landing.destination,
+            allow_non_fast_forward: options.allow_non_fast_forward,
+        },
+        || {
+            let pointer = crate::received::read_received_pointer(layout, &landing.destination)?
+                .ok_or_else(|| {
+                    PrikkError::Integrity(format!(
+                        "the received pointer at {} vanished while its class was read",
                         landing.destination
-                    ),
-                });
-            }
-            // A genuine fact worth naming even though adoption proceeds (A3: "the class in
-            // remote_reason") -- never set for the ordinary fast-forward/already-at-tip case,
-            // see `LandingOutcome::remote_reason`'s own doc comment.
-            adopt_remote_reason = Some(format!(
-                "adopted despite a {} against the received pointer already held at {} \
-                 (--allow-non-fast-forward)",
-                class.as_str(),
-                landing.destination
-            ));
-        }
-    }
+                    ))
+                })?;
+            classify_landing_connectivity(
+                &*object_store,
+                landing.ref_state_id,
+                pointer.ref_state_id,
+            )
+        },
+    )? {
+        AdoptionStart::FellThrough { reason } => return Ok(AdoptOutcome::FellThrough { reason }),
+        AdoptionStart::Ready {
+            remote_reason,
+            class,
+            chain,
+        } => (remote_reason, class, chain),
+    };
 
     // This ref's own subsequence, in order -- filtered from the archive's whole, interleaved
     // carried ref log (decoded once by the caller, not per ref).
@@ -1722,67 +1695,26 @@ fn try_adopt_local_ref(
     // nothing to special-case for a resume; the fail-fast gate above (fresh runs only, before the
     // journal) cannot carry its own capture across a crash-and-resume at all -- a resume is a new
     // process invocation -- which is exactly why the real guarantee lives here instead.
-    let pending_materialization = match options.current_branch.as_deref() {
-        Some(branch) if branch == landing.ref_name => {
-            let active_replay =
-                Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME).replay()?;
-            let pending = require_worktree_clean_and_capture(
-                layout,
-                branch,
-                &active_replay,
-                &format!("adopting {branch}"),
-            )?;
-            // The chain's own last entry (sorted by `update_seq` above) names the exact, final
-            // tip this adoption will publish -- already a real local `Block` (stage 1 wrote every
-            // carried block unconditionally, regardless of this landing's own eventual adoption
-            // outcome), so this is a genuine replay of an already-admitted target, not a
-            // simulation of one that might not publish (contrast `sync seal`'s own batch, whose
-            // claimed blocks are never locally admitted by `sync accept` at all).
-            let (last_update, _) = chain.last().ok_or_else(|| {
-                PrikkError::Integrity(
-                    "archive import --adopt: empty ref-update chain after its own non-empty \
-                     check just above"
-                        .to_string(),
-                )
-            })?;
-            let target_envelope = object_store
-                .read_object(last_update.new_ref_state_id)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "archive's carried ref log names RefState {} for {}, but stage 1 never \
-                         wrote it -- refusing to adopt",
-                        last_update.new_ref_state_id, landing.ref_name
-                    ))
-                })?;
-            let target_state = RefStatePayload::decode_canonical(
-                &target_envelope.canonical_payload,
-                target_envelope.schema_version,
-            )?;
-            // 0.56.0 step W3c-5b (defect 1): this backstop runs *after* stage 1 has already
-            // admitted this archive's own objects unconditionally and the journal already names
-            // every container it touched (import_archive's own doc comment above) -- every time
-            // it runs, not only in the rare race the new early check (the fresh-run branch,
-            // above) cannot see into (a file created by a process outside prikk, between the two
-            // checks, under the same lock). The shared "(nothing was written)" wording would be
-            // false here, so this names what is actually true instead.
-            require_nothing_in_the_way_for_block(
-                layout,
-                &pending,
-                &*object_store,
-                branch,
-                target_state.target_object_id,
-                &format!("adopting {branch}"),
-                Some(
-                    "this archive's own objects are already admitted, and its import journal is \
-                     already written -- run the same import again to resume, picking up from \
-                     here",
-                ),
-            )?;
-            mark_current_branch_switch_pending(layout, &pending)?;
-            Some(pending)
-        }
-        _ => None,
-    };
+    // 0.57.0 S1b: shared half 2 -- the current-branch capture, in-the-way check and switch marker are one function both importers
+    // call. The chain's own last entry (sorted by `update_seq` above) names the exact, final tip this adoption will publish.
+    let (last_update, _) = chain.last().ok_or_else(|| {
+        PrikkError::Integrity(
+            "archive import --adopt: empty ref-update chain after its own non-empty check just above".to_string(),
+        )
+    })?;
+    // This backstop runs after stage 1's unconditional writes and the journal, so the shared "(nothing was written)" wording
+    // would be false here (0.56.0 step W3c-5b, defect 1): it names what is true instead.
+    let pending_materialization = capture_for_current_branch(
+        layout,
+        options.current_branch.as_deref(),
+        &landing.ref_name,
+        &*object_store,
+        last_update.new_ref_state_id,
+        Some(
+            "this archive's own objects are already admitted, and its import journal is already written -- run the same \
+             import again to resume, picking up from here",
+        ),
+    )?;
 
     // Condition 4 (CAS against absent) for the first step, and the chain's own internal CAS for
     // every step after it -- both enforced by `publish_with_object_store_under_held_lock` itself,

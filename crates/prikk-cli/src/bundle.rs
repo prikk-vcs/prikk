@@ -43,9 +43,9 @@ use crate::output::{
 };
 use crate::stdout::println;
 use prikk_store::{
-    BundleImportOptions, BundleManifest, BundleScope, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
-    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle,
-    verify_bundle,
+    BundleAdoption, BundleImportOptions, BundleManifest, BundleScope,
+    DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
+    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, export_bundle, import_bundle_adopting, verify_bundle,
 };
 
 /// Dispatch `prikk bundle [export|import|preview|verify]`.
@@ -113,31 +113,52 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     )?;
     let options = bundle_import_options(&object_bound)?
         .with_allow_non_fast_forward(parsed.allow_non_fast_forward);
-    let report = import_bundle(&layout, &mut source, &options).map_err(|err| {
-        // 0.56.0 step 3b (A4): a `refusal-v1` document on exactly the three connectivity-based
-        // refusals 3a added -- the one condition this round classifies structurally, via the
-        // `BundleNonFastForward` variant 3b added to `PrikkError`, never by matching `err`'s own
-        // message text. Printed before `render_incoming_error` consumes `err` by value below;
-        // stderr's own text and the exit code are unaffected either way (`refuse`'s own idiom in
-        // `crate::extract`).
-        if format_json {
-            if let prikk_error::PrikkError::BundleNonFastForward { class, .. } = &err {
-                print_bundle_import_refusal_json(class, &err.to_string());
-            } else if let prikk_error::PrikkError::ForgedPublicationSignature { .. } = &err {
-                // 0.56.0 step F: the new forged-publication-signature refusal, classified the
-                // identical way -- by variant, never by message text.
-                print_bundle_import_refusal_json("forged-publication-signature", &err.to_string());
-            } else if let Some(id) = artifact_version_refusal_id(&err) {
-                // 0.56.0 step F (from the 3f2 report): `bundle import --format json` used to
-                // print nothing at all for `outside-version-rule` -- `extract`'s own precedent
-                // (`classify_prikk_error_fallback`) is what names the id. 0.57.0 U4b: the same
-                // function also names `repository-format-too-old`, and an unknown declared format
-                // number is `outside-version-rule` too.
-                print_bundle_import_refusal_json(id, &err.to_string());
+    // 0.57.0 S1b: `--adopt` publishes the delivered branch under the receiver's own maintainer key, so a missing key refuses here,
+    // before the bundle is opened for writing, naming how to set one up.
+    let adopt_signer = if parsed.adopt {
+        Some(crate::maintainer_signer_from_env().map_err(|err| {
+            CliError::Failure(format!(
+                "bundle import --adopt publishes the branch under your own maintainer key, and none is usable: {}. Check with \
+                 `prikk key status --role maintainer`, or create one with `prikk setup`",
+                err.message()
+            ))
+        })?)
+    } else {
+        None
+    };
+    let adoption = adopt_signer.as_ref().map(|signer| BundleAdoption {
+        signer,
+        current_branch: crate::current_branch::displayed_current_branch(&layout),
+    });
+    let report = import_bundle_adopting(&layout, &mut source, &options, adoption.as_ref())
+        .map_err(|err| {
+            // 0.56.0 step 3b (A4): a `refusal-v1` document on exactly the three connectivity-based
+            // refusals 3a added -- the one condition this round classifies structurally, via the
+            // `BundleNonFastForward` variant 3b added to `PrikkError`, never by matching `err`'s own
+            // message text. Printed before `render_incoming_error` consumes `err` by value below;
+            // stderr's own text and the exit code are unaffected either way (`refuse`'s own idiom in
+            // `crate::extract`).
+            if format_json {
+                if let prikk_error::PrikkError::BundleNonFastForward { class, .. } = &err {
+                    print_bundle_import_refusal_json(class, &err.to_string());
+                } else if let prikk_error::PrikkError::ForgedPublicationSignature { .. } = &err {
+                    // 0.56.0 step F: the new forged-publication-signature refusal, classified the
+                    // identical way -- by variant, never by message text.
+                    print_bundle_import_refusal_json(
+                        "forged-publication-signature",
+                        &err.to_string(),
+                    );
+                } else if let Some(id) = artifact_version_refusal_id(&err) {
+                    // 0.56.0 step F (from the 3f2 report): `bundle import --format json` used to
+                    // print nothing at all for `outside-version-rule` -- `extract`'s own precedent
+                    // (`classify_prikk_error_fallback`) is what names the id. 0.57.0 U4b: the same
+                    // function also names `repository-format-too-old`, and an unknown declared format
+                    // number is `outside-version-rule` too.
+                    print_bundle_import_refusal_json(id, &err.to_string());
+                }
             }
-        }
-        render_incoming_error(err, &object_bound)
-    })?;
+            render_incoming_error(err, &object_bound)
+        })?;
     if format_json {
         print_bundle_import_json(&report);
     } else {
@@ -149,7 +170,19 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
 /// `bundle import`'s plain-text form -- unchanged by 0.56.0 step 3b, which only adds the
 /// `--format json` branch alongside it (`run_import`, above).
 fn print_bundle_import_plain(report: &prikk_store::BundleImportReport) {
-    println!("received {}", report.ref_name);
+    if report.adopted {
+        // 0.57.0 S1b: the same sentence shape `archive import --adopt` prints for an adopted landing.
+        println!("{}: adopted as a local branch", report.landed_as);
+    } else {
+        println!("received {}", report.ref_name);
+    }
+    if let Some(reason) = &report.adopt_reason {
+        if report.adopted {
+            println!("note: {reason}");
+        } else {
+            println!("not adopted: {reason}");
+        }
+    }
     println!("RefState: {}", report.ref_state_id);
     println!("objects: {}", report.object_count);
     println!("new objects: {}", report.written_object_count);
@@ -177,7 +210,22 @@ fn print_bundle_import_plain(report: &prikk_store::BundleImportReport) {
     if let Some(chain) = report.ref_state_chain {
         println!("ref state chain: {}", chain.as_str());
     }
-    if report.pointer_updated {
+    if report.adopted {
+        println!(
+            "note: {ref_name} is now a local branch, published by your own maintainer key over the RefStates the bundle carried; \
+             the original signers stay on those RefStates, and no MAINTAINER key was trusted by this import",
+            ref_name = report.landed_as
+        );
+        if let Some(materialized) = &report.materialization {
+            crate::warn_anchor_fallbacks(materialized.anchor_fallback.iter());
+            println!(
+                "materialized into the worktree: files written: {}, unchanged: {}, deleted: {}",
+                materialized.written_files,
+                materialized.unchanged_files,
+                materialized.deleted_files,
+            );
+        }
+    } else if report.pointer_updated {
         // The note says what the import gave and stops there. It used to advise `merge`, which refuses in a
         // fresh repository (`ref heads/main is not published`): a received ref cannot become a local branch
         // today, by any route, and `docs/src/guide/backup-restore.md` says so.
@@ -514,6 +562,7 @@ struct ImportArgs {
     input: PathBuf,
     max_object_bytes: Option<u64>,
     allow_non_fast_forward: bool,
+    adopt: bool,
     format_json: bool,
 }
 
@@ -521,10 +570,12 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
     let mut input = None;
     let mut max_object_bytes = None;
     let mut allow_non_fast_forward = false;
+    let mut adopt = false;
     let mut format_json = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--adopt" => mark_seen(&mut adopt, "--adopt")?,
             "--input" => {
                 let value = flag_value(&mut iter, "bundle import --input")?;
                 input.set_once("--input", PathBuf::from(value))?;
@@ -557,6 +608,7 @@ fn parse_import_args(args: Vec<String>) -> std::result::Result<ImportArgs, CliEr
         input,
         max_object_bytes,
         allow_non_fast_forward,
+        adopt,
         format_json,
     })
 }

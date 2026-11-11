@@ -86,7 +86,7 @@ original signer the interrupted publication's own leading `RefState` already car
 
 <!-- rfc118-stage3-gated-operations:start -->
 `seal`, `merge`, `sync build`, `sync seal`, `sync adopt-tag`, `prikk tag create`,
-`prikk branch create`, `prikk branch close`, `prikk ref complete`.
+`prikk branch create`, `prikk branch close`, `prikk ref complete`, `prikk bundle import --adopt`.
 <!-- rfc118-stage3-gated-operations:end -->
 
 This list is derived, not transcribed: it names every `GatedOperation` variant `verify_signer_trusted`

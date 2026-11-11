@@ -68,6 +68,42 @@ pub(crate) fn print_bundle_import_json(report: &BundleImportReport) {
         "false"
     });
 
+    // 0.57.0 S1b: additive, the same names and meanings `archive import --adopt` carries per landing (`landed_as`, `adopted`,
+    // `remote_reason`) and for the current-branch materialization (`materialized_*`).
+    json.push_str(",\n  \"landed_as\": ");
+    json.push_str(&escape_json_string(&report.landed_as));
+    json.push_str(",\n  \"adopted\": ");
+    json.push_str(if report.adopted { "true" } else { "false" });
+    json.push_str(",\n  \"remote_reason\": ");
+    match &report.adopt_reason {
+        Some(reason) => json.push_str(&escape_json_string(reason)),
+        None => json.push_str("null"),
+    }
+    if let Some(materialized) = &report.materialization {
+        crate::warn_anchor_fallbacks(materialized.anchor_fallback.iter());
+    }
+    json.push_str(",\n  \"materialized_into_worktree\": ");
+    json.push_str(if report.materialization.is_some() {
+        "true"
+    } else {
+        "false"
+    });
+    for (name, value) in [
+        (
+            "materialized_written_files",
+            report.materialization.as_ref().map(|m| m.written_files),
+        ),
+        (
+            "materialized_unchanged_files",
+            report.materialization.as_ref().map(|m| m.unchanged_files),
+        ),
+        (
+            "materialized_deleted_files",
+            report.materialization.as_ref().map(|m| m.deleted_files),
+        ),
+    ] {
+        json.push_str(&format!(",\n  \"{name}\": {}", value.unwrap_or(0)));
+    }
     json.push_str("\n}");
     println!("{json}");
 }

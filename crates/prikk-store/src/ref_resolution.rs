@@ -327,24 +327,50 @@ pub fn resolve_branch_source_block(
     block_id_text: &str,
 ) -> Result<ObjectId> {
     let point = resolve_point(layout, block_id_text, ReceivedRefs::Refused)?;
-    let prefix = format!("branch create {new_branch} --from {block_id_text}");
-    match block_standing(layout, point.block_id)? {
-        BlockStanding::ReachedLocally(_) => Ok(point.block_id),
+    require_block_reached_locally(
+        layout,
+        point.block_id,
+        block_id_text,
+        &format!("branch create {new_branch} --from {block_id_text}"),
+    )?;
+    Ok(point.block_id)
+}
+
+/// **Every command that publishes a local ref at a bare block id asks this** (0.57.0 S1b, the owner's rule over the class): the
+/// block must be reached by a local branch or tag. Publishing a ref at a block only a received ref (or nothing) reaches would
+/// take in history without the trust checks the importers' `--adopt` make, so it is refused by name, before anything is written.
+/// `branch create --from` and `tag create --target` call it; `sync adopt-tag` and `ref complete` do not need to (they cannot name
+/// such a block; the report states why, and a test proves it for `sync adopt-tag`).
+///
+/// **The way forward names every route the history could have arrived by**, because the received index records only the ref and
+/// its tip, not how it came (measured, S1b): `archive import --adopt`, `bundle import --adopt`, and, for what `sync accept` left,
+/// sealing a claim.
+///
+/// # Errors
+///
+/// `Precondition` as above; any read error.
+pub fn require_block_reached_locally(
+    layout: &RepositoryLayout,
+    block_id: ObjectId,
+    block_id_text: &str,
+    command: &str,
+) -> Result<()> {
+    const WAY_FORWARD: &str = "bring that history in through the importer that carried it, with its trust checks: `prikk archive \
+         import <the archive> --adopt` or `prikk bundle import --input <the bundle> --adopt` (each adopts a branch whose name is \
+         free here; where a local branch of that name exists the delivery stays under remotes/ and the importer says how to merge \
+         it), or, for patches a `sync accept` left, `prikk sync seal <ref> --claim <id>`; then run this command again";
+    match block_standing(layout, block_id)? {
+        BlockStanding::ReachedLocally(_) => Ok(()),
         BlockStanding::ReceivedOnly(refs) => Err(PrikkError::Precondition(format!(
-            "{prefix}: block {block_id_text} is not reached by any local branch or tag; it is held \
-             only through the received ref(s) {}. Publishing it as a local branch would bypass the \
-             trust checks `prikk archive import --adopt` makes -- refusing, nothing was written. To \
-             bring that history in with those checks, run `prikk archive import <the archive that \
-             carried it> --adopt` (it adopts a branch whose name is free here; where a local branch \
-             of that name exists the delivery stays under remotes/), then run this command again",
+            "{command}: block {block_id_text} is not reached by any local branch or tag; it is held only through the received \
+             ref(s) {}. Publishing a ref at it would bypass the trust checks an importer's --adopt makes -- refusing, nothing was \
+             written. To {WAY_FORWARD}",
             refs.join(", ")
         ))),
         BlockStanding::Unreached => Err(PrikkError::Precondition(format!(
-            "{prefix}: block {block_id_text} is in this repository but no ref reaches it (not a \
-             local branch, a tag or a received ref; `prikk received remove` leaves blocks like \
-             this), so there is no published history to branch from -- refusing, nothing was \
-             written. Bring the history that carried it back with `prikk archive import <the \
-             archive that carried it> --adopt`, then run this command again"
+            "{command}: block {block_id_text} is in this repository but no ref reaches it (not a local branch, a tag or a \
+             received ref; `prikk received remove` leaves blocks like this), so there is no published history to point at -- \
+             refusing, nothing was written. To {WAY_FORWARD}"
         ))),
     }
 }

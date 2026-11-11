@@ -74,7 +74,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 
+mod adopt;
+pub(crate) mod adopt_local_ref;
 mod preview;
+
+pub use adopt::BundleAdoption;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -320,6 +324,16 @@ pub struct BundleImportReport {
     /// received pointer itself untouched, since the content is identical and advancing the pointer
     /// would move its own record backward.
     pub pointer_updated: bool,
+    /// 0.57.0 S1b: whether the delivered branch was adopted as a real local branch (`--adopt`). When `true` no received pointer
+    /// was written for it; [`Self::landed_as`] is the local branch.
+    pub adopted: bool,
+    /// 0.57.0 S1b: where the delivery landed: [`Self::ref_name`] (`remotes/<ref>`), or the local branch when adopted.
+    pub landed_as: String,
+    /// 0.57.0 S1b: with `--adopt`, why the delivery was **not** adopted (a typeable sentence), or, when adopted despite a
+    /// non-fast-forward (`--allow-non-fast-forward`), that fact. `None` without `--adopt`, and for a plain adoption.
+    pub adopt_reason: Option<String>,
+    /// 0.57.0 S1b: set when the adopted branch is the current branch and was materialized into the worktree.
+    pub materialization: Option<adopt_local_ref::CurrentBranchMaterializeReport>,
 }
 
 /// The six block-content connectivity classes (0.56.0 step 3a, design review v2 ruling A2), from
@@ -2150,6 +2164,21 @@ pub fn import_bundle(
     source: &mut BundleSource,
     options: &BundleImportOptions,
 ) -> Result<BundleImportReport> {
+    import_bundle_adopting(layout, source, options, None)
+}
+
+/// [`import_bundle`], optionally **adopting** the delivered branch as a real local branch (`bundle import --adopt`, 0.57.0 S1b;
+/// see `bundle/adopt.rs`). With `None` this is exactly [`import_bundle`]. With `Some`, a delivered `heads/` ref that is absent
+/// locally and signed by an adopted key throughout its RefState chain is published as a local branch (the receiver signs the
+/// `RefUpdate`s) and no received pointer is written for it; otherwise the delivery lands under `remotes/` as ever, and the
+/// report says why it was not adopted.
+#[allow(clippy::too_many_lines)]
+pub fn import_bundle_adopting(
+    layout: &RepositoryLayout,
+    source: &mut BundleSource,
+    options: &BundleImportOptions,
+    adoption: Option<&BundleAdoption<'_>>,
+) -> Result<BundleImportReport> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
 
     // Header-only checks, before the lock (Q1): the declared total size and the format magic.
@@ -2212,13 +2241,17 @@ pub fn import_bundle(
     // - `ObjectStore` joins this same acquisition, held across every object write below
     //   (`write_object_under_held_lock`, the shape `archive import` already uses).
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
-    let _container_locks = acquire_container_locks(
-        layout,
-        &[
-            LockableContainer::ReceivedIndex,
-            LockableContainer::ObjectStore,
-        ],
-    )?;
+    // 0.57.0 S1b: `--adopt` also publishes a ref, which needs the ref pointer index and the ref log held (as `archive import` holds
+    // them); an import without it takes exactly the locks it always did.
+    let mut lock_set = vec![
+        LockableContainer::ReceivedIndex,
+        LockableContainer::ObjectStore,
+    ];
+    if adoption.is_some() {
+        lock_set.push(LockableContainer::RefPointerIndex);
+        lock_set.push(LockableContainer::RefLog);
+    }
+    let _container_locks = acquire_container_locks(layout, &lock_set)?;
     crate::received::received_index::require_received_index_clean_tail(layout)?;
 
     let objects_start = stream_position_usize(source)?;
@@ -2527,6 +2560,44 @@ pub fn import_bundle(
         }
     }
 
+    // 0.57.0 S1b: decide, still before the first write, whether `--adopt` lands the delivered branch as a local branch (see
+    // `bundle/adopt.rs`): the shared start (absent ref, queue, class), the signer's standing, and the whole RefState chain's trust.
+    // A delivery that cannot be adopted still lands under `remotes/`, with the reason reported. For the current branch the clean
+    // worktree and nothing-in-the-way refusals are here too, so they too leave nothing written.
+    let adoption_decision = {
+        let source_cell: RefCell<&mut BundleSource> = RefCell::new(&mut *source);
+        let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
+        let reader = BundleAndLocalReader {
+            source: &source_cell,
+            prepared: &prepared,
+            index_by_id: &index_by_id,
+            cache: &cache,
+            local: Some(&read_snapshot),
+        };
+        let decision = adopt::plan_adoption(
+            layout,
+            adoption,
+            &origin_ref_name,
+            &received_ref_name,
+            ref_state_id,
+            connectivity_class,
+            ref_state_chain,
+            options.allow_non_fast_forward,
+            &adopted_policy,
+            &reader,
+        )?;
+        if let (adopt::AdoptionDecision::Adopt(_), Some(adoption)) = (&decision, adoption) {
+            adopt_local_ref::refuse_current_branch_obstacles(
+                layout,
+                adoption.current_branch.as_deref(),
+                &origin_ref_name,
+                &reader,
+                tip_block_id,
+            )?;
+        }
+        decision
+    };
+
     // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely
     // over `prepared`'s own cheap `(id, type, dependency ids)` metadata.
     let write_order = dependency_order_indices(&prepared)?;
@@ -2671,15 +2742,46 @@ pub fn import_bundle(
     // above but not the pointer itself -- the content is identical, and advancing the pointer
     // would move its own record backward (`log` walks this chain). Every other combination writes
     // exactly as before this round.
-    let pointer_updated = !matches!(
+    let mut pointer_updated = !matches!(
         (connectivity_class, ref_state_chain),
         (
             BundleConnectivityClass::AlreadyAtTip,
             Some(RefStateChainRelation::Older)
         )
     );
-    if pointer_updated {
-        crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
+    // 0.57.0 S1b: an adopted branch is published as a real local branch and gets no received pointer; every other delivery
+    // (including one `--adopt` could not land, with its reason) writes the pointer exactly as before.
+    let mut adopted = false;
+    let mut landed_as = received_ref_name.clone();
+    let mut adopt_reason: Option<String> = None;
+    let mut materialization = None;
+    match (&adoption_decision, adoption) {
+        (adopt::AdoptionDecision::Adopt(plan), Some(adoption)) => {
+            let outcome = adopt::publish_adoption(
+                layout,
+                &mut object_store,
+                &_container_locks,
+                adoption,
+                plan,
+                &origin_ref_name,
+            )?;
+            adopted = true;
+            pointer_updated = false;
+            landed_as.clone_from(&origin_ref_name);
+            adopt_reason.clone_from(&plan.remote_reason);
+            materialization = outcome.materialization;
+        }
+        (adopt::AdoptionDecision::FellThrough { reason }, _) => {
+            adopt_reason = Some(reason.clone());
+            if pointer_updated {
+                crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
+            }
+        }
+        _ => {
+            if pointer_updated {
+                crate::received::write_received_pointer(layout, &received_ref_name, ref_state_id)?;
+            }
+        }
     }
 
     Ok(BundleImportReport {
@@ -2693,6 +2795,10 @@ pub fn import_bundle(
         class: connectivity_class,
         ref_state_chain,
         pointer_updated,
+        adopted,
+        landed_as,
+        adopt_reason,
+        materialization,
     })
 }
 

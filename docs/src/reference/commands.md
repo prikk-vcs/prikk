@@ -65,7 +65,7 @@ prikk config set <key> <value>
 prikk config unset <key>
 prikk config list
 prikk bundle export --ref REF --output <file> [--force]
-prikk bundle import --input <file> [--max-object-bytes N] [--allow-non-fast-forward] [--format json]
+prikk bundle import --input <file> [--adopt] [--max-object-bytes N] [--allow-non-fast-forward] [--format json]
 prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
@@ -178,7 +178,11 @@ branch ref names its Block directly, and a tag ref is dereferenced through its t
 `--from tags/v1` publishes the new branch at the Block that tag names. `tag create --target` takes a
 block id or a **branch** ref, and **refuses a tag ref** — a tag of a tag is outside the model (ref →
 tag object → block, one hop), and resolving it silently would make `--target tags/v1` and `--target`
-that tag's own block indistinguishable in history. The refusal names both accepted forms.
+that tag's own block indistinguishable in history. The refusal names both accepted forms. **A bare block id
+is held to the same standing `branch create --from <block id>` demands (0.57.0):** the block must be reached by
+a local branch or tag. A block held only through a received ref, or reached by nothing, refuses by name before
+anything is written, with the same way forward (`bundle import --adopt` or `archive import --adopt`, then the
+same command). A block a local branch or tag reaches is unaffected, and so is `--target <branch ref>`.
 
 **Key ids.**
 - `setup` (when it creates a seed) and `key generate --out` write the new key's id,
@@ -241,9 +245,11 @@ visible name are valid stored history. See [Path and Worktree Safety](path-safet
   ref**, or **reached by no ref at all** (after `received remove`, say), refuses by name, with exit `1`
   and before anything is written: publishing a local branch there would take in history without the trust
   checks `archive import --adopt` makes. The refusal names the received ref(s) that hold the block and the
-  way forward, `prikk archive import <the archive that carried it> --adopt`, after which the same
-  command succeeds (an adopted branch needs a name free here; where a local branch of that name exists the
-  delivery stays under `remotes/`). The RefState written is the one a ref route writes (`update_seq: 1`,
+  way forward, `prikk archive import <the archive that carried it> --adopt` or `prikk bundle import --input
+  <the bundle that carried it> --adopt`, after which the same command succeeds (an adopted branch needs a
+  name free here; where a local branch of that name exists the delivery stays under `remotes/`). The received
+  index records no arrival route, so the refusal names both importers, and `prikk sync seal <ref> --claim
+  <id>` for a block sealed here. The RefState written is the one a ref route writes (`update_seq: 1`,
   no previous RefState, no attestations, open). When the new branch is the unborn current branch, a file
   in the way of the block's files refuses before the publish, as it does for a ref.
 - **A path with no repository** refuses as a precondition naming that path ("no prikk repository at
@@ -480,6 +486,34 @@ itself is unchanged by this.
   never for
   `bundle import`'s other refusals (a damaged bundle, a digest mismatch, an author-key conflict, and
   so on), which print no document. `"reason"` is always `null`.
+
+**`bundle import --adopt` (0.57.0) lands a delivered branch as a real local branch, under the same conditions
+`archive import --adopt` holds.** A bundle carries RefStates but no RefUpdates, so adoption is by the receiver's
+own signature, never by trusting the sender's:
+- **What is checked, before the first write.** Every RefState in the delivered chain (the tip and each
+  predecessor, carried by the bundle or already held) must carry a MAINTAINER signature by a key this repository
+  has adopted, through the predicate `verify` uses, and the oldest must have no predecessor. The receiver's own
+  maintainer key (the one `--adopt` signs with) must be adopted here too. The ref must be absent as a local
+  branch, no queued work may own the name, and a non-fast-forward against a received pointer of the same name
+  refuses unless `--allow-non-fast-forward` is given. When the branch is the current branch, a dirty worktree or a
+  file in the way of the block's files refuses. Each of these leaves nothing written.
+- **What it writes.** The receiver signs a `RefUpdate` over each delivered RefState, oldest first (the shape
+  `ref complete` writes), so the local ref log reads as a published branch; the original signers stay on the
+  RefStates; no MAINTAINER key is trusted by the import. **No `remotes/` pointer is written for an adopted
+  branch.** When the adopted branch is the current branch it is materialized into the worktree (`materialized
+  into the worktree: files written: N, unchanged: M, deleted: K`).
+- **A delivery that cannot be adopted is not refused for that**: it lands under `remotes/<ref>` exactly as
+  without `--adopt`, and the report says why in a typeable sentence (`not adopted: …`): a local branch of the
+  name exists (`prikk merge --from remotes/heads/<name>` or `prikk setup <new-dir>`), a signer this repository has
+  not adopted (`prikk trust maintainer add --key-id <id> --public-key <hex>`), a signature that does not
+  verify (`prikk verify`), a chain the bundle and this repository do not hold in full, or a ref that is not a
+  branch (tags stay received).
+- **`--format json`** adds `landed_as` (the local branch when adopted, else the `remotes/` name), `adopted`,
+  `remote_reason` (why it was not adopted, or `null`) and, for the current branch, `materialized_into_worktree`
+  and `materialized_*` counts, the names and meanings `archive import --format json` carries per landing.
+  Additive within `bundle-import-report-v1`.
+- After an adoption, `branch create --from <block id>` and `tag create --target <block id>` work at any block of
+  the adopted history, because a local branch now reaches it.
 
 **`archive import` applies the identical classification and refusal to its own landings, plus
 `--adopt`.**
@@ -1095,6 +1129,13 @@ unchanged), each from the very structure the text line is printed from:
   An issue about no object (an unreadable trust policy) has `null` object fields. `block_seals[].
   sealed_by_signatures[].outcome` is one of `sound`, `unverifiable`, `invalid` (an object with no signature
   has no entries there).
+- **`sealed_path_collisions`**: one entry per distinct pair of paths that are one name under this version's
+  Unicode case folding and normalization and are held by a sealed *tip*: `{"block_id", "first_path",
+  "second_path", "blocks"}`, the paths escaped. A tip is a reached block no other block derives its state from,
+  the state `extract`, `checkout` and `branch switch` would write. **`blocks` counts tips, not every block that
+  holds the pair**: it is the number the way out acts on, because renaming one path and sealing again clears the
+  warning for every tip it changes; an earlier block of a branch that has since renamed one of them is history
+  and is not counted. `block_id` is the first such tip. A warning, never a failure (`verify` exits `0`).
 
 **Which object each `sealed_by` lists.** `log` and `verify` list the **Block's** MAINTAINER signatures;
 `bundle preview` lists the **delivered tip RefState's**. They are different objects and can differ: when

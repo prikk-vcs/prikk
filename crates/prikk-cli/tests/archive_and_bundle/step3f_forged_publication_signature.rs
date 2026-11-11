@@ -1368,3 +1368,58 @@ fn a_forged_signature_on_a_held_object_is_one_refusal_in_the_imports_order() {
     let _ = std::fs::remove_file(honest_bundle);
     let _ = std::fs::remove_file(forged_bundle);
 }
+
+/// 0.57.0 S1b: `bundle import --adopt` refuses a forged MAINTAINER signature exactly as `bundle import` does, with the same
+/// `refusal-v1` id, and writes nothing -- adoption is decided after, and only over, a delivery that passed the forgery check.
+#[test]
+fn bundle_import_adopt_refuses_a_forged_publication_signature_exactly_as_without_adopt() {
+    let layout = build_source_signed_by(
+        "bundle-forged-adopt",
+        &FORGER_SEED,
+        support::MAINTAINER_KEY_ID,
+    );
+    let bundle_path = std::env::temp_dir().join(format!(
+        "prikk-s1b-bundle-forged-adopt-{}.pbndl",
+        support::unique_suffix()
+    ));
+    export_bundle_to(&layout, &bundle_path);
+    let source_dir = layout.root().to_path_buf();
+
+    let dest = support::unique_repo("s1b-bundle-forged-adopt-dest");
+    support::init(&dest);
+    support::trust_maintainer(&dest); // adopts the *real* key under MAINTAINER_KEY_ID
+    let before = support::store_bytes(&dest);
+
+    let json = support::prikk(&dest)
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args([
+            "bundle",
+            "import",
+            "--input",
+            bundle_path.to_str().unwrap(),
+            "--adopt",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    let value = assert_valid_json(&stdout_of(&json));
+    assert_eq!(value.get("schema_version").as_str(), "refusal-v1");
+    assert_eq!(value.get("command").as_str(), "bundle-import");
+    assert_eq!(
+        value.get("refusal").as_str(),
+        "forged-publication-signature"
+    );
+    assert_eq!(
+        support::store_bytes(&dest),
+        before,
+        "a refused adopting import must write nothing"
+    );
+    cleanup(&[&source_dir, &dest]);
+    let _ = std::fs::remove_file(&bundle_path);
+}

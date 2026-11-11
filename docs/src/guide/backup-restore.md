@@ -313,7 +313,11 @@ it is; import's own report is not a substitute for running it.
   is not itself a backup source.
 
 A `bundle import` restore is therefore an intact, checkable copy of the history, not a repository you
-continue working in that way. `prikk archive export <file>` writes a whole repository, verbatim, into
+continue working in that way, **unless you ask for `prikk bundle import --input <file> --adopt`** (0.57.0): with
+the sealing key adopted here, and your own maintainer key adopted too, a delivered `heads/*` branch becomes a real
+local branch (you sign a `RefUpdate` over each RefState the bundle carried; no `remotes/` pointer is written; the
+current branch is materialized), under the conditions `archive import --adopt` holds. When it cannot be adopted the
+bundle still lands under `remotes/`, and the output says why in a sentence you can type. `prikk archive export <file>` writes a whole repository, verbatim, into
 one file (RFC 155) — see [The Archive Format](../reference/archive-format.md). `prikk archive verify
 <file>` reads one back and checks structure, reference closure, and every signature against the
 archive's own carried key material, reporting *internally consistent*, never *trusted* — it needs no

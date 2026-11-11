@@ -212,18 +212,45 @@ fn a_block_only_another_local_branch_reaches_is_accepted() {
 /// Row: a block reached from a tag. Here the tag is the only *local* ref that reaches it (the history
 /// otherwise arrived as a received ref), so this fails if tags are not searched.
 #[test]
-fn a_block_only_a_tag_reaches_locally_is_accepted() {
+fn a_block_a_local_tag_reaches_is_accepted_and_the_tag_itself_is_held_to_the_same_rule() {
+    // 0.57.0 S1b: `tag create --target <block id>` used to be the one way a received-only block became a local ref, bypassing
+    // every importer's trust checks. It is now held to the same standing as `branch create --from`: refused for a received-only
+    // block, and accepted for a block a local branch or tag reaches (this fixture adopts the archive's branch first, the route
+    // the refusal names).
     let (source, old, _new) = source_with_two_blocks("tag");
     let archive = export_archive(&source, "tag");
     let dest = receiver_of(&archive, "tag");
 
-    // Held only through remotes/heads/main: refused.
+    // Held only through remotes/heads/main: both publishers refuse, with the same way forward.
     let refused = support::branch_create(&dest, "heads/viatag", &old);
     assert!(!refused.status.success(), "{refused:?}");
+    let tag_refused = support::tag_create(&dest, "tags/old", &old);
+    assert_eq!(tag_refused.status.code(), Some(1), "{tag_refused:?}");
+    let said = String::from_utf8_lossy(&tag_refused.stderr).to_string();
+    assert!(
+        said.contains("tag create --target")
+            && said.contains("held only through the received ref(s) remotes/heads/main"),
+        "{said}"
+    );
+    assert!(
+        said.contains("prikk archive import <the archive> --adopt")
+            && said.contains("prikk bundle import --input <the bundle> --adopt"),
+        "the way forward names both importers, because the received index does not record which one carried it: {said}"
+    );
 
+    // The way forward: adopt the archive's branch. Then the block is reached locally and the tag is allowed.
+    support::ok(
+        &support::prikk(&dest)
+            .args(["archive", "import"])
+            .arg(&archive)
+            .arg("--adopt")
+            .output()
+            .unwrap(),
+        "archive import --adopt",
+    );
     support::ok(
         &support::tag_create(&dest, "tags/old", &old),
-        "tag create at the held block",
+        "tag create at a block a local branch reaches",
     );
     support::ok(
         &support::branch_create(&dest, "heads/viatag", &old),
@@ -402,12 +429,31 @@ fn from_a_ref_is_as_before() {
 /// branch is created and the block's files are written.
 #[test]
 fn onto_the_unborn_current_branch_a_file_in_the_way_refuses_before_publishing() {
-    let (source, old, _new) = source_with_two_blocks("inway");
+    // The source's branch is `heads/src`, so adopting it leaves `heads/main` (the unborn current branch) free to be created.
+    let source = support::unique_repo("s1-source-inway");
+    support::init(&source);
+    support::generation(&source, "heads/src", "f.txt", b"one\n", "one");
+    support::generation(&source, "heads/src", "f.txt", b"two\n", "two");
+    let log = support::prikk(&source)
+        .args(["log", "--ref", "heads/src", "--format", "json"])
+        .output()
+        .unwrap();
+    let json = support::json::parse(&String::from_utf8_lossy(&log.stdout));
+    let blocks = json.get("blocks").as_array();
+    let old = blocks[blocks.len() - 1]
+        .get("block_id")
+        .as_str()
+        .to_string();
     let archive = export_archive(&source, "inway");
     let dest = receiver_of(&archive, "inway");
     support::ok(
-        &support::tag_create(&dest, "tags/old", &old),
-        "tag create at the held block",
+        &support::prikk(&dest)
+            .args(["archive", "import"])
+            .arg(&archive)
+            .arg("--adopt")
+            .output()
+            .unwrap(),
+        "archive import --adopt (heads/src becomes local; the current branch heads/main stays unborn)",
     );
 
     // A different file already sits where the block's `f.txt` would be written.

@@ -39,6 +39,7 @@ const ALL_GATED_OPERATIONS: &[GatedOperation] = &[
     GatedOperation::BranchCreate,
     GatedOperation::BranchClose,
     GatedOperation::RefComplete,
+    GatedOperation::BundleAdopt,
 ];
 
 /// The exact backtick-quoted marker each operation is named by in the page's bound list -- an
@@ -55,6 +56,7 @@ fn marker(operation: GatedOperation) -> &'static str {
         GatedOperation::BranchCreate => "prikk branch create",
         GatedOperation::BranchClose => "prikk branch close",
         GatedOperation::RefComplete => "prikk ref complete",
+        GatedOperation::BundleAdopt => "prikk bundle import --adopt",
     }
 }
 
@@ -115,10 +117,11 @@ fn all_gated_operations_is_exhaustive() {
             | GatedOperation::TagCreate
             | GatedOperation::BranchCreate
             | GatedOperation::BranchClose
-            | GatedOperation::RefComplete => {}
+            | GatedOperation::RefComplete
+            | GatedOperation::BundleAdopt => {}
         }
     }
-    assert_eq!(ALL_GATED_OPERATIONS.len(), 9);
+    assert_eq!(ALL_GATED_OPERATIONS.len(), 10);
 }
 
 /// Forward direction: every `GatedOperation` variant is named in the page's list.
