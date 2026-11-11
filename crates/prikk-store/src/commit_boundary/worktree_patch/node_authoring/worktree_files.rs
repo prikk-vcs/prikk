@@ -90,12 +90,12 @@ fn walk_dir(
 ) -> std::result::Result<(), AuthorError> {
     let entries =
         list_directory(layout.worktree_mutation_root(), dir).map_err(AuthorError::Store)?;
-    for entry in entries {
-        let file_name = entry.name;
+    for entry in &entries {
+        let file_name = entry.name.as_os_str();
         if file_name == ".prikk" {
             continue;
         }
-        let path = join_relative(dir, &file_name);
+        let path = join_relative(dir, file_name);
         // RFC 124: checked once per entry, before dispatching on kind, so an ignored directory is
         // skipped without ever being opened -- essential, not only faster, since a real
         // `node_modules/`-shaped directory is typically full of symlinks and other entry kinds this
@@ -117,6 +117,28 @@ fn walk_dir(
         if matches!(entry.kind, EntryKind::Directory) {
             walk_dir(layout, &path, rules, tracked, out, refused.as_deref_mut())?;
             continue;
+        }
+        // 0.57.0 U2 (ruling C2): a name that is not NFC, **beside an entry that has its NFC spelling**, is two entries for one
+        // visible name. Refused naming both, before the generic NFC sentence -- the user's fix is different (keep one).
+        if let Some(twin) = canonical_twin(file_name, &entries) {
+            let twin_path = join_relative(dir, twin);
+            let reason = format!(
+                "{shown} and {twin_shown} are two entries with canonically equivalent names (one visible name in two \
+                 Unicode spellings); prikk records NFC names only and cannot tell them apart. Keep one of them: rename \
+                 or remove the other, then commit again",
+                shown = prikk_object::escape_non_ascii(&refused_path_text(&path)),
+                twin_shown = prikk_object::escape_non_ascii(&refused_path_text(&twin_path)),
+            );
+            match refused.as_deref_mut() {
+                Some(collected) => {
+                    collected.push(RefusedEntry {
+                        path: refused_path_text(&path),
+                        refusal: PrikkError::Precondition(reason).to_string(),
+                    });
+                    continue;
+                }
+                None => return Err(AuthorError::Store(PrikkError::Precondition(reason))),
+            }
         }
         // RFC 147 §2e(a): the refusal comes from the one shared classifier, so `worktree-status`
         // reporting a path as refused and `commit` refusing it are the same decision rendered
@@ -158,6 +180,24 @@ fn walk_dir(
         insert_regular_file(layout, &path, out)?;
     }
     Ok(())
+}
+
+/// The entry of the same directory whose name is `name`'s NFC spelling, when `name` is not NFC and carries no character the
+/// decode table refuses (that one is named by its own refusal). `None` otherwise.
+fn canonical_twin<'a>(
+    name: &std::ffi::OsStr,
+    entries: &'a [crate::foundation::fsutil::RootDirEntry],
+) -> Option<&'a std::ffi::OsStr> {
+    // A name that is not UTF-8 has no NFC spelling; it is refused as unrepresentable elsewhere.
+    let name = name.to_str()?;
+    if prikk_object::first_refused_character(name).is_some() {
+        return None;
+    }
+    let nfc = prikk_object::non_nfc_spelling(name)?;
+    entries
+        .iter()
+        .find(|other| other.name == nfc.as_str())
+        .map(|other| other.name.as_os_str())
 }
 
 fn insert_regular_file(

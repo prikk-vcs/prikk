@@ -96,7 +96,7 @@ fn block_warning(output: &std::process::Output) -> String {
         .to_string()
 }
 
-const PATH_RULE_SENTENCE: &str = "pages/日本語.md is outside what this version of prikk accepts";
+const PATH_RULE_SENTENCE: &str = "contains U+200D (invisible format character), which is outside what this version of prikk accepts";
 
 #[test]
 fn the_backup_of_a_repository_with_an_unreached_unreadable_patch_verifies_imports_and_verifies_there()

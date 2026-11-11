@@ -306,9 +306,11 @@ fn an_inline_test_module_is_not_production() {
         // and the new `index_rebuild` child module is declared and re-exported, 1926 -> 1932. 0.57.0
         // step 1d: that module is renamed `cache_rebuild` and re-exports its public report type
         // beside the crate-private entry point, 1932 -> 1933. 0.57.0 U1 (format 8): the authoring classifier gains the
-        // `format` parameter and the non-ASCII format gate (`non_ascii_path_needs_upgrade`, with its doc comment), 1933 -> 1955.
+        // `format` parameter and the non-ASCII format gate (`non_ascii_path_needs_upgrade`, with its doc comment), 1933 -> 1955. 0.57.0 U2: the NFC authoring
+        // rule (`non_nfc_path_refusal`, with its doc comment) joins the classifier and the upgrade gate learns to stay silent for a
+        // character the decode table refuses, 1955 -> 1983.
         physical,
-        1955,
+        1983,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -318,7 +320,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1906);
+    assert_eq!(counted.production_lines, 1934);
     assert_eq!(
         physical - counted.production_lines,
         49,

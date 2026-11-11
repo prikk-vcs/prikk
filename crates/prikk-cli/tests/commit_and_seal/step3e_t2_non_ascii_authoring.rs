@@ -1,7 +1,9 @@
-//! 0.56.0 step 3e, T2 (first item, per the step-3d2 review): the authoring sentence a user
-//! actually meets when `commit`/`status` scans a non-ASCII-named worktree file has no test of its
+//! 0.56.0 step 3e, T2 (first item, per the step-3d2 review), **reworded for format 8 (0.57.0 U2)**: a non-ASCII name is no
+//! longer refused as such -- the fixture is a name containing U+200D (ZWJ), which the decode table refuses in every
+//! format. The authoring sentence a user
+//! actually meets when `commit`/`status` scans a worktree file with a refused character has no test of its
 //! own before this file -- `prikk-object`'s own
-//! `create_file_validate_gives_the_authoring_sentence_for_a_non_ascii_path` only proves
+//! `create_file_validate_gives_the_authoring_sentence_for_a_refused_character` only proves
 //! `CreateFile::validate` gives the right wording, and the step-3d2 report's own finding is that
 //! `CreateFile::validate` is never actually the *first* refusal for a brand-new worktree file:
 //! `prikk-store`'s own five worktree-scan call sites (`worktree_files.rs`, `node_authoring.rs`,
@@ -19,21 +21,22 @@ use crate::support::{commit, init, unique_repo};
 /// `commit` of a brand-new worktree file whose name is non-ASCII: the authoring sentence, naming
 /// the file, never the reading sentence.
 #[test]
-fn commit_of_a_non_ascii_worktree_file_gives_the_authoring_sentence() {
+fn commit_of_a_worktree_file_with_a_refused_character_gives_the_authoring_sentence() {
     let repo = unique_repo("step3e-t2-commit-non-ascii");
     init(&repo);
     std::fs::create_dir_all(repo.join("pages")).unwrap();
-    std::fs::write(repo.join("pages/日本語.md"), b"hello\n").unwrap();
+    std::fs::write(repo.join("pages/zw\u{200d}j.md"), b"hello\n").unwrap();
 
     let output = commit(&repo, "heads/main", "add a non-ascii file");
     assert!(
         !output.status.success(),
-        "a non-ASCII worktree file must still refuse authoring"
+        "a worktree file with a refused character must still refuse authoring"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("this version of prikk does not accept non-ASCII repository paths")
-            && stderr.contains("日本語"),
+        stderr.contains(
+            "this version of prikk does not accept U+200D (invisible format character) in a repository path"
+        ) && stderr.contains("pages/zw\u{200d}j.md"),
         "expected the authoring sentence naming the file, got: {stderr}"
     );
     assert!(
@@ -50,10 +53,10 @@ fn commit_of_a_non_ascii_worktree_file_gives_the_authoring_sentence() {
 /// reaches this refusal at all -- confirmed by reading its own output with the identical fixture
 /// before choosing `worktree-status` here instead.)
 #[test]
-fn worktree_status_of_a_non_ascii_worktree_file_gives_the_authoring_sentence() {
+fn worktree_status_of_a_worktree_file_with_a_refused_character_gives_the_authoring_sentence() {
     let repo = unique_repo("step3e-t2-worktree-status-non-ascii");
     init(&repo);
-    std::fs::write(repo.join("日本.txt"), b"hello\n").unwrap();
+    std::fs::write(repo.join("zw\u{200d}j.txt"), b"hello\n").unwrap();
 
     let output = prikk_test_support::prikk(&repo)
         .arg("worktree-status")
@@ -61,12 +64,13 @@ fn worktree_status_of_a_non_ascii_worktree_file_gives_the_authoring_sentence() {
         .unwrap();
     assert!(
         !output.status.success(),
-        "worktree-status over a non-ASCII untracked file must still refuse"
+        "worktree-status over an untracked file with a refused character must still refuse"
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("this version of prikk does not accept non-ASCII repository paths")
-            && stdout.contains("日本.txt"),
+        stdout.contains(
+            "this version of prikk does not accept U+200D (invisible format character) in a repository path"
+        ) && stdout.contains("zw\u{200d}j.txt"),
         "expected the authoring sentence naming the file, got: {stdout}"
     );
     assert!(

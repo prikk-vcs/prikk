@@ -512,7 +512,7 @@ pub fn import_archive<R: Read + Seek>(
     options: &ArchiveImportOptions,
 ) -> Result<ArchiveImportReport> {
     // Stage 0, part 1: the archive's own verify, Part V's code, not a copy.
-    let verify_report = super::verify_archive(source)?;
+    let verify_report = super::verify::verify_archive_for_receiver(source, Some(layout.format()))?;
     if !verify_report.is_internally_consistent() {
         return Err(PrikkError::Integrity(format!(
             "archive is not internally consistent -- refusing the import; see `archive verify` \
@@ -848,9 +848,10 @@ pub fn import_archive<R: Read + Seek>(
             // 0.57.0 U4b: a patch outside this version's rule that stage 0 judged unreached (`verify_report`) is written
             // and held, as the source held it; one stage 0 did not list refuses, as before.
             if object_type == ObjectType::Patch {
-                if let Some(error) =
-                    super::verify::admission_decode_outside_rule(&admitted.envelope)?
-                {
+                if let Some(error) = super::verify::admission_decode_outside_rule(
+                    &admitted.envelope,
+                    Some(layout.format()),
+                )? {
                     if !crate::block_state::outside_version_rule_is_excused(
                         error.decode_failure_kind(),
                         !verify_report

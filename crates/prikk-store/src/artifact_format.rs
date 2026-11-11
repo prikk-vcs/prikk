@@ -37,6 +37,8 @@ pub(crate) fn known_repository_format_numbers() -> [u32; 3] {
 pub(crate) enum ArtifactKind {
     Archive,
     Bundle,
+    /// A `sync` exchange artifact (`sync accept`). It declares no repository format, so only the content rule applies.
+    Sync,
 }
 
 impl ArtifactKind {
@@ -44,6 +46,7 @@ impl ArtifactKind {
         match self {
             Self::Archive => "archive",
             Self::Bundle => "bundle",
+            Self::Sync => "sync artifact",
         }
     }
 }
@@ -87,6 +90,49 @@ pub(crate) fn require_receiver_can_hold(
              import again; nothing was written"
         ),
     })
+}
+
+/// Rule 3, **the content half** of "a format-6 or 7 repository refuses non-ASCII" (U4 review, Q2): an artifact that
+/// *carries* a non-ASCII path is refused by a receiver that cannot hold one, whatever format the artifact declares -- a
+/// declaration of 6 or 7 from the 0.55.0 hole, or no declaration at all (`sync`). The declared-format half (rule 2) catches
+/// every artifact from a format-8 repository; this catches the one declaring less than it carries. A named path, the
+/// command, the cost, and that nothing was written: the same shape as rule 2, the same `repository-format-too-old` id.
+///
+/// `operations` are one patch's already-decoded operations. Called by every importer that has a receiving repository
+/// (`bundle import`, `bundle preview`, `archive import`, `sync accept`), before any write; the receiver-less `verify`
+/// commands do not call it.
+pub(crate) fn require_receiver_can_hold_paths(
+    kind: ArtifactKind,
+    operations: &[crate::patch_replay::decode::DecodedPatchOperation],
+    receiver: RepositoryFormat,
+) -> Result<()> {
+    if receiver.admits_non_ascii_paths() {
+        return Ok(());
+    }
+    let first_non_ascii_format = RepositoryFormat::V8;
+    let noun = kind.noun();
+    let have = receiver.number();
+    let want = first_non_ascii_format.number();
+    for operation in operations {
+        if let Some(path) = operation
+            .kind
+            .paths()
+            .into_iter()
+            .find(|path| !path.is_ascii())
+        {
+            return Err(PrikkError::RepositoryFormatTooOld {
+                artifact: noun,
+                declared: want,
+                have,
+                message: format!(
+                    "this {noun} carries the non-ASCII path {path}, and this repository is format {have}, which cannot hold \
+                     non-ASCII paths. Run `prikk format upgrade` to move this repository to format {want} (a prikk older \
+                     than this one cannot open a format-{want} repository), then import again; nothing was written"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

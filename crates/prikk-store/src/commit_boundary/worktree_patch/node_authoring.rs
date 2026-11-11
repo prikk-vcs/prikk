@@ -207,6 +207,7 @@ pub(in crate::commit_boundary) fn authoring_refusal(
                 "{path}: symlink node modification is out of scope"
             ))),
             _ => non_ascii_path_needs_upgrade(path, format)
+                .or_else(|| non_nfc_path_refusal(path))
                 .map(|reason| AuthorError::Store(PrikkError::Precondition(reason))),
         },
     }
@@ -219,6 +220,11 @@ pub(in crate::commit_boundary) fn authoring_refusal(
 /// place prikk suggests the upgrade**, because upgrading an ASCII-only repository would cut older
 /// binaries off for nothing.
 pub(crate) fn non_ascii_path_needs_upgrade(path: &str, format: RepositoryFormat) -> Option<String> {
+    // A path the decode table refuses is refused in every format, so the upgrade would not help: say nothing about it
+    // here, and let the conversion to a `RepoPath` name the character.
+    if prikk_object::first_refused_character(path).is_some() {
+        return None;
+    }
     (!path.is_ascii() && !format.admits_non_ascii_paths()).then(|| {
         format!(
             "{path}: non-ASCII repository paths need repository format 8, and this repository is \
@@ -227,6 +233,28 @@ pub(crate) fn non_ascii_path_needs_upgrade(path: &str, format: RepositoryFormat)
             format.number()
         )
     })
+}
+
+/// **The NFC rule on authoring a name** (0.57.0 U2, ruling C2): `Some(reason)` when `path` is not in Unicode normalization
+/// form C. prikk records NFC names and never rewrites one silently -- on Linux and Windows an NFC and an NFD file with the
+/// same visible name are two real files, and silently normalizing would drop one of them at every commit. The reason names
+/// the path and its NFC spelling, both with the non-ASCII characters written `\u{..}` because the two look identical on
+/// screen. **Asked only here, where a name is authored, never at decode** (ruling C3: a name containing a code point that is
+/// unassigned in one Unicode version can be NFC there and not in a later one, so a decode-time NFC check could make a newer
+/// binary refuse history an older one wrote -- a documented exception to DC-54's encode/decode symmetry).
+///
+/// A path the decode table refuses is not judged here: the conversion to a `RepoPath` names the character.
+pub(crate) fn non_nfc_path_refusal(path: &str) -> Option<String> {
+    if prikk_object::first_refused_character(path).is_some() {
+        return None;
+    }
+    let nfc = prikk_object::non_nfc_spelling(path)?;
+    Some(format!(
+        "{shown}: this name is not in Unicode normalization form C (NFC), the only form prikk records, and prikk never \
+         rewrites a name for you; its NFC spelling is {nfc_shown}. Rename the file to that spelling, then commit again",
+        shown = prikk_object::escape_non_ascii(path),
+        nfc_shown = prikk_object::escape_non_ascii(&nfc),
+    ))
 }
 
 /// `authoring_refusal` rendered exactly as `commit` will render it, for readers outside

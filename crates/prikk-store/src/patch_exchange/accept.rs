@@ -219,9 +219,16 @@ pub fn accept_exchange_artifact(
                 envelope.object_id()
             )));
         }
-        for operation in
-            decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?
-        {
+        let operations =
+            decode_patch_operations(&envelope.canonical_payload, envelope.schema_version)?;
+        // 0.57.0 U2 (the content half): a receiver that cannot hold a non-ASCII path refuses a patch that carries one,
+        // before anything is written -- `sync accept` is an importer like `bundle import` and `archive import`.
+        crate::artifact_format::require_receiver_can_hold_paths(
+            crate::artifact_format::ArtifactKind::Sync,
+            &operations,
+            layout.format(),
+        )?;
+        for operation in operations {
             for blob_id in referenced_blob_ids(&operation.kind) {
                 if !artifact_blob_ids.contains(&blob_id)
                     && !read_snapshot.contains_object(ObjectType::Blob, blob_id)

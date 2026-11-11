@@ -73,6 +73,6 @@ validation; otherwise they replay the whole history. A received block's snapshot
 point for a worktree write. The written files are identical either way. `rollback-preview` always
 replays the whole history.
 
-The path validator remains conservative: non-ASCII paths are deferred until Unicode NFC
-normalization is implemented, and paths targeting `.prikk/` are rejected. For the exact validator and
+The path validator remains conservative: a path with a character the decode table refuses (a control character, a noncharacter, ZWJ and similar invisible or bidirectional characters) is
+rejected, and so are paths targeting `.prikk/`; non-ASCII names are accepted at repository format 8. For the exact validator and
 write-safety caveats, see [path and worktree safety](../../reference/path-safety.md).

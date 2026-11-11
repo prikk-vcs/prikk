@@ -30,7 +30,7 @@ pub fn is_canonical_file_mode(mode: u32) -> bool {
 
 /// Reword a `validate_repo_path` refusal for the authoring context: `commit` encoding a worktree
 /// file into a new `Patch` (0.56.0 step 3d2). Structural: matches
-/// [`PrikkError::NonAsciiRepoPath`], never any error's rendered text. Every other
+/// [`PrikkError::RefusedPathCharacter`], never any error's rendered text. Every other
 /// `validate_repo_path` refusal (empty, absolute, too-long, a reserved component, ...) passes
 /// through unchanged -- those are permanently invalid, not a statement about this version
 /// specifically, so they keep `InvalidName`'s own wording.
@@ -41,8 +41,13 @@ pub fn is_canonical_file_mode(mode: u32) -> bool {
 /// function, not a second copy) -- so the sentence cannot drift between the two crates again.
 pub fn authoring_path_error(err: PrikkError) -> PrikkError {
     match err {
-        PrikkError::NonAsciiRepoPath { path } => PrikkError::InvalidName(format!(
-            "this version of prikk does not accept non-ASCII repository paths: {path}"
+        PrikkError::RefusedPathCharacter {
+            path,
+            character,
+            reason,
+        } => PrikkError::InvalidName(format!(
+            "this version of prikk does not accept U+{:04X} ({reason}) in a repository path: {path}",
+            u32::from(character)
         )),
         other => other,
     }
@@ -447,26 +452,28 @@ impl CanonicalEncode for ReplaceBinary {
 mod tests {
     use super::*;
 
-    /// 0.56.0 step 3d2: `CreateFile::validate`'s own `validate_repo_path` call must give the
-    /// *authoring* sentence for a non-ASCII path -- naming the file, never the *reading* sentence
+    /// 0.56.0 step 3d2 (reworded for format 8): `CreateFile::validate`'s own `validate_repo_path` call must give the
+    /// *authoring* sentence for a path the decode table refuses -- naming the character and the file, never the *reading*
+    /// sentence
     /// (which names "newer version of prikk may have written it", wrong for a worktree file that
     /// was just typed by hand) and never the retired "deferred until ... implemented" wording.
     #[test]
     #[allow(clippy::expect_used)]
-    fn create_file_validate_gives_the_authoring_sentence_for_a_non_ascii_path() {
+    fn create_file_validate_gives_the_authoring_sentence_for_a_refused_character() {
         let op = CreateFile {
-            path: "pages/日本語.md".to_string(),
+            path: "pages/zw\u{200d}j.md".to_string(),
             node_id: NodeId::from_bytes([1u8; 32]),
             blob_id: ObjectId::from_bytes([2u8; 32]),
             mode: 0o100_644,
         };
         let err = op
             .validate()
-            .expect_err("a non-ASCII path must still refuse authoring");
+            .expect_err("a path with a refused character must refuse authoring");
         let rendered = err.to_string();
         assert!(
-            rendered.contains("this version of prikk does not accept non-ASCII repository paths")
-                && rendered.contains("pages/日本語.md"),
+            rendered.contains(
+                "this version of prikk does not accept U+200D (invisible format character)"
+            ) && rendered.contains("pages/zw\u{200d}j.md"),
             "expected the authoring sentence naming the file, got: {rendered}"
         );
         assert!(

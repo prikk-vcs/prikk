@@ -1696,7 +1696,9 @@ fn apply_queued_patch_envelopes_classifies_a_non_ascii_path_as_outside_version_r
 
     // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
     let mut create_file = CanonicalWriter::new();
-    create_file.field_repo_path(1, "pages/日本語.md").unwrap();
+    create_file
+        .field_repo_path(1, "pages/zw\u{200d}j.md")
+        .unwrap();
     create_file.field_bytes(2, nid(0x51).as_bytes()).unwrap();
     create_file.field_object_id(3, &oid(60)).unwrap();
     create_file.field_u32(4, 0o100_644).unwrap();

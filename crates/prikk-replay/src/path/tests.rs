@@ -19,9 +19,25 @@ fn repo_path_rejects_filesystem_or_platform_ambiguous_paths() {
         ".PRIKK/FORMAT",
         "src\\main.rs",
         "CON.txt",
-        "日本語.txt",
+        // A character the decode table refuses (ZWJ): outside the rule in every format. A non-ASCII name in itself is no
+        // longer refused (0.57.0, format 8): see `repo_path_accepts_non_ascii_names_in_either_normalization_form`.
+        "zw\u{200d}j.txt",
+        "COM\u{b9}.txt",
     ] {
         assert!(RepoPath::parse(path).is_err(), "{path}");
+    }
+}
+
+#[test]
+fn repo_path_accepts_non_ascii_names_in_either_normalization_form() {
+    // Decode does not ask for NFC (ruling C3); only `commit` does.
+    for path in [
+        "日本語.txt",
+        "caf\u{e9}.txt",
+        "cafe\u{301}.txt",
+        "dir/한글.md",
+    ] {
+        assert!(RepoPath::parse(path).is_ok(), "{path}");
     }
 }
 

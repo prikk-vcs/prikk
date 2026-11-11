@@ -13,12 +13,12 @@
 //! operations (`decode_patch_operations`, to discover referenced Blobs) as part of its own
 //! closure walk, so **no local repository holding this fixture can ever be exported to a bundle
 //! at all** -- confirmed directly, by trying it: `export_bundle` itself fails with the identical
-//! `NonAsciiRepoPath`, before any bundle file exists to import. A CLI-level `bundle import
+//! `RefusedPathCharacter`, before any bundle file exists to import. A CLI-level `bundle import
 //! --format json` test for this id is therefore not constructible through the public API at all
 //! (there is no way to get this exact byte shape into a `.pbndl` except `prikk-store`'s own
 //! `pub(crate) encode_bundle`, which serializes already-built envelopes verbatim with no decode
 //! of its own -- unreachable from here). The `prikk-store`-internal test asserts the identical
-//! underlying classification (`PrikkError::NonAsciiRepoPath`/`DecodeFailureKind::
+//! underlying classification (`PrikkError::RefusedPathCharacter`/`DecodeFailureKind::
 //! OutsideVersionRule`) and byte identity; it does not assert the CLI's own printed JSON text,
 //! which is produced by a simple, pre-existing, unchanged-by-this-round match arm in
 //! `crates/prikk-cli/src/bundle.rs` (`DecodeFailureKind::OutsideVersionRule =>
@@ -371,7 +371,7 @@ fn build_source_with_outside_version_rule_patch(tag: &str) -> RepositoryLayout {
     let author = Ed25519AuthorSigner::from_seed("step3f2-author", &[0x5b_u8; 32])
         .expect("construct an author signer");
     let non_ascii_patch =
-        write_hand_crafted_create_file_patch(&mut store, &author, "pages/日本語.md", 0x5c);
+        write_hand_crafted_create_file_patch(&mut store, &author, "pages/zw\u{200d}j.md", 0x5c);
 
     let child_payload = BlockPayload {
         parent_block_ids: vec![root_id],

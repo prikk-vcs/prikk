@@ -100,7 +100,7 @@ The scanner is intentionally conservative:
 
 - `.prikk/` metadata is ignored;
 - existing path-safety validation is reused;
-- non-ASCII paths remain unsupported until Unicode NFC normalization is implemented;
+- non-ASCII names are supported at repository format 8 if they are in NFC; a name that is not NFC, or that contains a character the path rules refuse (ZWJ, a bidirectional control, a noncharacter), is listed with `authoring: refused` and the reason (see [path and worktree safety](../reference/path-safety.md));
 - no writes are performed **in the worktree**. Under `.prikk/`, the baseline derivation this command shares
   with `prikk commit` refreshes the rebuildable cache (`cache/lifecycle-state.v1`), which is best-effort and never
   authoritative. [`prikk diff`](diff.md) uses the same derivation with that refresh switched off, and writes

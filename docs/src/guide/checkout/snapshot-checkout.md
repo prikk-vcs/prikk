@@ -19,7 +19,7 @@ The current path-safety scaffold is deliberately conservative. It rejects:
 - backslashes and colon characters
 - control characters
 - Windows reserved names such as `CON`, `NUL`, `COM1`, and `LPT1`
-- non-ASCII paths until Unicode NFC normalization is implemented
+- characters the path rules refuse (controls, noncharacters, ZWJ and ZWNJ, bidirectional controls, other invisible format characters); a non-ASCII name itself is accepted at repository format 8
 - duplicate paths and case-insensitive collisions
 
 Use `prikk checkout --snapshot-materialize` to write validated snapshot files. Supported patch replay

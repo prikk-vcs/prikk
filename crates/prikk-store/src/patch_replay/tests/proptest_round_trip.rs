@@ -772,7 +772,7 @@ fn decode_patch_operations_for_admission_gives_the_reading_sentence_for_a_non_as
 
     let mut create_file = CanonicalWriter::new();
     create_file
-        .field_repo_path(1, "pages/日本語.md")
+        .field_repo_path(1, "pages/zw\u{200d}j.md")
         .expect("repo path field");
     create_file
         .field_bytes(2, NodeId::from_bytes([7u8; 32]).as_bytes())
@@ -803,7 +803,7 @@ fn decode_patch_operations_for_admission_gives_the_reading_sentence_for_a_non_as
     .expect_err("a non-ASCII path must still refuse admission, not be admitted silently");
     let rendered = err.to_string();
     assert!(
-        rendered.contains("pages/日本語.md")
+        rendered.contains("pages/zw\u{200d}j.md")
             && rendered.contains("outside what this version of prikk accepts")
             && rendered.contains("newer version of prikk may have written it"),
         "expected the reading sentence naming the path, got: {rendered}"

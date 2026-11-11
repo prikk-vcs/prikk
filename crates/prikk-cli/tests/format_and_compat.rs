@@ -17,6 +17,8 @@ mod rfc156_format_7;
 mod support;
 #[path = "format_and_compat/u1_format_8.rs"]
 mod u1_format_8;
+#[path = "format_and_compat/u2_content_half.rs"]
+mod u2_content_half;
 #[path = "format_and_compat/u4_artifact_format.rs"]
 mod u4_artifact_format;
 #[path = "format_and_compat/u4b_refusal_ids.rs"]

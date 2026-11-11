@@ -12,19 +12,24 @@ For physical repository layout and `.prikk/` authority boundaries, see
 ## Core Caveats
 
 - Prikk is early implementation software and is not a production Git replacement.
-- Repository paths currently use a conservative ASCII-only subset.
-- Unicode NFC normalization is not implemented; non-ASCII repository paths are rejected.
+- **Repository format 8 admits non-ASCII repository paths** (0.57.0). A new repository is format 8; a format-6 or
+  format-7 repository refuses to author one, naming `prikk format upgrade`. What a path may contain is decided by one
+  explicit table in prikk's source, frozen at format 8 (see "The decode table" below), not by a Unicode property.
+- **`commit` records a name only if it is in Unicode normalization form C (NFC)**, and never rewrites a name for you. A
+  name in another form (an NFD `é`, `e` followed by U+0301) is refused, naming the name and its NFC spelling. Decoding
+  stored history does **not** ask for NFC. That is a stated exception to the rule that encode and decode refuse the same
+  paths (DC-54), and its reason is in "NFC is checked where a name is authored", below.
 - Cross-platform conservative checks are enforced even on Unix, including Windows reserved names and
   case-insensitive collision rejection.
 - The collision-rejection rule is ASCII case-folding only (`to_ascii_lowercase`), applied uniformly
   to repository paths, branch ref names, tag ref names, and maintainer trust key ids (DC-72). It is
-  **not** Unicode normalization: an NFC-composed and NFD-decomposed spelling of the same visible name
-  are different byte sequences and are not folded together. Repository paths cannot reach this case
-  today because non-ASCII repository paths are rejected outright (previous bullet); branch and tag ref
-  names have no such ASCII restriction, so an NFC/NFD pair there is a live, recorded, un-rejected
-  collision. Locale-dependent case rules (Turkish `İ`/`i`, German `ß`/`SS`) are outside ASCII folding
-  for the same reason. Closing this needs a normalization dependency prikk-store's dependency
-  allowlist does not currently permit (`tools/release-policy/src/boundary/placement.rs`).
+  **not** Unicode case folding or normalization. For repository paths that now matters: `commit` refuses a
+  non-NFC name, which keeps an NFC and an NFD twin from being recorded together by `commit`, but the collision
+  rule itself still compares ASCII-lowercased bytes, so `É` and `é`, or `straße` and `strasse`, are not yet
+  recognized as colliding. (The two Unicode crates the canonical comparison needs are in the build and their
+  behaviour is pinned by tests; the comparison itself is the next step.) Branch and tag ref names have no ASCII
+  restriction, so an NFC/NFD pair there is a live, recorded, un-rejected collision, as before; ref names and key ids
+  are not part of this change.
 - Repository-path collisions are rejected at `seal`, not at `commit` (DC-72) — `commit` records a
   case-colliding pair into the active WAL without error; `seal` computes the full state root over all
   live paths and rejects there. Nothing enters sealed, verifiable history either way, but the
@@ -49,7 +54,7 @@ For physical repository layout and `.prikk/` authority boundaries, see
 Prikk's `RepoPath` is a validated repository-relative path string. The current accepted shape is:
 
 - non-empty;
-- ASCII only;
+- valid UTF-8, with none of the characters in "The decode table" below (non-ASCII is allowed at format 8);
 - repository-relative, with no leading `/`;
 - slash-separated with `/`;
 - made of non-empty components;
@@ -67,16 +72,18 @@ The current validator rejects:
 - absolute paths that start with `/`;
 - backslashes;
 - colon characters;
-- non-ASCII bytes;
-- control bytes `0x00` through `0x1F` and `0x7F`;
+- any character in the decode table: control characters (`0x00`-`0x1F`, `0x7F`, `0x80`-`0x9F`), noncharacters,
+  line and paragraph separators, bidirectional controls and invisible format characters, **including ZWJ (U+200D)
+  and ZWNJ (U+200C)**;
 - empty path components;
 - a path component longer than 255 bytes;
 - a total path longer than 1024 bytes;
 - `.` and `..` components;
 - `.prikk` as the first component, case-insensitively;
 - components ending in a space or dot;
-- Windows reserved component basenames: `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, and `LPT1`
-  through `LPT9`;
+- Windows reserved component basenames: `CON`, `PRN`, `AUX`, `NUL`, `COM1` through `COM9`, `LPT1` through
+  `LPT9`, and the superscript forms `COM¹ COM² COM³ LPT¹ LPT² LPT³` that Windows also reserves in every directory
+  (0.57.0; they are reachable now that a path may be non-ASCII);
 - duplicate paths in a path set; and
 - case-insensitive collisions in a path set.
 
@@ -86,11 +93,11 @@ Added by RFC 125 §3: before this, `validate_repo_path` had no length check of a
 over-long path entered signed history and only failed later — as a raw OS error, not a clean
 refusal — at checkout on a repository that had already verified clean.
 
-- **255 bytes per component** — POSIX `NAME_MAX`, the per-component ceiling shared by Linux, macOS,
-  and Windows' own NTFS component limit (255 UTF-16 code units, the same count as bytes here since
-  repository paths are ASCII-only). A component longer than this cannot exist on any of the three
-  platforms this project mutates on ([platform support](./platform-support.md)), regardless of
-  where in the tree it sits or how deep the worktree root is.
+- **255 bytes per component** — POSIX `NAME_MAX`, counted in UTF-8 bytes. Windows' NTFS limit is 255 UTF-16 code units,
+  and a string never has more UTF-16 units than UTF-8 bytes, so a component under 255 bytes is always under NTFS's limit
+  too: there is deliberately **no second, UTF-16 limit**, because it could never fail. A component longer than this
+  cannot exist on any of the three platforms this project mutates on ([platform support](./platform-support.md)),
+  regardless of where in the tree it sits or how deep the worktree root is.
 - **1024 bytes total** — macOS's `PATH_MAX` (`sys/syslimits.h`), the strictest of the three
   platforms' hard total-path limits: Linux's is 4096, and Windows' legacy default (`MAX_PATH`, 260)
   is a separate, narrower gap that depends on the worktree root's own depth too and cannot be
@@ -101,7 +108,50 @@ refusal — at checkout on a repository that had already verified clean.
   a repository is checked out, not something a repository-relative length cap alone can close.
 
 The Windows reserved-name check is matched on the component basename before the first `.`. It is not a
-complete Windows path policy and does not include `COM0` or `LPT0`.
+complete Windows path policy and does not include `COM0` or `LPT0`. The names are an explicit list, so the rule is the
+same in every Unicode version.
+
+### The decode table
+
+What a stored or delivered repository path may **not** contain is **an explicit list in prikk's own source**
+(`crates/prikk-object/src/path/decode_table.rs`), frozen at repository format 8, and the same for every binary that reads
+the history. Neither Unicode property data nor the dependency crates are asked at decode, because the Unicode data does not
+hold still: `General_Category=Cf` had 131 code points in Unicode 3.2 and 170 in 16.0, so "is a format character" asked at
+decode would let a newer prikk refuse history an older one accepted. The table may grow **only with a format bump**:
+loosening a refusal later is possible, tightening it is not, because history already accepted would become refused.
+
+| class | members |
+|---|---|
+| controls | U+0000-001F, U+007F, U+0080-009F |
+| noncharacters | U+FDD0-FDEF, and U+xFFFE and U+xFFFF of every plane (34) |
+| line and paragraph separators | U+2028, U+2029 |
+| bidirectional controls | U+061C, U+200E, U+200F, U+202A-202E, U+2066-2069 |
+| invisible format characters | U+00AD (soft hyphen), U+200B-200D (zero width space, **ZWNJ, ZWJ**), U+2060-2064, U+FEFF, U+FFF9-FFFB, the Tags block U+E0000-E007F |
+
+A path with one of these is **outside what this version accepts, not damage**: every reader says so, naming the character
+(`contains U+200D (invisible format character), which is outside what this version …`), `verify` and
+`doctor` do not call the repository damaged, and `refusal-v1` reads `outside-version-rule`. Unassigned code points are
+accepted.
+
+**ZWJ and ZWNJ are refused on purpose, and that has a cost.** ZWNJ is needed to spell Persian and some Indic scripts
+correctly, and ZWJ forms many emoji sequences, so a file named in those scripts or with such an emoji is refused. The reason
+is that both are invisible: `report` and `re` + ZWJ + `port` would be two different paths that look identical. This is
+revisited if a consumer asks; admitting them later is a format change that loosens the table.
+
+### NFC is checked where a name is authored
+
+`commit` refuses a name that is not in NFC, naming it and its NFC spelling (both written with `\u{..}`, because an NFC and an
+NFD `é` look identical on screen), and refuses an NFC and an NFD spelling of one name found side by side, naming both. On Linux
+and Windows those are two real files, and silently normalizing would drop one of them at every commit; on macOS (APFS
+preserves the form but compares canonically) the NFD name another tool made must be renamed to NFC first. `worktree-status`
+reports the same decision (`authoring: refused`).
+
+**Decoding does not ask for NFC.** Normalization tables grow with Unicode versions: a name containing a code point that is
+unassigned in one version can be NFC there and not in a later one. If decode also asked, a newer prikk could refuse history an
+older one wrote. So the NFC check runs only where a name is authored, which is a **documented exception to DC-54's rule that
+encode and decode refuse the same paths**. Both spellings of one visible name are valid stored history; collisions between them
+are the disk-protecting checks' job (`seal`, `extract`), which may tighten across Unicode versions, because refusing more is
+the safe direction.
 
 The `.prikk` rejection applies to the first component only. A later `.prikk` component is not rejected
 by that specific validator rule. Worktree authoring separately skips the top-level `.prikk/` directory.
@@ -168,6 +218,8 @@ The current authoring path:
 - rejects non-regular entries;
 - rejects non-UTF-8 host paths before they can become repository paths;
 - validates each repository-relative path through `RepoPath`;
+- refuses a non-ASCII name in a format-6 or format-7 repository (naming `prikk format upgrade`) and a name that is not in
+  NFC (naming its NFC spelling);
 - normalizes regular file modes into Prikk's supported mode representation; and
 - rejects snapshot-only published baselines as worktree-authoring identity authority.
 
@@ -214,8 +266,8 @@ the same id is still refused even after removal.
 
 ## Deferred and Not Promised
 
-Still deferred: Unicode NFC normalization, non-ASCII repository paths, symlink authoring, symlink
-materialization, full platform path matrix, Git path compatibility, path-policy configuration, stable
+Still deferred: Unicode-aware collision comparison of repository paths (full case folding over the canonical form), symlink
+authoring, symlink materialization, full platform path matrix, Git path compatibility, path-policy configuration, stable
 repository-format migration, complete checkout pruning, complete branch switching, production merge
 execution, and race-free worktree mutation hardening.
 
@@ -225,7 +277,7 @@ Current checks are deliberately strict so future path policy can expand from a c
 
 | Claim | Source anchors |
 |---|---|
-| `RepoPath` accepts only the current ASCII, repository-relative, slash-separated subset. | [`path.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path.rs), [`path/tests.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path/tests.rs), [DC-32](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-32-PATH-WORKTREE-SAFETY-REFERENCE.md) |
+| `RepoPath` accepts a repository-relative, slash-separated UTF-8 path with none of the decode table's characters. | [`path.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path.rs), [`path/tests.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path/tests.rs), [DC-32](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-32-PATH-WORKTREE-SAFETY-REFERENCE.md) |
 | The `.prikk` validator rule applies to the first component case-insensitively. | [`path.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path.rs), [repository layout](./repository-layout.md) |
 | Duplicate paths and case-insensitive collisions are rejected. | [`path.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-replay/src/path.rs), [`snapshot.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/snapshot.rs) |
 | Snapshot manifests decode UTF-8 path bytes, parse `RepoPath`, enforce sorted paths, and length-frame content bytes. | [`snapshot.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/snapshot.rs), [snapshot checkout guide](../guide/checkout/snapshot-checkout.md) |

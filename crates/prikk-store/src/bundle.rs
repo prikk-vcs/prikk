@@ -648,7 +648,7 @@ pub fn preview_bundle_reporting_anchor(
     Vec<crate::patch_replay::SnapshotAnchorFallback>,
 )> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
-    let metadata = decode_bundle_closure_metadata(source, options)?;
+    let metadata = decode_bundle_closure_metadata(source, options, Some(layout.format()))?;
     // 0.57.0 U4: the same refusal `import_bundle` gives, so a preview never says an import would work when it cannot.
     if let Some(declared) = &metadata.manifest {
         crate::artifact_format::require_receiver_can_hold(
@@ -1428,7 +1428,10 @@ struct ClosureMetadata {
 
 /// This envelope's own [`same_kind_dependencies`] plus its [`ClosureMetadata`], decoding each
 /// type-specific payload at most once -- never the envelope itself past this call.
-fn closure_metadata_for(envelope: &ObjectEnvelope) -> Result<(Vec<ObjectId>, ClosureMetadata)> {
+fn closure_metadata_for(
+    envelope: &ObjectEnvelope,
+    receiver: Option<crate::foundation::layout::RepositoryFormat>,
+) -> Result<(Vec<ObjectId>, ClosureMetadata)> {
     let mut closure = ClosureMetadata::default();
     let same_kind_dependencies = match envelope.object_type {
         ObjectType::Block => {
@@ -1460,10 +1463,19 @@ fn closure_metadata_for(envelope: &ObjectEnvelope) -> Result<(Vec<ObjectId>, Clo
             // must call the identical function, not a second copy that happens to call the same
             // lower-level decoder.
             let mut referenced = Vec::new();
-            for operation in crate::patch_replay::decode::decode_patch_operations_for_admission(
+            let operations = crate::patch_replay::decode::decode_patch_operations_for_admission(
                 &envelope.canonical_payload,
                 envelope.schema_version,
-            )? {
+            )?;
+            // 0.57.0 U2: a receiver that cannot hold a non-ASCII path refuses a patch that carries one, before any write.
+            if let Some(receiver) = receiver {
+                crate::artifact_format::require_receiver_can_hold_paths(
+                    crate::artifact_format::ArtifactKind::Bundle,
+                    &operations,
+                    receiver,
+                )?;
+            }
+            for operation in operations {
                 referenced.extend(bundle_referenced_blob_ids(&operation.kind));
             }
             closure.referenced_blob_ids = referenced;
@@ -1935,6 +1947,7 @@ struct BundleClosureMetadata {
 fn decode_bundle_closure_metadata(
     source: &mut BundleSource,
     options: &BundleImportOptions,
+    receiver: Option<crate::foundation::layout::RepositoryFormat>,
 ) -> Result<BundleClosureMetadata> {
     let total_len = source.seek(SeekFrom::End(0)).map_err(|err| {
         PrikkError::Integrity(format!("bundle decode: failed to measure the input: {err}"))
@@ -2085,7 +2098,7 @@ fn decode_bundle_closure_metadata(
         }
 
         let object_type = envelope.object_type;
-        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
+        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope, receiver)?;
         drop(envelope);
 
         let index = prepared.len();
@@ -2362,7 +2375,8 @@ pub fn import_bundle(
         // 0.55.0 step 3 Part 3b-ii: extracted before `admit_one`, not after -- closure metadata
         // never depends on the admission result, and `admit_one` now takes `envelope` by value
         // (below), so this must read it first.
-        let (same_kind_dependencies, closure) = closure_metadata_for(&envelope)?;
+        let (same_kind_dependencies, closure) =
+            closure_metadata_for(&envelope, Some(layout.format()))?;
         // RFC 156 §4 rules 1-3, format 7: for every carried object this repository already holds,
         // which of its signatures may join the stored record. Verified here, before anything is
         // written; an invalid one refuses the whole import.
@@ -3372,7 +3386,8 @@ pub fn verify_bundle(
     source: &mut BundleSource,
     options: &BundleImportOptions,
 ) -> Result<BundleVerifyReport> {
-    let metadata = decode_bundle_closure_metadata(source, options)?;
+    // No receiving repository: `verify` applies no receiver rule (the format or the content one).
+    let metadata = decode_bundle_closure_metadata(source, options, None)?;
     // No lock, `local: None` -- offline verification has no repository to ask (this function's
     // own doc comment, "what this cannot prove" section), and nothing here writes, so there is
     // nothing a lock would protect. `validate_bundle_closure` already resolves and present-checks

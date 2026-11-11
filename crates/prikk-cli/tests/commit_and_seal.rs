@@ -71,3 +71,5 @@ mod step3w3c4_sync_seal_current_branch;
 mod step3w3c5_archive_import_adopt_current_branch;
 #[path = "support/mod.rs"]
 mod support;
+#[path = "commit_and_seal/u2_unicode_authoring.rs"]
+mod u2_unicode_authoring;

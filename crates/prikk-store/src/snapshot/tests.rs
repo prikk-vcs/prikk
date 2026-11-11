@@ -29,7 +29,8 @@ fn repo_path_rejects_traversal_and_reserved_names() {
     assert!(RepoPath::parse("/absolute").is_err());
     assert!(RepoPath::parse("CON.txt").is_err());
     assert!(RepoPath::parse("src\\main.rs").is_err());
-    assert!(RepoPath::parse("日本語.txt").is_err());
+    assert!(RepoPath::parse("zw\u{200d}j.txt").is_err());
+    assert!(RepoPath::parse("日本語.txt").is_ok());
 }
 
 /// DC-96 Windows Anchor Identity, option 2 (`.git-exclude/reviewed/DC-96-ancestor-rename-ruling-v1.md`

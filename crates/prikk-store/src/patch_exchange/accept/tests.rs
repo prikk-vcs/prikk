@@ -39,11 +39,21 @@ fn build_single_patch_artifact(
     signer: &crate::Ed25519AuthorSigner,
     record_locally: bool,
 ) -> Result<(Vec<u8>, ObjectId)> {
+    build_single_patch_artifact_at(sender_name, signer, record_locally, "accept.txt")
+}
+
+/// [`build_single_patch_artifact`] with the patch's `CreateFile` path chosen by the caller.
+fn build_single_patch_artifact_at(
+    sender_name: &str,
+    signer: &crate::Ed25519AuthorSigner,
+    record_locally: bool,
+    path: &str,
+) -> Result<(Vec<u8>, ObjectId)> {
     let sender = fresh_repo(sender_name)?;
     let mut objects = FileObjectStore::new(sender.clone());
     let blob = signed_blob_envelope(b"accept fixture\n")?;
     let blob_id = objects.write_object(&blob)?;
-    let patch = signed_author_patch_envelope(signer, "accept.txt", 0x30, blob_id)?;
+    let patch = signed_author_patch_envelope(signer, path, 0x30, blob_id)?;
     let patch_id = objects.write_object(&patch)?;
     if record_locally {
         let active_lock = ActiveLock::acquire(&sender, DEFAULT_ACTIVE_NAME)?;
@@ -911,6 +921,65 @@ fn the_signature_bound_holds_through_accept() -> Result<()> {
         before
     );
 
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}
+
+/// 0.57.0 U2 (the content half, U4 review Q2): `sync accept` is an importer like `bundle import` and `archive import`. A
+/// patch that carries a non-ASCII path is refused by a receiver that cannot hold one (format 6 or 7), before anything is
+/// written, naming the path and `prikk format upgrade`; a format-8 receiver accepts it. A `sync` artifact declares no
+/// repository format, so only the content rule can apply.
+#[test]
+fn a_patch_carrying_a_non_ascii_path_is_refused_by_a_format_7_receiver_and_accepted_by_format_8()
+-> Result<()> {
+    let signer = author_signer(0x11)?;
+    let (bytes, patch_id) = build_single_patch_artifact_at(
+        "pexch-accept-unicode-sender",
+        &signer,
+        true,
+        "pages/\u{65e5}\u{672c}\u{8a9e}.md",
+    )?;
+
+    for marker in [&b"6\n"[..], &b"7\n"[..]] {
+        let receiver = fresh_repo("pexch-accept-unicode-old-receiver")?;
+        std::fs::write(receiver.root().join(".prikk").join("FORMAT"), marker).unwrap();
+        let receiver = RepositoryLayout::open(receiver.root())?;
+        let Err(err) =
+            accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits())
+        else {
+            panic!("a format-6 or 7 receiver cannot hold a non-ASCII path");
+        };
+        let said = err.to_string();
+        assert!(
+            matches!(
+                &err,
+                prikk_error::PrikkError::RepositoryFormatTooOld {
+                    artifact: "sync artifact",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            said.contains("carries the non-ASCII path pages/\u{65e5}\u{672c}\u{8a9e}.md"),
+            "{said}"
+        );
+        assert!(
+            said.contains("prikk format upgrade") && said.contains("nothing was written"),
+            "{said}"
+        );
+        let snapshot = ObjectReadSnapshot::open(&receiver)?;
+        assert!(
+            !snapshot.contains_object(ObjectType::Patch, patch_id),
+            "a refused exchange writes nothing"
+        );
+        let _ = std::fs::remove_dir_all(receiver.root());
+    }
+
+    let receiver = fresh_repo("pexch-accept-unicode-new-receiver")?;
+    accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits())?;
+    let snapshot = ObjectReadSnapshot::open(&receiver)?;
+    assert!(snapshot.contains_object(ObjectType::Patch, patch_id));
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }

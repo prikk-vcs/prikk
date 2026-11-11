@@ -4187,6 +4187,7 @@ fn bundle_and_local_reader_never_caches_a_blob() -> prikk_error::Result<()> {
     let metadata = crate::bundle::decode_bundle_closure_metadata(
         &mut source_handle,
         &BundleImportOptions::default_limits(),
+        None,
     )?;
     assert!(
         metadata.index_by_id.contains_key(&blob_id),
@@ -4242,7 +4243,7 @@ fn bundle_and_local_reader_never_caches_a_blob() -> prikk_error::Result<()> {
 /// 0.56.0 F2 item 3 (review `.git-exclude/reviewed/0.56.0-step-3-f-review-v1.md`, "F2 item 3"):
 /// `bundle import` refuses a carried `Patch` whose own `CreateFile` operation names a path
 /// outside this version's own rule (a non-ASCII path), reporting
-/// `PrikkError::NonAsciiRepoPath`/`DecodeFailureKind::OutsideVersionRule` -- the library-level
+/// `PrikkError::RefusedPathCharacter`/`DecodeFailureKind::OutsideVersionRule` -- the library-level
 /// classification `refusal-v1`'s own `"outside-version-rule"` id is built from
 /// (`crates/prikk-cli/src/bundle.rs`'s own `err.decode_failure_kind() ==
 /// DecodeFailureKind::OutsideVersionRule` check). Built directly through `encode_bundle`, not
@@ -4251,7 +4252,7 @@ fn bundle_and_local_reader_never_caches_a_blob() -> prikk_error::Result<()> {
 /// no *local* repository holding this fixture (built the same write-time bypass
 /// `crates/prikk-store/src/archive/tests.rs::seal_one_block_with_an_outside_version_rule_patch`
 /// uses) can ever be exported to a bundle at all -- confirmed directly: attempting it fails with
-/// the identical `NonAsciiRepoPath` at *export* time, before any bundle file exists to import.
+/// the identical `RefusedPathCharacter` at *export* time, before any bundle file exists to import.
 /// `encode_bundle` sidesteps that: it serializes already-built envelopes verbatim, with no decode
 /// of its own, so this is the only way to get this exact byte shape into a `.pbndl` at all.
 /// Destination trust is irrelevant here (the dummy `maintainer_signature()`/`rollback_author_
@@ -4273,7 +4274,7 @@ fn bundle_import_refuses_outside_version_rule_for_a_non_ascii_path() -> prikk_er
     // one_block_with_an_outside_version_rule_patch` already uses. The named blob id need not
     // exist anywhere: decode fails on the path itself, before any dependency is ever resolved.
     let mut create_file = CanonicalWriter::new();
-    create_file.field_repo_path(1, "pages/日本語.md")?;
+    create_file.field_repo_path(1, "pages/zw\u{200d}j.md")?;
     create_file.field_bytes(2, NodeId::from_bytes([0x5c; 32]).as_bytes())?;
     create_file.field_object_id(3, &ObjectId::from_bytes([0x5d; 32]))?;
     create_file.field_u32(4, 0o100_644)?;
@@ -4315,7 +4316,7 @@ fn bundle_import_refuses_outside_version_rule_for_a_non_ascii_path() -> prikk_er
         "{error}"
     );
     assert!(
-        matches!(error, prikk_error::PrikkError::NonAsciiRepoPath { .. }),
+        matches!(error, prikk_error::PrikkError::RefusedPathCharacter { .. }),
         "{error:?}"
     );
     assert_eq!(

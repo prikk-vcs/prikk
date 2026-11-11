@@ -106,7 +106,7 @@ impl SnapshotManifest {
     /// Decode a manifest from a `SNAPSHOT` Blob's content. Every failure is `Integrity` -- a snapshot
     /// that does not decode is damage, whatever byte was wrong -- **except** an entry whose path this
     /// version's own path rule refuses (non-ASCII), which `not_decodable` keeps as
-    /// `NonAsciiRepoPath`: that is not damage, only a path a newer `prikk` version may have written
+    /// `RefusedPathCharacter`: that is not damage, only a path a newer `prikk` version may have written
     /// (0.56.0 step 3d, A6; 3d2 narrowed this to the non-ASCII cause specifically).
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         let Some(mut rest) = bytes.strip_prefix(SNAPSHOT_MAGIC) else {
@@ -155,7 +155,7 @@ fn magic_found(bytes: &[u8]) -> String {
 fn not_decodable(err: PrikkError) -> PrikkError {
     match err {
         // 0.56.0 step 3d (A6), corrected in 3d2: a path this version's own path rule refuses
-        // (`NonAsciiRepoPath`) is not damage -- kept apart from `Integrity`, so a reader two hops up
+        // (`RefusedPathCharacter`) is not damage -- kept apart from `Integrity`, so a reader two hops up
         // (`verify`'s object check, `doctor`'s advice) can still tell it apart from a manifest that
         // really does not decode. Passed through unchanged: its own `Display` already gives the
         // ruled reading sentence, naming the path, with no raw-validator-text parenthesis appended.
@@ -164,7 +164,7 @@ fn not_decodable(err: PrikkError) -> PrikkError {
         // that case as `Corrupt`, which is correct: no future `prikk` version will ever accept those.
         PrikkError::Integrity(_)
         | PrikkError::InvalidName(_)
-        | PrikkError::NonAsciiRepoPath { .. } => err,
+        | PrikkError::RefusedPathCharacter { .. } => err,
         other => PrikkError::Integrity(format!("snapshot manifest does not decode: {other}")),
     }
 }
@@ -191,7 +191,7 @@ pub(crate) struct SnapshotFile {
 ///
 /// Steps 2 and 3 are always `Integrity`. Step 1's decode is `Integrity` too, **except** when the
 /// manifest's own entries fail only this version's path rule (0.56.0 step 3d, A6): `SnapshotManifest`
-/// `::decode`'s own `not_decodable` keeps that case as `NonAsciiRepoPath`, since it is not damage.
+/// `::decode`'s own `not_decodable` keeps that case as `RefusedPathCharacter`, since it is not damage.
 /// Step 3 comes after step 2, so a forged manifest never directs a single presence check.
 pub(crate) fn validate_snapshot_manifest(
     reader: &impl ObjectReader,

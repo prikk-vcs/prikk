@@ -10,7 +10,9 @@ const ALLOWED_THIRD_PARTY: [(&str, &[&str]); 8] = [
     ("prikk-ffi", &["libc", "windows-sys"]),
     ("prikk-hash", &["sha2"]),
     ("prikk-crypto", &["ed25519-dalek", "getrandom"]),
-    ("prikk-object", &[]),
+    // 0.57.0 U2 (owner decision D2, option B): NFC/NFD and full case folding for repository paths. `prikk-object` is the
+    // lowest crate every path check reaches; `tinyvec` is transitive (via `unicode-normalization`) and not a direct edge.
+    ("prikk-object", &["unicase", "unicode-normalization"]),
     ("prikk-replay", &[]),
     ("prikk-store", &["getrandom", "rustix"]),
     ("prikk", &[]),

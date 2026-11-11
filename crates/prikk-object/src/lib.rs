@@ -21,6 +21,9 @@ mod vectors;
 pub use canonical::{CanonicalEncode, CanonicalWriter, WireType};
 pub use envelope::{ObjectEnvelope, SignatureEnvelopeIssues};
 pub use id::{OBJECT_ID_DOMAIN, ObjectId, ObjectType};
-pub use path::{ascii_fold, is_windows_reserved_name, validate_repo_path};
+pub use path::{
+    ascii_fold, canonical_caseless_key, escape_non_ascii, first_refused_character,
+    is_windows_reserved_name, non_nfc_spelling, refusal_reason, validate_repo_path,
+};
 pub use payload::*;
 pub use signature::{ED25519_SIGNATURE_LEN, Signature, SignatureAlgorithm, SignerRole};

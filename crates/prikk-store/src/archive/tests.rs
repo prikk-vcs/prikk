@@ -149,7 +149,7 @@ pub(crate) fn seal_one_block_with_an_outside_version_rule_patch(
 
     // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
     let mut create_file = CanonicalWriter::new();
-    create_file.field_repo_path(1, "pages/日本語.md")?;
+    create_file.field_repo_path(1, "pages/zw\u{200d}j.md")?;
     create_file.field_bytes(2, NodeId::from_bytes([0x51; 32]).as_bytes())?;
     create_file.field_object_id(3, &blob_id)?;
     create_file.field_u32(4, 0o100_644)?;

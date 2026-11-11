@@ -226,6 +226,17 @@ pub(super) struct ManifestView {
 /// instead, with [`ArchiveVerifyReport::is_internally_consistent`] turning `false` -- consistent with
 /// §9.1: "damage ... travels verbatim. The archive's verify names it."
 pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyReport> {
+    verify_archive_for_receiver(source, None)
+}
+
+/// [`verify_archive`] for an importer that **has a receiving repository** (0.57.0 U2): the same checks, plus the content
+/// rule -- an archive whose patches carry a non-ASCII path is refused when `receiver` cannot hold one
+/// (`artifact_format::require_receiver_can_hold_paths`), at stage 0, before the journal. `None` is the receiver-less
+/// `archive verify`, which applies no receiver rule.
+pub(super) fn verify_archive_for_receiver<R: Read + Seek>(
+    source: &mut R,
+    receiver: Option<crate::foundation::layout::RepositoryFormat>,
+) -> Result<ArchiveVerifyReport> {
     let (total_len, manifest_offset, manifest_length, manifest_checksum) =
         read_end_trailer(source)?;
     let manifest = read_manifest(source, manifest_offset, manifest_length, manifest_checksum)?;
@@ -251,7 +262,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
                 // 0.57.0 U4b: a path outside this version's rule is judged after reachability is known (pass 2 collects
                 // it, below); any other decode failure refuses here, as before.
                 if object_type == ObjectType::Patch {
-                    admission_decode_outside_rule(envelope)?;
+                    admission_decode_outside_rule(envelope, receiver)?;
                 }
                 ids.insert(envelope.object_id());
                 Ok(())
@@ -360,7 +371,7 @@ pub fn verify_archive<R: Read + Seek>(source: &mut R) -> Result<ArchiveVerifyRep
             // here since this pass re-streams the section independently -- see
             // `decode_patch_operations_for_admission`'s own doc comment.
             if object_type == ObjectType::Patch {
-                if let Some(error) = admission_decode_outside_rule(envelope)? {
+                if let Some(error) = admission_decode_outside_rule(envelope, receiver)? {
                     outside_rule_patches.push((envelope.object_id(), error));
                 }
             }
@@ -650,12 +661,23 @@ impl ObjectReader for ArchiveObjectReader<'_> {
 /// write loop decodes the same way.
 pub(super) fn admission_decode_outside_rule(
     envelope: &ObjectEnvelope,
+    receiver: Option<crate::foundation::layout::RepositoryFormat>,
 ) -> Result<Option<PrikkError>> {
     match crate::patch_replay::decode::decode_patch_operations_for_admission(
         &envelope.canonical_payload,
         envelope.schema_version,
     ) {
-        Ok(_) => Ok(None),
+        Ok(operations) => {
+            // 0.57.0 U2 (the content half): a receiver that cannot hold a non-ASCII path refuses a patch that carries one.
+            if let Some(receiver) = receiver {
+                crate::artifact_format::require_receiver_can_hold_paths(
+                    crate::artifact_format::ArtifactKind::Archive,
+                    &operations,
+                    receiver,
+                )?;
+            }
+            Ok(None)
+        }
         Err(error)
             if error.decode_failure_kind()
                 == prikk_error::DecodeFailureKind::OutsideVersionRule =>

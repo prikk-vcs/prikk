@@ -161,7 +161,7 @@ pub(super) fn doctor(repo: &Path) -> std::process::Output {
 /// The chain the 0.55.0 hole admitted: a received ref `remotes/heads/side` at a block with a non-ASCII path.
 pub(super) fn received_non_ascii_chain(tag: &str) -> (PathBuf, ObjectId, ObjectId) {
     let (repo, mut store, genesis) = fresh(tag);
-    let patch = write_create_file_patch(&mut store, "pages/日本語.md", 0x72);
+    let patch = write_create_file_patch(&mut store, "pages/zw\u{200d}j.md", 0x72);
     let block = write_block(&mut store, genesis, vec![patch]);
     let state = write_ref_state(&mut store, "heads/side", block);
     prikk_store::write_received_pointer_for_test(
@@ -264,7 +264,7 @@ fn after_received_remove_the_unreached_block_is_a_warning_and_verify_passes() {
 #[test]
 fn an_unreached_child_of_the_unreadable_block_is_excused_too() {
     let (repo, mut store, genesis) = fresh("u4-unreached-child");
-    let patch = write_create_file_patch(&mut store, "pages/日本語.md", 0x72);
+    let patch = write_create_file_patch(&mut store, "pages/zw\u{200d}j.md", 0x72);
     let parent = write_block(&mut store, genesis, vec![patch]);
     let child = write_block(&mut store, parent, Vec::new());
     let output = verify(&repo);

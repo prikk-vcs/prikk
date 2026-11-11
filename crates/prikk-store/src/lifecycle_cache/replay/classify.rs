@@ -1,6 +1,6 @@
 //! 0.56.0 step 3d (A6), corrected in 3d2: classify a patch-operations decode failure *before* it is
 //! folded into a `String`, so a path this version's own path rule refuses (non-ASCII) is kept
-//! apart from real corruption -- matching [`prikk_error::PrikkError::NonAsciiRepoPath`] directly,
+//! apart from real corruption -- matching [`prikk_error::PrikkError::RefusedPathCharacter`] directly,
 //! never rendered text, which can be edited without anyone noticing the classification silently
 //! dropped. Split out of `replay.rs` itself only to keep that file under this project's own
 //! line-count gate; this is still `replay`'s own classifier, used by both of its patch-operations
@@ -20,12 +20,54 @@ use super::LifecycleReplayError;
 
 pub(super) fn classify_decode_failure(patch_id: ObjectId, err: PrikkError) -> LifecycleReplayError {
     match err {
-        PrikkError::NonAsciiRepoPath { path } => {
-            LifecycleReplayError::OutsideVersionRuleInLineage { patch_id, path }
-        }
+        PrikkError::RefusedPathCharacter {
+            path,
+            character,
+            reason,
+        } => LifecycleReplayError::OutsideVersionRuleInLineage {
+            patch_id,
+            path,
+            character,
+            reason,
+        },
         other => LifecycleReplayError::MalformedPatchInLineage {
             patch_id,
             detail: other.to_string(),
         },
     }
+}
+
+impl From<LifecycleReplayError> for PrikkError {
+    fn from(value: LifecycleReplayError) -> Self {
+        use LifecycleReplayError::OutsideVersionRuleInLineage;
+        match value {
+            OutsideVersionRuleInLineage {
+                path,
+                character,
+                reason,
+                ..
+            } => Self::RefusedPathCharacter {
+                path,
+                character,
+                reason,
+            },
+            other => Self::Integrity(other.to_string()),
+        }
+    }
+}
+
+/// The reading sentence for [`LifecycleReplayError::OutsideVersionRuleInLineage`] (moved here from `replay.rs`, which is at
+/// the file-size limit): names the patch, the path, the refused character and its kind.
+pub(super) fn write_outside_version_rule(
+    f: &mut std::fmt::Formatter<'_>,
+    patch_id: ObjectId,
+    path: &str,
+    character: char,
+    reason: &str,
+) -> std::fmt::Result {
+    write!(
+        f,
+        "lifecycle replay: patch {patch_id}: {path} contains U+{:04X} ({reason}), which is outside what this version of prikk accepts, and a newer version of prikk may have written it",
+        u32::from(character)
+    )
 }

@@ -63,6 +63,13 @@ rustix                      = { version = "1", features = ["fs", "process"] }
 # windows-sys below.
 libc                        = "0.2"
 sha2                        = "0.11"
+# 0.57.0 U2 (Unicode repository paths; owner decision D2, option B): NFC/NFD and full case folding. Exact versions, because
+# the behaviour of both is pinned by tests (`prikk-object`'s `unicode_stability`), and a crate upgrade must be a deliberate
+# act that either keeps those tests green or moves them with a reason. `tinyvec` (transitive, via
+# `unicode-normalization`) is pinned by `Cargo.lock`. Read for `unsafe`, build scripts and proc-macros in U0: five bounded
+# `unsafe` sites in `unicode-normalization`'s Hangul code, accepted (U0 review, Q3) and covered by an exhaustive test.
+unicode-normalization       = "=0.1.26"
+unicase                     = "=2.10.0"
 # DC-96: pinned to the version already resolved in the dependency graph (via rustix->errno and
 # tempfile) so this direct edge does not add a second copy. Verify against Cargo.lock before
 # bumping, not just this comment.

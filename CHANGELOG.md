@@ -12,8 +12,27 @@ repository) and let an archive carrying one land silently; 0.55.0 and 0.56.0 ref
 is idempotent on 8. **For a non-ASCII path, prikk suggests the upgrade in one place only:** `commit` (and `worktree-status`, which reports the same decision) refuses a non-ASCII path
 in a format-6 or format-7 repository, naming the path, the format needed (8), the format the repository is at, `prikk format upgrade`, and that a
 prikk older than this one cannot open a format-8 repository. An ASCII-only repository is never prompted; nothing about it changes except what a new one is
-created as. Bundles and archives exported from a format-8 repository declare format 8. In this change a format-8 repository still refuses a
-non-ASCII path (admitting one is the next part of the same item). See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
+created as. Bundles and archives exported from a format-8 repository declare format 8. See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
+
+### Added — non-ASCII repository paths: `commit` records NFC names in a format-8 repository
+
+A file named `日本語.md` or `café.md` can now be committed, sealed, read back (`tree`, `extract`, `verify`) and exchanged. What a path may contain is decided
+by one **explicit table in prikk's source, frozen at format 8** (controls, noncharacters, line and paragraph separators, bidirectional controls and invisible
+format characters), not by a Unicode property, so every binary that reads the history agrees. **`commit` records a name only if it is in Unicode
+normalization form C (NFC)** and never rewrites a name: a name in another form is refused, naming it and its NFC spelling (written `\u{..}`, because the two
+look identical), and an NFC and an NFD spelling of one name side by side are refused naming both. Reading history does not ask for NFC (both spellings are
+valid stored history; a documented exception to DC-54's encode/decode symmetry, because the NFC status of a code point unassigned today can change).
+**ZWJ (U+200D) and ZWNJ (U+200C) are refused**, with the other invisible format characters, by the owner's ruling: ZWNJ is needed to spell Persian and some
+Indic scripts and ZWJ forms many emoji sequences, so a name in those scripts or with such an emoji is refused, and the reason is that both are invisible
+(two names that look identical). This is revisited if a consumer asks; admitting them later loosens the table with a format change. `COM¹ COM² COM³ LPT¹ LPT²
+LPT³` join the Windows device names. A component is bounded in UTF-8 bytes (255), which already bounds its UTF-16 length; there is no second limit.
+A format-6 or format-7 repository still refuses to author a non-ASCII name (naming `prikk format upgrade`), and refuses an **artifact that carries one**:
+`bundle import`, `bundle preview`, `archive import` and `sync accept` refuse a patch with a non-ASCII path before writing anything, whatever format the artifact
+declares (this closes the corner where a format-7 repository exported what 0.55.0 let in), with `"refusal": "repository-format-too-old"` under `--format json`.
+Two crates join the binary, exact versions: `unicode-normalization =0.1.26` (and `tinyvec`, transitive) and `unicase =2.10.0`, both Unicode 18.0.0 (so
+`THIRD-PARTY-NOTICES` lists 26 crates); the only `unsafe` is five bounded sites in `unicode-normalization`'s Hangul code, covered by a test of all 11,172
+syllables. Their NFC and folding behaviour is pinned by tests, so an upgrade of either cannot change it silently. Comparing paths for collisions with Unicode case
+folding is the next step: until it lands the collision rule is still ASCII case-folding. See [Path and Worktree Safety](docs/src/reference/path-safety.md).
 
 ### Changed — a bundle or archive from a format-8 repository is refused by a format-6 or format-7 one, and a bundle's declared format is checked
 
@@ -393,6 +412,21 @@ sender's. The sync guide states the step.
   cleared by `--yes`.
 - **A lock written by 0.56.0 or earlier lists as `unknown`** ("written by an older prikk") until it is
   cleared or its holder finishes; `--yes` clears it as before.
+- **`worktree-status`'s listing of a worktree file with a non-ASCII name changed, and `kind` and `authoring` are the contract.** Before this release a
+  non-ASCII file not in the baseline was `"kind": "unsupported-path"`. The final shapes, for a file not in the baseline:
+
+  | the name | repository format | `kind` | `authoring` |
+  |---|---|---|---|
+  | non-ASCII, in NFC (`café.md`) | 8 | `untracked` | `authored` (`refusal: null`) |
+  | non-ASCII, not in NFC (`cafe` + U+0301) | 8 | `untracked` | `refused`, the NFC sentence naming its NFC spelling |
+  | non-ASCII, either form | 6 or 7 | `untracked` | `refused`, the sentence naming `prikk format upgrade` |
+  | contains ZWJ, ZWNJ, a bidirectional control, a noncharacter, a C1 control or another decode-table character | any | `unsupported-path` | `refused`, the sentence naming the character |
+
+  `refused_count` counts the `refused` entries. A consumer that read `unsupported-path` as "a non-ASCII name" must read `authoring` instead, and one that
+  matched the old sentence (`this version of prikk does not accept non-ASCII repository paths`) must match `does not accept U+XXXX (…) in a repository path`.
+- **A path with a character the decode table refuses is reported by name.** The reading sentence for history is now `<path> contains U+200D (invisible format
+  character), which is outside what this version of prikk accepts, and a newer version of prikk may have written it` (it named only the path before); the
+  `refusal-v1` id (`outside-version-rule`) and the not-damage classification are unchanged.
 
 ## 0.56.0 — 2026-11-08
 

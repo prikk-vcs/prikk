@@ -948,6 +948,24 @@ repository declares 8, even one with only ASCII paths, because the declaration i
 verify` need no repository and still pass; `bundle preview` gives the same refusal as `bundle import`. Under `--format json`, the
 three import and preview commands print a `refusal-v1` document with `"refusal": "repository-format-too-old"`.
 
+## `error: precondition not met: <path>: this name is not in Unicode normalization form C (NFC) …`
+
+`commit` (and `worktree-status`, as `authoring: refused`) found a file whose name is not in NFC: an accented letter spelled as a
+base letter plus a combining mark (`e` then U+0301) instead of the single precomposed character (`é`, U+00E9). The two look
+identical on screen, which is why the message writes the non-ASCII characters as `\u{..}` and gives both spellings. Another tool made
+the name (macOS writes names this way, and some archive tools do), and prikk records only NFC names and never renames a file for you.
+Rename the file to the NFC spelling the message gives, then commit again. If a file with the NFC spelling already exists beside it, the
+message says the two are one visible name in two spellings: keep one and rename or remove the other.
+
+## `error: invalid name: this version … does not accept U+200D (invisible format character) in a repository path: …`
+
+A file name contains a character no repository path may contain, in any format: a control character, a noncharacter, a line or
+paragraph separator, a bidirectional control, or an invisible format character such as the zero width joiner (U+200D) or non-joiner
+(U+200C). The message names the character and the file. Rename the file without it; no `prikk format upgrade` helps, and none is
+suggested. The reason these are refused is that two names differing only by an invisible character would look identical. ZWJ and ZWNJ are
+needed to spell some scripts and emoji; they are refused on purpose for now, and that is revisited if a consumer asks. The same
+character in history written by another version is reported as outside what this version accepts, not as damage.
+
 ## `error: bundle declares repository format 9, which this build does not know how to read; … so this is not damage …`
 
 A bundle or an archive (the message says which) names a repository format this prikk does not know. This is not damage: the file's

@@ -990,7 +990,7 @@ fn extract_ref_refuses_outside_version_rule_for_a_non_ascii_path_in_the_chain() 
     let signer = admitted_maintainer_signer();
 
     let non_ascii_patch =
-        write_hand_crafted_create_file_patch(&mut store, &author, "pages/日本語.md", 0x92);
+        write_hand_crafted_create_file_patch(&mut store, &author, "pages/zw\u{200d}j.md", 0x92);
     let tip_block = publish_block_with_patches(
         &layout,
         "heads/main",
@@ -1036,7 +1036,7 @@ fn extract_claim_refuses_outside_version_rule_for_a_non_ascii_path() {
     let author = author_signer("step3f2-claim-outside-version-author", 0x93);
 
     let non_ascii_patch =
-        write_hand_crafted_create_file_patch(&mut store, &author, "pages/日本語.md", 0x94);
+        write_hand_crafted_create_file_patch(&mut store, &author, "pages/zw\u{200d}j.md", 0x94);
     let foot_claim = write_claim_signed_by(
         &mut store,
         RecognitionClaimPayload {

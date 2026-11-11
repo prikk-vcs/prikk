@@ -201,6 +201,22 @@ repository at open. For non-ASCII paths, `commit` and `worktree-status` suggest 
 format-6 or format-7 repository is refused, naming the path, the format needed and `prikk format upgrade`.
 See [Release Compatibility](release-compatibility.md).
 
+**Non-ASCII repository paths (0.57.0).** `commit` records a non-ASCII name in a format-8 repository **if the name is in Unicode
+normalization form C (NFC)**, and never rewrites a name for you. A name in another form is refused, naming the name and its NFC
+spelling, both with the non-ASCII characters written `\u{..}` because the two look identical (rename the file to the NFC
+spelling, then commit again); an NFC and an NFD spelling of one name side by side are refused naming both. A name containing a
+character of the decode table (a control, a noncharacter, ZWJ or ZWNJ, a bidirectional control, another invisible format
+character) is refused in **every** format, naming the character; no upgrade is suggested for it, because an upgrade would not
+help. `COM¹ COM² COM³ LPT¹ LPT² LPT³` are Windows device names and refused like `COM1`. A format-6 or format-7 repository
+refuses any non-ASCII name and suggests `prikk format upgrade`. `worktree-status` reports each decision: for a file not in the
+baseline, a non-ASCII NFC name at format 8 is `"kind": "untracked"` with `"authoring": "authored"`; a non-NFC name at format 8, and
+any non-ASCII name at format 6 or 7, is `"untracked"` with `"authoring": "refused"` and the reason in `"refusal"`; a name with a
+decode-table character is `"unsupported-path"` with `"authoring": "refused"`. Importers (`bundle import`, `bundle preview`,
+`archive import`, `sync accept`) refuse an artifact that **carries** a non-ASCII path when the receiving repository is format 6
+or 7, whatever format the artifact declares, naming the path and `prikk format upgrade` and writing nothing; under
+`--format json` that is `"refusal": "repository-format-too-old"`. Reading history never asks for NFC: both spellings of one
+visible name are valid stored history. See [Path and Worktree Safety](path-safety.md).
+
 **Refusals about refs and repositories.**
 - **A ref that does not exist.** A command that reads an existing ref's state refuses an absent name
   before anything else with `precondition not met: ref <name> does not exist in this repository` (exit
@@ -614,8 +630,8 @@ comparison.
 **A path this version of `prikk` does not accept is not damage.** Every reader (`verify`,
 `doctor`, `show`, `tree`, `extract`, and `commit` when it replays existing history to derive
 state) and every importer's admission check (`bundle import`/`verify`/`preview`,
-`archive import`/`verify`) classify a path that fails this version's own path rule (today:
-non-ASCII) distinctly from genuine corruption: the message names the path and says that it is
+`archive import`/`verify`) classify a path that fails this version's own path rule (today: a
+character in the decode table, see [Path and Worktree Safety](path-safety.md)) distinctly from genuine corruption: the message names the path and says that it is
 outside what this version of `prikk` accepts, and that a newer version of `prikk` may have
 written it — never "malformed", never "does not decode", and never a roadmap statement about
 when the rule might change. `doctor`'s own recommendation for this case says no repair is
@@ -623,7 +639,7 @@ needed and to read the repository with a newer version of `prikk`, rather than t
 operator to preserve the repository and inspect the failing object or block. A worktree file
 with such a name, reached while authoring a commit (including from `diff`'s and `status`'s own
 worktree scans), is told something different instead: that this version of `prikk` does not
-accept non-ASCII repository paths, naming the file. Every one of these commands refuses; the
+accept that character (`U+200D (invisible format character)`, say) in a repository path, naming the file. Every one of these commands refuses; the
 classification and the wording say why. `bundle import --format json` and
 `archive import --format json` print a `refusal-v1` document for this cause (`"refusal":
 "outside-version-rule"`, the same id `extract --format json` gives).
@@ -868,13 +884,13 @@ this repository has adopted, or the link carries no MAINTAINER signature at all 
 directly on the command line is checked exactly the same way as every other link in the chain the
 walk builds from it. `claim-does-not-fold` means some link's own patches do not actually apply onto
 the state the chain has built up to that point — that claim is unsound, not this repository. A
-link whose own patch names a path outside this version's own rule (today: non-ASCII) is not this
+link whose own patch names a path outside this version's own rule (today: a decode-table character) is not this
 case: it reads `outside-version-rule`, with the same "outside what this version of `prikk` accepts"
 sentence `extract --ref` gives for the identical path (see "A path this version of `prikk`
 does not accept is not damage", above) — a claim can be perfectly sound and still carry a patch a
 newer `prikk` wrote.
 `outside-version-rule` itself means the refusal's own cause was a path this version of `prikk`'s own
-rule refuses (today: non-ASCII), never corruption — decided from the error's kind, never from its
+rule refuses (today: a decode-table character), never corruption — decided from the error's kind, never from its
 message text, and given both by `extract --ref`
 (a point whose own history replays a patch naming such a path) and by `extract --claim` (a chain
 link whose own patch names one) for the identical underlying cause. An empty, absolute, too-long,

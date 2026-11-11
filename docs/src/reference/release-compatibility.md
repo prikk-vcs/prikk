@@ -122,8 +122,10 @@ nothing — unless `prikk verify` would pass, and then overwrites only the one b
 Nothing stored is rewritten, because every format-6 repository is already a valid format-7 one, and every format-7 repository
 a valid format-8 one. The upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.56.0 and earlier refuse a
 format-8 repository at open** (0.44.0 and earlier already refuse format 7), so upgrade only once every prikk that opens the
-repository is newer. **For non-ASCII paths, prikk suggests the upgrade in one place only:** the refusal to author a non-ASCII path in a format-6
-or format-7 repository, which names the path, the format needed and the command. Upgrading an ASCII-only repository would cut
+repository is newer. **For non-ASCII paths, prikk suggests the upgrade in two connected places only:** the refusal to author a non-ASCII path in a
+format-6 or format-7 repository (`commit`, and `worktree-status` as `authoring: refused`), and the refusal of an artifact that
+carries one (`bundle import`, `bundle preview`, `archive import`, `sync accept`), both naming the path, the format needed and the
+command. Upgrading an ASCII-only repository would cut
 older binaries off for nothing, so nothing prompts it.
 
 The format has moved repeatedly and deliberately: 1→2 (state Merkle roots), 2→3 (object containers),

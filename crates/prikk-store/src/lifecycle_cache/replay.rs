@@ -83,8 +83,14 @@ pub(crate) enum LifecycleReplayError {
         /// Why it could not be read.
         detail: String,
     },
-    /// A6/3d2: a path fails this version's own rule, not damage; `path` is the offending path.
-    OutsideVersionRuleInLineage { patch_id: ObjectId, path: String },
+    /// A6/3d2: a path fails this version's own rule, not damage: `path` has `character`, which the decode table refuses
+    /// (0.57.0 U2), of the kind `reason` names.
+    OutsideVersionRuleInLineage {
+        patch_id: ObjectId,
+        path: String,
+        character: char,
+        reason: &'static str,
+    },
     /// A blob required to resolve a lifecycle state effect is absent. (2c-2b onward.)
     MissingBlobForLifecycleEffect {
         /// The blob an effect needed.
@@ -142,10 +148,12 @@ impl fmt::Display for LifecycleReplayError {
                     "lifecycle replay: patch {patch_id} is malformed ({detail})"
                 )
             }
-            Self::OutsideVersionRuleInLineage { patch_id, path } => write!(
-                f,
-                "lifecycle replay: patch {patch_id}: {path} is outside what this version of prikk accepts, and a newer version of prikk may have written it"
-            ),
+            Self::OutsideVersionRuleInLineage {
+                patch_id,
+                path,
+                character,
+                reason,
+            } => classify::write_outside_version_rule(f, *patch_id, path, *character, reason),
             Self::MissingBlobForLifecycleEffect { blob_id } => {
                 write!(
                     f,
@@ -167,16 +175,6 @@ impl fmt::Display for LifecycleReplayError {
                 }
                 write!(f, ") could not be localized: {reason}")
             }
-        }
-    }
-}
-
-impl From<LifecycleReplayError> for PrikkError {
-    fn from(value: LifecycleReplayError) -> Self {
-        use LifecycleReplayError::OutsideVersionRuleInLineage;
-        match value {
-            OutsideVersionRuleInLineage { path, .. } => Self::NonAsciiRepoPath { path },
-            other => Self::Integrity(other.to_string()),
         }
     }
 }

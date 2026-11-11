@@ -132,6 +132,26 @@ pub(crate) enum DecodedOperationKind {
     },
 }
 
+impl DecodedOperationKind {
+    /// The repository paths this operation names (0.57.0 U2): none for the node-addressed kinds that carry only an identity
+    /// (`EditText`, `ReplaceBinary`, `ChangePerm`), one for `CreateFile`, `DeleteNode` and `CreateSymlink`, two for
+    /// `RenamePath`. The one place that lists them, so an importer's "does this patch need a format that holds non-ASCII
+    /// paths" asks every path an operation can carry.
+    pub(crate) fn paths(&self) -> Vec<&str> {
+        match self {
+            Self::CreateFile { path, .. }
+            | Self::DeleteNode { path, .. }
+            | Self::CreateSymlink { path, .. } => vec![path.as_str()],
+            Self::RenamePath {
+                old_path, new_path, ..
+            } => vec![old_path.as_str(), new_path.as_str()],
+            Self::EditText { .. } | Self::ReplaceBinary { .. } | Self::ChangePerm { .. } => {
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// Discriminated `DeleteNode` deletion preimage (§9.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

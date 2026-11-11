@@ -16,6 +16,8 @@ keywords.workspace      = true
 [dependencies]
 prikk-error                 = { workspace = true }
 prikk-hash                  = { workspace = true }
+unicode-normalization       = { workspace = true }
+unicase                     = { workspace = true }
 
 [dev-dependencies]
 proptest                    = { workspace = true }

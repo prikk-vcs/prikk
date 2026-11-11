@@ -718,7 +718,9 @@ fn write_non_ascii_path_patch(store: &mut FileObjectStore) -> ObjectId {
 
     // CreateFile tags (payload/patch/operations.rs): 1=path, 2=node_id, 3=blob_id, 4=mode.
     let mut create_file = CanonicalWriter::new();
-    create_file.field_repo_path(1, "pages/日本語.md").unwrap();
+    create_file
+        .field_repo_path(1, "pages/zw\u{200d}j.md")
+        .unwrap();
     create_file
         .field_bytes(2, NodeId::from_bytes([0xD1; 32]).as_bytes())
         .unwrap();
