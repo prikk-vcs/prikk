@@ -16,7 +16,6 @@
 //! 1a ordering row first named `--discard-damaged-commits` and the test showed it does not clear that
 //! finding.
 
-use crate::block_state::BlockStateStatus;
 use crate::verify::{ActiveWalMetadataStatus, ObjectItemStatus, RepositoryVerification};
 
 /// The sound-copy sequence, in full. `setup` makes the new directory a repository (and adopts this
@@ -204,7 +203,7 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
     if report
         .block_state_outcomes
         .iter()
-        .any(|o| !matches!(o.status, BlockStateStatus::Verified))
+        .any(|o| o.status.is_failure())
     {
         out.push(("a block's state root failed", WayOut::BlockState));
     }

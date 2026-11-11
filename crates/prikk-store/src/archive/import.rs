@@ -527,6 +527,13 @@ pub fn import_archive<R: Read + Seek>(
     let (_total_len, manifest_offset, manifest_length, manifest_checksum) =
         read_end_trailer(source)?;
     let manifest = read_manifest(source, manifest_offset, manifest_length, manifest_checksum)?;
+    // 0.57.0 U4: an archive from a repository that can hold non-ASCII paths (format 8 and later) is refused by one
+    // that cannot, before the journal, a lock or any object write, naming `prikk format upgrade`.
+    crate::artifact_format::require_receiver_can_hold(
+        crate::artifact_format::ArtifactKind::Archive,
+        manifest.repository_format,
+        layout.format(),
+    )?;
     let archive_identity = manifest_checksum;
     let author_material = read_author_material(source, &manifest)?;
 

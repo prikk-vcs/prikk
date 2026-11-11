@@ -1320,13 +1320,10 @@ fn validate_manifest_shape(
     // just before this call, in `read_manifest`) only proves the bytes are the ones a real export
     // wrote -- not that *this build* knows how to read the format number carried inside them. A
     // future build may legitimately write a format this one predates.
-    if !super::known_repository_format_numbers().contains(&manifest.repository_format) {
-        return Err(PrikkError::MalformedData(format!(
-            "archive declares repository format {}, which this build does not know how to read \
-             -- refusing the whole archive",
-            manifest.repository_format
-        )));
-    }
+    crate::artifact_format::require_known_declared_format(
+        crate::artifact_format::ArtifactKind::Archive,
+        manifest.repository_format,
+    )?;
     let claimed_end = manifest_offset
         .checked_add(manifest_length)
         .and_then(|sum| sum.checked_add(END_TRAILER_LEN_USIZE as u64))

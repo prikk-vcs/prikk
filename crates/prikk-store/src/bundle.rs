@@ -649,6 +649,14 @@ pub fn preview_bundle_reporting_anchor(
 )> {
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
     let metadata = decode_bundle_closure_metadata(source, options)?;
+    // 0.57.0 U4: the same refusal `import_bundle` gives, so a preview never says an import would work when it cannot.
+    if let Some(declared) = &metadata.manifest {
+        crate::artifact_format::require_receiver_can_hold(
+            crate::artifact_format::ArtifactKind::Bundle,
+            declared.repository_format,
+            layout.format(),
+        )?;
+    }
     // No lock: this never writes, so there is nothing to protect. `local: Some(&read_snapshot)`
     // -- a referenced object may be satisfied by the bundle or the repository's own existing
     // objects (D7's incremental-import rule). `validate_bundle_closure` already resolves and
@@ -1993,6 +2001,12 @@ fn decode_bundle_closure_metadata(
                     .to_string(),
             )
         })?;
+        // 0.57.0 U4: the bundle's declared format used to be informational; a number this build does not know is
+        // now refused, as the archive's always was.
+        crate::artifact_format::require_known_declared_format(
+            crate::artifact_format::ArtifactKind::Bundle,
+            repository_format,
+        )?;
         let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
             .map_err(|err| {
                 PrikkError::MalformedData(format!(
@@ -2226,6 +2240,12 @@ pub fn import_bundle(
                     .to_string(),
             )
         })?;
+        // 0.57.0 U4: the bundle's declared format used to be informational; a number this build does not know is
+        // now refused, as the archive's always was.
+        crate::artifact_format::require_known_declared_format(
+            crate::artifact_format::ArtifactKind::Bundle,
+            repository_format,
+        )?;
         let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
             .map_err(|err| {
                 PrikkError::MalformedData(format!(
@@ -2256,6 +2276,15 @@ pub fn import_bundle(
         return Err(PrikkError::MalformedData(
             "trailing bytes in bundle".to_string(),
         ));
+    }
+    // 0.57.0 U4: a bundle from a repository that can hold non-ASCII paths (format 8 and later) is refused by one that
+    // cannot, before the first object is written, naming `prikk format upgrade`.
+    if let Some(declared) = &manifest {
+        crate::artifact_format::require_receiver_can_hold(
+            crate::artifact_format::ArtifactKind::Bundle,
+            declared.repository_format,
+            layout.format(),
+        )?;
     }
 
     source

@@ -409,7 +409,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.57.0 step 2 (L1) added `lock_holder.rs`: 176 -> 177. 0.57.0 step 3 (S5b) added `uncommit.rs` (`prikk uncommit`): 177 -> 178.
     // 0.57.0 U1 (format 8) split `foundation/layout/format_marker.rs` (the marker reader) out of `layout.rs`, which format 8 had pushed past
     // the 1,200-line limit: 178 -> 179.
-    assert_eq!(store.production_files, 179);
+    // 0.57.0 U4 added `artifact_format.rs` (what an artifact's declared repository format means to a receiver; its `tests.rs` is
+    // `cfg(test)`-invisible): 179 -> 180.
+    assert_eq!(store.production_files, 180);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

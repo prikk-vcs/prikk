@@ -87,7 +87,7 @@ pub(super) const UPPER_LAYER: [&str; 33] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-pub(super) const LOWER_LAYER: [&str; 40] = [
+pub(super) const LOWER_LAYER: [&str; 41] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -95,6 +95,9 @@ pub(super) const LOWER_LAYER: [&str; 40] = [
     "refs",
     "trust",
     // Infrastructure the core reaches.
+    // 0.57.0 U4: what an artifact's declared repository format means to a receiver. A leaf over `foundation::layout` and
+    // `prikk-error`; `archive` and `bundle` (both upper) are its only callers, and it reaches nothing above it.
+    "artifact_format",
     "author",
     "blob_access",
     "commit_index",

@@ -907,19 +907,6 @@ const fn repository_format_number(format: RepositoryFormat) -> u32 {
     }
 }
 
-/// Every `repository_format` number a real export can ever write -- the inverse of
-/// [`repository_format_number`], enumerated the same way rather than re-guessed as a numeric range.
-/// `verify::validate_manifest_shape` refuses, naming the value, when a carried archive declares
-/// anything else (V2's own fix, review `rfc155-impl-V-review-v1` finding V1b): import would
-/// otherwise act on a format number nobody actually wrote.
-pub(crate) fn known_repository_format_numbers() -> [u32; 3] {
-    [
-        repository_format_number(RepositoryFormat::CurrentV6),
-        repository_format_number(RepositoryFormat::V7),
-        repository_format_number(RepositoryFormat::V8),
-    ]
-}
-
 #[cfg(test)]
 thread_local! {
     static AFTER_EXPORT_LOCKS_ACQUIRED: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =

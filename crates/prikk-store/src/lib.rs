@@ -30,6 +30,7 @@ mod anchor_trust;
 // RFC 155 §9: `prikk archive export|verify|import`, the whole-repository artifact. Implemented
 // across four parts (export, verify, import A, import B); only export exists so far.
 mod archive;
+mod artifact_format;
 mod author;
 mod blob_access;
 mod block_state;

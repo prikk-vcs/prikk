@@ -642,6 +642,56 @@ pub enum BlockStateStatus {
         /// This block's own state-derivation parent.
         blocked_by: ObjectId,
     },
+    /// 0.57.0 U4: a block whose state this version could not re-derive **because a path in its history is outside
+    /// this version's path rule**, and that nothing reaches. It is [`Self::Failed`] with `OutsideVersionRule`, or
+    /// [`Self::NotEvaluated`] behind one, turned into a finding that is not a failure: an unreached object is a
+    /// warning (`UnreachedObject`), and this one is no different. Without it a repository that `received remove`
+    /// had cleaned up stayed red, with no command that clears the finding. Genuine damage (`Corrupt`) and a block
+    /// that **is** reached keep their failures.
+    UnreachedOutsideVersionRule {
+        /// What the check said, or why it was not attempted.
+        message: String,
+    },
+}
+
+impl BlockStateStatus {
+    /// Whether this outcome fails `verify`: a block whose state root failed, or could not be attempted behind one
+    /// that failed. [`Self::UnreachedOutsideVersionRule`] is a warning, never a failure.
+    #[must_use]
+    pub fn is_failure(&self) -> bool {
+        matches!(self, Self::Failed { .. } | Self::NotEvaluated { .. })
+    }
+}
+
+/// 0.57.0 U4: turn each outcome that is an outside-version-rule finding **on an unreached block** into
+/// [`BlockStateStatus::UnreachedOutsideVersionRule`]. `outcomes` is in the order `verify_blocks_topological` resolved
+/// them (a state-derivation parent before its children), so a child blocked by an excused parent is excused in the
+/// same pass. A block that is reached, and any other failure, is left exactly as it was.
+pub(crate) fn excuse_unreached_outside_version_rule(
+    outcomes: &mut [BlockStateOutcome],
+    unreached_blocks: &BTreeSet<ObjectId>,
+) {
+    let mut excused: BTreeSet<ObjectId> = BTreeSet::new();
+    for outcome in outcomes {
+        if !unreached_blocks.contains(&outcome.block_id) {
+            continue;
+        }
+        let message = match &outcome.status {
+            BlockStateStatus::Failed {
+                message,
+                kind: prikk_error::DecodeFailureKind::OutsideVersionRule,
+            } => message.clone(),
+            BlockStateStatus::NotEvaluated { blocked_by } if excused.contains(blocked_by) => {
+                format!(
+                    "state root not evaluated: its state-derivation parent {blocked_by} is outside what this \
+                     version of prikk accepts"
+                )
+            }
+            _ => continue,
+        };
+        excused.insert(outcome.block_id);
+        outcome.status = BlockStateStatus::UnreachedOutsideVersionRule { message };
+    }
 }
 
 /// One block's resolved outcome from `verify_blocks_topological`.
@@ -787,9 +837,13 @@ pub(crate) fn verify_blocks_topological(
         let blocking_parent =
             in_batch_parent.and_then(|parent_id| match resolved.get(&parent_id) {
                 Some(BlockStateStatus::Verified) | None => None,
-                Some(BlockStateStatus::Failed { .. } | BlockStateStatus::NotEvaluated { .. }) => {
-                    Some(parent_id)
-                }
+                // `UnreachedOutsideVersionRule` is only ever written after this pass, by
+                // `excuse_unreached_outside_version_rule`; were it ever seen here, its state is undefined too.
+                Some(
+                    BlockStateStatus::Failed { .. }
+                    | BlockStateStatus::NotEvaluated { .. }
+                    | BlockStateStatus::UnreachedOutsideVersionRule { .. },
+                ) => Some(parent_id),
             });
         let status = if let Some(blocked_by) = blocking_parent {
             BlockStateStatus::NotEvaluated { blocked_by }

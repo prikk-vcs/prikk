@@ -581,16 +581,25 @@ pub(crate) fn print_verify_report(
     let incomplete_blocks: Vec<_> = report
         .block_state_outcomes
         .iter()
-        .filter(|outcome| !matches!(outcome.status, BlockStateStatus::Verified))
+        .filter(|outcome| outcome.status.is_failure())
         .collect();
     println!(
         "block state items: {} checked, {} incomplete",
         report.block_state_outcomes.len(),
         incomplete_blocks.len()
     );
+    // 0.57.0 U4: a block nothing reaches whose state this version cannot read is a warning, not an incomplete item.
+    for outcome in &report.block_state_outcomes {
+        if let BlockStateStatus::UnreachedOutsideVersionRule { message } = &outcome.status {
+            println!(
+                "warning: block {}: state root not verified: {message}; nothing reaches this block, so this is not a failure",
+                outcome.block_id
+            );
+        }
+    }
     for outcome in incomplete_blocks {
         match &outcome.status {
-            BlockStateStatus::Verified => {}
+            BlockStateStatus::Verified | BlockStateStatus::UnreachedOutsideVersionRule { .. } => {}
             BlockStateStatus::Failed { message, .. } => {
                 println!("block {}: state-root failed: {message}", outcome.block_id);
             }

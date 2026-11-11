@@ -1335,7 +1335,7 @@ impl RepositoryVerification {
             || self
                 .block_state_outcomes
                 .iter()
-                .any(|outcome| !matches!(outcome.status, BlockStateStatus::Verified))
+                .any(|outcome| outcome.status.is_failure())
             || self
                 .pointer_outcomes
                 .iter()

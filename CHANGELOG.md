@@ -15,6 +15,26 @@ prikk older than this one cannot open a format-8 repository. An ASCII-only repos
 created as. Bundles and archives exported from a format-8 repository declare format 8. In this change a format-8 repository still refuses a
 non-ASCII path (admitting one is the next part of the same item). See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
 
+### Changed — a bundle or archive from a format-8 repository is refused by a format-6 or format-7 one, and a bundle's declared format is checked
+
+A bundle or archive declares its **sending repository's** format (a format-8 repository's artifacts declare 8, even with only ASCII paths).
+`bundle import`, `bundle preview` and `archive import` now refuse one that declares 8 when the receiving repository is format 6 or 7, before any
+object, journal or pointer is written, with a precondition naming both formats, `prikk format upgrade` and that a prikk older than this one cannot open a
+format-8 repository; an upgrade followed by the same import succeeds. An artifact from a format-6 or format-7 repository is received by every format.
+The bundle's declared format used to be informational, so a bundle could declare anything: `bundle verify`, `bundle preview` and `bundle import` now
+refuse a number this build does not know, as `archive verify` always did. `--format json` prints no `refusal-v1` document for either refusal (stderr and exit `1`).
+See [Release Compatibility](docs/src/reference/release-compatibility.md#bundle-format-transitions) and [Troubleshooting](docs/src/guide/troubleshooting.md).
+
+### Fixed — a block this version cannot read, that nothing reaches, no longer keeps `verify` red
+
+In a repository that 0.55.0 let admit a non-ASCII path from an archive, `prikk received remove` made the block unreached but `verify` still failed on its
+state root (`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-OUTSIDE-VERSION-RULE`, exit `1`), and no command cleared it (0.56.0 Security note (c)). Such a block is now a warning like every
+other unreached object: `verify` prints `warning: block <id>: state root not verified: …` and exits `0`, `doctor` gives the new
+`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE` warning, and the block stays in `unreached_objects`. While something reaches the block it
+still fails, and an unreached block whose state root does not verify is still damage. A scripted consumer that counted a failed block-state item for
+this case will see it as a warning now. The bytes stay; no command removes them yet. `archive export` of such a repository still carries the block, and
+`archive verify` and `archive import` still refuse that export while the path is outside the rule.
+
 ### Added — every release archive carries `THIRD-PARTY-NOTICES`, and a gate keeps it true
 
 BSD-3-Clause, MIT, Zlib and Unicode-3.0 each ask for their notice in a binary distribution, and the archives shipped `prikk` and

@@ -1043,6 +1043,20 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             for outcome in &verification.block_state_outcomes {
                 let (code, message, recommendation) = match &outcome.status {
                     BlockStateStatus::Verified => continue,
+                    // 0.57.0 U4: a block nothing reaches whose state this version cannot read. A warning like every
+                    // other unreached object, so a repository `received remove` cleaned up is not red over it.
+                    BlockStateStatus::UnreachedOutsideVersionRule { message } => {
+                        issues.push(DoctorIssue::warning(
+                            "PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE",
+                            format!(
+                                "Block {} state root not verified: {message}; nothing reaches this block",
+                                outcome.block_id
+                            ),
+                            "no repair is needed: nothing reaches this block, so it is not damage and not a \
+                             failure; the bytes stay, and no command removes them yet",
+                        ));
+                        continue;
+                    }
                     // 0.56.0 step 3d (A6): same split as the object loop above -- a path this
                     // version's own path rule refuses is not damage.
                     BlockStateStatus::Failed {

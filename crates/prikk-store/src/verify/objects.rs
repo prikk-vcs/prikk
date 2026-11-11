@@ -353,8 +353,20 @@ pub(super) fn verify_objects(
     }
     summary.temp_paths = scan_loose_file_temp_debris(layout)?;
 
-    let topological =
+    let mut topological =
         verify_blocks_topological(object_store, &pending_v3_blocks, &mut lineage_memo)?;
+    // 0.57.0 U4: a block this version's path rule cannot read, that nothing reaches, is a warning like every other
+    // unreached object (it is already in `unreached_objects`), not a failure with no way out.
+    let unreached_blocks: std::collections::BTreeSet<ObjectId> = summary
+        .unreached_objects
+        .iter()
+        .filter(|unreached| unreached.object_type == ObjectType::Block)
+        .map(|unreached| unreached.object_id)
+        .collect();
+    crate::block_state::excuse_unreached_outside_version_rule(
+        &mut topological.outcomes,
+        &unreached_blocks,
+    );
     summary.topological_outcomes = topological.outcomes;
     Ok(summary)
 }

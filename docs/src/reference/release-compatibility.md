@@ -147,7 +147,12 @@ silently, so the bump is fail-closed on the write side: an older client meeting 
 refuses it outright with its own hardcoded magic check. The manifest names the on-disk repository
 format and the exporting tool's own version, and states plainly that a bundle is one ref's closure
 only — other refs in the source repository, if any, are not included, and the bundle makes no claim
-about them. Both `prikk bundle export` and `prikk bundle verify` print it.
+about them. Both `prikk bundle export` and `prikk bundle verify` print it. **Since 0.57.0 a receiver checks the declared format** (it was
+informational before): `bundle verify`, `bundle preview` and `bundle import` refuse a number this build does not know, and `bundle
+preview`, `bundle import` and `archive import` refuse an artifact that declares format 8 when the receiving repository is format 6 or 7,
+naming `prikk format upgrade` and writing nothing. An artifact declares its sending repository's format, so every artifact from a
+format-8 repository declares 8 and is refused by 0.55.0 and 0.56.0 (an archive at once, before any write; a bundle, whose declaration
+those versions ignore, only if it carries a non-ASCII path).
 
 **`PBNDL001` and `PBNDL002` bundles are still accepted on import** (`PBNDL001` acceptance corrected
 shortly after the `PBNDL002` bump shipped — `bundle-v1-import-regression-v1.md`; `PBNDL002`

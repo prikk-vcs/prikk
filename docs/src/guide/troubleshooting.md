@@ -931,6 +931,28 @@ prikk format upgrade
 and repeat the import or accept. `format upgrade` verifies the repository first and changes only the
 `FORMAT` marker; running it on a format-8 repository changes nothing.
 
+## `error: precondition not met: this bundle declares repository format 8, and this repository is format 7; …`
+
+A bundle or an archive (the message says which) was exported from a **format-8** repository, which may hold non-ASCII paths, and
+this repository is format 6 or 7, which cannot. Nothing was written. A new repository is created at format 8, so an older one
+that receives work from a newer one meets this. The message names the way forward, and it is the same one `commit` gives for a
+non-ASCII path:
+
+```sh
+prikk format upgrade
+```
+
+then repeat the import. `format upgrade` verifies the repository first and changes only the `FORMAT` marker, and there is no
+downgrade: a prikk older than this one (0.56.0 and earlier) cannot open the repository afterwards. Every artifact from a format-8
+repository declares 8, even one with only ASCII paths, because the declaration is the repository's. `bundle verify` and `archive
+verify` need no repository and still pass; `bundle preview` gives the same refusal as `bundle import`.
+
+## `error: malformed persisted data: bundle declares repository format 9, which this build does not know how to read …`
+
+The bundle's manifest names a repository format this prikk does not know: it was written by a newer prikk, or the file was damaged
+(`bundle verify` reads nothing else, so it says the same). `archive verify` always refused an unknown number; the bundle's was only
+informational before 0.57.0. Use a prikk that knows the format, or export the bundle again.
+
 ## `error: precondition not met: <type> <id> would carry at least 5 counted signatures, above the limit of 4 per object …`
 
 An import or accept would put more than four counted signatures on one object. The operation is refused

@@ -424,6 +424,16 @@ original five values unchanged (`already-at-tip` and `rollback` both still read
 `"ref_state_chain"`: `"extends"`, `"older"`, or `"unrelated"` — how the delivery's own publication
 history relates to the pointer it would replace, which can disagree with the class above (a
 `fast-forward` by content can still be `"older"` in its own publication history).
+- **A bundle or archive declares its sending repository's format, and the receiver checks it (0.57.0).** `bundle import`,
+  `bundle preview` and `archive import` refuse an artifact from a **format-8** repository when the receiving repository is format 6 or
+  7, before any object, journal or pointer is written: the message names both formats, `prikk format upgrade`, and that a prikk
+  older than this one cannot open a format-8 repository. It is a precondition (exit `1`), not damage, and an upgrade followed by the
+  same import succeeds. An artifact from a format-6 or format-7 repository is received by every format. A declared format this build
+  does not know is refused by `bundle verify`, `bundle preview` and `bundle import` as `archive verify` always refused it (the
+  bundle's declared format was informational before 0.57.0). `verify` has no receiving repository, so it checks only the number.
+  Every artifact from a format-8 repository declares 8, even one with only ASCII paths (the declaration is the repository's, which
+  costs nothing to read; the archive writer does not decode history). `--format json` prints no `refusal-v1` document for this
+  refusal: stderr and exit `1` only.
 - **`bundle import` refuses a `rollback`, a `diverged` delivery, or one that `does-not-connect`,
   whenever a received pointer already exists for that name** — naming the class, exit `1` — unless
   `--allow-non-fast-forward` is given. A delivery with no existing pointer to replace, or one that
@@ -898,7 +908,12 @@ object counts when no tip, no WAL record and no pending patch (with the blobs it
 reaches it. A `Block`/`RefState`'s own publication trust is skipped while it stays
 unreached (reclassified, and checked again, the moment something reaches it); a `Patch`/`Blob` has
 no publication-trust concept to skip in the first place — for them this is purely a presence
-record. The bytes stay either way; no command removes them yet. When `verify` also reports a
+record. The bytes stay either way; no command removes them yet. **A Block this version cannot read** (a path in its history is
+outside what this version of `prikk` accepts, as 0.55.0 let an archive land) **and that nothing reaches is a warning too**
+(0.57.0): `verify` prints `warning: block <id>: state root not verified: …` and exits `0`, and `doctor` gives
+`PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE`, so `received remove` of the ref that reached it is the way out.
+While something reaches such a block it still fails `verify`; genuine damage (a state root that does not verify) in an unreached
+block still fails. When `verify` also reports a
 damaged object, the walk cannot read past it: objects reached only through the damaged one are
 counted as unreached, and their publication trust is not checked, so the count can include objects
 that are in fact reached. `verify` still fails on the damage itself (`verify/reachability.rs`,

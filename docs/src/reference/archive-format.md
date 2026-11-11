@@ -150,8 +150,11 @@ a consistent archive into a failure. It writes nothing, on any exit path — no 
 directory.
 
 The manifest's own declared `repository_format` number (checked above, against what this build
-knows how to read) is purely informative past that check: `archive import` always writes the
-**receiving** repository's own real, current format, never the carried number. A format-6 archive
+knows how to read) is the **sending** repository's format. Past that check it matters in one way only (0.57.0):
+`archive import` refuses an archive that declares format 8 or later when the receiving repository is format 6 or 7,
+before the journal or any write, naming `prikk format upgrade`, because a format-8 repository may hold non-ASCII paths that
+a format-6 or format-7 one cannot. Otherwise `archive import` always writes the **receiving** repository's own real, current
+format, never the carried number. A format-6 archive
 built from format-7 bytes, or any other mismatch between the carried number and the carried
 content's own real shape, changes nothing about what import actually writes.
 
