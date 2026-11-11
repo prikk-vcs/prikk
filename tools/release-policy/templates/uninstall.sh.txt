@@ -70,6 +70,17 @@ binary_path="$install_dir/prikk"
 path_marker_begin="# >>> prikk installer >>>"
 path_marker_end="# <<< prikk installer <<<"
 
+# A copy left by an earlier uninstall that stopped (see the startup-file step below) is never overwritten:
+# refuse before anything is removed.
+for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  backup_file="$rc_file.prikk-uninstall-backup"
+  if [ -e "$backup_file" ] || [ -L "$backup_file" ]; then
+    echo "prikk-uninstall: $backup_file already exists, left by an earlier uninstall that stopped;" >&2
+    echo "prikk-uninstall: check it against $rc_file, remove it, and run this again. Nothing was changed." >&2
+    exit 1
+  fi
+done
+
 removed_binary=0
 if [ -f "$binary_path" ]; then
   rm -f "$binary_path"
@@ -110,12 +121,27 @@ if [ "$(basename "$install_dir")" = "bin" ] && [ -d "$(dirname "$install_dir")/s
 fi
 remove_licences_from "$install_dir/share/licenses/prikk" inside
 
+# Rewriting a startup file in place keeps its mode and any link to it, but it truncates the file before it
+# writes, so a copy of the original is kept beside it until the rewrite has finished. If the script stops
+# while the copy exists (an error, a full disk, Ctrl-C), the copy stays and the message names it.
 removed_path_entry=0
+work_file=""
+pending_backup=""
+pending_rc=""
+cleanup_after_stop() {
+  [ -z "$work_file" ] || rm -f "$work_file"
+  if [ -n "$pending_backup" ]; then
+    echo "prikk-uninstall: stopped while rewriting $pending_rc; your original is kept at $pending_backup" >&2
+    echo "prikk-uninstall: put it back with: cp -p \"$pending_backup\" \"$pending_rc\"" >&2
+  fi
+}
+trap cleanup_after_stop EXIT
+trap 'exit 1' INT TERM HUP
 for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
   if [ -f "$rc_file" ] && grep -qF "$path_marker_begin" "$rc_file" 2>/dev/null; then
+    backup_file="$rc_file.prikk-uninstall-backup"
     work_file="$(mktemp)"
-    # The block goes with the one blank line the installer wrote above it. The file is rewritten in
-    # place (not replaced), so its mode, owner and any symlink to it are kept.
+    # The block goes with the one blank line the installer wrote above it.
     awk -v begin="$path_marker_begin" -v end="$path_marker_end" '
       $0 == begin { skipping = 1; held = 0; next }
       $0 == end { skipping = 0; next }
@@ -124,8 +150,17 @@ for rc_file in "$HOME/.bashrc" "$HOME/.zshrc"; do
       { if (held) { print ""; held = 0 } print }
       END { if (held) print "" }
     ' "$rc_file" > "$work_file"
+    if ! cp -p "$rc_file" "$backup_file"; then
+      rm -f "$backup_file"
+      echo "prikk-uninstall: could not make a copy of $rc_file first, so it was not changed" >&2
+      exit 1
+    fi
+    pending_backup="$backup_file"
+    pending_rc="$rc_file"
     cat "$work_file" > "$rc_file"
-    rm -f "$work_file"
+    pending_backup=""
+    rm -f "$backup_file" "$work_file"
+    work_file=""
     removed_path_entry=1
     echo "prikk-uninstall: removed the PATH entry from $rc_file"
   fi

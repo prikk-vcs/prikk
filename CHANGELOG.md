@@ -30,7 +30,7 @@ Until now `install.sh` created `~/.bashrc` (or `~/.zshrc`) to hold its `PATH` bl
 removed the block and left the new, empty file; on macOS, where `sh` is bash, that was an extra `.bashrc` after an uninstall. The
 installer now adds its block only to a startup file that already exists; when the file is missing, or the shell is not bash or zsh, it prints
 the `export PATH=...` line instead. `uninstall.sh` removes the block together with the blank line the installer wrote above it, and rewrites
-the file in place, so its mode and any symlink to it are kept (it replaced the file before, which made it mode 600 and ended a link). See
+the file in place, so its mode and any symlink to it are kept (it replaced the file before, which made it mode 600 and ended a link); since an in-place write can be cut short, it keeps a copy of the file beside it (`<file>.prikk-uninstall-backup`) until the rewrite has finished, and if it stops first the copy stays and the message names it and how to put it back. See
 [Install](docs/src/guide/install.md#uninstalling).
 
 ### Changed — the top-level help is a grouped summary, and `prikk help [command]` works

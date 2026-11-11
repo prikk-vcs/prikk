@@ -59,7 +59,7 @@ curl -fsSL https://github.com/prikk-vcs/prikk/releases/latest/download/uninstall
 Removes the binary from its install directory and the marked `PATH` block (with the one blank line the installer wrote above it) from
 whichever shell startup file has it, and nothing else — an unrelated file in the same directory, or unrelated lines
 in the same startup file, are left untouched. The startup file is rewritten in place, so its mode and any symlink to it (a dotfiles
-manager's layout) are kept; one corner: a file that did not end in a newline ends in one afterwards. If you installed with a custom directory, name the same
+manager's layout) are kept; one corner: a file that did not end in a newline ends in one afterwards. Because an in-place rewrite can be cut short, the uninstaller keeps a copy beside the file (`<file>.prikk-uninstall-backup`) until the rewrite has finished and removes it then; if the uninstall stops in between, the copy stays, the message names it and the `cp -p` command that puts it back, and a later uninstall refuses to run over it until you remove it. If you installed with a custom directory, name the same
 one to the uninstaller: `curl -fsSL <url> | sh -s -- --prefix /custom/path`, or
 `PRIKK_INSTALL_DIR=/custom/path` in the environment. Giving both is accepted only when they agree. The
 uninstaller refuses, and removes nothing, when `--prefix` has no value or an empty one, when `--prefix`

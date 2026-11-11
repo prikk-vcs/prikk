@@ -723,6 +723,125 @@ mod licence_files_execution {
         }
     }
 
+    /// The uninstall of a startup file whose rewrite is made to fail by replacing the one `cat` line with `replacement`: the file is
+    /// left truncated (as a real interruption would), the copy beside it is byte-identical to the original and the message names it.
+    fn uninstall_with_a_failing_rewrite(replacement: &str) -> (tempfile::TempDir, Output, String) {
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            unreachable!("callers return first");
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let (udir, uninstall) = generated("uninstall.sh");
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+        fs::write(home.path().join(".zshrc"), "alias a=b\nexport EDITOR=vi\n").unwrap();
+        let output = run_install_in(
+            &install,
+            release.path(),
+            home.path(),
+            None,
+            "/usr/bin/zsh",
+            None,
+        );
+        assert!(output.status.success(), "{}", stdout(&output));
+        let original = fs::read_to_string(home.path().join(".zshrc")).unwrap();
+        assert!(original.contains("# >>> prikk installer >>>"));
+        let anchor = "    cat \"$work_file\" > \"$rc_file\"\n";
+        let text = fs::read_to_string(&uninstall).unwrap();
+        assert!(text.contains(anchor), "the template changed shape");
+        let perturbed = udir.path().join("uninstall-perturbed.sh");
+        fs::write(&perturbed, text.replace(anchor, replacement)).unwrap();
+        let output = run_uninstall(&perturbed, home.path(), None);
+        (home, output, original)
+    }
+
+    fn assert_the_copy_is_kept(home: &Path, output: &Output, original: &str, what: &str) {
+        let startup = home.join(".zshrc");
+        let backup = home.join(".zshrc.prikk-uninstall-backup");
+        assert!(!output.status.success(), "{what}: the uninstall stops");
+        assert_eq!(
+            fs::read_to_string(&startup).unwrap(),
+            "alias",
+            "{what}: the rewrite was cut short"
+        );
+        assert_eq!(
+            fs::read_to_string(&backup).unwrap(),
+            original,
+            "{what}: the copy is byte-identical to the original"
+        );
+        let said = stdout(output);
+        assert!(
+            said.contains(&format!("your original is kept at {}", backup.display()))
+                && said.contains(&format!(
+                    "cp -p \"{}\" \"{}\"",
+                    backup.display(),
+                    startup.display()
+                )),
+            "{what}: the message names the copy and how to put it back: {said}"
+        );
+        assert!(
+            !said.contains("removed the PATH entry"),
+            "{what}: it does not claim success: {said}"
+        );
+    }
+
+    /// A failed write (a full disk) while rewriting leaves the user's file cut short; the copy is the way back, and the message says so.
+    #[test]
+    fn a_failed_rewrite_keeps_a_copy_and_names_it() {
+        if host_target().filter(|_| curl_exists()).is_none() {
+            return;
+        }
+        let (home, output, original) = uninstall_with_a_failing_rewrite(
+            "    head -c 5 \"$work_file\" > \"$rc_file\"\n    false\n",
+        );
+        assert_the_copy_is_kept(home.path(), &output, &original, "write error");
+    }
+
+    /// An interruption (here SIGTERM; Ctrl-C and hang-up take the same path) in the middle of the rewrite does the same.
+    #[test]
+    fn an_interrupted_rewrite_keeps_a_copy_and_names_it() {
+        if host_target().filter(|_| curl_exists()).is_none() {
+            return;
+        }
+        let (home, output, original) = uninstall_with_a_failing_rewrite(
+            "    head -c 5 \"$work_file\" > \"$rc_file\"\n    kill -TERM $$\n    sleep 5\n",
+        );
+        assert_the_copy_is_kept(home.path(), &output, &original, "interrupt");
+    }
+
+    /// A copy left by an earlier stopped uninstall is never overwritten: the script refuses, naming it, and changes nothing.
+    #[test]
+    fn an_existing_copy_is_never_overwritten() {
+        let Some(target) = host_target().filter(|_| curl_exists()) else {
+            return;
+        };
+        let release = fixture_release(target, &FILES);
+        let (_i, install) = generated("install.sh");
+        let (_u, uninstall) = generated("uninstall.sh");
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+        fs::write(home.path().join(".bashrc"), "export A=1\n").unwrap();
+        let output = run_install_in(
+            &install,
+            release.path(),
+            home.path(),
+            None,
+            "/bin/bash",
+            None,
+        );
+        assert!(output.status.success(), "{}", stdout(&output));
+        fs::write(
+            home.path().join(".bashrc.prikk-uninstall-backup"),
+            "older original\n",
+        )
+        .unwrap();
+        let before = tree(home.path());
+        let output = run_uninstall(&uninstall, home.path(), None);
+        assert!(!output.status.success());
+        assert!(stdout(&output).contains(".bashrc.prikk-uninstall-backup already exists"));
+        assert_eq!(tree(home.path()), before, "nothing was changed");
+    }
+
     /// The startup file keeps its mode, and stays a symlink to its target (a dotfiles manager's layout), through install and uninstall.
     #[test]
     fn a_startup_file_keeps_its_mode_and_stays_a_symlink() {
