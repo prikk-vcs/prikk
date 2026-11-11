@@ -15,3 +15,5 @@ mod rfc136_verified_record;
 mod rfc156_format_7;
 #[path = "support/mod.rs"]
 mod support;
+#[path = "format_and_compat/u1_format_8.rs"]
+mod u1_format_8;

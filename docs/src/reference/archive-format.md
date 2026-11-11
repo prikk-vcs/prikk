@@ -112,7 +112,7 @@ Reads the end trailer and the manifest first (seek, never scan), then checks:
 - **the manifest's own checksum**, before any of its fields (including `repository_format`) are
   read as anything but raw bytes — a mismatch refuses the whole archive by name;
 - **the manifest's own `repository_format`** is one this build actually knows how to read (today:
-  6 or 7) — an archive legitimately written by some other build, naming a format number this one
+  6, 7 or 8) — an archive legitimately written by some other build, naming a format number this one
   predates, is refused by name rather than silently misread;
 - **structure** — every section's own checksum matches the manifest's recorded one, the fixed set
   of thirteen section kinds is present exactly once each (an unknown, duplicated, or missing kind

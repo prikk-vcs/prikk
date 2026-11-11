@@ -49,7 +49,9 @@ use crate::commit_boundary::worktree_patch::{
 };
 use crate::commit_index::{self, CommitIndex, CommitIndexEntry};
 use crate::foundation::fsutil::{EntryKind, RootFileStat, read_file_if_exists};
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout};
+use crate::foundation::layout::{
+    DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
+};
 use crate::lifecycle_cache::replay::TextCache;
 use crate::lock::{ActiveLock, ContainerLockGuard, acquire_container_locks};
 use crate::node::node_id_gen::{NodeIdEntropySource, NodeIdGenerator};
@@ -191,6 +193,7 @@ pub(in crate::commit_boundary) fn authoring_refusal(
     path: &str,
     baseline_kind: Option<NodeKind>,
     shape: WorktreeEntryShape,
+    format: RepositoryFormat,
 ) -> Option<AuthorError> {
     match shape {
         WorktreeEntryShape::Symlink => Some(AuthorError::UnsupportedSymlinkAuthoring(format!(
@@ -203,9 +206,27 @@ pub(in crate::commit_boundary) fn authoring_refusal(
             Some(NodeKind::Symlink) => Some(AuthorError::UnsupportedSymlinkAuthoring(format!(
                 "{path}: symlink node modification is out of scope"
             ))),
-            _ => None,
+            _ => non_ascii_path_needs_upgrade(path, format)
+                .map(|reason| AuthorError::Store(PrikkError::Precondition(reason))),
         },
     }
+}
+
+/// **The format gate on authoring a non-ASCII path** (0.57.0, format 8): `Some(reason)` when `path` is
+/// non-ASCII and `format` does not admit such paths. The caller can fix it and nothing else can --
+/// `prikk format upgrade` -- so it is a precondition, not damage. The reason names the format, the
+/// command, and what the upgrade costs (an older prikk cannot open a format-8 repository): **the only
+/// place prikk suggests the upgrade**, because upgrading an ASCII-only repository would cut older
+/// binaries off for nothing.
+pub(crate) fn non_ascii_path_needs_upgrade(path: &str, format: RepositoryFormat) -> Option<String> {
+    (!path.is_ascii() && !format.admits_non_ascii_paths()).then(|| {
+        format!(
+            "{path}: non-ASCII repository paths need repository format 8, and this repository is \
+             format {}; run `prikk format upgrade` to move it to format 8 (a prikk older than this \
+             one cannot open a format-8 repository)",
+            format.number()
+        )
+    })
 }
 
 /// `authoring_refusal` rendered exactly as `commit` will render it, for readers outside
@@ -224,8 +245,9 @@ pub(crate) fn authoring_refusal_reason(
     path: &str,
     baseline_kind: Option<NodeKind>,
     shape: WorktreeEntryShape,
+    format: RepositoryFormat,
 ) -> Option<String> {
-    authoring_refusal(path, baseline_kind, shape)
+    authoring_refusal(path, baseline_kind, shape, format)
         .map(|refusal| PrikkError::from(refusal).to_string())
 }
 

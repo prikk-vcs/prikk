@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed — new repositories are format 8, and `prikk format upgrade` moves a format-6 or format-7 repository to it
+
+Format 8 is format 7 plus one rule, **a repository path may be non-ASCII**, and exists so older binaries meet such a repository with one clean
+refusal instead of a misreading: 0.55.0 read a non-ASCII path as damage (`verify` failed an object, `doctor` advised preserving a healthy
+repository) and let an archive carrying one land silently; 0.55.0 and 0.56.0 refuse a format-8 repository at open on every command with
+`unsupported format version: 8`, and refuse a format-8 archive before writing anything. Nothing stored differs from format 7: `prikk format upgrade`
+(explicit, verified like `prikk verify`, one byte of the `FORMAT` marker, no downgrade) moves a format-6 or format-7 repository to 8 in one step, and
+is idempotent on 8. **For a non-ASCII path, prikk suggests the upgrade in one place only:** `commit` (and `worktree-status`, which reports the same decision) refuses a non-ASCII path
+in a format-6 or format-7 repository, naming the path, the format needed (8), the format the repository is at, `prikk format upgrade`, and that a
+prikk older than this one cannot open a format-8 repository. An ASCII-only repository is never prompted; nothing about it changes except what a new one is
+created as. Bundles and archives exported from a format-8 repository declare format 8. In this change a format-8 repository still refuses a
+non-ASCII path (admitting one is the next part of the same item). See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
+
 ### Added — every release archive carries `THIRD-PARTY-NOTICES`, and a gate keeps it true
 
 BSD-3-Clause, MIT, Zlib and Unicode-3.0 each ask for their notice in a binary distribution, and the archives shipped `prikk` and

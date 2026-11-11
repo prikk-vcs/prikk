@@ -922,14 +922,14 @@ history, merge it into a local branch with `prikk merge --from remotes/<ref>`.
 Someone sent you an object you already hold, carrying signatures yours does not — a second signer of the
 same patch or block. A format-6 repository holds one record per object, so it cannot keep both; format
 7 merges the signatures into one object. Check that every prikk that opens this repository is 0.45 or
-newer (older binaries refuse a format-7 repository at open), then:
+newer (older binaries refuse a format-7 or format-8 repository at open; the upgrade moves the repository to format 8, which 0.56.0 and earlier refuse), then:
 
 ```sh
 prikk format upgrade
 ```
 
 and repeat the import or accept. `format upgrade` verifies the repository first and changes only the
-`FORMAT` marker; running it on a format-7 repository changes nothing.
+`FORMAT` marker; running it on a format-8 repository changes nothing.
 
 ## `error: precondition not met: <type> <id> would carry at least 5 counted signatures, above the limit of 4 per object …`
 

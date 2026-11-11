@@ -448,7 +448,7 @@ fn run_unlock(args: Vec<String>) -> std::result::Result<(), CliError> {
     Ok(())
 }
 
-/// `prikk format upgrade [path]` (RFC 156 §5b): move a format-6 repository to format 7 in place.
+/// `prikk format upgrade [path]` (RFC 156 §5b; 0.57.0): move a format-6 or format-7 repository to format 8 in place.
 fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
     let mut args = args.into_iter();
     if args.next().as_deref() != Some("upgrade") {
@@ -485,7 +485,7 @@ fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
         prikk_store::FormatUpgradeOutcome::Upgraded { from, to } => {
             println!("repository format: upgraded from {from} to {to}");
             println!(
-                "note: nothing stored was rewritten; prikk 0.44.0 and earlier refuse a format-{to} \
+                "note: nothing stored was rewritten; prikk 0.56.0 and earlier refuse a format-{to} \
                  repository at open, and there is no downgrade"
             );
         }

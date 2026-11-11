@@ -103,9 +103,13 @@ retired format specifically.
 
 ## Repository Format Transitions
 
-New repositories use format **7** and schema-2 Blocks with replay-derived clean-state Merkle roots.
+New repositories use format **8** and schema-2 Blocks with replay-derived clean-state Merkle roots.
 Format 7 is format 6 plus one rule: an object id may hold several container records, and the last one
-is authoritative — which is how one object carries several signers.
+is authoritative — which is how one object carries several signers. Format 8 is format 7 plus one rule:
+**a repository path may be non-ASCII** (0.57.0). Nothing stored differs between 7 and 8, so the format's job
+is to cut older binaries off cleanly: a prikk that does not know format 8 refuses the repository at open,
+uniformly, with `unsupported format version: 8`, instead of reading a non-ASCII path as damage (0.55.0) or
+silently admitting it from an archive. An ASCII-only repository never needs to move.
 
 **Formats 1 through 5 are rejected at open.** Each is refused with an error naming the format found. The
 earlier bounded legacy read-only mode for format 1 no longer exists — it was retired when format 1 was,
@@ -113,17 +117,20 @@ and there is no read-only fallback for any superseded format.
 
 **Format 6 stays openable, and upgrades in place.** A format-6 repository opens and works as before,
 holding one record per id: a second signer's copy of a stored object is refused, naming the upgrade.
-`prikk format upgrade` moves it to format 7 in place: it takes the writer lock, refuses — changing
+`prikk format upgrade` moves it to the current format, 8, in place, in one step from 6 or from 7: it takes the writer lock, refuses — changing
 nothing — unless `prikk verify` would pass, and then overwrites only the one byte of the `FORMAT` marker, in place and flushed (RFC 168 §3.3; no rename).
-Nothing stored is rewritten, because every format-6 repository is already a valid format-7 one. The
-upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.44.0 and earlier refuse a
-format-7 repository at open**, so upgrade only once every prikk that opens the repository is newer.
+Nothing stored is rewritten, because every format-6 repository is already a valid format-7 one, and every format-7 repository
+a valid format-8 one. The upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.56.0 and earlier refuse a
+format-8 repository at open** (0.44.0 and earlier already refuse format 7), so upgrade only once every prikk that opens the
+repository is newer. **For non-ASCII paths, prikk suggests the upgrade in one place only:** the refusal to author a non-ASCII path in a format-6
+or format-7 repository, which names the path, the format needed and the command. Upgrading an ASCII-only repository would cut
+older binaries off for nothing, so nothing prompts it.
 
 The format has moved repeatedly and deliberately: 1→2 (state Merkle roots), 2→3 (object containers),
 3→4 (ref containers), 4→5 (trust containers, received-ref index, active ref metadata), 5→6 (compaction
-slots and generation logs), 6→7 (several records per object id). Prikk is early implementation software
+slots and generation logs), 6→7 (several records per object id), 7→8 (non-ASCII repository paths). Prikk is early implementation software
 and has not committed to format stability. Bumps up to 6 each made every older repository unopenable,
-with no in-place migration; 6→7 is the first a repository crosses in place.
+with no in-place migration; 6→7 and 7→8 are crossed in place.
 
 To carry work across one of the earlier transitions, use `prikk bundle export` on a version that still
 opens the old repository and `prikk bundle import` into a new one. **Never edit `FORMAT` by hand** —

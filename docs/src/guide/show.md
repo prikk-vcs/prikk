@@ -103,7 +103,7 @@ as the leftover of a crashed or interrupted import). A pending patch's node-addr
 claims that name it, back to a block this repository holds; when they cannot, `"unresolved_node_id"`
 carries a `"reason"`. See [Command Surface](../reference/commands.md).
 
-**A rename names every signer.** A patch may carry several AUTHOR signatures (format 7: another
+**A rename names every signer.** A patch may carry several AUTHOR signatures (format 7 and later: another
 signer's copy of the same patch merges in). A rename reports every one: prose lists them all on its
 `asserted by` line, and JSON carries `author_key_ids`, every signer in canonical order (key id bytes).
 `author_key_id` keeps its meaning — the first signer in that order — so a patch with one signer reports

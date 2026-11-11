@@ -602,7 +602,7 @@ fn export_archive_round_trips_a_small_history() {
 
     let mut buffer = Vec::new();
     let report = export_archive(&layout, &mut buffer).expect("export");
-    assert_eq!(report.repository_format, 7);
+    assert_eq!(report.repository_format, 8);
     assert_eq!(
         report
             .object_counts

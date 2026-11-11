@@ -3387,6 +3387,8 @@ const fn repository_format_number(format: RepositoryFormat) -> u32 {
         // RFC 156 §5b. Informational in the manifest — no receiver refuses on it — so a format-7
         // sender's bundle still imports into an older receiver.
         RepositoryFormat::V7 => 7,
+        // 0.57.0 (Unicode repository paths). Informational here until a receiver checks it (U4).
+        RepositoryFormat::V8 => 8,
     }
 }
 

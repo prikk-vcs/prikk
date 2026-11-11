@@ -540,7 +540,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         summary: "Upgrade the repository format in place",
         run: crate::run_format,
         help_lines: &[
-            "  prikk format upgrade [path]               Verify, then move a format-6 repository to format 7 in place (explicit; no downgrade)",
+            "  prikk format upgrade [path]               Verify, then move a format-6 or format-7 repository to format 8 in place (explicit; no downgrade)",
         ],
     },
 ];

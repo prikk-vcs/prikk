@@ -250,13 +250,13 @@ this check skips is that of `Block` and `RefState` alone.
 Patch's AUTHOR signatures against recorded key material (DC-53), and fails when one does not verify or
 when a `key_id`'s recorded material contradicts itself** — but that is continuity, not identity.
 **Every signature of a role is checked, not only the first:** an object may carry several signers
-(format 7), and a second AUTHOR signature that does not verify fails `verify` just as a first would; so
+(format 7 and later), and a second AUTHOR signature that does not verify fails `verify` just as a first would; so
 does a MAINTAINER signature by an adopted key on a publication object. It does not enforce historical PKI
 semantics, AUTHOR revocation, rotation, expiration, threshold policy beyond `required = 1`, remote policy,
 hosted identity, or complete crash-proof durability.
 
 **Several signers on one object.** Signatures are not part of an object's id, so two signers of the same
-content produce the same id — in format 7 their copies merge into one stored object carrying both
+content produce the same id — in format 7 and later their copies merge into one stored object carrying both
 signature sets. Nothing joins a stored object unchecked: `bundle import` and `sync accept` verify every
 incoming signature first and refuse the whole import or exchange, writing nothing, if one fails; a
 MAINTAINER signature is kept only when this repository has adopted its key, and is otherwise dropped and

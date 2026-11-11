@@ -232,9 +232,9 @@ still missing. This is tolerated only because an interrupted `init` has nothing 
 history exists yet.
 
 Every other command opens an existing repository through `RepositoryLayout::open`, which reads `FORMAT`
-and refuses outright if it names anything but a supported format: 7, which new repositories get, or 6,
+and refuses outright if it names anything but a supported format: 8, which new repositories get, 7, or 6,
 which a repository created by 0.44.0 or earlier has (RFC 114 rules formats 1-5 out of scope). The one
-format-migration verb is `prikk format upgrade`, which moves format 6 to 7 in place after verification;
+format-migration verb is `prikk format upgrade`, which moves format 6 or 7 to 8 in place after verification;
 any other marker is refused by every command, including `init` itself against an already-initialized
 directory (its own, terser refusal).
 

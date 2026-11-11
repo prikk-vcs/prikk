@@ -15,7 +15,9 @@ pub(crate) fn validate_object_envelope(
     envelope.validate_strict()?;
     match format {
         // RFC 156 §5b: format 7 changes how many records an id may hold, never an envelope's schema.
-        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 => validate_format2_schema(envelope),
+        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 | RepositoryFormat::V8 => {
+            validate_format2_schema(envelope)
+        }
     }
 }
 
@@ -75,7 +77,7 @@ pub(crate) fn validate_read_schema(
     envelope: &ObjectEnvelope,
 ) -> Result<()> {
     match format {
-        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 => {
+        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 | RepositoryFormat::V8 => {
             envelope.validate_strict()?;
             validate_format2_schema(envelope)
         }

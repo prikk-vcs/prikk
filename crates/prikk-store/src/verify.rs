@@ -2689,13 +2689,20 @@ fn verify_block_payload(
         crate::snapshot::validate_snapshot_manifest(object_store, block_id, &payload)?;
     }
     let is_remnant = classifier.remnants.len() > remnants_before;
-    let merge_baseline_divergence =
-        if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) && !is_remnant {
-            verify_merge_baseline(object_store, block_id, &payload)?
-        } else {
-            None
-        };
-    if matches!(format, RepositoryFormat::CurrentV6 | RepositoryFormat::V7) && !is_remnant {
+    let merge_baseline_divergence = if matches!(
+        format,
+        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 | RepositoryFormat::V8
+    ) && !is_remnant
+    {
+        verify_merge_baseline(object_store, block_id, &payload)?
+    } else {
+        None
+    };
+    if matches!(
+        format,
+        RepositoryFormat::CurrentV6 | RepositoryFormat::V7 | RepositoryFormat::V8
+    ) && !is_remnant
+    {
         pending_v3_blocks.push((block_id, payload));
     }
     Ok((rollback_patch_count, merge_baseline_divergence))

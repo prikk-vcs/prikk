@@ -1,9 +1,11 @@
-//! `prikk format upgrade`: move a format-6 repository to format 7 in place (RFC 156 §5b; RFC 114 §5.2a).
+//! `prikk format upgrade`: move a format-6 or format-7 repository to the current format, 8, in place
+//! (RFC 156 §5b; RFC 114 §5.2a; 0.57.0 Unicode repository paths).
 //!
-//! Format 7 is format 6 plus "an id may hold several records; the last is authoritative". Nothing
-//! stored differs, so the upgrade **carries everything by moving nothing**: it proves the repository
-//! verifies, then changes the one-line `FORMAT` marker. It is explicit and never automatic, idempotent
-//! on format 7, and has no inverse — there is no downgrade.
+//! Format 7 is format 6 plus "an id may hold several records; the last is authoritative"; format 8 is
+//! format 7 plus "a repository path may be non-ASCII". Nothing stored differs between them, so the
+//! upgrade **carries everything by moving nothing**: it proves the repository verifies, then changes
+//! the one-line `FORMAT` marker, in one step from either older format. It is explicit and never
+//! automatic, idempotent on format 8, and has no inverse — there is no downgrade.
 //!
 //! **The lock.** `ActiveLock`, held from reading the marker through writing it: every writer that can
 //! store objects under this repository's author or maintainer keys — `commit`, `seal`, `merge`,
@@ -41,13 +43,13 @@ pub enum FormatUpgradeOutcome {
     },
 }
 
-/// Upgrade `layout`'s repository to format 7.
+/// Upgrade `layout`'s repository to the current format (8), from 6 or 7.
 ///
 /// `verdict` decides whether the verification passed. It is the caller's, not a second definition here:
 /// the CLI passes `prikk verify`'s own blocking-condition declaration, so an upgrade passes exactly when
 /// `prikk verify` would exit 0. It returns the reason a failing verification fails.
 ///
-/// Refuses, writing nothing, when the lock is held, the marker is neither 6 nor 7, or the verification
+/// Refuses, writing nothing, when the lock is held, the marker is not 6, 7 or 8, or the verification
 /// does not pass.
 pub fn upgrade_repository_format(
     layout: &RepositoryLayout,
@@ -56,14 +58,14 @@ pub fn upgrade_repository_format(
     let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // The marker as it is now, under the lock — not as it was when `layout` was opened.
     let current = RepositoryLayout::open(layout.root().to_path_buf())?;
-    match current.format() {
-        RepositoryFormat::V7 => {
+    let from = match current.format() {
+        RepositoryFormat::V8 => {
             return Ok(FormatUpgradeOutcome::AlreadyCurrent {
-                format: RepositoryFormat::V7.number(),
+                format: RepositoryFormat::V8.number(),
             });
         }
-        RepositoryFormat::CurrentV6 => {}
-    }
+        older @ (RepositoryFormat::CurrentV6 | RepositoryFormat::V7) => older.number(),
+    };
 
     let report = verify_repository(&current)?;
     verdict(&report).map_err(|reason| {
@@ -78,8 +80,8 @@ pub fn upgrade_repository_format(
         change();
     }
 
-    // RFC 168 §3.3: the marker is a one-byte overwrite of its own `6\n`, flushed. A one-byte write does not tear, and a
-    // later format-7 write cannot outlive a marker that reverts, because the marker is never renamed.
+    // RFC 168 §3.3: the marker is a one-byte overwrite of its own `6\n` or `7\n`, flushed. A one-byte write does not
+    // tear, and a later format-8 write cannot outlive a marker that reverts, because the marker is never renamed.
     overwrite_in_place_required(
         current.repository_mutation_root(),
         Path::new("FORMAT"),
@@ -87,15 +89,15 @@ pub fn upgrade_repository_format(
         CURRENT_FORMAT_VERSION.get(..1).unwrap_or_default(),
     )?;
     let upgraded = RepositoryLayout::open(layout.root().to_path_buf())?;
-    if upgraded.format() != RepositoryFormat::V7 {
+    if upgraded.format() != RepositoryFormat::V8 {
         return Err(PrikkError::Integrity(format!(
             "the format marker was written but reads format {} afterwards",
             upgraded.format().number()
         )));
     }
     Ok(FormatUpgradeOutcome::Upgraded {
-        from: RepositoryFormat::CurrentV6.number(),
-        to: RepositoryFormat::V7.number(),
+        from,
+        to: RepositoryFormat::V8.number(),
     })
 }
 

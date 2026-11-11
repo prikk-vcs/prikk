@@ -42,7 +42,7 @@ fn export_and_verify_both_print_the_manifest_and_agree() {
     let export_stdout = String::from_utf8_lossy(&export.stdout).into_owned();
 
     assert!(
-        export_stdout.contains("repository format: 7"),
+        export_stdout.contains("repository format: 8"),
         "export stdout: {export_stdout}"
     );
     assert!(
@@ -64,7 +64,7 @@ fn export_and_verify_both_print_the_manifest_and_agree() {
     let verify_stdout = String::from_utf8_lossy(&verify.stdout).into_owned();
 
     assert!(
-        verify_stdout.contains("repository format: 7"),
+        verify_stdout.contains("repository format: 8"),
         "verify stdout: {verify_stdout}"
     );
     assert!(

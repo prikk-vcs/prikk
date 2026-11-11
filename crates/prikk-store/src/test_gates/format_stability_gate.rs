@@ -8,11 +8,12 @@
 //! failing). The watcher does not live inside the thing it watches -- this file is separate from
 //! `layout.rs`, which is what it checks.
 //!
-//! **Format 7 exists (RFC 156 §5b), and format 6 is covered.** `CURRENT_FORMAT_VERSION_NUMERIC` is 7, so
-//! layer 1's range is `[6]`; format 6 is listed; its fixture is a real format-6 repository committed at
-//! `tests/fixtures/format-6-migration/repo` (layer 2), written by a prikk binary that still created
-//! format 6; and layer 3 carries a copy of it through the documented migration — `prikk format upgrade`,
-//! in place, RFC 114 §5.2a — and asserts the result opens at format 7 and verifies.
+//! **Format 8 exists (0.57.0, Unicode repository paths), and formats 6 and 7 are covered.**
+//! `CURRENT_FORMAT_VERSION_NUMERIC` is 8, so layer 1's range is `[6, 7]`; both are listed; each fixture
+//! is a real repository committed at `tests/fixtures/format-<n>-migration/repo` (layer 2), written by a
+//! prikk binary that still created that format; and layer 3 carries a copy of each through the
+//! documented migration — `prikk format upgrade`, in place, RFC 114 §5.2a, in one step to format 8 —
+//! and asserts the result opens at format 8 and verifies.
 //!
 //! **Before format 7**, `RepositoryFormat` had one variant and every layer passed trivially; the history
 //! below records how the tripwire was shown able to fire then.
@@ -41,10 +42,10 @@ const FIRST_SUPPORTED_FORMAT: u32 = 6;
 
 /// RFC 114 §4 Gate B, layer 2's list: formats below `CURRENT_FORMAT_VERSION_NUMERIC` whose migration
 /// path into the current format has a real, committed byte fixture backing it (checked by
-/// `layer_2_every_listed_format_has_a_committed_fixture` below). Format 6, since format 7 (RFC 156 §5b).
+/// `layer_2_every_listed_format_has_a_committed_fixture` below). Format 6, since format 7 (RFC 156 §5b); format 7, since format 8 (0.57.0).
 /// Adding a number here without adding its fixture is caught by layer 2, distinctly from layer 1's
 /// failure, so a reader knows which half is missing.
-const FORMATS_WITH_MIGRATION_COVERAGE: &[u32] = &[6];
+const FORMATS_WITH_MIGRATION_COVERAGE: &[u32] = &[6, 7];
 
 /// Layer 2's fixture-location convention: a directory per retired format, named after the format it
 /// migrates *from*. Mirrors `dc55_identity_evidence.rs`'s own fixture placement
@@ -59,7 +60,7 @@ fn migration_fixture_dir(format: u32) -> PathBuf {
 
 /// RFC 114 §4 Gate B, layer 1: the range check. Fires the instant `CURRENT_FORMAT_VERSION_NUMERIC`
 /// moves past `FIRST_SUPPORTED_FORMAT` without a matching entry in `FORMATS_WITH_MIGRATION_COVERAGE`.
-/// The range is `6..7` since format 7 (RFC 156 §5b); format 6 is listed. The `#[expect]` that silenced
+/// The range is `6..8` since format 8 (0.57.0); formats 6 and 7 are listed. The `#[expect]` that silenced
 /// clippy's empty-range lint while the range was `6..6` retired itself exactly as designed: the lint
 /// stopped firing and the expectation had to go.
 #[test]
@@ -97,15 +98,15 @@ fn layer_2_every_listed_format_has_a_committed_fixture() {
 /// through the documented migration path, and assert the result opens and verifies — the layer a
 /// placeholder fixture cannot pass, since garbage bytes fail to decode for real.
 ///
-/// **Format 6 → 7 (RFC 156 §5b; RFC 114 §5.2a):** the migration is `upgrade_repository_format`, the
-/// function `prikk format upgrade` runs. A copy of the committed repository is opened at format 6,
-/// verified clean, upgraded, and must then open at format 7 and verify clean again with the same object
+/// **Formats 6 and 7 → 8 (RFC 156 §5b; RFC 114 §5.2a; 0.57.0):** the migration is `upgrade_repository_format`, the
+/// function `prikk format upgrade` runs. A copy of the committed repository is opened at its own format,
+/// verified clean, upgraded, and must then open at format 8 and verify clean again with the same object
 /// count — nothing was carried because nothing moved, and this proves nothing was lost either.
 #[test]
 fn layer_3_every_listed_format_migrates_to_a_repository_that_opens_and_verifies() {
     for &format in FORMATS_WITH_MIGRATION_COVERAGE {
         match format {
-            6 => format_6_migrates_in_place(),
+            6 | 7 => format_migrates_in_place(format),
             other => panic!(
                 "format {other} is listed in FORMATS_WITH_MIGRATION_COVERAGE but layer 3 has no \
                  migration-conformance case for it -- extend this test before the bump ships"
@@ -162,12 +163,13 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn format_6_migrates_in_place() {
+fn format_migrates_in_place(format: u32) {
     use crate::foundation::layout::{RepositoryFormat, RepositoryLayout};
 
-    let copy = crate::test_gates::test_support::unique_temp_dir("format-6-migration");
-    copy_tree(&migration_fixture_dir(6).join("repo"), &copy);
-    // Git keeps no empty directory, and a format-6 repository has two (`refs/locks`, `refs/tmp`).
+    let copy =
+        crate::test_gates::test_support::unique_temp_dir(&format!("format-{format}-migration"));
+    copy_tree(&migration_fixture_dir(format).join("repo"), &copy);
+    // Git keeps no empty directory, and these fixtures have empty ones (`refs/locks`, `refs/tmp`).
     // Recreated from the layout's own list — empty by definition, so nothing is invented.
     let layout = RepositoryLayout::open(copy.clone()).expect("the fixture opens");
     for dir in layout
@@ -178,22 +180,30 @@ fn format_6_migrates_in_place() {
     }
     assert_eq!(
         std::fs::read(copy.join(".prikk").join("FORMAT")).expect("marker"),
-        b"6\n",
-        "the committed fixture must be a format-6 repository"
+        format!("{format}\n").into_bytes(),
+        "the committed fixture must be a format-{format} repository"
     );
-    assert_eq!(layout.format(), RepositoryFormat::CurrentV6);
+    assert_eq!(
+        layout.format().number(),
+        format,
+        "the fixture opens at its own format"
+    );
 
     let before = crate::verify_repository(&layout).expect("verify before");
-    verifies_clean(&before).expect("the format-6 fixture verifies clean before the migration");
+    verifies_clean(&before)
+        .unwrap_or_else(|reason| panic!("the format-{format} fixture does not verify: {reason}"));
 
     let outcome = crate::upgrade_repository_format(&layout, verifies_clean).expect("migration");
     assert_eq!(
         outcome,
-        crate::FormatUpgradeOutcome::Upgraded { from: 6, to: 7 }
+        crate::FormatUpgradeOutcome::Upgraded {
+            from: format,
+            to: 8
+        }
     );
 
     let upgraded = RepositoryLayout::open(copy.clone()).expect("reopens after the migration");
-    assert_eq!(upgraded.format(), RepositoryFormat::V7);
+    assert_eq!(upgraded.format(), RepositoryFormat::V8);
     let after = crate::verify_repository(&upgraded).expect("verify after");
     verifies_clean(&after).expect("the migrated repository verifies clean");
     assert_eq!(
@@ -211,6 +221,6 @@ fn format_6_migrates_in_place() {
 /// together rather than one drifting while only the other's own use site notices.
 #[test]
 fn current_format_version_byte_and_numeric_forms_agree() {
-    assert_eq!(layout::CURRENT_FORMAT_VERSION, b"7\n");
-    assert_eq!(layout::CURRENT_FORMAT_VERSION_NUMERIC, 7);
+    assert_eq!(layout::CURRENT_FORMAT_VERSION, b"8\n");
+    assert_eq!(layout::CURRENT_FORMAT_VERSION_NUMERIC, 8);
 }

@@ -20,6 +20,17 @@ fn format_6_repository(tag: &str) -> prikk_error::Result<(std::path::PathBuf, Re
     Ok((root, layout))
 }
 
+/// A fresh repository with its marker set to format 7 -- genuine for the same reason as above: a new repository holds
+/// nothing a format-7 repository could not.
+fn format_7_repository(tag: &str) -> prikk_error::Result<(std::path::PathBuf, RepositoryLayout)> {
+    let root = unique_temp_dir(tag);
+    RepositoryLayout::init(root.clone())?;
+    std::fs::write(root.join(".prikk").join("FORMAT"), b"7\n")?;
+    let layout = RepositoryLayout::open(root.clone())?;
+    assert_eq!(layout.format(), RepositoryFormat::V7);
+    Ok((root, layout))
+}
+
 fn marker(root: &Path) -> Vec<u8> {
     std::fs::read(root.join(".prikk").join("FORMAT")).unwrap_or_default()
 }
@@ -33,26 +44,52 @@ fn a_verified_format_6_repository_is_upgraded_in_place() -> prikk_error::Result<
     let (root, layout) = format_6_repository("format-upgrade-ok")?;
     assert_eq!(
         upgrade_repository_format(&layout, passes)?,
-        FormatUpgradeOutcome::Upgraded { from: 6, to: 7 }
+        FormatUpgradeOutcome::Upgraded { from: 6, to: 8 }
     );
-    assert_eq!(marker(&root), b"7\n");
+    assert_eq!(marker(&root), b"8\n");
     assert_eq!(
         RepositoryLayout::open(root.clone())?.format(),
-        RepositoryFormat::V7
+        RepositoryFormat::V8
     );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// 0.57.0 U1: the 7 -> 8 step. The marker's first byte is overwritten, and the repository opens at format 8 (which, unlike 7,
+/// admits a non-ASCII path to author). Nothing else is written.
+#[test]
+fn a_verified_format_7_repository_is_upgraded_in_place_to_format_8() -> prikk_error::Result<()> {
+    let (root, layout) = format_7_repository("format-upgrade-7-to-8")?;
+    assert!(!layout.format().admits_non_ascii_paths());
+    let before = repository_bytes(&layout)?;
+    assert_eq!(
+        upgrade_repository_format(&layout, passes)?,
+        FormatUpgradeOutcome::Upgraded { from: 7, to: 8 }
+    );
+    assert_eq!(marker(&root), b"8\n");
+    let upgraded = RepositoryLayout::open(root.clone())?;
+    assert_eq!(upgraded.format(), RepositoryFormat::V8);
+    assert!(upgraded.format().admits_non_ascii_paths());
+    // Everything but the marker is byte for byte what it was.
+    let mut after = repository_bytes(&upgraded)?;
+    let mut expected = before;
+    let marker_path = root.join(".prikk").join("FORMAT");
+    assert_eq!(after.remove(&marker_path), Some(b"8\n".to_vec()));
+    assert_eq!(expected.remove(&marker_path), Some(b"7\n".to_vec()));
+    assert_eq!(after, expected, "nothing but the marker changed");
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
 
 /// Control 4, first half: idempotent — a second upgrade reports the current format and writes nothing.
 #[test]
-fn upgrading_a_format_7_repository_changes_nothing() -> prikk_error::Result<()> {
+fn upgrading_a_format_8_repository_changes_nothing() -> prikk_error::Result<()> {
     let (root, layout) = format_6_repository("format-upgrade-idempotent")?;
     upgrade_repository_format(&layout, passes)?;
     let before = repository_bytes(&RepositoryLayout::open(root.clone())?)?;
     assert_eq!(
         upgrade_repository_format(&layout, passes)?,
-        FormatUpgradeOutcome::AlreadyCurrent { format: 7 }
+        FormatUpgradeOutcome::AlreadyCurrent { format: 8 }
     );
     assert_eq!(
         repository_bytes(&RepositoryLayout::open(root.clone())?)?,

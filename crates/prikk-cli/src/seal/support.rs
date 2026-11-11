@@ -94,7 +94,7 @@ pub(super) fn current_ref_state(
         if !log.records.is_empty()
             && (matches!(
                 layout.format(),
-                RepositoryFormat::CurrentV6 | RepositoryFormat::V7
+                RepositoryFormat::CurrentV6 | RepositoryFormat::V7 | RepositoryFormat::V8
             ) || log.records.len() > 1)
         {
             return Err(format!(

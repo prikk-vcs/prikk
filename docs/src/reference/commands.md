@@ -191,12 +191,15 @@ that tag's own block indistinguishable in history. The refusal names both accept
   does not hold its seed's id as `reason: key-id-file-mismatch`, which refuses signing.
 
 **`format upgrade` is explicit, verified and one-way.** A repository created by 0.44.0 or earlier is
-format 6; new repositories are format 7, which is format 6 plus "an object id may hold several records,
-the last authoritative". `prikk format upgrade` takes the writer lock, runs the same verification as
+format 6, one created by 0.45.0 to 0.56.0 is format 7 ("an object id may hold several records, the last
+authoritative"), and new repositories are format 8 (format 7 plus "a repository path may be non-ASCII").
+`prikk format upgrade` moves a format-6 or format-7 repository to 8 in one step. It takes the writer lock, runs the same verification as
 `prikk verify` and refuses — changing nothing — unless it would exit 0, then overwrites the one byte
-of the `.prikk/FORMAT` marker in place and flushes it (no rename; RFC 168 §3.3, `crates/prikk-store/src/format_upgrade.rs:81-88`). Nothing stored is rewritten. It is idempotent on a format-7
-repository, never runs by itself, and has no inverse: prikk 0.44.0 and earlier refuse a format-7
-repository at open. See [Release Compatibility](release-compatibility.md).
+of the `.prikk/FORMAT` marker in place and flushes it (no rename; RFC 168 §3.3, `crates/prikk-store/src/format_upgrade.rs:81-88`). Nothing stored is rewritten. It is idempotent on a format-8
+repository, never runs by itself, and has no inverse: prikk 0.56.0 and earlier refuse a format-8
+repository at open. For non-ASCII paths, `commit` and `worktree-status` suggest it in one situation only: a non-ASCII path in a
+format-6 or format-7 repository is refused, naming the path, the format needed and `prikk format upgrade`.
+See [Release Compatibility](release-compatibility.md).
 
 **Refusals about refs and repositories.**
 - **A ref that does not exist.** A command that reads an existing ref's state refuses an absent name

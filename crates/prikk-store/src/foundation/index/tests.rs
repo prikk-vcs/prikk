@@ -308,10 +308,9 @@ fn a_damaged_index_entry_blocks_lookup_as_a_reported_defect() -> Result<()> {
 fn a_payload_mismatch_under_one_id_refuses_as_integrity_in_format_7() -> Result<()> {
     let root = crate::test_gates::test_support::unique_temp_dir("index-payload-mismatch");
     let layout = RepositoryLayout::init(root.clone())?;
-    assert_eq!(
-        layout.format(),
-        crate::foundation::layout::RepositoryFormat::V7
-    );
+    // A new repository is format 8, which (like 7) holds several records per id; the refusal below is
+    // about a *different payload*, not about the format.
+    assert!(layout.format().holds_several_records_per_id());
     let first = signed_patch_envelope();
     write_object_to_container_for_test(&layout, ObjectType::Patch, &first)?;
     let existing = lookup_object_location(&layout, first.object_id())?;

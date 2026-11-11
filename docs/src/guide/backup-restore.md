@@ -241,7 +241,7 @@ note: no local ref was created or advanced, and no MAINTAINER key was trusted; t
 
 **Restoring into a repository that already holds some of the history** stores nothing twice. An object
 it already holds under the same signatures is counted but not written; the same object under an
-additional signature — a copy another maintainer sealed — merges into the stored one in a format-7
+additional signature — a copy another maintainer sealed — merges into the stored one in a format-7-or-later
 repository, reported as `objects gaining signatures: N`, and is refused in a format-6 one (see
 [Sync](sync.md)).
 

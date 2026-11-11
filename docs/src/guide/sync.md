@@ -114,7 +114,7 @@ artifact may already be sitting in the object store, but nothing yet points at i
 is no reference naming content that was never stored. Running the exact same `accept` again simply
 continues it to completion: the content already written is skipped, not rewritten.
 
-**One id, several signers, in format 7.** After the receiver has sealed the sender's patches as above,
+**One id, several signers, in format 7 and later.** After the receiver has sealed the sender's patches as above,
 importing the sender's bundle of that ref merges: each shared object keeps one stored copy carrying both
 maintainers' signatures, and the import reports `objects gaining signatures: N`. The same happens in the
 other order, when the receiver imports first and seals afterwards. What may join a stored object is

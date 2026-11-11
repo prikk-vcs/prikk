@@ -903,6 +903,7 @@ const fn repository_format_number(format: RepositoryFormat) -> u32 {
     match format {
         RepositoryFormat::CurrentV6 => 6,
         RepositoryFormat::V7 => 7,
+        RepositoryFormat::V8 => 8,
     }
 }
 
@@ -911,10 +912,11 @@ const fn repository_format_number(format: RepositoryFormat) -> u32 {
 /// `verify::validate_manifest_shape` refuses, naming the value, when a carried archive declares
 /// anything else (V2's own fix, review `rfc155-impl-V-review-v1` finding V1b): import would
 /// otherwise act on a format number nobody actually wrote.
-pub(crate) fn known_repository_format_numbers() -> [u32; 2] {
+pub(crate) fn known_repository_format_numbers() -> [u32; 3] {
     [
         repository_format_number(RepositoryFormat::CurrentV6),
         repository_format_number(RepositoryFormat::V7),
+        repository_format_number(RepositoryFormat::V8),
     ]
 }
 

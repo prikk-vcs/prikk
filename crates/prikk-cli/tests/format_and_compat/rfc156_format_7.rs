@@ -86,10 +86,11 @@ fn sealed_repository(tag: &str) -> (PathBuf, ObjectId) {
 }
 
 #[test]
-fn a_new_repository_is_created_at_format_7() {
+fn a_new_repository_is_created_at_format_8() {
     let repo = support::unique_repo("rfc156-2a-new");
     support::init(&repo);
-    assert_eq!(marker(&repo), b"7\n");
+    // 0.57.0: new repositories are format 8 (format 7 plus non-ASCII repository paths).
+    assert_eq!(marker(&repo), b"8\n");
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -98,7 +99,7 @@ fn a_new_repository_is_created_at_format_7() {
 #[test]
 fn a_format_7_repository_with_a_superseding_block_record_verifies_clean() {
     let (repo, block_id) = sealed_repository("rfc156-2a-superseding-block");
-    assert_eq!(marker(&repo), b"7\n");
+    assert_eq!(marker(&repo), b"8\n");
     let second =
         Ed25519MaintainerSigner::from_seed(SECOND_MAINTAINER_KEY_ID, &SECOND_MAINTAINER_SEED)
             .unwrap();
@@ -137,7 +138,7 @@ fn a_format_7_repository_with_a_superseding_block_record_verifies_clean() {
 /// Controls 3 and 4 (CLI half): a verified format-6 repository upgrades in place, a second upgrade
 /// changes nothing, and the repository still verifies.
 #[test]
-fn format_upgrade_moves_a_verified_format_6_repository_to_7_once() {
+fn format_upgrade_moves_a_verified_format_6_repository_to_8_once() {
     let (repo, _) = sealed_repository("rfc156-2a-upgrade");
     // A repository this binary created holds nothing format 6 could not: marking it 6 makes a genuine
     // format-6 repository, as a 0.44.0 binary would have created it.
@@ -147,18 +148,18 @@ fn format_upgrade_moves_a_verified_format_6_repository_to_7_once() {
     let upgraded = run(&repo, &["format", "upgrade"]);
     support::ok(&upgraded, "format upgrade");
     assert!(
-        text(&upgraded).contains("repository format: upgraded from 6 to 7"),
+        text(&upgraded).contains("repository format: upgraded from 6 to 8"),
         "{}",
         text(&upgraded)
     );
-    assert_eq!(marker(&repo), b"7\n");
-    support::ok(&run(&repo, &["verify"]), "verify at format 7");
+    assert_eq!(marker(&repo), b"8\n");
+    support::ok(&run(&repo, &["verify"]), "verify at format 8");
 
     let before = store_bytes(&repo);
     let again = run(&repo, &["format", "upgrade"]);
     support::ok(&again, "second format upgrade");
     assert!(
-        text(&again).contains("repository format: already 7; nothing changed"),
+        text(&again).contains("repository format: already 8; nothing changed"),
         "{}",
         text(&again)
     );
@@ -205,14 +206,14 @@ fn format_upgrade_refuses_a_repository_that_fails_verification() {
 /// Control 6: a format refusal names the version it read — 0.44.0 said `unsupported format version: 0`.
 #[test]
 fn a_format_refusal_names_the_version_found() {
-    let repo = support::unique_repo("rfc156-2a-format-8");
+    let repo = support::unique_repo("rfc156-2a-format-9");
     support::init(&repo);
-    std::fs::write(repo.join(".prikk").join("FORMAT"), b"8\n").unwrap();
+    std::fs::write(repo.join(".prikk").join("FORMAT"), b"9\n").unwrap();
     for args in [vec!["status"], vec!["verify"], vec!["log"]] {
         let refused = run(&repo, &args);
         assert_eq!(refused.status.code(), Some(1), "{}", text(&refused));
         assert!(
-            text(&refused).contains("unsupported format version: 8"),
+            text(&refused).contains("unsupported format version: 9"),
             "prikk {}: {}",
             args.join(" "),
             text(&refused)

@@ -135,8 +135,8 @@ and nothing validates their presence at open, so a repository initialized before
 harmlessly and a newly initialized one simply lacks them. One dormant diagnostic still reads the
 `objects/` tree if present — see [Object Store](#object-store) below.
 
-New repositories contain `7` in `FORMAT`; a repository created by 0.44.0 or earlier contains `6`, still
-opens, and moves to 7 in place with `prikk format upgrade` (see
+New repositories contain `8` in `FORMAT`; a repository created by 0.56.0 or earlier contains `7` (or `6`, from
+0.44.0 or earlier), still opens, and moves to 8 in place with `prikk format upgrade` (see
 [Release Compatibility](release-compatibility.md#repository-format-transitions)). **Formats 1 through 5
 are rejected at open**, with an error naming the format found and directing migration through
 `prikk bundle export` on a version that still supports it; so is any number this build does not know.
@@ -185,7 +185,7 @@ requested id.
 a valid index entry pointing at bytes that are not there, so the ordering is load-bearing.
 
 **Nothing deletes an object, and nothing is rewritten.** Writing an id that already exists with
-identical bytes is a no-op. In format 7 an id may hold several records, and **the last one is
+identical bytes is a no-op. In formats 7 and 8 an id may hold several records, and **the last one is
 authoritative**: another signer's copy of a stored object — the same type, schema and payload under other
 signatures — is written as one superseding record carrying the union of both signature sets, and the
 index's last entry for the id points at it. Every reader resolves an id to that last record, in every
@@ -403,9 +403,9 @@ persist across key removal, so it stays a single append-only file, never compact
 
 | Path or data | Classification | Current meaning |
 |---|---|---|
-| `.prikk/FORMAT` | Format gate | Required by repository open; `7` is the current format. Format `6` still opens and is written as format 6 until `prikk format upgrade` moves it to `7` in place (marker only; no downgrade). Formats 1-5 are rejected at open, with no bridge and no in-place migration. |
+| `.prikk/FORMAT` | Format gate | Required by repository open; `8` is the current format. Formats `6` and `7` still open and are written as they are until `prikk format upgrade` moves them to `8` in place (marker only; no downgrade). Formats 1-5 are rejected at open, with no bridge and no in-place migration. |
 | `.prikk/config` | Local settings, optional | Written only by `prikk config set` (`unset` removes the file); absent means every key takes its default. One key today, `incoming.max-object-bytes`. Never authority for history and never read from the worktree or from anything imported, so nothing received can set a value in it; `bundle verify`, which opens no repository, does not read it, and an older `prikk` build ignores it. |
-| `containers/<type>/a.container` | Content-addressed object authority | One checksum-framed record per object in format 6; in format 7 an id may hold several, and the last is authoritative. Authority when the frame checksum verifies, the envelope validates, and its computed id/type match the requested object. `objects/` is a retired remnant no longer created by `init`; authority for nothing. |
+| `containers/<type>/a.container` | Content-addressed object authority | One checksum-framed record per object in format 6; in formats 7 and 8 an id may hold several, and the last is authoritative. Authority when the frame checksum verifies, the envelope validates, and its computed id/type match the requested object. `objects/` is a retired remnant no longer created by `init`; authority for nothing. |
 | `refs/containers/log-a.container` (`log-b.container` reserved) | Publication evidence | Shared, append-only signed RefUpdate records for every ref, interleaved; authoritative only with valid chain, object, signature, and trust checks. |
 | `trust/policy-{a,b}.container` and `trust/keys.container` | Repository-local trust authority | Current local MAINTAINER trust input for seal and verify publication-trust checks. `policy-{a,b}` is compacted by `prikk compact --trust-policy` (the live slot is named by its own generation log); `keys.container` has no slot pair and is never compacted — TOFU history must persist across key removal. |
 | `active/default/queue.wal` | Local active-session state | Pending signed Patch envelopes before seal; load-bearing for the active session, not sealed history. |
@@ -441,7 +441,7 @@ full cross-platform filesystem validation.
 | Claim | Source anchors |
 |---|---|
 | Repository initialization creates the listed directories and writes `.prikk/FORMAT`. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-31](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-31-REPOSITORY-LAYOUT-AUTHORITY-REFERENCE.md) |
-| `.prikk/FORMAT` selects format 7 for new repositories; format 6 still opens and upgrades in place; formats 1-5 are rejected at open. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-40](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-40-STATE-MERKLE-FORMAT-TRANSITION.md) |
+| `.prikk/FORMAT` selects format 8 for new repositories; formats 6 and 7 still open and upgrade in place; formats 1-5 are rejected at open. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [DC-40](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-40-STATE-MERKLE-FORMAT-TRANSITION.md) |
 | Persistent objects are checksum-framed records appended into per-type containers allocated at `init`. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs) |
 | Six object types currently have initialized persistent object directories; `RefUpdate` is inline-only in ref logs. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [`object_store.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/object_store.rs), [`refs/container.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs/container.rs) |
 | Ref storage keys are SHA-256 hex digests of human-readable ref names, shared by the pointer index, the log container, and per-ref lock files. | [`layout.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/foundation/layout.rs), [`refs.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/refs.rs) |

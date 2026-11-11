@@ -127,6 +127,7 @@ fn walk_dir(
             &path.to_string_lossy(),
             None,
             WorktreeEntryShape::from_entry_kind(entry.kind),
+            layout.format(),
         ) {
             match refused.as_deref_mut() {
                 Some(collected) => {

@@ -179,8 +179,8 @@ fn walk_finds_the_confirmed_production_module_count() {
     // producers moving the current branch): 172 -> 173.
     // 0.57.0 step 0c added `commit_boundary::worktree_patch::node_authoring::index_rebuild`
     // (`doctor --rebuild-caches`, built from the same parts `commit` and `diff` use; named `index_rebuild` until 0.57.0 step 1d): 173 -> 174. 0.57.0 step 1e added `way_out` (the one
-    // function `doctor` and `verify` both print each finding's way out from): 174 -> 175. 0.57.0 step 2 (L1) added `lock_holder` (a lock names its holder): 175 -> 176. 0.57.0 step 3 (S5b) added `uncommit` (`prikk uncommit`, taking back the newest queued patch): 176 -> 177.
-    assert_eq!(modules.len(), 177, "modules: {modules:?}");
+    // function `doctor` and `verify` both print each finding's way out from): 174 -> 175. 0.57.0 step 2 (L1) added `lock_holder` (a lock names its holder): 175 -> 176. 0.57.0 step 3 (S5b) added `uncommit` (`prikk uncommit`, taking back the newest queued patch): 176 -> 177. 0.57.0 U1 (format 8) added `format_marker` (the marker reader, split out of `layout`): 177 -> 178.
+    assert_eq!(modules.len(), 178, "modules: {modules:?}");
     assert!(
         !modules
             .iter()

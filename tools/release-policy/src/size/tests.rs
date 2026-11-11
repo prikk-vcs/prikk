@@ -164,8 +164,9 @@ fn removing_a_declaration_names_its_file() {
         // `ObjectVerification::block_sealers` (every reached Block's recorded sealers and per-signature
         // outcomes), 2,837 -> 2,867.
         // 0.57.0 step 3 (S5b): `UnreachedObject::has_publication_trust`, so a blob an uncommit leaves is not said to have had
-        // a trust skipped, 2,867 -> 2,877.
-        detail.contains("2877"),
+        // a trust skipped, 2,867 -> 2,877. 0.57.0 U1 (format 8): the format-6/7 matches accept format 8 too (a longer
+        // pattern each, re-wrapped by `cargo fmt`), 2,877 -> 2,884.
+        detail.contains("2884"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -304,9 +305,10 @@ fn an_inline_test_module_is_not_production() {
         // racy-entry rule arms the index at the one place `commit` loads it (a comment plus the call),
         // and the new `index_rebuild` child module is declared and re-exported, 1926 -> 1932. 0.57.0
         // step 1d: that module is renamed `cache_rebuild` and re-exports its public report type
-        // beside the crate-private entry point, 1932 -> 1933.
+        // beside the crate-private entry point, 1932 -> 1933. 0.57.0 U1 (format 8): the authoring classifier gains the
+        // `format` parameter and the non-ASCII format gate (`non_ascii_path_needs_upgrade`, with its doc comment), 1933 -> 1955.
         physical,
-        1933,
+        1955,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -316,7 +318,7 @@ fn an_inline_test_module_is_not_production() {
         .iter()
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
-    assert_eq!(counted.production_lines, 1884);
+    assert_eq!(counted.production_lines, 1906);
     assert_eq!(
         physical - counted.production_lines,
         49,
@@ -405,7 +407,9 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.57.0 step 0c added `node_authoring/cache_rebuild.rs` (`doctor --rebuild-caches`; `index_rebuild.rs` until 0.57.0 step 1d): 174 -> 175.
     // 0.57.0 step 1e added `way_out.rs`: 175 -> 176.
     // 0.57.0 step 2 (L1) added `lock_holder.rs`: 176 -> 177. 0.57.0 step 3 (S5b) added `uncommit.rs` (`prikk uncommit`): 177 -> 178.
-    assert_eq!(store.production_files, 178);
+    // 0.57.0 U1 (format 8) split `foundation/layout/format_marker.rs` (the marker reader) out of `layout.rs`, which format 8 had pushed past
+    // the 1,200-line limit: 178 -> 179.
+    assert_eq!(store.production_files, 179);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

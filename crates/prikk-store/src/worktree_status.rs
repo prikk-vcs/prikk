@@ -18,8 +18,10 @@ use prikk_object::{NodeId, ObjectEnvelope, ObjectId};
 
 use crate::author::author_signing::require_author_key_id;
 use crate::blob_access::ensure_blob_matches_node_kind;
-use crate::commit_boundary::worktree_patch::{WorktreeEntryShape, authoring_refusal_reason};
-use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::commit_boundary::worktree_patch::{
+    WorktreeEntryShape, authoring_refusal_reason, non_ascii_path_needs_upgrade,
+};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
 use crate::ignore::{IgnoreRules, should_skip_discovery};
 use crate::lifecycle_cache::replay::TextCache;
 use std::collections::BTreeMap;
@@ -354,6 +356,7 @@ fn worktree_status_from_resolved(
                 &path_text,
                 Some(node.kind),
                 WorktreeEntryShape::from_symlink_metadata(&metadata),
+                layout.format(),
             );
             changes.push(WorktreeChange {
                 path: path_text,
@@ -388,6 +391,7 @@ fn worktree_status_from_resolved(
         &baseline_paths,
         &seen_paths,
         &rules,
+        layout.format(),
         &mut changes,
     )?;
     changes.sort_by(|left, right| {
@@ -424,6 +428,7 @@ fn scan_untracked(
     baseline_paths: &BTreeSet<String>,
     seen_paths: &BTreeSet<String>,
     rules: &IgnoreRules,
+    format: RepositoryFormat,
     changes: &mut Vec<WorktreeChange>,
 ) -> Result<()> {
     let entries = match fs::read_dir(current) {
@@ -454,11 +459,25 @@ fn scan_untracked(
         }
         let metadata = fs::symlink_metadata(&path)?;
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            scan_untracked(root, &path, baseline_paths, seen_paths, rules, changes)?;
+            scan_untracked(
+                root,
+                &path,
+                baseline_paths,
+                seen_paths,
+                rules,
+                format,
+                changes,
+            )?;
             continue;
         }
         let repo_path = path_to_repo_string(root, &path);
         match repo_path.and_then(|text| {
+            // 0.57.0: a non-ASCII name in a repository that does not admit one is refused by the
+            // authoring rule below, with the sentence `commit` prints -- the same decision rendered
+            // twice -- not reported as an unrepresentable name.
+            if non_ascii_path_needs_upgrade(&text, format).is_some() {
+                return Ok(text);
+            }
             RepoPath::parse(&text)
                 .map_err(authoring_path_error)
                 .map(|_| text)
@@ -472,6 +491,7 @@ fn scan_untracked(
                         &text,
                         None,
                         WorktreeEntryShape::from_symlink_metadata(&metadata),
+                        format,
                     );
                     changes.push(WorktreeChange {
                         path: text,
