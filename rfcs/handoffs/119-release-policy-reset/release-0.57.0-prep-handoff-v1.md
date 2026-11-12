@@ -87,3 +87,13 @@ As in 0.56.0's prep:
   the CLI's own exhaustive matches still fail to compile on a new variant. Update the Upgrading line to match, and state
   the rule there in one clause.
 - The 15 gates on the final commit.
+
+**P2 ACCEPTED and pushed 2026-11-12** (`2a94904f`; review `release-0.57.0-prep-P2-review-v1`). The memory ratio is
+unchanged: 1.865 against 0.56.0's 1.869, same day, alternated. The handoff's "≈ 1.92" was one review sample, not
+0.56.0's figure.
+
+**P3 item 0, before items 1–3:**
+- **(F6)** `architecture.md`: macOS `libc` serves a process's start time and the machine's identity (`proc_pidinfo`,
+  `gethostuuid`), not "the boot time".
+- **(F7)** `crates/prikk-ffi/src/lib.rs:1-5`: the crate doc says what the crate holds on each platform. It is no longer
+  "nothing on non-Windows targets".
