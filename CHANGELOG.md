@@ -39,7 +39,7 @@
     carries a non-ASCII path whatever it declares, before the first write, naming the format and `prikk format upgrade` (`--format json`: `"refusal":
     "repository-format-too-old"`); a declaration this build does not know is refused as `outside-version-rule`, not damage. Sending **to** an older prikk (measured on 0.55.0 and 0.56.0): an archive that declares format 8 is refused
     before any write, **even when it holds only ASCII names**, so an archive exported from a format-8 repository cannot go back to those binaries; they ignore a bundle's
-    declaration and refuse a bundle that carries a non-ASCII path for the path itself (a bundle with ASCII names only is read as before, by reading the code, not run).
+    declaration, so a format-8 bundle with ASCII names only is **imported** by both (measured: `bundle verify` and `bundle import` succeed), and one that carries a non-ASCII path is refused for the path itself.
   - **Names:** a non-ASCII name must be NFC (`commit` refuses another form, naming its NFC spelling and never rewriting it); U+200C and U+200D are refused with the
     other invisible format characters (a Persian or Indic spelling or an emoji sequence that needs one cannot be committed; revisited if a consumer asks); two names
     that are one name under Unicode case folding and normalization (`straße` and `strasse`) collide at `seal`, `extract`, every checkout and `branch switch`, a
@@ -47,7 +47,7 @@
 - **A script that tags a received block now passes through the importer's `--adopt`.** `tag create --target <block id>` refuses a block that only a received ref holds, or that nothing reaches, the way `branch create --from <block id>` does: `prikk archive import <file> --adopt` or `prikk bundle import --input <file> --adopt`, then the same command. A block a local branch or tag reaches, and `--target <branch ref>`, are unaffected.
 - **`bundle import --adopt` and `archive import --adopt` exit `0` when they cannot adopt a branch** and land it under `remotes/<ref>` with the reason (text: `not adopted: …`; `--format json`: `"adopted": false` and a `"remote_reason"`). A script that must know whether the branch became local reads those, not the exit code.
 - **A script that matched `warning: blob <id> …` or `warning: patch <id> …` in `verify` text, or counted `PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the `unreached content:` line (text), `PRIKK-DOCTOR-UNREACHED-CONTENT` (`doctor`) or `unreached_objects` (`verify --format json`, unchanged: every object with its type).** A Block or a RefState that nothing reaches keeps its per-object warning.
-- **A script that read the invocations from the top-level `prikk --help` reads them from each command's own `prikk <command> --help`.** The top-level help is a grouped summary of about 60 lines; `prikk help <command>` is the same text as `prikk <command> --help`.
+- **A script that read the invocations from the top-level `prikk --help` reads them from each command's own `prikk <command> --help`.** The top-level help is a grouped summary of 63 lines; `prikk help <command>` is the same text as `prikk <command> --help`.
 - **A scripted consumer that matched the old archive sentence `malformed persisted data: archive declares repository format …` matches the new text** (`archive declares repository format N, which this build does not know how to read; … so this is not damage`), or reads `"refusal": "outside-version-rule"` under `--format json`.
 - **An archive from a release before 0.57.0 carries no `LICENSE` or `THIRD-PARTY-NOTICES` for the installer to place:** the installer says so and installs the binary.
 - **If you call the `prikk-error`, `prikk-object` or `prikk-store` library (this changes their public API):**
@@ -92,8 +92,7 @@ Carried from the entries below, as written:
   accept` meets the same condition with the same sentence. The same condition on an object that is not a
   Block or RefState, and an AUTHOR-signature failure, keep their own sentence and print no document.
 - `bundle preview` lists that held-object refusal, first, before a class refusal (the import's order);
-  at most one signature entry. Cost measured on a 130-block delivery already held: preview about 9 → 10
-  ms, the import of the same delivery about 18 ms.
+  at most one signature entry. Cost, measured on a 130-block delivery the repository already holds (one text file edited at every step, release builds, 20 runs, medians, 0.56.0 against 0.57.0 alternated twice): `bundle preview` about 2.1 → 3.5 ms; `bundle import` of the same delivery about 11–14 ms in both.
 - `bundle preview --format json` gains `"import_refusals"` (additive; the schema stays
   `bundle-preview-v1`), and the text form prints `bundle import of this delivery would refuse: <id>` with
   the import's sentence for each entry, and nothing when there is none.
@@ -292,7 +291,7 @@ See [Release Compatibility](docs/src/reference/release-compatibility.md#bundle-f
 
 `prikk`, `prikk --help` and `prikk -h` now print the commands in groups, in the order of a day's work (start; record your work;
 read history and files; branches and tags; share with others; trust; merge; undo sealed work; check and repair), one line each:
-the name and a summary. It was 101 lines, up to 622 columns wide, with every full synopsis; it is about 60 lines, none longer than
+the name and a summary. It was 98 lines, up to 622 columns wide, with every full synopsis; it is 63 lines, none longer than
 80 columns. **`prikk <command> --help` is unchanged** and carries every synopsis and note. `prikk help <command>` is an exact
 alias of it (the same text and exit code), `prikk help` alone is the top-level help, and `prikk help <unknown>` is the
 unknown-command error; before, `prikk help` failed with "unknown command: help". The groups and summaries are fields of the one
@@ -401,7 +400,7 @@ history it cannot read. `verify` prints one `warning:` naming the first path and
 
 BSD-3-Clause, MIT, Zlib and Unicode-3.0 each ask for their notice in a binary distribution, and the archives shipped `prikk` and
 `LICENSE` only. A new file at the repository root, `THIRD-PARTY-NOTICES`, lists every crate linked into the `prikk` binary on any
-release target (23 today; normal dependencies only, so no proc-macro, build or development crate, and not prikk's own crates) with
+release target (26 in this release; normal dependencies only, so no proc-macro, build or development crate, and not prikk's own crates) with
 its version, SPDX licence expression, the targets that link it, and the full text of each licence file its package ships. It is
 generated by `prikk-release-policy notices-generate` and committed. **A fifteenth gate, `notices-check`,** regenerates it and fails
 when the committed file differs (a dependency change cannot land without its notices) or when a linked crate ships no licence
