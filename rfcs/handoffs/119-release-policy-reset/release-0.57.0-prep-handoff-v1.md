@@ -1,6 +1,8 @@
 # Release 0.57.0 preparation, as a candidate — the dev team's part
 
-**Not live until the owner authorizes the cut.** 0.57.0's planned work is complete as of U5 (`c74d979e`): theme
+**LIVE: owner-authorized 2026-11-12** (*"Authorized."*). **The architect's reading:** this authorizes release prep
+P1–P3, which ends in a candidate commit prepared locally. It does not authorize the tag, crates.io or the letters;
+each still needs the owner's word. 0.57.0's planned work is complete as of U5 (`c74d979e`): theme
 *"what we promised, and what reads wrong"*, owner-approved 2026-11-08 and re-scoped the same day. The history of
 every part is in its handoff:
 - **step 0:** `147-refusal-visibility/0.57.0-step-0-what-reads-wrong-handoff-v1.md`;
