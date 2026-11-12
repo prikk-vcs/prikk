@@ -51,8 +51,9 @@ graph TD
 ## Dependency boundary, enforced not documented
 
 `prikk-store` may depend on exactly **`getrandom` and `rustix`**; `prikk-crypto` on **`ed25519-dalek`
-and `getrandom`**; `prikk-hash` on **`sha2`**. Every other product crate has **no** third-party
-dependencies at all.
+and `getrandom`**; `prikk-hash` on **`sha2`**; `prikk-object` on **`unicode-normalization` and `unicase`**
+(0.57.0: Unicode normalization and case folding for repository paths). Every other product crate has **no**
+third-party dependencies at all.
 
 This is not a convention. It is checked by `prikk-release-policy boundary-check`, which resolves the
 real package graph from the root manifest and fails the build on any addition. Adding a dependency to a
