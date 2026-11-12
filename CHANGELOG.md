@@ -2,95 +2,101 @@
 
 ## Unreleased
 
-### Changed — new repositories are format 8, and `prikk format upgrade` moves a format-6 or format-7 repository to it
+### Upgrading
 
-Format 8 is format 7 plus one rule, **a repository path may be non-ASCII**, and exists so older binaries meet such a repository with one clean
-refusal instead of a misreading: 0.55.0 read a non-ASCII path as damage (`verify` failed an object, `doctor` advised preserving a healthy
-repository) and let an archive carrying one land silently; 0.55.0 and 0.56.0 refuse a format-8 repository at open on every command with
-`unsupported format version: 8`, and refuse a format-8 archive before writing anything. Nothing stored differs from format 7: `prikk format upgrade`
-(explicit, verified like `prikk verify`, one byte of the `FORMAT` marker, no downgrade) moves a format-6 or format-7 repository to 8 in one step, and
-is idempotent on 8. **For a non-ASCII path, prikk suggests the upgrade in one place only:** `commit` (and `worktree-status`, which reports the same decision) refuses a non-ASCII path
-in a format-6 or format-7 repository, naming the path, the format needed (8), the format the repository is at, `prikk format upgrade`, and that a
-prikk older than this one cannot open a format-8 repository. An ASCII-only repository is never prompted; nothing about it changes except what a new one is
-created as. Bundles and archives exported from a format-8 repository declare format 8. See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
+- **`prikk unlock --lock <path> --yes` against a lock whose holder appears running now exits `1`** with a
+  precondition naming the pid and the start time, and leaves the lock; before 0.57.0 it cleared that
+  lock. `--yes` and `--force` are no longer synonyms. **`--force` is unchanged:** it clears a live holder's
+  lock without asking, exactly as 0.56.0 did. A script that means to clear a live holder's lock (rare, and
+  at the risk of corrupting what that process is writing) passes `--force`. A script clearing the lock of a
+  crashed writer needs no change: a dead holder, an older prikk's lock and an unknown holder are all still
+  cleared by `--yes`.
+- **A lock written by 0.56.0 or earlier lists as `unknown`** ("written by an older prikk") until it is
+  cleared or its holder finishes; `--yes` clears it as before.
+- **`worktree-status`'s listing of a worktree file with a non-ASCII name changed, and `kind` and `authoring` are the contract.** Before this release a
+  non-ASCII file not in the baseline was `"kind": "unsupported-path"`. The final shapes, for a file not in the baseline:
 
-### Added — non-ASCII repository paths: `commit` records NFC names in a format-8 repository
+  | the name | repository format | `kind` | `authoring` |
+  |---|---|---|---|
+  | non-ASCII, in NFC (`café.md`) | 8 | `untracked` | `authored` (`refusal: null`) |
+  | non-ASCII, not in NFC (`cafe` + U+0301) | 8 | `untracked` | `refused`, the NFC sentence naming its NFC spelling |
+  | non-ASCII, either form | 6 or 7 | `untracked` | `refused`, the sentence naming `prikk format upgrade` |
+  | contains ZWJ, ZWNJ, a bidirectional control, a noncharacter, a C1 control or another decode-table character | any | `unsupported-path` | `refused`, the sentence naming the character |
 
-A file named `日本語.md` or `café.md` can now be committed, sealed, read back (`tree`, `extract`, `verify`) and exchanged. What a path may contain is decided
-by one **explicit table in prikk's source, frozen at format 8** (controls, noncharacters, line and paragraph separators, bidirectional controls and invisible
-format characters), not by a Unicode property, so every binary that reads the history agrees. **`commit` records a name only if it is in Unicode
-normalization form C (NFC)** and never rewrites a name: a name in another form is refused, naming it and its NFC spelling (written `\u{..}`, because the two
-look identical), and an NFC and an NFD spelling of one name side by side are refused naming both. Reading history does not ask for NFC (both spellings are
-valid stored history; a documented exception to DC-54's encode/decode symmetry, because the NFC status of a code point unassigned today can change).
-**ZWJ (U+200D) and ZWNJ (U+200C) are refused**, with the other invisible format characters, by the owner's ruling: ZWNJ is needed to spell Persian and some
-Indic scripts and ZWJ forms many emoji sequences, so a name in those scripts or with such an emoji is refused, and the reason is that both are invisible
-(two names that look identical). This is revisited if a consumer asks; admitting them later loosens the table with a format change. `COM¹ COM² COM³ LPT¹ LPT²
-LPT³` join the Windows device names. A component is bounded in UTF-8 bytes (255), which already bounds its UTF-16 length; there is no second limit.
-A format-6 or format-7 repository still refuses to author a non-ASCII name (naming `prikk format upgrade`), and refuses an **artifact that carries one**:
-`bundle import`, `bundle preview`, `archive import` and `sync accept` refuse a patch with a non-ASCII path before writing anything, whatever format the artifact
-declares (this closes the corner where a format-7 repository exported what 0.55.0 let in), with `"refusal": "repository-format-too-old"` under `--format json`.
-Two crates join the binary, exact versions: `unicode-normalization =0.1.26` (and `tinyvec`, transitive) and `unicase =2.10.0`, both Unicode 18.0.0 (so
-`THIRD-PARTY-NOTICES` lists 26 crates); the only `unsafe` is five bounded sites in `unicode-normalization`'s Hangul code, covered by a test of all 11,172
-syllables. Their NFC and folding behaviour is pinned by tests, so an upgrade of either cannot change it silently. Comparing paths for collisions with Unicode case
-folding is the next entry. See [Path and Worktree Safety](docs/src/reference/path-safety.md).
+  `refused_count` counts the `refused` entries. A consumer that read `unsupported-path` as "a non-ASCII name" must read `authoring` instead, and one that
+  matched the old sentence (`this version of prikk does not accept non-ASCII repository paths`) must match `does not accept U+XXXX (…) in a repository path`.
+- **A path with a character the decode table refuses is reported by name.** The reading sentence for history is now `<path> contains U+200D (invisible format
+  character), which is outside what this version of prikk accepts, and a newer version of prikk may have written it` (it named only the path before); the
+  `refusal-v1` id (`outside-version-rule`) and the not-damage classification are unchanged.
+- **New repositories are format 8, and what that means for every binary and repository you have (Unicode repository paths).** Format 8 admits a non-ASCII path
+  (NFC, authored at `commit`); nothing stored differs from format 7.
+  - **`prikk init` and `prikk setup` create format 8.** A repository you already have stays at 6 or 7, works exactly as before for ASCII names, and is **never
+    upgraded as a side effect**. `prikk format upgrade` moves a verified format-6 or format-7 repository to 8 in place (one byte of `.prikk/FORMAT`, idempotent on 8,
+    no downgrade). prikk suggests it in two places only: when you commit a non-ASCII name, and when an artifact needs format 8 to be received.
+  - **An older prikk cannot open a format-8 repository.** Measured on the published binaries: 0.55.0 and 0.56.0 print `error: unsupported format version: 8` and exit
+    `1` on every command, and name nothing typeable (those binaries cannot change). Upgrade only repositories that only this release or a later one will touch.
+  - **A bundle or archive declares its sending repository's format.** A format-6 or format-7 receiver refuses a format-8 artifact, and any artifact that
+    carries a non-ASCII path whatever it declares, before the first write, naming the format and `prikk format upgrade` (`--format json`: `"refusal":
+    "repository-format-too-old"`); a declaration this build does not know is refused as `outside-version-rule`, not damage. Sending **to** an older prikk (measured on 0.55.0 and 0.56.0): an archive that declares format 8 is refused
+    before any write, **even when it holds only ASCII names**, so an archive exported from a format-8 repository cannot go back to those binaries; they ignore a bundle's
+    declaration and refuse a bundle that carries a non-ASCII path for the path itself (a bundle with ASCII names only is read as before, by reading the code, not run).
+  - **Names:** a non-ASCII name must be NFC (`commit` refuses another form, naming its NFC spelling and never rewriting it); U+200C and U+200D are refused with the
+    other invisible format characters (a Persian or Indic spelling or an emoji sequence that needs one cannot be committed; revisited if a consumer asks); two names
+    that are one name under Unicode case folding and normalization (`straße` and `strasse`) collide at `seal`, `extract`, every checkout and `branch switch`, a
+    deliberate over-refusal. History sealed earlier is never failed for it: `verify` warns once (the sealed-path-collision entry above).
+- **A script that tags a received block now passes through the importer's `--adopt`.** `tag create --target <block id>` refuses a block that only a received ref holds, or that nothing reaches, the way `branch create --from <block id>` does: `prikk archive import <file> --adopt` or `prikk bundle import --input <file> --adopt`, then the same command. A block a local branch or tag reaches, and `--target <branch ref>`, are unaffected.
+- **`bundle import --adopt` and `archive import --adopt` exit `0` when they cannot adopt a branch** and land it under `remotes/<ref>` with the reason (text: `not adopted: …`; `--format json`: `"adopted": false` and a `"remote_reason"`). A script that must know whether the branch became local reads those, not the exit code.
+- **A script that matched `warning: blob <id> …` or `warning: patch <id> …` in `verify` text, or counted `PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the `unreached content:` line (text), `PRIKK-DOCTOR-UNREACHED-CONTENT` (`doctor`) or `unreached_objects` (`verify --format json`, unchanged: every object with its type).** A Block or a RefState that nothing reaches keeps its per-object warning.
+- **A script that read the invocations from the top-level `prikk --help` reads them from each command's own `prikk <command> --help`.** The top-level help is a grouped summary of about 60 lines; `prikk help <command>` is the same text as `prikk <command> --help`.
+- **A scripted consumer that matched the old archive sentence `malformed persisted data: archive declares repository format …` matches the new text** (`archive declares repository format N, which this build does not know how to read; … so this is not damage`), or reads `"refusal": "outside-version-rule"` under `--format json`.
+- **An archive from a release before 0.57.0 carries no `LICENSE` or `THIRD-PARTY-NOTICES` for the installer to place:** the installer says so and installs the binary.
+- **If you call the `prikk-error`, `prikk-object` or `prikk-store` library (this changes their public API):**
+  - `PrikkError::NonAsciiRepoPath` is now `PrikkError::RefusedPathCharacter { path, character, reason }` (format 8 admits non-ASCII paths, so the variant names the one refused character); `RepositoryFormatTooOld` and `UnknownArtifactFormat` are new variants (`PrikkError` is `#[non_exhaustive]`).
+  - `RepositoryFormat` gained `V8`, `BlockStateStatus` gained `UnreachedOutsideVersionRule`, and `GatedOperation` gained `BundleAdopt`; none of the three is `#[non_exhaustive]`, so an exhaustive `match` on any of them needs the new arm.
+  - `BlockStateOutcome` (`path_collision`), `HistoryEntry` (`parent_block_ids`, `sealed_by`), `PublicationTrustIssue` (`subject`), `HeldLock` (`liveness_reason`, `recorded_start`) and `ObjectVerification` (`block_sealers`) gained public fields and are not `#[non_exhaustive]`: read them field by field and do not construct them.
+  - New public reports and enums (`BlockSealers`, `UncommitPlan`, `SealedPathCollision`, `UnreachedContent`, `LivenessReason`, …) are `#[non_exhaustive]` from the start; match them with a wildcard arm. `BundleImportReport`, `BundlePreviewReport`, `RepositoryVerification`, `BranchSwitchReport` and `ArchiveVerifyReport` gained fields and already were `#[non_exhaustive]`.
 
-### Changed — repository-path collisions are judged by Unicode case folding over NFD, a deliberate over-refusal
+### Output changes
 
-`seal`, `extract`, every checkout (`--patch-materialize*`, `--snapshot-materialize`, `branch switch`) and the `.prikk`
-first-component rule now compare repository paths by the **canonical caseless key**, `NFD(fold(NFD(path)))` with full Unicode case folding (one function in `prikk-object`,
-pinned by tests), instead of ASCII case alone. Two paths with one key are one name to a case-insensitive or normalizing file system, so they must not both exist: **`straße` and
-`strasse` collide**, as do `É` and `é`, `ẞ` and `ss`, an NFC and an NFD spelling of one name, and `K` and the Kelvin sign. This is stricter than necessary on a case-sensitive file
-system, on purpose: a check that protects the disk errs toward refusing, and it **may tighten across Unicode versions**. The refusal names both paths, the non-ASCII characters written
-`\u{..}`. A checkout now refuses a colliding state before its first write, naming both paths and writing nothing. `.pri` + U+212A + `k` is refused as the `.prikk` metadata directory.
-Branch and tag ref names and maintainer key ids keep ASCII case-folding, unchanged. **`verify` does not ask this rule** (next entry).
+- **`verify --format json` (`verify-report-v1`), additive:** `block_seals`, `object_items`, `failed_objects`, `unverifiable_author_signatures`, `publication_trust_issues` (all from what the text always printed), `non_ascii_paths_in_old_format`, `sealed_path_collisions`. `block_seals` and the text's `sealed blocks:` list a Block stored twice once. `unreached_objects` is unchanged (every object, with its type).
+- **`log --format json`, additive:** each block gains `parent_block_ids` (as stored, sorted by id; no "first parent") and `sealed_by` (key ids as recorded, not as trusted).
+- **`bundle import --format json` and `archive import --format json`, additive:** `landed_as`, `adopted`, `remote_reason`, `materialized_*`. Text: `bundle import --adopt` prints the adopted branch and its materialization, or `not adopted: <reason>`.
+- **`bundle preview --format json`, additive:** `import_refusals`; the text prints `bundle import of this delivery would refuse: <id>` per entry, and nothing when there is none. `bundle preview --format json` prints `refusal-v1` documents (`"command": "bundle-preview"`) for the two new format ids.
+- **`archive verify --format json`, additive:** `unreached_outside_version_rule`; the text prints `warning: patch <id>: a path in it is outside what this version …` for a patch outside the version rule that no carried ref reaches.
+- **`refusal-v1` ids:** new `repository-format-too-old` (a receiver older than the artifact, from `bundle import`, `bundle preview`, `archive import`); `outside-version-rule` now also for a declared artifact format this build does not know (an archive's text no longer begins `malformed persisted data:`); `forged-publication-signature` is also raised for a held Block or RefState (see below); `cat --format json` prints `refusal-v1` documents for every refusal it exits `1` for (`"command": "cat"`; eight ids are `extract`'s, new `path-not-found`; an unpublished current branch is `point-not-found`, as in `extract`).
+- **`verify`/`doctor` exit codes:** `verify` exits `0`, not `1`, for a Block this version cannot read that nothing reaches (a `warning: block <id>: state root not verified: …` line; `doctor`: `PRIKK-DOCTOR-VERIFY-BLOCK-STATE-UNREACHED-OUTSIDE-VERSION-RULE`, a warning). `unlock --lock` exits `1` for a holder that appears running unless `--force` (`--yes` cleared it before). A collision under today's case-folding rule on sealed history is a warning (exit `0`), while `seal`, `extract`, every checkout and `branch switch` refuse it.
+- **New `doctor` codes:** `PRIKK-DOCTOR-COMMIT-INDEX-DIVERGENCE`, `-LIFECYCLE-CACHE-DIVERGENCE`, `-RECEIVED-REF-DAMAGED`, `-MERGE-BASELINE-DIVERGENCE`, `-ACTIVE-WAL-ORDERING`, `-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD`, `-WORKTREE-RECORD-IGNORED`, `-NON-ASCII-PATH-IN-OLD-FORMAT`, `-SEALED-PATH-COLLISION` (warnings, errors where the entry says so) and `-UNREACHED-CONTENT` (`info`); `PRIKK-DOCTOR-UNREACHED-OBJECT` is now only for a Block or a RefState.
+- **`verify`/`doctor` text:** an `unreached content: N object(s) …` line replaces `warning: blob|patch <id> is reached by nothing …`; `way out [<finding>]:` lines; one `warning:` each for a non-ASCII path in a format-6/7 repository and for a sealed tip whose paths collide.
+- **Refusal text:** a path with a refused character is written with every non-ASCII character as `\u{..}` (`a\u{200d}b.md`); `worktree-status` `kind` and `authoring` for a non-ASCII name follow the table under Upgrading; a format-8 artifact or a non-ASCII path into a format-6/7 repository is refused naming `prikk format upgrade`; `sync seal` names the claim, the block its ref does not reach and a way out; `tag create --target` and `branch create --from` name the received ref(s) that hold a block and the `--adopt` that fits.
+- **`unlock`:** the listing prints each lock's liveness word with its reason and recorded start time (`unknown` for a lock written by 0.56.0 or earlier); the help names the three words and their page.
+- **New command `prikk uncommit <patch-id> [--plan-only]`** (text only; exit 0 done, 1 refused, 2 usage) and **`prikk help [command]`**; `prikk`, `--help` and `-h` print the grouped summary. **`prikk branch switch <the current branch>`** prints `recorded the worktree's baseline for <ref>` when it restores the record. **`prikk doctor --rebuild-caches [--plan-only]`** is new.
+- **`cat --output`** writes the recorded mode (0755 stays executable). **`branch create --from <block id>`** is accepted. **`prikk format upgrade`** moves 6 or 7 to 8, and a new repository is `FORMAT` `8`.
 
-### Changed — `verify` judges a sealed block's integrity, and a collision under today's rule is one warning
+Carried from the entries below, as written:
 
-`verify` re-derives each sealed block's state root **without the collision rule**: a real mismatch still fails, but history that was valid when sealed can never be failed by a
-later Unicode version or a crate upgrade that makes two old paths collide (that would read as damage). A sealed tip whose paths collide under this version's rule (a reached block no other
-block derives its state from) is instead **one warning per distinct pair** in `verify` and `doctor` (`PRIKK-DOCTOR-SEALED-PATH-COLLISION`; `verify --format json` gains an additive
-`sealed_path_collisions` array), exit `0`, naming both paths escaped, saying that `extract`, `checkout` and `branch switch` will refuse to write them, and giving the way out:
-`prikk mv <one> <new name>`, then `commit` and `seal`. `seal`, `extract`, every checkout and `branch switch` keep refusing, unchanged. A snapshot manifest still refuses a colliding
-state when it is encoded (sealing a checkpoint) and no longer when it is decoded (reading one).
+- **`verify` prints a `way out [<finding>]: <sentence>` line for each kind of finding it fails on**, after the
+  divergence counts. The sentence is the one `doctor` recommends for the same finding: both read it from one
+  function (`prikk_store::WayOut::sentence`), so they cannot disagree. The commit-index and lifecycle-cache lines
+  (`commit-index: …`, `lifecycle-cache: …`) added earlier in this release are now two of these lines.
+- `doctor`'s recommendations for the findings above changed from "preserve the repository and inspect …" to the
+  sentences described under Fixed.
 
-### Added — `prikk bundle import --adopt` lands a delivered branch as a local branch, and `tag create --target <block id>` is held to the standing `branch create --from` demands
-
-`archive import --adopt` had no twin for a bundle: a branch delivered by `bundle import` was a received ref only, and a block it carried could not be branched from. `bundle import --adopt` closes that,
-under the conditions `archive import --adopt` holds, on shared code. A bundle carries RefStates but no RefUpdates, so adoption is by the **receiver's own signature**: every RefState in the delivered
-chain must be signed by a MAINTAINER key this repository has adopted (through `verify`'s predicate), the receiver's own maintainer key must be adopted too, the ref must be absent locally, no queued work
-may own the name, a non-fast-forward needs `--allow-non-fast-forward`, and (for the current branch) a dirty worktree or a file in the way refuses, all before the first write. It then signs a
-`RefUpdate` over each delivered RefState, oldest first, writes **no** `remotes/` pointer for the adopted branch, and materializes the current branch into the worktree. A delivery that cannot be adopted
-still lands under `remotes/` as without the flag, with a typeable reason in the text (`not adopted: …`) and in `--format json` (`landed_as`, `adopted`, `remote_reason`, `materialized_*`; additive).
-**`tag create --target <block id>` now demands the standing `branch create --from <block id>` demands:** a block only a received ref holds, or that nothing reaches, refuses by name before any write,
-naming `bundle import --adopt` and `archive import --adopt` (the received index records no arrival route, so both are named). Before, a tag could be written at such a block without any importer's trust
-checks. A block a local branch or tag reaches, and `--target <branch ref>`, are unaffected. `GatedOperation::BundleAdopt` joins the trust-gated list. See
-[Commands](docs/src/reference/commands.md) and [Trust and Threat Model](docs/src/reference/trust-threat-model.md).
-
-### Changed — a refusal that names an invisible character writes the path with it escaped
-
-`this version of prikk does not accept U+200D (invisible format character) in a repository path: a\u{200d}b.md` (and the reading sentence for history, and `worktree-status`'s refusal text)
-now write every non-ASCII character of the path as `\u{..}`; printed raw, a ZWJ is nothing and `a<ZWJ>b.md` read as `ab.md`.
-
-### Added — `verify` and `doctor` warn once when a format-6 or format-7 repository holds a non-ASCII path
-
-A repository that 0.55.0 let admit a non-ASCII path from an archive reads clean now that format 8 admits non-ASCII paths, but format 7's own rule is that it holds none, and an older prikk would meet
-history it cannot read. `verify` prints one `warning:` naming the first path and `prikk format upgrade` (and why: after the upgrade the format makes an older prikk refuse the repository cleanly),
-`--format json` gains an additive `non_ascii_paths_in_old_format` array, and `doctor` gives `PRIKK-DOCTOR-NON-ASCII-PATH-IN-OLD-FORMAT` as a warning. Neither fails: both exit `0`.
-
-### Changed — a bundle or archive from a format-8 repository is refused by a format-6 or format-7 one, and a bundle's declared format is checked
-
-A bundle or archive declares its **sending repository's** format (a format-8 repository's artifacts declare 8, even with only ASCII paths).
-`bundle import`, `bundle preview` and `archive import` now refuse one that declares 8 when the receiving repository is format 6 or 7, before any
-object, journal or pointer is written, with a precondition naming both formats, `prikk format upgrade` and that a prikk older than this one cannot open a
-format-8 repository; an upgrade followed by the same import succeeds. An artifact from a format-6 or format-7 repository is received by every format.
-The bundle's declared format used to be informational, so a bundle could declare anything: `bundle verify`, `bundle preview` and `bundle import` now
-refuse a number this build does not know, as `archive verify` always did. **That refusal is no longer worded as damage:** an archive's sentence began
-`malformed persisted data:` and now reads `archive declares repository format N, which this build does not know how to read; … so this is not damage` (a
-scripted consumer that matched the old prefix must match the new text). Under `--format json`, `bundle import`, `bundle preview` and `archive import` now
-print a `refusal-v1` document for both refusals: `"refusal": "repository-format-too-old"` for the receiver older than the artifact, and the existing
-`"outside-version-rule"` for an unknown declared number (a different version of prikk wrote it; not damage). Both keep stderr's text and exit `1`.
-`bundle preview --format json` prints `refusal-v1` documents (`"command": "bundle-preview"`) for these two ids.
-See [Release Compatibility](docs/src/reference/release-compatibility.md#bundle-format-transitions) and [Troubleshooting](docs/src/guide/troubleshooting.md).
+- **A forged signature on an object the repository already holds is now the same refusal as on a new one.**
+  `bundle import` of a delivery that re-sends a held Block or RefState with an extra MAINTAINER signature by
+  an adopted key that does not verify used to stop in signature admission with `invalid signature: <type>
+  <id> carries a MAINTAINER signature by adopted key <K> that does not verify (…) -- refusing the whole
+  import, nothing was written`, with no route out, and `--format json` printed nothing. It now raises
+  `forged-publication-signature` — the sentence names both possible causes and the route (`prikk key
+  generate`, `prikk trust maintainer add`), the error reads `precondition not met: …`, and `bundle import
+  --format json` and `archive import --format json` print the `refusal-v1` document with that id. `sync
+  accept` meets the same condition with the same sentence. The same condition on an object that is not a
+  Block or RefState, and an AUTHOR-signature failure, keep their own sentence and print no document.
+- `bundle preview` lists that held-object refusal, first, before a class refusal (the import's order);
+  at most one signature entry. Cost measured on a 130-block delivery already held: preview about 9 → 10
+  ms, the import of the same delivery about 18 ms.
+- `bundle preview --format json` gains `"import_refusals"` (additive; the schema stays
+  `bundle-preview-v1`), and the text form prints `bundle import of this delivery would refuse: <id>` with
+  the import's sentence for each entry, and nothing when there is none.
 
 ### Fixed — a block this version cannot read, that nothing reaches, no longer keeps `verify` red
 
@@ -105,28 +111,6 @@ ref the archive carries reaches is held as an unreached object, with a `warning:
 --format json`), and the receiving repository's `verify` passes. Reached by a carried ref, it still refuses the archive; damage is never held. Before this,
 the backup of a repository that `verify` passed was refused by `archive verify` and `archive import`.
 
-### Added — every release archive carries `THIRD-PARTY-NOTICES`, and a gate keeps it true
-
-BSD-3-Clause, MIT, Zlib and Unicode-3.0 each ask for their notice in a binary distribution, and the archives shipped `prikk` and
-`LICENSE` only. A new file at the repository root, `THIRD-PARTY-NOTICES`, lists every crate linked into the `prikk` binary on any
-release target (23 today; normal dependencies only, so no proc-macro, build or development crate, and not prikk's own crates) with
-its version, SPDX licence expression, the targets that link it, and the full text of each licence file its package ships. It is
-generated by `prikk-release-policy notices-generate` and committed. **A fifteenth gate, `notices-check`,** regenerates it and fails
-when the committed file differs (a dependency change cannot land without its notices) or when a linked crate ships no licence
-file (naming it). It runs in the local gates and in CI's `policy` job. The three tarballs, the Windows zip and both AUR packages
-(`/usr/share/licenses/prikk/THIRD-PARTY-NOTICES`) now carry it beside `LICENSE`; the release notes say so. See [Install](docs/src/guide/install.md#licences).
-
-### Added — the installers put `LICENSE` and `THIRD-PARTY-NOTICES` on disk, and the uninstallers remove exactly them
-
-`install.sh` and `install.ps1` used to move only `prikk` out of the archive and delete the rest, so an installer user had neither licence
-file. `install.sh` now installs both into `<parent>/share/licenses/prikk` when the install directory is named `bin` and `<parent>/share` already
-exists (the default `~/.local/bin` on an ordinary system gives `~/.local/share/licenses/prikk`), and otherwise into
-`<install directory>/share/licenses/prikk`, so that `--prefix ~/bin` makes no `~/share`;
-`install.ps1` installs them beside `prikk.exe`. `uninstall.sh` and `uninstall.ps1` remove those two files and nothing else, and the
-directories the installer made for them, each only when empty: install then uninstall leaves the file system as it was (the install
-directory itself, which the installer makes if missing, stays on Unix). An archive from a release before 0.57.0 has neither file: the installer
-says so and installs the binary. See [Install](docs/src/guide/install.md#licences).
-
 ### Fixed — `install.sh` no longer creates a shell startup file, and `uninstall.sh` returns the file it edited as it was
 
 Until now `install.sh` created `~/.bashrc` (or `~/.zshrc`) to hold its `PATH` block when the file did not exist, and `uninstall.sh`
@@ -136,68 +120,6 @@ the `export PATH=...` line instead. `uninstall.sh` removes the block together wi
 the file in place, so its mode and any symlink to it are kept (it replaced the file before, which made it mode 600 and ended a link); since an in-place write can be cut short, it keeps a copy of the file beside it (`<file>.prikk-uninstall-backup`) until the rewrite has finished, and if it stops first the copy stays and the message names it and how to put it back. See
 [Install](docs/src/guide/install.md#uninstalling).
 
-### Changed — the top-level help is a grouped summary, and `prikk help [command]` works
-
-`prikk`, `prikk --help` and `prikk -h` now print the commands in groups, in the order of a day's work (start; record your work;
-read history and files; branches and tags; share with others; trust; merge; undo sealed work; check and repair), one line each:
-the name and a summary. It was 101 lines, up to 622 columns wide, with every full synopsis; it is about 60 lines, none longer than
-80 columns. **`prikk <command> --help` is unchanged** and carries every synopsis and note. `prikk help <command>` is an exact
-alias of it (the same text and exit code), `prikk help` alone is the top-level help, and `prikk help <unknown>` is the
-unknown-command error; before, `prikk help` failed with "unknown command: help". The groups and summaries are fields of the one
-command table that dispatch uses. A script that read the invocations from the top-level `--help` reads them from each command's own
-`--help` now.
-
-### Added — `prikk uncommit <patch-id> [--plan-only]` takes back your newest unsealed commit
-
-Promised to inklkunn (2026-10-31, §4: "it acts on a patch named exactly; it has `--plan-only`, and a recovery record so the
-discard can be undone"). It is the inverse of `commit` for work that has not been sealed, and nothing is wrong when you run
-it: the newest queued patch leaves the queue and is kept in the recovery log, the files in your worktree are not changed (the
-next `commit` includes them), and sealed history is never touched (for that, `rollback-draft`).
-- **Newest only, healthy queue only.** A patch with others queued after it is refused, naming them; a sealed patch, a block,
-  another object and an unknown id are each refused by what they are; a damaged or lost-commit queue refuses with its own row's
-  sentence and its own `doctor` verb.
-- **The next `commit` authors the same operations.** The plan says, per operation, whether the worktree still holds the change.
-  A rename is put back into the rename declarations (so the next `commit` authors a rename again, not a delete and a create
-  with a new identity); a rename declared since that overlaps refuses before anything is written.
-- **A re-run finishes an interrupted run** and says so (naming the earlier run when the recovery log holds it; the same state is also what a lost acknowledged commit looks like, and then the sentence says both). Between the WAL cut and the witness rewrite, `verify` and `doctor` read
-  the queue as a lost commit and now add that running `prikk uncommit` again finishes it.
-- **After the only queued patch leaves, the session is an empty queue**, the state `seal` leaves, and the worktree's record
-  matches it.
-- **The undo** is `prikk doctor --recovery-restore <run>` (the run id is printed). It now also restores the worktree's record
-  and the rename declarations, and refuses once anything has changed since. Each recovery entry is saved just before the write
-  it undoes. Each run records its kind in its entries, and the restore's closing sentence follows it (after an `uncommit` it
-  says the commit is queued again, not that damage is back).
-- Text only, with the exit codes of the other repairs (0 done, 1 refused, 2 usage); no `--format json` until the CLI's JSON
-  tier is decided (0.59.0). Raced against a `commit` loop (300 rounds): each ended in one of its two allowed states and `verify`
-  read clean every time. See [Commands](docs/src/reference/commands.md) and [Worktree patch
-  authoring](docs/src/guide/patches/worktree-patch.md).
-
-### Changed — `verify` and `doctor` count unreached content in one line instead of warning about each Patch and Blob
-
-Almost every `prikk uncommit` leaves a blob (a text `create-file` writes one too), and `received remove` and `doctor --discard-damaged-commits` leave patches and blobs, each of which was a warning
-line of its own although nothing was published under it and there is no trust question. They are now **one line**: `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …`,
-saying what they are (for example, left behind by a commit taken back, a received ref removed, a rolled-back block, discarded commits, or an import refused or interrupted after writing), that they are harmless, that no command removes them yet and that `prikk verify --format json` lists each one; `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`.
-It is not a warning, and exit codes are unchanged. **A Block or a RefState that nothing reaches keeps its per-object warning** (its publication trust was not checked), `unreached objects: N` stays the
-total, and `unreached_objects` in `--format json` is unchanged: every object, each with its type. A script that matched `warning: blob …` or `warning: patch …` in `verify` text, or counted
-`PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the count line (text) or `unreached_objects` (JSON) instead.
-
-### Changed — `verify` and `doctor` no longer say a blob's "publication trust was not checked"
-
-An unreached object that is a Patch or a Blob (a blob a commit wrote and `prikk uncommit` or a rollback left behind) is reported
-as before, a warning that leaves `verify` at exit 0, but the sentence now says nothing was published under it, so there is no
-publication trust to check. A Block or a RefState keeps the old sentence. The bytes stay, and no command removes them yet.
-
-### Added — `cat --output` applies the recorded mode, and `cat --format json` refusals are `refusal-v1`
-
-Promised in stikk letter 029 (§4.5). `prikk cat --path <p> --output <file>` now writes the file with the mode
-prikk recorded (0755 stays executable, anything else is 0644), also over an existing file with `--force`,
-through the one function `extract` uses; only those two modes are ever applied, and a setuid, setgid or
-sticky bit is never taken from content. Where there is no POSIX mode (Windows) nothing is applied, as in
-`extract`. Under `--format json`, every refusal `cat` exits `1` for now prints one `refusal-v1` document to
-stdout with `"command": "cat"`, and stderr and the exit code are unchanged. Eight of its nine ids are
-`extract`'s, with the same meaning; the new one is `path-not-found`. See [Tree and
-cat](docs/src/guide/tree-and-cat.md).
-
 ### Fixed — `verify`'s `sealed blocks:` listed a Block twice when a superseding record carried it
 
 A Block stored twice (RFC 156: another signer's copy merged as one superseding record) was one `sealed-block`
@@ -205,90 +127,6 @@ line per stored record in `verify`'s text, so `sealed blocks:` counted it twice.
 latest record (the one every reader sees), and a later record with no trusted sealer no longer leaves the
 earlier record's trusted one in the list. The list is folded at its source in the verification, so the text
 and `verify --format json`'s `block_seals` agree.
-
-### Added — `verify --format json` carries the block seals, item counts, failed objects and unverifiable signatures
-
-Promised in stikk letter 029 (1.2) and inklkunn's 2026-10-31 letter (§1: "the same field reaches
-`verify-report-v1`"). `verify-report-v1` gains, additively within the version (a consumer written against
-the older field set reads these documents unchanged), what `verify`'s text has always printed:
-- **`block_seals`**: every reached Block's `sealed_by` (the key ids it records, **as recorded, not as
-  trusted**: the same field and function as `log`'s, so it reads the same before and after `trust maintainer
-  remove`), `trusted_by`, and each signature's outcome beside it. stikk's case: `colleague` sealed 1 of 3,
-  before the key is removed and after.
-- **`object_items`**, **`failed_objects`** (typed: object type, id when known, locator, class `corrupt` or
-  `outside-version-rule`), **`unverifiable_author_signatures`**.
-- **`publication_trust_issues`**, typed: `code`, `object_type`, `object_id`, `key_id`, `outcome`.
-`log` and `verify` list the **Block's** signatures; `bundle preview` lists the delivered tip RefState's, and
-the two can differ. `ways_out` is not here (the JSON tier round, 0.59.0). No extra verification work: the
-per-signature outcomes come from the single pass that already decided each block's trust.
-See [Commands](docs/src/reference/commands.md).
-
-### Added — `log --format json` carries `parent_block_ids` and `sealed_by`
-
-Promised in stikk letter 029 (§4.3) and inklkunn's 2026-10-31 letter (§1). Each block in `log-report-v1`
-gains two fields, additive within the version (a consumer written against the older field set reads these
-documents unchanged; `parent_count` is kept):
-- **`parent_block_ids`**: the Block's own parents as stored, sorted by object id (the order carries no
-  "first parent"; a root block has `[]`).
-- **`sealed_by`**: the MAINTAINER key ids the Block's seal records, **as recorded, not as trusted**: it
-  reads the same before and after `trust maintainer remove` of a sealer, and lists a sealer this
-  repository never adopted. The same function builds `bundle preview`'s `sealed_by`.
-See [History inspection](docs/src/guide/history.md).
-
-### Added — `prikk branch create heads/<name> --from <block id>`
-
-Promised in stikk letter 029 (1.1). `--from` now takes a bare block id (64 lowercase hex characters) as well
-as a ref, for a block that **a local branch or tag reaches**. Going back to an earlier block no longer
-takes a tag you did not ask for. The id is resolved by the point resolver `cat`, `tree` and `extract` use
-(an id the store does not hold, or of another kind, refuses saying what it is); the RefState written is the
-one a ref route writes. A block held **only through a received ref**, or **reached by no ref**, refuses by
-name before anything is written, with the received ref(s) that hold it and the way forward
-(`prikk archive import <archive> --adopt` or `prikk bundle import --input <bundle> --adopt`, then the same command): a branch published there would bypass
-the trust checks `--adopt` makes. See
-[Commands](docs/src/reference/commands.md).
-
-### Changed — a lock names its holder, not just a pid; `prikk unlock` says what it knows and why
-
-A lock file recorded only `pid=<n>`, so `prikk unlock` could only ask whether *some* process had that
-number, which a reused pid, a reboot, or another container's PID namespace each answer wrongly. A lock
-now also records its holder's **start time** and, on Linux, the machine's **boot id** and the holder's
-**PID namespace**; `unlock` answers "appears running" only for the same pid with the same start time
-(and, on Linux, the same boot, PID namespace and time namespace), on the same machine. The listing prints the reason beside each answer and the
-recorded start time, and `doctor`'s held-lock finding prints the same words. What each platform records
-is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
-
-- A lock written by 0.56.0 or earlier lists as **unknown**, "written by an older prikk" — never "does
-  not appear to be running", because it records no start time to check.
-- A lock body is visible before it is complete (it is created, then written), so the new body starts
-  with a version line and ends with an end line; a body cut anywhere lists as **unknown**, "still being
-  written, or damaged", and its pid is not used or shown. Before, `pid=12` read from a half-written
-  `pid=1234` was checked as process 12.
-- A holder that has exited but not been reaped (a zombie) no longer reads as running — but a thread-group
-  leader whose main thread has exited while other threads run (state `Z`, `Threads: 2`) is a live process
-  and reads as one.
-- Three answers that were false of a live holder in the first form of this change are true: a holder in
-  **another time namespace** (Linux 5.6+ reports `/proc/<pid>/stat` field 22 with the reader's time-namespace
-  offset: 156423 inside a namespace made with `--boottime 1000`, 56423 outside) reads unknown, not "reused";
-  a lock taken **on another machine** (a repository on a shared drive) reads unknown, never "the machine
-  restarted" or "no such process", because "does not appear to be running" is now said only of a lock known
-  to come from this machine (machine identity: `/etc/machine-id`, `gethostuuid`, `MachineGuid`).
-- `prikk-ffi` also gains `machine_uuid` (macOS) and `machine_guid` (Windows; `windows-sys` feature
-  `Win32_System_Registry`).
-- 0.56.0's `unlock` still lists a new lock (it keeps only the `pid=` and `kind=` lines); measured against
-  the 0.56.0 binary.
-- Internal: `prikk-ffi` gains a macOS process-start-time call and a direct `libc` dependency under
-  `cfg(target_os = "macos")` (already in the lockfile through `rustix`); no `unsafe` enters `prikk-store`.
-### Changed — `prikk unlock --lock` refuses a holder that appears running unless `--force`
-
-With the holder recorded (above), "appears running" now means the process that took the lock is still the
-one running, so it is safe to refuse on. `prikk unlock --lock <path>` on such a lock exits `1` with a
-precondition naming the pid and the start time, whether it is given `--yes`, a typed `yes`, or no flag;
-`--force` clears it anyway, without asking, at the risk of corrupting what that process is
-writing. `--yes` keeps its meaning for a holder that does not appear to be running or is unknown (an older
-prikk's lock, a cut body, another namespace or machine). `--yes` and `--force` are no longer synonyms. The help
-line and [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean)
-define the flags and the three words once.
-
 
 ### Fixed — a damaged commit-index entry made `commit` refuse with `EditText requested for unchanged text`
 
@@ -332,15 +170,6 @@ the rebuild writes nothing and the finding stays, the ref names a damaged or mis
 finding listed with it, if any, names it), and no command repairs that in place. A test types the sentence of every
 kind of finding each of fifteen damages causes, against a copy, and checks it.
 
-### Output changes (way out)
-
-- **`verify` prints a `way out [<finding>]: <sentence>` line for each kind of finding it fails on**, after the
-  divergence counts. The sentence is the one `doctor` recommends for the same finding: both read it from one
-  function (`prikk_store::WayOut::sentence`), so they cannot disagree. The commit-index and lifecycle-cache lines
-  (`commit-index: …`, `lifecycle-cache: …`) added earlier in this release are now two of these lines.
-- `doctor`'s recommendations for the findings above changed from "preserve the repository and inspect …" to the
-  sentences described under Fixed.
-
 ### Fixed — an ignored worktree record could not be restored, and nothing said it was ignored
 
 `.prikk/worktree.baseline` is what lets `commit` refuse a worktree that is behind its branch. When it is
@@ -370,25 +199,6 @@ failures, or a structurally invalid delivery (which fails the preview itself); `
 Cost: one Ed25519 verification per signature of each unique Block and RefState, as the import's own check,
 plus one stored-envelope read per held Block and RefState.
 
-### Output changes
-
-- **A forged signature on an object the repository already holds is now the same refusal as on a new one.**
-  `bundle import` of a delivery that re-sends a held Block or RefState with an extra MAINTAINER signature by
-  an adopted key that does not verify used to stop in signature admission with `invalid signature: <type>
-  <id> carries a MAINTAINER signature by adopted key <K> that does not verify (…) -- refusing the whole
-  import, nothing was written`, with no route out, and `--format json` printed nothing. It now raises
-  `forged-publication-signature` — the sentence names both possible causes and the route (`prikk key
-  generate`, `prikk trust maintainer add`), the error reads `precondition not met: …`, and `bundle import
-  --format json` and `archive import --format json` print the `refusal-v1` document with that id. `sync
-  accept` meets the same condition with the same sentence. The same condition on an object that is not a
-  Block or RefState, and an AUTHOR-signature failure, keep their own sentence and print no document.
-- `bundle preview` lists that held-object refusal, first, before a class refusal (the import's order);
-  at most one signature entry. Cost measured on a 130-block delivery already held: preview about 9 → 10
-  ms, the import of the same delivery about 18 ms.
-- `bundle preview --format json` gains `"import_refusals"` (additive; the schema stays
-  `bundle-preview-v1`), and the text form prints `bundle import of this delivery would refuse: <id>` with
-  the import's sentence for each entry, and nothing when there is none.
-
 ### Fixed — `doctor` read clean over five findings `verify` fails on
 
 `verify` exits non-zero on eleven conditions; `doctor` was silent on five of them (measured by reading
@@ -400,32 +210,6 @@ out is `prikk received remove <ref>`), `PRIKK-DOCTOR-MERGE-BASELINE-DIVERGENCE` 
 `PRIKK-DOCTOR-ACTIVE-WAL-ORDERING` and `PRIKK-DOCTOR-COMMIT-WITNESS-SUBSTITUTED-EARLIER-RECORD` (errors,
 scoped to the `default` active session). A rule now holds over the class: `doctor` reports every finding
 `verify` fails on.
-
-### Added — `prikk doctor --rebuild-caches [--plan-only]`, and git's racy-entry rule for the commit-index
-
-`verify` and `doctor` now name one command for a divergence of either derived cache: **`prikk doctor
---rebuild-caches`** rebuilds every derived cache that has a divergence check, under the active lock `commit`
-takes (a `commit` running meanwhile fails with `lock conflict` instead of racing it), names each cache and the
-count it read, and `--plan-only` counts what it would read and writes nothing. The caches hold no history: no
-recovery-log entry.
-- the **commit-index** is rebuilt from the worktree: every file `commit` would scan is read once (the current
-  branch's baseline decides each file's kind). This is the way out for the case `commit` cannot see on its own,
-  an entry that hides a same-size rewrite whose mtime a tool put back;
-- the **lifecycle-state cache** is rebuilt by a full replay of the current branch's lineage from scratch (never an
-  incremental step). `verify` and `doctor` say "before your next commit" for it, because `commit` trusts it for an
-  incremental step and a divergent one can make the next commits wrong until a full replay replaces it (every 64
-  steps otherwise). `doctor` stays a warning.
-
-`commit` no longer records an entry for a file whose mtime is not older than the file system's own
-clock when `commit` took its lock (git's racy-entry rule), so a rewrite inside one timestamp tick can no
-longer hide behind a recorded stat: on a coarse-clock file system (an older kernel's tick, NTFS, FAT's 2
-seconds) `commit` silently skipped such a change; it reads the file instead, once.
-
-### Documented — signatures and RefUpdates carry no time
-
-`created_at` is `0` at every current signing and ref-update writer, so no block, patch or ref record
-carries a time. The sentence is in the data-model reference and the history guide (it was promised for
-0.56.0).
 
 ### Fixed — `sync seal` onto a branch the receiver does not hold sealed the branch without its earlier files
 
@@ -453,48 +237,284 @@ still seals it claim by claim and now builds the complete branch; creating the b
 (`prikk branch create heads/feature --from heads/main`) gives the same block ids and tree as the
 sender's. The sync guide states the step.
 
-### Upgrading
+### Changed — new repositories are format 8, and `prikk format upgrade` moves a format-6 or format-7 repository to it
 
-- **`prikk unlock --lock <path> --yes` against a lock whose holder appears running now exits `1`** with a
-  precondition naming the pid and the start time, and leaves the lock; before 0.57.0 it cleared that
-  lock. `--yes` and `--force` are no longer synonyms. **`--force` is unchanged:** it clears a live holder's
-  lock without asking, exactly as 0.56.0 did. A script that means to clear a live holder's lock (rare, and
-  at the risk of corrupting what that process is writing) passes `--force`. A script clearing the lock of a
-  crashed writer needs no change: a dead holder, an older prikk's lock and an unknown holder are all still
-  cleared by `--yes`.
-- **A lock written by 0.56.0 or earlier lists as `unknown`** ("written by an older prikk") until it is
-  cleared or its holder finishes; `--yes` clears it as before.
-- **`worktree-status`'s listing of a worktree file with a non-ASCII name changed, and `kind` and `authoring` are the contract.** Before this release a
-  non-ASCII file not in the baseline was `"kind": "unsupported-path"`. The final shapes, for a file not in the baseline:
+Format 8 is format 7 plus one rule, **a repository path may be non-ASCII**, and exists so older binaries meet such a repository with one clean
+refusal instead of a misreading: 0.55.0 read a non-ASCII path as damage (`verify` failed an object, `doctor` advised preserving a healthy
+repository) and let an archive carrying one land silently; 0.55.0 and 0.56.0 refuse a format-8 repository at open on every command with
+`unsupported format version: 8`, and refuse a format-8 archive before writing anything. Nothing stored differs from format 7: `prikk format upgrade`
+(explicit, verified like `prikk verify`, one byte of the `FORMAT` marker, no downgrade) moves a format-6 or format-7 repository to 8 in one step, and
+is idempotent on 8. **For a non-ASCII path, prikk suggests the upgrade in two connected places only:** `commit` (and `worktree-status`, which reports the same decision) refuses a non-ASCII path
+in a format-6 or format-7 repository, and `bundle import`, `bundle preview`, `archive import` and `sync accept` refuse an artifact that carries one or declares format 8 (the next entries). Each names the path, the format needed (8), the format the repository is at, `prikk format upgrade`, and that a
+prikk older than this one cannot open a format-8 repository. An ASCII-only repository is never prompted; nothing about it changes except what a new one is
+created as. Bundles and archives exported from a format-8 repository declare format 8. See [Release Compatibility](docs/src/reference/release-compatibility.md#repository-format-transitions).
 
-  | the name | repository format | `kind` | `authoring` |
-  |---|---|---|---|
-  | non-ASCII, in NFC (`café.md`) | 8 | `untracked` | `authored` (`refusal: null`) |
-  | non-ASCII, not in NFC (`cafe` + U+0301) | 8 | `untracked` | `refused`, the NFC sentence naming its NFC spelling |
-  | non-ASCII, either form | 6 or 7 | `untracked` | `refused`, the sentence naming `prikk format upgrade` |
-  | contains ZWJ, ZWNJ, a bidirectional control, a noncharacter, a C1 control or another decode-table character | any | `unsupported-path` | `refused`, the sentence naming the character |
+### Changed — repository-path collisions are judged by Unicode case folding over NFD, a deliberate over-refusal
 
-  `refused_count` counts the `refused` entries. A consumer that read `unsupported-path` as "a non-ASCII name" must read `authoring` instead, and one that
-  matched the old sentence (`this version of prikk does not accept non-ASCII repository paths`) must match `does not accept U+XXXX (…) in a repository path`.
-- **A path with a character the decode table refuses is reported by name.** The reading sentence for history is now `<path> contains U+200D (invisible format
-  character), which is outside what this version of prikk accepts, and a newer version of prikk may have written it` (it named only the path before); the
-  `refusal-v1` id (`outside-version-rule`) and the not-damage classification are unchanged.
-- **New repositories are format 8, and what that means for every binary and repository you have (Unicode repository paths).** Format 8 admits a non-ASCII path
-  (NFC, authored at `commit`); nothing stored differs from format 7.
-  - **`prikk init` and `prikk setup` create format 8.** A repository you already have stays at 6 or 7, works exactly as before for ASCII names, and is **never
-    upgraded as a side effect**. `prikk format upgrade` moves a verified format-6 or format-7 repository to 8 in place (one byte of `.prikk/FORMAT`, idempotent on 8,
-    no downgrade). `commit` is the only place prikk suggests it, and only when you commit a non-ASCII name.
-  - **An older prikk cannot open a format-8 repository.** Measured on the published binaries: 0.55.0 and 0.56.0 print `error: unsupported format version: 8` and exit
-    `1` on every command, and name nothing typeable (those binaries cannot change). Upgrade only repositories that only this release or a later one will touch.
-  - **A bundle or archive declares its sending repository's format.** A format-6 or format-7 receiver refuses a format-8 artifact, and any artifact that
-    carries a non-ASCII path whatever it declares, before the first write, naming the format and `prikk format upgrade` (`--format json`: `"refusal":
-    "repository-format-too-old"`); a declaration this build does not know is refused as `outside-version-rule`, not damage. Sending **to** an older prikk (measured on 0.55.0 and 0.56.0): an archive that declares format 8 is refused
-    before any write, **even when it holds only ASCII names**, so an archive exported from a format-8 repository cannot go back to those binaries; they ignore a bundle's
-    declaration and refuse a bundle that carries a non-ASCII path for the path itself (a bundle with ASCII names only is read as before, by reading the code, not run).
-  - **Names:** a non-ASCII name must be NFC (`commit` refuses another form, naming its NFC spelling and never rewriting it); U+200C and U+200D are refused with the
-    other invisible format characters (a Persian or Indic spelling or an emoji sequence that needs one cannot be committed; revisited if a consumer asks); two names
-    that are one name under Unicode case folding and normalization (`straße` and `strasse`) collide at `seal`, `extract`, every checkout and `branch switch`, a
-    deliberate over-refusal. History sealed earlier is never failed for it: `verify` warns once (the sealed-path-collision entry above).
+`seal`, `extract`, every checkout (`--patch-materialize*`, `--snapshot-materialize`, `branch switch`) and the `.prikk`
+first-component rule now compare repository paths by the **canonical caseless key**, `NFD(fold(NFD(path)))` with full Unicode case folding (one function in `prikk-object`,
+pinned by tests), instead of ASCII case alone. Two paths with one key are one name to a case-insensitive or normalizing file system, so they must not both exist: **`straße` and
+`strasse` collide**, as do `É` and `é`, `ẞ` and `ss`, an NFC and an NFD spelling of one name, and `K` and the Kelvin sign. This is stricter than necessary on a case-sensitive file
+system, on purpose: a check that protects the disk errs toward refusing, and it **may tighten across Unicode versions**. The refusal names both paths, the non-ASCII characters written
+`\u{..}`. A checkout now refuses a colliding state before its first write, naming both paths and writing nothing. `.pri` + U+212A + `k` is refused as the `.prikk` metadata directory.
+Branch and tag ref names and maintainer key ids keep ASCII case-folding, unchanged. **`verify` does not ask this rule** (next entry).
+
+### Changed — `verify` judges a sealed block's integrity, and a collision under today's rule is one warning
+
+`verify` re-derives each sealed block's state root **without the collision rule**: a real mismatch still fails, but history that was valid when sealed can never be failed by a
+later Unicode version or a crate upgrade that makes two old paths collide (that would read as damage). A sealed tip whose paths collide under this version's rule (a reached block no other
+block derives its state from) is instead **one warning per distinct pair** in `verify` and `doctor` (`PRIKK-DOCTOR-SEALED-PATH-COLLISION`; `verify --format json` gains an additive
+`sealed_path_collisions` array), exit `0`, naming both paths escaped, saying that `extract`, `checkout` and `branch switch` will refuse to write them, and giving the way out:
+`prikk mv <one> <new name>`, then `commit` and `seal`. `seal`, `extract`, every checkout and `branch switch` keep refusing, unchanged. A snapshot manifest still refuses a colliding
+state when it is encoded (sealing a checkpoint) and no longer when it is decoded (reading one).
+
+### Changed — a refusal that names an invisible character writes the path with it escaped
+
+`this version of prikk does not accept U+200D (invisible format character) in a repository path: a\u{200d}b.md` (and the reading sentence for history, and `worktree-status`'s refusal text)
+now write every non-ASCII character of the path as `\u{..}`; printed raw, a ZWJ is nothing and `a<ZWJ>b.md` read as `ab.md`.
+
+### Changed — a bundle or archive from a format-8 repository is refused by a format-6 or format-7 one, and a bundle's declared format is checked
+
+A bundle or archive declares its **sending repository's** format (a format-8 repository's artifacts declare 8, even with only ASCII paths).
+`bundle import`, `bundle preview` and `archive import` now refuse one that declares 8 when the receiving repository is format 6 or 7, before any
+object, journal or pointer is written, with a precondition naming both formats, `prikk format upgrade` and that a prikk older than this one cannot open a
+format-8 repository; an upgrade followed by the same import succeeds. An artifact from a format-6 or format-7 repository is received by every format.
+The bundle's declared format used to be informational, so a bundle could declare anything: `bundle verify`, `bundle preview` and `bundle import` now
+refuse a number this build does not know, as `archive verify` always did. **That refusal is no longer worded as damage:** an archive's sentence began
+`malformed persisted data:` and now reads `archive declares repository format N, which this build does not know how to read; … so this is not damage` (a
+scripted consumer that matched the old prefix must match the new text). Under `--format json`, `bundle import`, `bundle preview` and `archive import` now
+print a `refusal-v1` document for both refusals: `"refusal": "repository-format-too-old"` for the receiver older than the artifact, and the existing
+`"outside-version-rule"` for an unknown declared number (a different version of prikk wrote it; not damage). Both keep stderr's text and exit `1`.
+`bundle preview --format json` prints `refusal-v1` documents (`"command": "bundle-preview"`) for these two ids.
+See [Release Compatibility](docs/src/reference/release-compatibility.md#bundle-format-transitions) and [Troubleshooting](docs/src/guide/troubleshooting.md).
+
+### Changed — the top-level help is a grouped summary, and `prikk help [command]` works
+
+`prikk`, `prikk --help` and `prikk -h` now print the commands in groups, in the order of a day's work (start; record your work;
+read history and files; branches and tags; share with others; trust; merge; undo sealed work; check and repair), one line each:
+the name and a summary. It was 101 lines, up to 622 columns wide, with every full synopsis; it is about 60 lines, none longer than
+80 columns. **`prikk <command> --help` is unchanged** and carries every synopsis and note. `prikk help <command>` is an exact
+alias of it (the same text and exit code), `prikk help` alone is the top-level help, and `prikk help <unknown>` is the
+unknown-command error; before, `prikk help` failed with "unknown command: help". The groups and summaries are fields of the one
+command table that dispatch uses. A script that read the invocations from the top-level `--help` reads them from each command's own
+`--help` now.
+
+### Changed — `verify` and `doctor` count unreached content in one line instead of warning about each Patch and Blob
+
+Almost every `prikk uncommit` leaves a blob (a text `create-file` writes one too), and `received remove` and `doctor --discard-damaged-commits` leave patches and blobs, each of which was a warning
+line of its own although nothing was published under it and there is no trust question. They are now **one line**: `unreached content: N object(s) (P patch(es), B blob(s)) that nothing reaches -- …`,
+saying what they are (for example, left behind by a commit taken back, a received ref removed, a rolled-back block, discarded commits, or an import refused or interrupted after writing), that they are harmless, that no command removes them yet and that `prikk verify --format json` lists each one; `doctor` gives one `info` issue, `PRIKK-DOCTOR-UNREACHED-CONTENT`.
+It is not a warning, and exit codes are unchanged. **A Block or a RefState that nothing reaches keeps its per-object warning** (its publication trust was not checked), `unreached objects: N` stays the
+total, and `unreached_objects` in `--format json` is unchanged: every object, each with its type. A script that matched `warning: blob …` or `warning: patch …` in `verify` text, or counted
+`PRIKK-DOCTOR-UNREACHED-OBJECT` for a Patch or a Blob, reads the count line (text) or `unreached_objects` (JSON) instead.
+
+### Changed — a lock names its holder, not just a pid; `prikk unlock` says what it knows and why
+
+A lock file recorded only `pid=<n>`, so `prikk unlock` could only ask whether *some* process had that
+number, which a reused pid, a reboot, or another container's PID namespace each answer wrongly. A lock
+now also records its holder's **start time** and, on Linux, the machine's **boot id** and the holder's
+**PID namespace**; `unlock` answers "appears running" only for the same pid with the same start time
+(and, on Linux, the same boot, PID namespace and time namespace), on the same machine. The listing prints the reason beside each answer and the
+recorded start time, and `doctor`'s held-lock finding prints the same words. What each platform records
+is in [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
+
+- A lock written by 0.56.0 or earlier lists as **unknown**, "written by an older prikk" — never "does
+  not appear to be running", because it records no start time to check.
+- A lock body is visible before it is complete (it is created, then written), so the new body starts
+  with a version line and ends with an end line; a body cut anywhere lists as **unknown**, "still being
+  written, or damaged", and its pid is not used or shown. Before, `pid=12` read from a half-written
+  `pid=1234` was checked as process 12.
+- A holder that has exited but not been reaped (a zombie) no longer reads as running — but a thread-group
+  leader whose main thread has exited while other threads run (state `Z`, `Threads: 2`) is a live process
+  and reads as one.
+- Three answers that were false of a live holder in the first form of this change are true: a holder in
+  **another time namespace** (Linux 5.6+ reports `/proc/<pid>/stat` field 22 with the reader's time-namespace
+  offset: 156423 inside a namespace made with `--boottime 1000`, 56423 outside) reads unknown, not "reused";
+  a lock taken **on another machine** (a repository on a shared drive) reads unknown, never "the machine
+  restarted" or "no such process", because "does not appear to be running" is now said only of a lock known
+  to come from this machine (machine identity: `/etc/machine-id`, `gethostuuid`, `MachineGuid`).
+- `prikk-ffi` also gains `machine_uuid` (macOS) and `machine_guid` (Windows; `windows-sys` feature
+  `Win32_System_Registry`).
+- 0.56.0's `unlock` still lists a new lock (it keeps only the `pid=` and `kind=` lines); measured against
+  the 0.56.0 binary.
+- Internal: `prikk-ffi` gains a macOS process-start-time call and a direct `libc` dependency under
+  `cfg(target_os = "macos")` (already in the lockfile through `rustix`); no `unsafe` enters `prikk-store`.
+
+### Changed — `prikk unlock --lock` refuses a holder that appears running unless `--force`
+
+With the holder recorded (above), "appears running" now means the process that took the lock is still the
+one running, so it is safe to refuse on. `prikk unlock --lock <path>` on such a lock exits `1` with a
+precondition naming the pid and the start time, whether it is given `--yes`, a typed `yes`, or no flag;
+`--force` clears it anyway, without asking, at the risk of corrupting what that process is
+writing. `--yes` keeps its meaning for a holder that does not appear to be running or is unknown (an older
+prikk's lock, a cut body, another namespace or machine). `--yes` and `--force` are no longer synonyms. The help
+line and [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean)
+define the flags and the three words once.
+
+
+### Changed — the reference says that no signature, RefUpdate or other record carries a time
+
+`created_at` is `0` at every current signing and ref-update writer, so no block, patch or ref record
+carries a time. The sentence is in the data-model reference and the history guide (it was promised for
+0.56.0).
+
+### Added — non-ASCII repository paths: `commit` records NFC names in a format-8 repository
+
+A file named `日本語.md` or `café.md` can now be committed, sealed, read back (`tree`, `extract`, `verify`) and exchanged. What a path may contain is decided
+by one **explicit table in prikk's source, frozen at format 8** (controls, noncharacters, line and paragraph separators, bidirectional controls and invisible
+format characters), not by a Unicode property, so every binary that reads the history agrees. **`commit` records a name only if it is in Unicode
+normalization form C (NFC)** and never rewrites a name: a name in another form is refused, naming it and its NFC spelling (written `\u{..}`, because the two
+look identical), and an NFC and an NFD spelling of one name side by side are refused naming both. Reading history does not ask for NFC (both spellings are
+valid stored history; a documented exception to DC-54's encode/decode symmetry, because the NFC status of a code point unassigned today can change).
+**ZWJ (U+200D) and ZWNJ (U+200C) are refused**, with the other invisible format characters, by the owner's ruling: ZWNJ is needed to spell Persian and some
+Indic scripts and ZWJ forms many emoji sequences, so a name in those scripts or with such an emoji is refused, and the reason is that both are invisible
+(two names that look identical). This is revisited if a consumer asks; admitting them later loosens the table with a format change. `COM¹ COM² COM³ LPT¹ LPT²
+LPT³` join the Windows device names. A component is bounded in UTF-8 bytes (255), which already bounds its UTF-16 length; there is no second limit.
+A format-6 or format-7 repository still refuses to author a non-ASCII name (naming `prikk format upgrade`), and refuses an **artifact that carries one**:
+`bundle import`, `bundle preview`, `archive import` and `sync accept` refuse a patch with a non-ASCII path before writing anything, whatever format the artifact
+declares (this closes the corner where a format-7 repository exported what 0.55.0 let in), with `"refusal": "repository-format-too-old"` under `--format json`.
+Two crates join the binary, exact versions: `unicode-normalization =0.1.26` (and `tinyvec`, transitive) and `unicase =2.10.0`, both Unicode 18.0.0 (so
+`THIRD-PARTY-NOTICES` lists 26 crates); the only `unsafe` is five bounded sites in `unicode-normalization`'s Hangul code, covered by a test of all 11,172
+syllables. Their NFC and folding behaviour is pinned by tests, so an upgrade of either cannot change it silently. Comparing paths for collisions with Unicode case
+folding is the next entry. See [Path and Worktree Safety](docs/src/reference/path-safety.md).
+
+### Added — `prikk bundle import --adopt` lands a delivered branch as a local branch, and `tag create --target <block id>` is held to the standing `branch create --from` demands
+
+`archive import --adopt` had no twin for a bundle: a branch delivered by `bundle import` was a received ref only, and a block it carried could not be branched from. `bundle import --adopt` closes that,
+under the conditions `archive import --adopt` holds, on shared code. A bundle carries RefStates but no RefUpdates, so adoption is by the **receiver's own signature**: every RefState in the delivered
+chain must be signed by a MAINTAINER key this repository has adopted (through `verify`'s predicate), the receiver's own maintainer key must be adopted too, the ref must be absent locally, no queued work
+may own the name, a non-fast-forward needs `--allow-non-fast-forward`, and (for the current branch) a dirty worktree or a file in the way refuses, all before the first write. It then signs a
+`RefUpdate` over each delivered RefState, oldest first, writes **no** `remotes/` pointer for the adopted branch, and materializes the current branch into the worktree. A delivery that cannot be adopted
+still lands under `remotes/` as without the flag, with a typeable reason in the text (`not adopted: …`) and in `--format json` (`landed_as`, `adopted`, `remote_reason`, `materialized_*`; additive).
+**`tag create --target <block id>` now demands the standing `branch create --from <block id>` demands:** a block only a received ref holds, or that nothing reaches, refuses by name before any write,
+naming `bundle import --adopt` and `archive import --adopt` (the received index records no arrival route, so both are named). Before, a tag could be written at such a block without any importer's trust
+checks. A block a local branch or tag reaches, and `--target <branch ref>`, are unaffected. `GatedOperation::BundleAdopt` joins the trust-gated list. See
+[Commands](docs/src/reference/commands.md) and [Trust and Threat Model](docs/src/reference/trust-threat-model.md).
+
+### Added — `verify` and `doctor` warn once when a format-6 or format-7 repository holds a non-ASCII path
+
+A repository that 0.55.0 let admit a non-ASCII path from an archive reads clean now that format 8 admits non-ASCII paths, but format 7's own rule is that it holds none, and an older prikk would meet
+history it cannot read. `verify` prints one `warning:` naming the first path and `prikk format upgrade` (and why: after the upgrade the format makes an older prikk refuse the repository cleanly),
+`--format json` gains an additive `non_ascii_paths_in_old_format` array, and `doctor` gives `PRIKK-DOCTOR-NON-ASCII-PATH-IN-OLD-FORMAT` as a warning. Neither fails: both exit `0`.
+
+### Added — every release archive carries `THIRD-PARTY-NOTICES`, and a gate keeps it true
+
+BSD-3-Clause, MIT, Zlib and Unicode-3.0 each ask for their notice in a binary distribution, and the archives shipped `prikk` and
+`LICENSE` only. A new file at the repository root, `THIRD-PARTY-NOTICES`, lists every crate linked into the `prikk` binary on any
+release target (23 today; normal dependencies only, so no proc-macro, build or development crate, and not prikk's own crates) with
+its version, SPDX licence expression, the targets that link it, and the full text of each licence file its package ships. It is
+generated by `prikk-release-policy notices-generate` and committed. **A fifteenth gate, `notices-check`,** regenerates it and fails
+when the committed file differs (a dependency change cannot land without its notices) or when a linked crate ships no licence
+file (naming it). It runs in the local gates and in CI's `policy` job. The three tarballs, the Windows zip and both AUR packages
+(`/usr/share/licenses/prikk/THIRD-PARTY-NOTICES`) now carry it beside `LICENSE`; the release notes say so. See [Install](docs/src/guide/install.md#licences).
+
+### Added — the installers put `LICENSE` and `THIRD-PARTY-NOTICES` on disk, and the uninstallers remove exactly them
+
+`install.sh` and `install.ps1` used to move only `prikk` out of the archive and delete the rest, so an installer user had neither licence
+file. `install.sh` now installs both into `<parent>/share/licenses/prikk` when the install directory is named `bin` and `<parent>/share` already
+exists (the default `~/.local/bin` on an ordinary system gives `~/.local/share/licenses/prikk`), and otherwise into
+`<install directory>/share/licenses/prikk`, so that `--prefix ~/bin` makes no `~/share`;
+`install.ps1` installs them beside `prikk.exe`. `uninstall.sh` and `uninstall.ps1` remove those two files and nothing else, and the
+directories the installer made for them, each only when empty: install then uninstall leaves the file system as it was (the install
+directory itself, which the installer makes if missing, stays on Unix). An archive from a release before 0.57.0 has neither file: the installer
+says so and installs the binary. See [Install](docs/src/guide/install.md#licences).
+
+### Added — `prikk uncommit <patch-id> [--plan-only]` takes back your newest unsealed commit
+
+Promised to inklkunn (2026-10-31, §4: "it acts on a patch named exactly; it has `--plan-only`, and a recovery record so the
+discard can be undone"). It is the inverse of `commit` for work that has not been sealed, and nothing is wrong when you run
+it: the newest queued patch leaves the queue and is kept in the recovery log, the files in your worktree are not changed (the
+next `commit` includes them), and sealed history is never touched (for that, `rollback-draft`).
+- **Newest only, healthy queue only.** A patch with others queued after it is refused, naming them; a sealed patch, a block,
+  another object and an unknown id are each refused by what they are; a damaged or lost-commit queue refuses with its own row's
+  sentence and its own `doctor` verb.
+- **The next `commit` authors the same operations.** The plan says, per operation, whether the worktree still holds the change.
+  A rename is put back into the rename declarations (so the next `commit` authors a rename again, not a delete and a create
+  with a new identity); a rename declared since that overlaps refuses before anything is written.
+- **A re-run finishes an interrupted run** and says so (naming the earlier run when the recovery log holds it; the same state is also what a lost acknowledged commit looks like, and then the sentence says both). Between the WAL cut and the witness rewrite, `verify` and `doctor` read
+  the queue as a lost commit and now add that running `prikk uncommit` again finishes it.
+- **After the only queued patch leaves, the session is an empty queue**, the state `seal` leaves, and the worktree's record
+  matches it.
+- **The undo** is `prikk doctor --recovery-restore <run>` (the run id is printed). It now also restores the worktree's record
+  and the rename declarations, and refuses once anything has changed since. Each recovery entry is saved just before the write
+  it undoes. Each run records its kind in its entries, and the restore's closing sentence follows it (after an `uncommit` it
+  says the commit is queued again, not that damage is back).
+- Text only, with the exit codes of the other repairs (0 done, 1 refused, 2 usage); no `--format json` until the CLI's JSON
+  tier is decided (0.59.0). Raced against a `commit` loop (300 rounds): each ended in one of its two allowed states and `verify`
+  read clean every time. See [Commands](docs/src/reference/commands.md) and [Worktree patch
+  authoring](docs/src/guide/patches/worktree-patch.md).
+
+### Added — `cat --output` applies the recorded mode, and `cat --format json` refusals are `refusal-v1`
+
+Promised in stikk letter 029 (§4.5). `prikk cat --path <p> --output <file>` now writes the file with the mode
+prikk recorded (0755 stays executable, anything else is 0644), also over an existing file with `--force`,
+through the one function `extract` uses; only those two modes are ever applied, and a setuid, setgid or
+sticky bit is never taken from content. Where there is no POSIX mode (Windows) nothing is applied, as in
+`extract`. Under `--format json`, every refusal `cat` exits `1` for now prints one `refusal-v1` document to
+stdout with `"command": "cat"`, and stderr and the exit code are unchanged. Eight of its nine ids are
+`extract`'s, with the same meaning; the new one is `path-not-found`. See [Tree and
+cat](docs/src/guide/tree-and-cat.md).
+
+### Added — `verify --format json` carries the block seals, item counts, failed objects and unverifiable signatures
+
+Promised in stikk letter 029 (1.2) and inklkunn's 2026-10-31 letter (§1: "the same field reaches
+`verify-report-v1`"). `verify-report-v1` gains, additively within the version (a consumer written against
+the older field set reads these documents unchanged), what `verify`'s text has always printed:
+- **`block_seals`**: every reached Block's `sealed_by` (the key ids it records, **as recorded, not as
+  trusted**: the same field and function as `log`'s, so it reads the same before and after `trust maintainer
+  remove`), `trusted_by`, and each signature's outcome beside it. stikk's case: `colleague` sealed 1 of 3,
+  before the key is removed and after.
+- **`object_items`**, **`failed_objects`** (typed: object type, id when known, locator, class `corrupt` or
+  `outside-version-rule`), **`unverifiable_author_signatures`**.
+- **`publication_trust_issues`**, typed: `code`, `object_type`, `object_id`, `key_id`, `outcome`.
+`log` and `verify` list the **Block's** signatures; `bundle preview` lists the delivered tip RefState's, and
+the two can differ. `ways_out` is not here (the JSON tier round, 0.59.0). No extra verification work: the
+per-signature outcomes come from the single pass that already decided each block's trust.
+See [Commands](docs/src/reference/commands.md).
+
+### Added — `log --format json` carries `parent_block_ids` and `sealed_by`
+
+Promised in stikk letter 029 (§4.3) and inklkunn's 2026-10-31 letter (§1). Each block in `log-report-v1`
+gains two fields, additive within the version (a consumer written against the older field set reads these
+documents unchanged; `parent_count` is kept):
+- **`parent_block_ids`**: the Block's own parents as stored, sorted by object id (the order carries no
+  "first parent"; a root block has `[]`).
+- **`sealed_by`**: the MAINTAINER key ids the Block's seal records, **as recorded, not as trusted**: it
+  reads the same before and after `trust maintainer remove` of a sealer, and lists a sealer this
+  repository never adopted. The same function builds `bundle preview`'s `sealed_by`.
+See [History inspection](docs/src/guide/history.md).
+
+### Added — `prikk branch create heads/<name> --from <block id>`
+
+Promised in stikk letter 029 (1.1). `--from` now takes a bare block id (64 lowercase hex characters) as well
+as a ref, for a block that **a local branch or tag reaches**. Going back to an earlier block no longer
+takes a tag you did not ask for. The id is resolved by the point resolver `cat`, `tree` and `extract` use
+(an id the store does not hold, or of another kind, refuses saying what it is); the RefState written is the
+one a ref route writes. A block held **only through a received ref**, or **reached by no ref**, refuses by
+name before anything is written, with the received ref(s) that hold it and the way forward
+(`prikk archive import <archive> --adopt` or `prikk bundle import --input <bundle> --adopt`, then the same command): a branch published there would bypass
+the trust checks `--adopt` makes. See
+[Commands](docs/src/reference/commands.md).
+
+### Added — `prikk doctor --rebuild-caches [--plan-only]`, and git's racy-entry rule for the commit-index
+
+`verify` and `doctor` now name one command for a divergence of either derived cache: **`prikk doctor
+--rebuild-caches`** rebuilds every derived cache that has a divergence check, under the active lock `commit`
+takes (a `commit` running meanwhile fails with `lock conflict` instead of racing it), names each cache and the
+count it read, and `--plan-only` counts what it would read and writes nothing. The caches hold no history: no
+recovery-log entry.
+- the **commit-index** is rebuilt from the worktree: every file `commit` would scan is read once (the current
+  branch's baseline decides each file's kind). This is the way out for the case `commit` cannot see on its own,
+  an entry that hides a same-size rewrite whose mtime a tool put back;
+- the **lifecycle-state cache** is rebuilt by a full replay of the current branch's lineage from scratch (never an
+  incremental step). `verify` and `doctor` say "before your next commit" for it, because `commit` trusts it for an
+  incremental step and a divergent one can make the next commits wrong until a full replay replaces it (every 64
+  steps otherwise). `doctor` stays a warning.
+
+`commit` no longer records an entry for a file whose mtime is not older than the file system's own
+clock when `commit` took its lock (git's racy-entry rule), so a rewrite inside one timestamp tick can no
+longer hide behind a recorded stat: on a coarse-clock file system (an older kernel's tick, NTFS, FAT's 2
+seconds) `commit` silently skipped such a change; it reads the file instead, once.
 
 ## 0.56.0 — 2026-11-08
 
