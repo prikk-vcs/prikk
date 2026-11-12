@@ -69,3 +69,21 @@ As in 0.56.0's prep:
     the Unicode paths with ZWJ/ZWNJ refused, and that `sync seal --claim` then needs a clean worktree;
   - **planeter:** the format-8 cut, `bundle import --adopt`, and the archive sentence that is no longer worded as
     damage.
+
+**P1 ACCEPTED and pushed 2026-11-12** (`0dfe3be4`; review `release-0.57.0-prep-P1-review-v1`). No `### Security`.
+
+**P2 item 0, before items 1–3** (one commit, or one per file):
+- **(F1)** `architecture.md` names `prikk-ffi`'s `libc` (macOS) and `windows-sys` (Windows), and `placement.rs` as the
+  gate's list.
+- **(F2)** `foundation/index.rs:634`'s format-6 refusal says format **8**. Fold it into the Output changes
+  refusal-text line, and fix `test_support.rs:296`'s comment.
+- **(F3)** "two places" becomes three, in the CHANGELOG and `release-compatibility.md:124`: add `verify`'s and
+  `doctor`'s one warning in a format-6/7 repository that holds a non-ASCII path.
+- **(F4)** P2's smoke runs the ASCII-only format-8 bundle into both published 0.55.0 and 0.56.0, and the Upgrading
+  line cites each measurement. 0.56.0 is already in `.git-exclude/logs/0.57.0-U4/smoke-release.txt:29-30`.
+- **(F5)** `tag create`'s help line carries `branch create`'s rule.
+- **(Ruling 2)** `#[non_exhaustive]` on `BlockStateOutcome`, `HistoryEntry`, `PublicationTrustIssue`, `HeldLock`,
+  `ObjectVerification`. **Not** on `RepositoryFormat`, `BlockStateStatus`, `GatedOperation`, which stay exhaustive so
+  the CLI's own exhaustive matches still fail to compile on a new variant. Update the Upgrading line to match, and state
+  the rule there in one clause.
+- The 15 gates on the final commit.
