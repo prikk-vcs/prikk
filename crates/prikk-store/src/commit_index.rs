@@ -163,6 +163,7 @@ pub(crate) fn file_system_horizon(held_lock: &Path) -> (i64, u32) {
 
 /// What `prikk doctor --rebuild-caches` read and wrote for the commit-index (0.57.0 step 0c/1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CommitIndexRebuildReport {
     /// Entries the index held before.
     pub entries_before: usize,

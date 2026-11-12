@@ -43,6 +43,7 @@ pub struct PublicationTrustIssue {
 /// The object a [`PublicationTrustIssue`] is about, with one finding per MAINTAINER signature that
 /// did not verify as trusted (0.57.0 step 3, S3).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PublicationTrustSubject {
     /// The object's type (`block`, `ref-state`, `tag`, `ref-update`, ...).
     pub object_type: prikk_object::ObjectType,
@@ -55,6 +56,7 @@ pub struct PublicationTrustSubject {
 
 /// One MAINTAINER signature that did not count as trusted, or the absence of any.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PublicationTrustFinding {
     /// The signature's key id; `None` exactly when the object has no MAINTAINER signature.
     pub key_id: Option<String>,

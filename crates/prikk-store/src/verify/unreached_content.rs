@@ -13,6 +13,7 @@ use super::UnreachedObject;
 
 /// How many unreached Patches and Blobs a repository holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct UnreachedContent {
     /// Unreached Patches.
     pub patches: usize,

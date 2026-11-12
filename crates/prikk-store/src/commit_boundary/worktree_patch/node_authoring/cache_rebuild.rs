@@ -40,6 +40,7 @@ use super::{
 
 /// What `prikk doctor --rebuild-caches` did to the lifecycle-state cache (0.57.0 step 1d).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LifecycleCacheRebuildReport {
     /// The block the cache claimed to represent before, if a cache loaded.
     pub claimed_block_before: Option<ObjectId>,

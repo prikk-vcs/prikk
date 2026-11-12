@@ -101,6 +101,7 @@ pub enum PidLiveness {
 /// Why a lock got the [`PidLiveness`] it got -- the listing prints this so "unknown" is never
 /// bare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LivenessReason {
     /// Alive, same start time (and boot and namespace on Linux).
     SameProcess,

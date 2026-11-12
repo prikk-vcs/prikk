@@ -406,6 +406,7 @@ pub enum AuthorSignatureVerification {
 /// Block whose publication trust was checked, including one nothing adopted signs for, so "how many of
 /// these blocks did key K seal" has an answer before and after `trust maintainer remove`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BlockSealers {
     /// The Block's object id.
     pub block_id: ObjectId,
