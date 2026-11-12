@@ -27,42 +27,80 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-/// Derive the `prikk` binary's path from this very test executable's own location -- no process
-/// spawned, nothing guessed (0.55.0 G2 Part A2, replacing Part A's nested `cargo build`).
+/// Where the `prikk` binary is for this test process, resolved once (0.55.0 G2 Part A2, changed by 0.57.0 prep P3b).
 ///
-/// **Why not `env!("CARGO_BIN_EXE_prikk")`:** that macro only resolves at compile time, for the
-/// rustc invocation building an integration test or benchmark belonging to the *same package* as
-/// the `[[bin]]` target it names. `prikk` (`crates/prikk-cli`) has no `[lib]` target, so nothing --
-/// including this crate -- can form a Cargo dependency edge to it, and this crate's own compilation
-/// is in any case a separate rustc invocation from `prikk`'s own test/bench compilation.
+/// **Why not `env!("CARGO_BIN_EXE_prikk")` here:** that macro only resolves at compile time, for the rustc invocation building an
+/// integration test or benchmark belonging to the *same package* as the `[[bin]]` target it names. `prikk` (`crates/prikk-cli`)
+/// has no `[lib]` target, so nothing -- including this crate -- can form a Cargo dependency edge to it, and this crate's own
+/// compilation is a separate rustc invocation from `prikk`'s own test compilation. (`tests/harness_self_test/support_binary_identity.rs`
+/// resolves it in the test crate and proves the two agree.)
 ///
-/// **Why not Part A's nested `cargo build --tests -p prikk`, reviewed and rejected
-/// (`.git-exclude/reviewed/0.55.0-g2-A-review-v1.md`):** it ran a real `cargo` subprocess inside
-/// every one of ~141 test-binary processes (doubling `cargo test -p prikk`'s own wall time, 7.74s to
-/// 14.26s), and it *inferred* the profile/target/features/lock rather than reusing the exact binary
-/// `cargo test` itself already built -- the very class of bug Part A's own Defect 1 surfaced once
-/// (a plain `cargo build` silently produced the test-support-feature-disabled binary).
+/// **Why not Part A's nested `cargo build --tests -p prikk`** (`.git-exclude/reviewed/0.55.0-g2-A-review-v1.md`): it ran a real
+/// `cargo` subprocess inside every one of ~141 test-binary processes and *inferred* the profile, target, features and lock rather
+/// than reusing the binary `cargo test` itself already built.
 ///
-/// **This derivation instead reads where Cargo already put things**, the same technique
-/// long-established Cargo test-support crates use (`assert_cmd::cargo::cargo_bin`,
-/// `escargot`): a `cargo test`-built integration-test executable always lives at
-/// `<target-dir>/[<target-triple>/]<profile>/deps/<name>-<hash>[.exe]`, and every other binary
-/// Cargo built *for that same invocation* -- including `prikk`'s own `[[bin]]` -- lives directly in
-/// that same `<profile>` directory: this executable's own parent's parent. No profile/target/
-/// feature/lock guesswork, because nothing is re-derived -- it is read from the one build that
-/// already happened, the build this very test process is itself a product of. Verified against
-/// `env!("CARGO_BIN_EXE_prikk")` by identity, in every profile, by
-/// `tests/support_binary_identity.rs` (A2.2).
+/// **What this does instead, in order (measured on 2026-11-13, `probe-env.txt`):**
+/// 1. **`CARGO_BIN_EXE_prikk` in the test process's environment.** Cargo 1.100.0 sets it when it runs an integration test
+///    (`<profile>/prikk`); Cargo 1.85.0 does not. It is Cargo's own answer, so it is used whenever it is there.
+/// 2. **Otherwise the layout older Cargo uses:** a test executable at `<profile>/deps/<name>-<hash>` has the binary at
+///    `<profile>/prikk` (this executable's parent's parent). Cargo 1.100.0 moved test executables to
+///    `<profile>/build/prikk/<hash>/out/<name>-<hash>`, so for that Cargo this guess names a directory -- which is why (1) comes first
+///    and why the result is checked.
+///
+/// **The result is checked** ([`resolve_prikk_binary`]): a path that is not a regular file panics with a sentence naming the
+/// path, where it came from, and what was found there, instead of a `NotFound` at the first `init`.
 fn locate_prikk_binary() -> PathBuf {
     let exe = std::env::current_exe()
         .unwrap_or_else(|err| panic!("current_exe() (to locate the prikk binary): {err}"));
-    let deps_dir = exe
-        .parent()
-        .unwrap_or_else(|| panic!("{exe:?} (this test executable) has no parent directory"));
-    let profile_dir = deps_dir.parent().unwrap_or_else(|| {
-        panic!("{deps_dir:?} (expected a Cargo `deps` directory) has no parent directory")
-    });
-    profile_dir.join(format!("prikk{}", std::env::consts::EXE_SUFFIX))
+    let from_cargo = std::env::var_os("CARGO_BIN_EXE_prikk").map(PathBuf::from);
+    resolve_prikk_binary(from_cargo, &exe).unwrap_or_else(|message| panic!("{message}"))
+}
+
+/// The rule behind [`locate_prikk_binary`], on values, so a test can feed it each situation: `from_cargo` is the value of
+/// `CARGO_BIN_EXE_prikk` in the test process's environment, if any; `test_exe` is this test executable's path.
+///
+/// # Errors
+///
+/// A sentence naming the candidate path, where it came from, and what is there, when the candidate is not a regular file.
+pub fn resolve_prikk_binary(
+    from_cargo: Option<PathBuf>,
+    test_exe: &Path,
+) -> Result<PathBuf, String> {
+    let (candidate, source) = match from_cargo {
+        Some(path) => (
+            path,
+            "CARGO_BIN_EXE_prikk, which Cargo sets when it runs this test".to_string(),
+        ),
+        None => {
+            let deps_dir = test_exe.parent().ok_or_else(|| {
+                format!("{test_exe:?} (this test executable) has no parent directory")
+            })?;
+            let profile_dir = deps_dir.parent().ok_or_else(|| {
+                format!("{deps_dir:?} (expected a Cargo `deps` directory) has no parent directory")
+            })?;
+            (
+                profile_dir.join(format!("prikk{}", std::env::consts::EXE_SUFFIX)),
+                "the `<profile>/deps/<test>` layout older Cargo uses (CARGO_BIN_EXE_prikk is not set)"
+                    .to_string(),
+            )
+        }
+    };
+    if candidate.is_file() {
+        return Ok(candidate);
+    }
+    let found = if candidate.is_dir() {
+        "that path is a directory"
+    } else if candidate.exists() {
+        "that path exists but is not a regular file"
+    } else {
+        "nothing exists there"
+    };
+    Err(format!(
+        "expected the prikk executable at {} (from {source}), but {found}; this test executable is {}. \
+         Run the tests through `cargo test -p prikk`, or set CARGO_BIN_EXE_prikk to the built binary",
+        candidate.display(),
+        test_exe.display()
+    ))
 }
 
 /// The `prikk` binary for this process's own profile, derived once per test-binary process
