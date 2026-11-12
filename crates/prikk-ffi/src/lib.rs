@@ -1,8 +1,17 @@
-//! Prikk's sole FFI surface (DC-96 Windows Anchor Identity). Every future FFI need lands here
-//! rather than motivating a second entry in `UNSAFE_EXEMPT_CRATES`, which DC-90 forbids anyway --
-//! see that gate's own module doc for why at most one workspace crate may hold this exemption.
-//! Compiles to nothing on non-Windows targets: there is no FFI need there today, and this crate
-//! exists to hold the one that does, not to anticipate ones that don't yet.
+//! Prikk's sole FFI surface (DC-96 Windows Anchor Identity, widened by 0.57.0 step 2 for lock liveness). Every
+//! future FFI need lands here rather than motivating a second entry in `UNSAFE_EXEMPT_CRATES`, which DC-90 forbids
+//! anyway -- see that gate's own module doc for why at most one workspace crate may hold this exemption.
+//!
+//! What it holds, per platform (a platform with no FFI need compiles to nothing, and this crate does not anticipate
+//! needs that do not exist yet):
+//!
+//! - **Windows:** a file's identity (`FileIdentity`, `identity_of`) and current path (`current_path_of`), advisory
+//!   process liveness (`ProcessLiveness`, `process_liveness`), a no-replace rename (`rename_no_replace`), a process's
+//!   start time (`ProcessStart`, `process_start_time`) and the machine's identity (`machine_guid`).
+//! - **macOS** (0.57.0, a lock names its holder): a process's start time (`ProcessStart`, `process_start_time`, from
+//!   `proc_pidinfo`) and the machine's identity (`machine_uuid`, from `gethostuuid`).
+//! - **Linux and other targets:** nothing. A holder's start time is a plain file read (`/proc/<pid>/stat`), done
+//!   by `prikk-store` without FFI.
 
 /// Identity of an open filesystem object on Windows -- the value that confirms an anchor handle
 /// still refers to the object it was bound to (DC-96). Meaningful only within one boot on one
