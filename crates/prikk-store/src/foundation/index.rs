@@ -632,7 +632,7 @@ pub(crate) fn decide_write_outcome(
         return Err(PrikkError::Integrity(format!(
             "existing container record for {object_id} differs from candidate -- this repository \
              is format 6, which holds one record per object id; `prikk format upgrade` moves it to \
-             format 7, where another signer's copy merges"
+             format 8, where another signer's copy merges"
         )));
     }
     // Format 7: the union. Signatures the stored record already carries are skipped; if the candidate

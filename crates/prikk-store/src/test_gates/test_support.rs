@@ -293,7 +293,7 @@ pub(crate) fn repository_bytes(
     Ok(files)
 }
 
-/// A new repository at **format 6** (RFC 156 §5b). New repositories are format 7; a test of a format-6
+/// A new repository at **format 6** (RFC 156 §5b). New repositories are format 8; a test of a format-6
 /// rule — one record per object id — states the format it tests. A freshly initialized repository holds
 /// nothing a format-6 repository could not, so setting the marker makes a genuine one.
 pub(crate) fn init_format_6_repository(

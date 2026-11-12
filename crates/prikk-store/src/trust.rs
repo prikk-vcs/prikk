@@ -29,6 +29,7 @@ use crate::trust_index::{
 
 /// One publication-trust issue found during repository verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PublicationTrustIssue {
     /// Stable issue code.
     pub code: &'static str,

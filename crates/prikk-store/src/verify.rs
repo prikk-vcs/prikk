@@ -355,6 +355,7 @@ pub use unreached_content::UnreachedContent;
 
 /// Verification summary for a single persisted object.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ObjectVerification {
     /// The object ID parsed from the object filename.
     pub object_id: ObjectId,

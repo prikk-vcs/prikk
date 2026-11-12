@@ -52,8 +52,11 @@ graph TD
 
 `prikk-store` may depend on exactly **`getrandom` and `rustix`**; `prikk-crypto` on **`ed25519-dalek`
 and `getrandom`**; `prikk-hash` on **`sha2`**; `prikk-object` on **`unicode-normalization` and `unicase`**
-(0.57.0: Unicode normalization and case folding for repository paths). Every other product crate has **no**
-third-party dependencies at all.
+(0.57.0: Unicode normalization and case folding for repository paths); `prikk-ffi` on **`windows-sys`**
+(Windows only) and **`libc`** (macOS only, 0.57.0: a process's start time and the boot time for lock
+liveness). Every other product crate (`prikk-error`, `prikk-replay`, `prikk`) has **no** third-party
+dependencies at all. The list the gate checks is `ALLOWED_THIRD_PARTY` in
+`tools/release-policy/src/boundary/placement.rs`.
 
 This is not a convention. It is checked by `prikk-release-policy boundary-check`, which resolves the
 real package graph from the root manifest and fails the build on any addition. Adding a dependency to a

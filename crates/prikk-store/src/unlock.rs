@@ -50,6 +50,7 @@ pub use crate::lock_holder::{LivenessReason, PidLiveness};
 
 /// One lock file found on disk, parsed from its own body (`lock_holder`'s format).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HeldLock {
     /// The lock file's own path -- pass this to `clear_lock` to remove it.
     pub path: PathBuf,

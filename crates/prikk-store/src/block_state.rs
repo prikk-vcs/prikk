@@ -737,6 +737,7 @@ pub(crate) fn excuse_unreached_outside_version_rule(
 
 /// One block's resolved outcome from `verify_blocks_topological`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BlockStateOutcome {
     /// The block this outcome is for.
     pub block_id: ObjectId,

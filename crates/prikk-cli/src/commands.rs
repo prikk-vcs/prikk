@@ -342,7 +342,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_tag,
         help_lines: &[
             "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
-            "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at a block",
+            "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at an existing target (a block id must be reached by a local branch or tag)",
         ],
     },
     Command {

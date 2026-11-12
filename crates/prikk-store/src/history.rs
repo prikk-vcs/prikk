@@ -36,6 +36,7 @@ impl RefHistory {
 
 /// One published RefState and its target Block summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HistoryEntry {
     /// RefState object ID for this publication.
     pub ref_state_id: ObjectId,
