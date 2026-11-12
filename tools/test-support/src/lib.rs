@@ -56,7 +56,7 @@ fn locate_prikk_binary() -> PathBuf {
     resolve_prikk_binary(from_cargo, &exe).unwrap_or_else(|message| panic!("{message}"))
 }
 
-/// The rule behind [`locate_prikk_binary`], on values, so a test can feed it each situation: `from_cargo` is the value of
+/// The rule behind `locate_prikk_binary` (private), on values, so a test can feed it each situation: `from_cargo` is the value of
 /// `CARGO_BIN_EXE_prikk` in the test process's environment, if any; `test_exe` is this test executable's path.
 ///
 /// # Errors
