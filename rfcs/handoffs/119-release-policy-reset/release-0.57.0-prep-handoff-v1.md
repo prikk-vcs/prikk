@@ -97,3 +97,34 @@ unchanged: 1.865 against 0.56.0's 1.869, same day, alternated. The handoff's "â‰
   `gethostuuid`), not "the boot time".
 - **(F7)** `crates/prikk-ffi/src/lib.rs:1-5`: the crate doc says what the crate holds on each platform. It is no longer
   "nothing on non-Windows targets".
+
+**P3 ACCEPTED 2026-11-13** (review `release-0.57.0-prep-P3-review-v1`). The candidate `ee13618e` is pushed. **CI on it
+is RED** (run `43325384765`): `stable`, macOS and Windows mutation suites; MSRV green.
+
+## Part P3b, FIRST: `main` is red on stable, because Cargo 1.100.0 moved test executables (45 min, stop at 90; report `release-0.57.0-prep-P3b-report.md`)
+
+**Cause (read by the architect):** `tools/test-support/src/lib.rs:56-65` (`locate_prikk_binary`) takes the test
+executable's parent's parent and joins `prikk`. Cargo 1.100.0 puts test executables at
+`<profile>/build/prikk/<hash>/out/<test>` (reproduced here with `cargo test -p prikk --no-run`), so that path is the
+directory `<profile>/build/prikk`. The binary is still at `<profile>/prikk`. 1.85.0 keeps `<profile>/deps/`. Your P3
+gates passed on rustc 1.99.1; this machine now has 1.100.0, so the gates fail locally too.
+
+1. **Locate the binary by Cargo's contract, not its layout.** Measure first, and report:
+   - whether `CARGO_BIN_EXE_prikk` is set at **run time** for `prikk`'s integration tests on 1.85.0 and on 1.100.0
+     (Cargo documents it at compile time);
+   - how each of the 23 test binaries could hand `env!("CARGO_BIN_EXE_prikk")` to the harness once. The
+     harness is used only by `prikk-cli`'s tests.
+
+   **The architect leans to `env!("CARGO_BIN_EXE_prikk")`,** resolved in the test crate, because it is Cargo's
+   documented contract and does not depend on any layout. Walking up the ancestors to find the profile directory is a
+   second layout guess, and this break shows why a guess fails. If neither fits, stop and ask.
+2. **`harness_self_test/support_binary_identity.rs`** keeps proving the identity on both toolchains. Add a red control:
+   a path that names a directory, not a file, must fail with a sentence naming what was expected, not `NotFound` at
+   `init`.
+3. **`tools/corpus/tests/support/mod.rs:128`** has its own `locate_prikk_binary`. Say whether it reads the layout or
+   Cargo's messages, and fix it the same way if it reads the layout.
+4. **The 15 gates on 1.100.0, and the `test-msrv` stage on 1.85.0,** on the final commit. Read CI's macOS and Windows
+   jobs on it, and say so.
+5. **CHANGELOG:** nothing. This is development tooling, and no user-visible behaviour changes.
+
+That commit becomes the candidate for the external review. The release commit `ee13618e` stays below it, unchanged.
