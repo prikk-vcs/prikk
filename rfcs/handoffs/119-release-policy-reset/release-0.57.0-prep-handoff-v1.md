@@ -132,3 +132,46 @@ That commit becomes the candidate for the external review. The release commit `e
 **P3b ACCEPTED and pushed 2026-11-13** (`74984253`, CI green `43335179101`, 17/17; review
 `release-0.57.0-prep-P3b-review-v1`). **The candidate for the external review is `74984253`.** The team has nothing
 until the review answers. P4 (the re-date) comes on the tag day.
+
+**External review 050 answered 2026-11-13: nothing blocks the tag** (`.git-exclude/upstream/external-architect/receive/050-review-of-the-0-57-0-candidate-74984253/`;
+reading `.git-exclude/reviewed/external-050-reading-v1.md`). **Owner, 2026-11-14:** *"Both your recommendations are
+accepted"*:
+- the `doctor` cache write is fixed in 0.57.0, as P3c below;
+- `--yes` stops clearing an *unknown* holder in 0.58.0's step 0, not in this release.
+
+## Part P3c: plain `doctor` writes nothing again (45 min, stop at 90; report `release-0.57.0-prep-P3c-report.md`)
+
+**Measured by the reviewer** (`receive/050-…/reproduce/i4.sh`, `i4.txt`). With the current branch's worktree record
+absent, damaged or empty, or with a queued commit, plain `doctor` run three times writes three different
+`.prikk/cache/lifecycle-state.v1` files; `steps_since_reanchor` goes 1, 2, 3. 0.56.0's `doctor` left it untouched, and
+`platform-support.md:223` says plain `doctor` is "Read-only".
+
+**One path, read by the architect:** `doctor.rs:1203` → `branch_switch::worktree_record_restorable_by_switch` →
+`plan_worktree_record_restore` (shared with `branch switch`, a writer) → `worktree_status::worktree_status_over_sound_replay`
+→ `resolve_folded_worktree_baseline` with `CacheWrite::Refresh`. **The queued-commit shape is a second path the
+architect has not traced.** Find every path, not only this one.
+
+1. **Plain `doctor` resolves with `CacheWrite::Never` on every path.** The existing
+   `resolve_folded_worktree_baseline_without_cache_write` is the model. The writers (`branch switch`, `commit`,
+   `worktree-status`) keep `Refresh`. Put the choice on the call path, not in a rule the writers share: a shared
+   check is not always the fix.
+2. **A test that fails on any write, not on this one file:** `doctor` run three times leaves every file under
+   `.prikk/` byte-identical (path, length, content), in each of the reviewer's shapes:
+   - the record absent;
+   - the record damaged;
+   - the record empty;
+   - a queued commit with the record present;
+   - a clean repository.
+
+   Red control: put `Refresh` back on the path above, and the test must fail naming the file.
+3. **`doctor`'s findings do not change:** the worktree-record notice still appears where it did, and the same test
+   output passes.
+4. **The docs:** `platform-support.md:223` is true again. Grep the docs for any other sentence about which commands
+   write, and say what you found.
+5. **CHANGELOG:** nothing. It is a defect of this release's own feature, so it folds in.
+6. **The 15 gates** on the final commit, with `test` on 1.100.0 and `test-msrv` on 1.85.0.
+
+**Then P4 (on the tag day, after the owner's word):** re-date the heading (`CHANGELOG.md:3`), and add one sentence to
+the format-8 Upgrading entry: a sync artifact declares no repository format, so a format-6/7 receiver's
+`sync accept` refuses one only when it carries a non-ASCII path. That is harmless, since nothing stored differs
+between format 7 and 8 (review 050 §1). Run the 15 gates.
