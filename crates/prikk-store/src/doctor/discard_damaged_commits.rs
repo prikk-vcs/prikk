@@ -28,7 +28,9 @@ use crate::commit_boundary::witness::{WitnessState, read_witness, rebuild_witnes
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::wal::{Wal, WalReplay};
-use crate::worktree_status::worktree_status_over_sound_replay;
+use crate::worktree_status::{
+    worktree_status_over_sound_replay, worktree_status_over_sound_replay_without_cache_write,
+};
 
 /// The plan a real run writes from, and everything `--plan-only` prints (RFC 166 D5 K1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,10 +146,19 @@ fn run(layout: &RepositoryLayout, mode: Mode) -> Result<DiscardDamagedCommitsPla
         trailing_partial_bytes: 0,
         record_outcomes: Vec::new(),
     };
-    let working_tree_may_still_hold_content =
-        worktree_status_over_sound_replay(layout, &owning_ref_name, &sound_replay_for_status)
-            .ok()
-            .is_some_and(|status| !status.is_clean());
+    // 0.57.0 prep P3c: a plan writes nothing, so it asks the way that does not refresh the baseline cache; the real run, a
+    // writer, keeps the refreshing form.
+    let status = match mode {
+        Mode::PlanOnly => worktree_status_over_sound_replay_without_cache_write(
+            layout,
+            &owning_ref_name,
+            &sound_replay_for_status,
+        ),
+        Mode::Execute => {
+            worktree_status_over_sound_replay(layout, &owning_ref_name, &sound_replay_for_status)
+        }
+    };
+    let working_tree_may_still_hold_content = status.ok().is_some_and(|status| !status.is_clean());
 
     match mode {
         Mode::PlanOnly => {

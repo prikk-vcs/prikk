@@ -129,7 +129,12 @@ pub fn switch_branch(
                 comparison,
                 crate::worktree_baseline::WorktreeBaselineComparison::NoRecord
             ) {
-                match plan_worktree_record_restore(layout, &target, &probe_replay)? {
+                match plan_worktree_record_restore(
+                    layout,
+                    &target,
+                    &probe_replay,
+                    PlanCache::Refresh,
+                )? {
                     WorktreeRecordRestore::Restorable(identity) => {
                         crate::worktree_baseline::write_worktree_baseline_identity(
                             &identity, layout,
@@ -498,20 +503,45 @@ pub(crate) enum WorktreeRecordRestore {
     NotClean,
 }
 
+/// Whether [`plan_worktree_record_restore`] may refresh the rebuildable baseline cache while it derives the status.
+#[derive(Clone, Copy)]
+pub(crate) enum PlanCache {
+    /// The switch itself, which writes.
+    Refresh,
+    /// `doctor`'s question, which must write nothing.
+    Never,
+}
+
 /// The one predicate behind both the restoring switch and `doctor`'s notice, so the notice appears
 /// exactly when the command it names would restore the record: the caller has found the record absent
 /// or ignored; this scans the worktree (the same report and the same dirty classification the switch's
 /// own refusal 3 uses) and answers whether the live identity may be written.
+///
+/// **The caller names whether the plan may refresh the rebuildable baseline cache** ([`PlanCache`], 0.57.0 prep P3c): the
+/// switch, a writer, lets it; `doctor`'s read-only question does not, because a plain `doctor` must write nothing.
 pub(crate) fn plan_worktree_record_restore(
     layout: &RepositoryLayout,
     branch: &str,
     active_replay: &crate::wal::WalReplay,
+    cache: PlanCache,
 ) -> Result<WorktreeRecordRestore> {
     if worktree_is_dirty(layout)? {
         return Ok(WorktreeRecordRestore::NotClean);
     }
-    let report =
-        crate::worktree_status::worktree_status_over_sound_replay(layout, branch, active_replay)?;
+    let report = match cache {
+        PlanCache::Refresh => crate::worktree_status::worktree_status_over_sound_replay(
+            layout,
+            branch,
+            active_replay,
+        )?,
+        PlanCache::Never => {
+            crate::worktree_status::worktree_status_over_sound_replay_without_cache_write(
+                layout,
+                branch,
+                active_replay,
+            )?
+        }
+    };
     if !crate::worktree_materialize::dirty_worktree_entries(&report, |_| false).is_empty() {
         return Ok(WorktreeRecordRestore::NotClean);
     }
@@ -539,7 +569,7 @@ pub(crate) fn worktree_record_restorable_by_switch(
         return Ok(false);
     }
     Ok(matches!(
-        plan_worktree_record_restore(layout, branch, &replay)?,
+        plan_worktree_record_restore(layout, branch, &replay, PlanCache::Never)?,
         WorktreeRecordRestore::Restorable(_)
     ))
 }

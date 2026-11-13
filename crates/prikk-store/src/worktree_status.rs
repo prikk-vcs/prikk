@@ -208,9 +208,43 @@ pub(crate) fn worktree_status_over_sound_replay(
     ref_name: &str,
     active_replay: &WalReplay,
 ) -> Result<WorktreeStatusReport> {
+    worktree_status_over_sound_replay_with(layout, ref_name, active_replay, StatusCache::Refresh)
+}
+
+/// [`worktree_status_over_sound_replay`] for a caller that must **write nothing under `.prikk/`**: the same report, and the
+/// rebuildable baseline cache is read when it helps and never refreshed. Plain `doctor` asks this way (0.57.0 prep P3c: it
+/// reached the refreshing form through `branch switch`'s plan and rewrote `.prikk/cache/lifecycle-state.v1` on every run);
+/// the writers (`branch switch`, `commit`, `uncommit`, the repair verbs) keep the refreshing form.
+pub(crate) fn worktree_status_over_sound_replay_without_cache_write(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+) -> Result<WorktreeStatusReport> {
+    worktree_status_over_sound_replay_with(layout, ref_name, active_replay, StatusCache::Never)
+}
+
+/// Whether a status derivation refreshes the rebuildable baseline cache; chosen by the caller, never by a shared rule.
+#[derive(Clone, Copy)]
+enum StatusCache {
+    Refresh,
+    Never,
+}
+
+fn worktree_status_over_sound_replay_with(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    active_replay: &WalReplay,
+    cache: StatusCache,
+) -> Result<WorktreeStatusReport> {
     let object_store = ObjectReadSnapshot::open(layout)?;
     let mut text_cache = TextCache::new();
-    let resolved = resolve_folded_worktree_baseline(
+    let resolve = match cache {
+        StatusCache::Refresh => resolve_folded_worktree_baseline,
+        StatusCache::Never => {
+            crate::patch_replay::resolve_folded_worktree_baseline_without_cache_write
+        }
+    };
+    let resolved = resolve(
         layout,
         &object_store,
         ref_name,
