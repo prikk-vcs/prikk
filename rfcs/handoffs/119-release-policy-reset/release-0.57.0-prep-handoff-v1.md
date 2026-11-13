@@ -128,3 +128,7 @@ gates passed on rustc 1.99.1; this machine now has 1.100.0, so the gates fail lo
 5. **CHANGELOG:** nothing. This is development tooling, and no user-visible behaviour changes.
 
 That commit becomes the candidate for the external review. The release commit `ee13618e` stays below it, unchanged.
+
+**P3b ACCEPTED and pushed 2026-11-13** (`74984253`, CI green `43335179101`, 17/17; review
+`release-0.57.0-prep-P3b-review-v1`). **The candidate for the external review is `74984253`.** The team has nothing
+until the review answers. P4 (the re-date) comes on the tag day.
