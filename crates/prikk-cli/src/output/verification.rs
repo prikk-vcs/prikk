@@ -1073,11 +1073,15 @@ fn print_active_wal_metadata_status(status: &ActiveWalMetadataStatus) {
         }
         ActiveWalMetadataStatus::ValidForEmptyWal { ref_name } => {
             println!("active WAL metadata: stale local metadata for empty WAL ({ref_name})");
-            println!("warning: active WAL ref metadata exists but the active WAL is empty");
+            println!(
+                "note: active WAL ref metadata exists but the active WAL is empty; the next `prikk commit` replaces it"
+            );
         }
         ActiveWalMetadataStatus::InvalidForEmptyWal { reason } => {
             println!("active WAL metadata: malformed local metadata for empty WAL ({reason})");
-            println!("warning: active WAL ref metadata exists but the active WAL is empty");
+            println!(
+                "note: active WAL ref metadata exists but the active WAL is empty; the next `prikk commit` replaces it"
+            );
         }
         ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name } => {
             println!("active WAL metadata: valid for {ref_name}");

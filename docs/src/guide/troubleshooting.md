@@ -1072,6 +1072,31 @@ tampered snapshot object. Run `prikk verify`, which names the block and the find
 You ran `seal` with nothing queued — every commit since the last seal has already been published.
 There is nothing to fix; commit something before sealing again.
 
+The refusal comes before anything is written: `.prikk` is byte-identical after it. (Through 0.57.0, `seal` first removed
+a stale `ref-name` file from the empty session and then refused.)
+
+## `seal stopped after it published, before it cleaned the queue`
+
+A `seal` killed after it published its Block, and before it emptied the queue, leaves the queue holding exactly the
+patches the Block already sealed. Nothing is lost and nothing is damaged. The readings:
+
+- `prikk verify` and `prikk doctor` report `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`; `doctor`'s way out is headed
+  `a seal stopped after it published, before it cleaned the queue` (through 0.57.0 the heading read `a ref's pointer
+  and log disagree`, above a finding that said they agree);
+- `prikk status --format json` exits 0 and carries `queue.already_sealed` with the Block's id and the route (through
+  0.57.0 it exited 1 with `lifecycle replay: … node_id is already live`; plain `status` always worked);
+- `prikk uncommit` refuses and names the same seal: `… the queued patches are already sealed in block <id>; run
+  `prikk seal --allow-no-audit`` (through 0.57.0 it said `use signer-backed seal retry`).
+
+**The way out is `prikk seal --allow-no-audit`**: it finishes the cleanup and publishes nothing new.
+
+### A stale `ref-name` file with an empty queue
+
+`doctor` reports it as `info` (`PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS`, or `…-MALFORMED-DEBRIS` when the file is
+damaged), and `verify` prints `note: active WAL ref metadata exists but the active WAL is empty; the next `prikk
+commit` replaces it`. There is nothing to do: the next `commit` replaces the file, sound or malformed (measured).
+Through 0.57.0 both were `warning`s that said no repair was required, a warning with no action.
+
 ## `error: invalid name: ref topic is not a local branch ref; expected heads/<name>`
 
 You passed a bare name (`topic`) where Prikk expects a fully-qualified ref

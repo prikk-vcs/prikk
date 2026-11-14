@@ -67,6 +67,7 @@ pub(crate) fn print_status_json(
     queue_target: Option<&QueueTarget>,
     threshold: Option<(&QueueThresholdStatus, usize, usize)>,
     patches: &[QueuedPatchEntry],
+    already_sealed_in: Option<ObjectId>,
 ) {
     let mut json = String::new();
     json.push_str("{\n");
@@ -158,6 +159,16 @@ pub(crate) fn print_status_json(
             json.push_str("    \"warn_threshold\": null,\n");
             json.push_str("    \"hard_limit\": null,\n");
         }
+    }
+    // 0.58.0 step 0b: additive within `status-report-v1`; `null` unless a `seal` published and was stopped before it cleaned the
+    // queue, in which case the queue is exactly the patches of `block_id` and `route` finishes it. (`block_id` means the Block, as in
+    // `provisional_worktree`; `route` is the typed command, as in `interrupted_materialization`.)
+    match already_sealed_in {
+        Some(block) => json.push_str(&format!(
+            "    \"already_sealed\": {{\"block_id\": {}, \"route\": \"prikk seal --allow-no-audit\"}},\n",
+            escape_json_string(&block.to_string())
+        )),
+        None => json.push_str("    \"already_sealed\": null,\n"),
     }
     json.push_str("    \"patches\": [");
     for (index, patch) in patches.iter().enumerate() {

@@ -676,23 +676,65 @@ pub struct QueuedPatchEntry {
 /// an otherwise-good baseline, extended to a queue that has no good baseline to resolve against at
 /// all. Path-addressed operations (which need no resolution) are reported normally regardless.
 pub fn enumerate_queued_patches(layout: &RepositoryLayout) -> Result<Vec<QueuedPatchEntry>> {
+    Ok(enumerate_queue(layout)?.patches)
+}
+
+/// The queue [`enumerate_queued_patches`] lists, with the one fact about it that changes what its patches mean (0.58.0 step 0b).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueEnumeration {
+    /// The queued patches, in queue order.
+    pub patches: Vec<QueuedPatchEntry>,
+    /// `Some(block)` when a `seal` published a Block and was stopped before it cleaned the queue: the queue is exactly that
+    /// Block's patches, already sealed, and `prikk seal --allow-no-audit` finishes the cleanup. The same recognition `verify`
+    /// uses for `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`. In that state the patches are enumerated against the Block's parent
+    /// (what they were authored against), not against the tip that already holds them.
+    pub already_sealed_in: Option<ObjectId>,
+}
+
+/// [`enumerate_queued_patches`], and whether the queue is already sealed ([`QueueEnumeration::already_sealed_in`]).
+pub fn enumerate_queue(layout: &RepositoryLayout) -> Result<QueueEnumeration> {
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let active_replay = wal.replay()?;
     if active_replay.records.is_empty() {
-        return Ok(Vec::new());
+        return Ok(QueueEnumeration {
+            patches: Vec::new(),
+            already_sealed_in: None,
+        });
     }
 
+    let mut already_sealed_in = None;
     let resolved_state = match read_active_ref_metadata(layout)? {
         ActiveRefMetadata::Valid(owner) => {
             let object_store = ObjectReadSnapshot::open(layout)?;
             let mut text_cache = TextCache::new();
-            let folded = resolve_folded_worktree_baseline(
+            let sealed = crate::refs::publication::queue_already_sealed(
                 layout,
-                &object_store,
                 &owner,
-                &active_replay,
-                &mut text_cache,
+                &active_replay.records,
             )?;
+            let folded = match sealed {
+                // Over the Block's parent: the queue is what that Block was sealed from, so the tip (which holds it) is the wrong
+                // base and replaying the queue over it reports a node that is "already live".
+                Some(sealed) => {
+                    already_sealed_in = Some(sealed.block);
+                    crate::patch_replay::resolve_state_at_recorded_baseline(
+                        layout,
+                        &object_store,
+                        sealed.parent,
+                        u64::MAX,
+                        &active_replay,
+                        &mut text_cache,
+                    )?
+                }
+                None => resolve_folded_worktree_baseline(
+                    layout,
+                    &object_store,
+                    &owner,
+                    &active_replay,
+                    &mut text_cache,
+                )?,
+            };
             Some(folded.state)
         }
         ActiveRefMetadata::Missing | ActiveRefMetadata::Invalid(_) => None,
@@ -718,7 +760,10 @@ pub fn enumerate_queued_patches(layout: &RepositoryLayout) -> Result<Vec<QueuedP
                 .collect::<Result<Vec<_>>>()?,
         });
     }
-    Ok(entries)
+    Ok(QueueEnumeration {
+        patches: entries,
+        already_sealed_in,
+    })
 }
 
 fn queued_operation_entry(

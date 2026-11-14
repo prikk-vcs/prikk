@@ -8,15 +8,29 @@
 
 ### Output changes
 
-- **`prikk unlock --lock <path> --yes` (and a typed `yes`) on an *unknown* holder:** before, exit `0` and `cleared: <path>`; after, exit `1`, the lock untouched, and `precondition not met: whether the process that took <path> is still running cannot be established (<reason>) -- refusing to clear its lock. --yes does not clear a lock whose holder is unknown. --force clears it anyway, at the risk of corrupting what that process is writing. …`. The refusal of a holder that appears running is unchanged in meaning and now shares its `--force` sentence. The `unlock` help line says "appears running or whose liveness is unknown".
+- **`prikk unlock --lock <path> --yes` (and a typed `yes`) on an *unknown* holder:** before, exit `0` and `cleared: <path>`; after, exit `1`, the lock untouched, and `precondition not met: whether the process that took <path> is still running cannot be established (<reason>) -- refusing to clear its lock. --yes does not clear a lock whose holder's liveness is unknown. --force clears it anyway, at the risk of corrupting what that process is writing. …`. The refusal of a holder that appears running is unchanged in meaning and now shares its `--force` sentence. The `unlock` help line says "appears running or whose liveness is unknown".
+- **`prikk status --format json` after a `seal` that stopped after it published:** before, exit `1` with `integrity error: lifecycle replay: … node_id is already live`; after, exit `0`, the queue's patches listed, and `queue.already_sealed` set to `{"block_id": "<id>", "route": "prikk seal --allow-no-audit"}` (`null` for an ordinary queue; an addition within `status-report-v1`). Plain `status` is unchanged.
+- **`prikk doctor`, same state:** the way-out heading reads `a seal stopped after it published, before it cleaned the queue`; it read `a ref's pointer and log disagree`, above a finding that said they agree.
+- **`prikk uncommit`, same state:** the refusal ends `the queued patches are already sealed in block <id>; run `prikk seal --allow-no-audit``; it ended `use signer-backed seal retry`.
+- **`prikk doctor` / `prikk verify`, an empty queue with a leftover `ref-name`:** `doctor` prints `info [PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS]` (and `…-MALFORMED-DEBRIS`, `…-ACTIVE-SESSION-…`) where it printed `warning`, with the recommendation `nothing to do: the next `prikk commit` replaces it`; `verify` prints `note: active WAL ref metadata exists but the active WAL is empty; the next `prikk commit` replaces it` where it printed `warning: … is empty`. The ids are unchanged. Both exit `0`, as before.
+- **`prikk seal` with nothing queued:** the same message and exit `1`, and now `.prikk` is byte-identical afterwards.
 
 ### Changed — `prikk unlock --yes` no longer clears a holder whose liveness is unknown
 
 External review 050 §2 froze real `bundle import` holders with `SIGSTOP` and judged them: the judge never said "does not appear to be running" of a live holder, but in four shapes it answered *unknown* (another PID namespace, a fresh PID namespace judging an outside holder, a time namespace with an offset, a changed machine identity as on a shared drive), and in each `unlock --lock <path> --yes` cleared the lock of the live, frozen holder with exit `0`. An empty `active.lock` (a writer that is starting now: the lock is created, then written) was cleared the same way. 0.57.0 refused only a holder that appears running. Now `--yes` and a typed `yes` (one answer given two ways) clear a lock only when its holder does not appear to be running; an unknown holder is refused with the reason the check gave and `--force` named, before anything is asked or written. See [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
 
-### Changed — `prikk-store` depends on `prikk-ffi` only on Windows and macOS
+### Fixed — the readings around a `seal` that stopped after it published
 
-Every call into `prikk-ffi` is under `cfg(windows)` or `cfg(target_os = "macos")`; on Linux the dependency was unused (Cargo 1.100's `unused_dependencies`). It is now a target-gated dependency. Nothing a Linux user can observe changes.
+Each of these is a defect in the released 0.57.0, measured there: the state is made by putting back a pre-seal copy of `.prikk/active/default/{queue.wal,ref-name,witness}` after a sound seal (the state a `seal` killed after it published leaves; the queue is exactly the patches of the Block the ref points at), and the build is measured on the same repository (the rows are in the part 0b report).
+
+- **`status --format json` exited `1` with an integrity error in a repository that has none.** It replayed the queue over a tip that already holds it. It now enumerates the queue over the published Block's parent, which is the state the queue was authored against, recognises the state with the predicate `verify` uses (one function, not a copy), and names it in `queue.already_sealed`.
+- **`doctor`'s heading named the wrong state** (the cleanup-pending state shared the `a ref's pointer and log disagree` heading with the legacy-log leads). It has its own heading.
+- **`uncommit` named nothing typeable for this state** (`use signer-backed seal retry` is not a command). It names `prikk seal --allow-no-audit`, and the Block.
+- **`seal` with nothing queued wrote before it refused**: it removed the empty session's stale `ref-name`, then exited `1` (`active WAL has no patch records to seal`). It refuses before any write; the leftover file is the `info` above, replaced by the next `commit`.
+
+### Changed — a leftover `ref-name` beside an empty queue is information
+
+`PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS`, `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS` and the two `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-…DEBRIS` ids are `info` instead of `warning`, and `verify`'s line is a `note:` instead of a `warning:`. They said no repair was required, which made a warning with no action; the next `commit` replaces the file whether it is sound or malformed (measured on 0.57.0: `commit` exits `0`, `doctor` then reports no debris finding, `verify` exits `0`). The ids keep their spelling, so a consumer that keys on the id sees only the severity move. The `-MALFORMED-DEBRIS` pair was measured separately and carries the same rule.
 
 ## 0.57.0 — 2026-11-14
 

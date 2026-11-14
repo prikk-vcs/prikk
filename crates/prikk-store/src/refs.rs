@@ -8,7 +8,7 @@
 mod container;
 mod evidence;
 mod pointer_index;
-mod publication;
+pub(crate) mod publication;
 mod rebuild_discovery;
 pub(crate) mod verify;
 

@@ -77,9 +77,9 @@ use prikk_store::{
     DoctorRepairOptions, Ed25519AuthorSigner, Ed25519MaintainerSigner, MergeEvidenceTarget,
     MoveHints, RefItemStatus, RefStore, RepositoryLayout, VerifyOptions, Wal,
     WorktreePatchCommitOptions, add_trusted_maintainer, append_rollback_draft,
-    commit_worktree_changes_signed, doctor_repository, enumerate_queued_patches,
-    list_received_pointers, load_maintainer_trust_policy_or_empty, load_received_ref_history,
-    load_ref_history, prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
+    commit_worktree_changes_signed, doctor_repository, enumerate_queue, list_received_pointers,
+    load_maintainer_trust_policy_or_empty, load_received_ref_history, load_ref_history,
+    prepare_merge_evidence, prepare_merge_plan, prepare_patch_inverse_plan,
     prepare_rollback_preview, read_active_ref_metadata, remove_trusted_maintainer,
     repair_repository, show, verify_active_rollback_draft, verify_repository_with_options,
     worktree_status,
@@ -860,6 +860,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
             None,
             None,
             &[],
+            None,
         );
         return Ok(());
     }
@@ -882,7 +883,7 @@ fn run_status_json() -> std::result::Result<(), CliError> {
 
     // RFC 140 §5: this is the derivation the prose path above never performs. Reached only because
     // `--format json` was requested and the queue is non-empty.
-    let patches = enumerate_queued_patches(&layout).map_err(|err| err.to_string())?;
+    let queue = enumerate_queue(&layout).map_err(|err| err.to_string())?;
 
     print_status_json(
         &layout,
@@ -894,7 +895,8 @@ fn run_status_json() -> std::result::Result<(), CliError> {
         interrupted,
         Some(&target),
         Some((&threshold_status, thresholds.warn, thresholds.limit)),
-        &patches,
+        &queue.patches,
+        queue.already_sealed_in,
     );
     Ok(())
 }

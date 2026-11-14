@@ -288,7 +288,13 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
             ref_name: issue.ref_name.clone(),
         };
         if !out.iter().any(|(_, existing)| *existing == kind) {
-            out.push(("a ref's pointer and log disagree", kind));
+            // 0.58.0 step 0b: a seal stopped after it published is not a disagreement (pointer and log agree); name the state.
+            let label = if issue.code == "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" {
+                "a seal stopped after it published, before it cleaned the queue"
+            } else {
+                "a ref's pointer and log disagree"
+            };
+            out.push((label, kind));
         }
     }
     if report.has_publication_trust_issues() {

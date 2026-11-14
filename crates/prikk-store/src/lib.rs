@@ -447,9 +447,9 @@ pub use worktree_marker::{
     worktree_materialization_interrupted,
 };
 pub use worktree_status::{
-    QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry, QueuedPathResolution,
-    WorktreeChange, WorktreeChangeKind, WorktreeStatusReport, enumerate_queued_patches,
-    worktree_status,
+    QueueEnumeration, QueuedOperationContent, QueuedOperationEntry, QueuedPatchEntry,
+    QueuedPathResolution, WorktreeChange, WorktreeChangeKind, WorktreeStatusReport,
+    enumerate_queue, enumerate_queued_patches, worktree_status,
 };
 // 0.56.0 step W3c-2: `branch create --from`'s own publish logic lives in `prikk-cli`
 // (`crate::branch::run_create`), not here -- unlike `merge`/`archive import`/`sync seal` -- so it

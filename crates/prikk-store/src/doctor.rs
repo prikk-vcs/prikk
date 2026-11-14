@@ -472,7 +472,7 @@ fn push_active_session_ref_metadata_issue(
             .for_active_session(name.to_os_string()),
         ),
         ActiveWalMetadataStatus::ValidForEmptyWal { ref_name } => issues.push(
-            DoctorIssue::warning(
+            DoctorIssue::info(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-DEBRIS",
                 format!(
                     "active session {name:?}'s WAL is empty but stale ref metadata remains for \
@@ -483,7 +483,7 @@ fn push_active_session_ref_metadata_issue(
             .for_active_session(name.to_os_string()),
         ),
         ActiveWalMetadataStatus::InvalidForEmptyWal { reason } => issues.push(
-            DoctorIssue::warning(
+            DoctorIssue::info(
                 "PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-MALFORMED-DEBRIS",
                 format!(
                     "active session {name:?}'s WAL is empty but malformed ref metadata remains: \
@@ -1888,25 +1888,29 @@ fn add_active_wal_metadata_issues(
             issues.push(
                 DoctorIssue::error(
                     "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED",
-                    format!("active WAL has records but active ref metadata is malformed: {reason}"),
+                    format!(
+                        "active WAL has records but active ref metadata is malformed: {reason}"
+                    ),
                     crate::way_out::WayOut::ActiveMetadata.sentence(),
                 )
                 .for_active_session(DEFAULT_ACTIVE_NAME),
             );
         }
         ActiveWalMetadataStatus::ValidForEmptyWal { ref_name } => issues.push(
-            DoctorIssue::warning(
+            // 0.58.0 step 0b: information, not a warning -- nothing is wrong and nothing needs doing; the next `prikk commit`
+            // replaces it (measured).
+            DoctorIssue::info(
                 "PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS",
                 format!("active WAL is empty but stale ref metadata remains for {ref_name}"),
-                "no repair is required; the next guarded active-WAL append will replace stale metadata",
+                "nothing to do: the next `prikk commit` replaces it",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),
         ActiveWalMetadataStatus::InvalidForEmptyWal { reason } => issues.push(
-            DoctorIssue::warning(
+            DoctorIssue::info(
                 "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS",
                 format!("active WAL is empty but malformed ref metadata remains: {reason}"),
-                "no repair is required; the next guarded active-WAL append will replace stale metadata",
+                "nothing to do: the next `prikk commit` replaces it",
             )
             .for_active_session(DEFAULT_ACTIVE_NAME),
         ),

@@ -175,15 +175,38 @@ pub fn incomplete_publication_refusal_naming_any_lead(
     let Some((ref_name, leading_id)) =
         crate::refs::mismatched_lead_candidate(layout, exclude_ref_name)?
     else {
-        return Ok(crate::refs::incomplete_publication_refusal());
+        return generic_or_cleanup_pending_refusal(layout);
     };
     match evaluate_known_lead(layout, &ref_name, leading_id)? {
         Ok(_plan) => Ok(PrikkError::Precondition(format!(
             "repository mutation is blocked by an interrupted publication for {ref_name}: its \
              pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`"
         ))),
-        Err(_) => Ok(crate::refs::incomplete_publication_refusal()),
+        Err(_) => generic_or_cleanup_pending_refusal(layout),
     }
+}
+
+/// The generic refusal, except when the active queue is exactly the patches of the Block its ref already points at: a `seal` that
+/// published and was stopped before it cleaned the queue (0.58.0 step 0b; the recognition `verify` uses for
+/// `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`). Then the refusal says so and names `prikk seal --allow-no-audit`, the command that
+/// finishes it, instead of "use signer-backed seal retry". The error stays `IncompletePublication`, so nothing that matches the
+/// variant changes, and it names `seal` only in the one state where `seal` is the way out.
+fn generic_or_cleanup_pending_refusal(layout: &RepositoryLayout) -> Result<PrikkError> {
+    let replay =
+        crate::wal::Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME)
+            .replay()?;
+    if let crate::ActiveRefMetadata::Valid(owner) = crate::read_active_ref_metadata(layout)? {
+        if let Some(sealed) =
+            crate::refs::publication::queue_already_sealed(layout, &owner, &replay.records)?
+        {
+            return Ok(PrikkError::IncompletePublication(format!(
+                "repository mutation is blocked by incomplete ref publication: a seal stopped after it published, before it \
+                 cleaned the queue (the queued patches are already sealed in block {}); run `prikk seal --allow-no-audit`",
+                sealed.block
+            )));
+        }
+    }
+    Ok(crate::refs::incomplete_publication_refusal())
 }
 
 /// RFC 165 R4's own rule, conditions (b)-(e)'s ref-log half plus (a)/(c)/(d), given a `leading_id`

@@ -14,7 +14,7 @@ file differs from what that produces. Line endings are LF and trailing whitespac
 ================================================================================
 bitflags 2.13.0
 License: MIT OR Apache-2.0
-Linked on: aarch64-apple-darwin, aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu
+Linked on: aarch64-apple-darwin, aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu
 
 --- LICENSE-APACHE ---
 
@@ -1984,7 +1984,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 errno 0.3.14
 License: MIT OR Apache-2.0
-Linked on: aarch64-apple-darwin, x86_64-pc-windows-msvc
+Linked on: aarch64-apple-darwin
 
 --- LICENSE-APACHE ---
 
@@ -3397,7 +3397,7 @@ DEALINGS IN THE SOFTWARE.
 ================================================================================
 rustix 1.1.4
 License: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-Linked on: aarch64-apple-darwin, aarch64-unknown-linux-gnu, x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu
+Linked on: aarch64-apple-darwin, aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu
 
 --- COPYRIGHT ---
 

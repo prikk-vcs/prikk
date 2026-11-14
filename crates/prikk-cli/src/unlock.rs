@@ -151,7 +151,7 @@ fn refuse_holder_not_shown_gone(lock: &HeldLock) -> String {
                 "the process that took {} appears running (pid {pid}{started})",
                 lock.path.display()
             ),
-            "appears running",
+            "holder appears running",
         )
     } else {
         (
@@ -160,11 +160,11 @@ fn refuse_holder_not_shown_gone(lock: &HeldLock) -> String {
                 lock.path.display(),
                 lock.liveness_reason.sentence()
             ),
-            "is unknown",
+            "holder's liveness is unknown",
         )
     };
     format!(
-        "precondition not met: {what} -- refusing to clear its lock. --yes does not clear a lock whose holder {state}. \
+        "precondition not met: {what} -- refusing to clear its lock. --yes does not clear a lock whose {state}. \
          {FORCE_RISK} What these words mean: {LIVENESS_WORDS_URL}"
     )
 }

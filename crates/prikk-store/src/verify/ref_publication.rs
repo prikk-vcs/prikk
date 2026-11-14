@@ -1,12 +1,10 @@
 //! Retained active-state evidence for interrupted ref publication diagnostics.
 
-use prikk_error::{PrikkError, Result};
-use prikk_object::{BlockPayload, ObjectType, RefStatePayload};
+use prikk_error::Result;
 
 use super::ActiveWalMetadataStatus;
 use crate::foundation::layout::RepositoryLayout;
-use crate::object_store::{FileObjectStore, ObjectReader};
-use crate::refs::{RefPublicationIssue, RefStore};
+use crate::refs::RefPublicationIssue;
 use crate::wal::WalRecord;
 
 /// `pub(crate)` (0.52.0 step 1 Part A round 3, A-5): `archive::export_archive`'s own narrow
@@ -81,17 +79,7 @@ fn add_incomplete_cleanup_issue(
     {
         return Ok(());
     }
-    let store = RefStore::new(layout.clone());
-    let Some(state_id) = store.read_current_ref_state_id(ref_name)? else {
-        return Ok(());
-    };
-    let objects = FileObjectStore::new(layout.clone());
-    let state = objects
-        .read_typed(state_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {state_id}")))?;
-    let target = RefStatePayload::decode_canonical(&state.canonical_payload, state.schema_version)?
-        .target_object_id;
-    if block_matches_wal(layout, target, records)? {
+    if crate::refs::publication::queue_already_sealed(layout, ref_name, records)?.is_some() {
         issues.push(RefPublicationIssue {
             code: "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING",
             ref_name: Some(ref_name.clone()),
@@ -101,26 +89,6 @@ fn add_incomplete_cleanup_issue(
         });
     }
     Ok(())
-}
-
-fn block_matches_wal(
-    layout: &RepositoryLayout,
-    target: prikk_object::ObjectId,
-    records: &[WalRecord],
-) -> Result<bool> {
-    if records.is_empty() {
-        return Ok(false);
-    }
-    let objects = FileObjectStore::new(layout.clone());
-    let block = objects
-        .read_typed(target, ObjectType::Block)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing Block object: {target}")))?;
-    let payload = BlockPayload::decode_canonical(&block.canonical_payload)?;
-    Ok(payload.patch_ids
-        == records
-            .iter()
-            .map(|record| record.envelope.object_id())
-            .collect::<Vec<_>>())
 }
 
 fn mark_unproved(issue: &mut RefPublicationIssue) {

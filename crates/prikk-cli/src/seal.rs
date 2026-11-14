@@ -12,9 +12,8 @@ use prikk_object::{CanonicalEncode, ObjectType, RefKind, RefStatePayload, RefUpd
 use prikk_store::{
     ActiveLock, ActiveRefMetadata, BlockLineage, DEFAULT_ACTIVE_NAME, GatedOperation,
     MaintainerSigner, ObjectWriteSession, RefPublication, RefStore, RepositoryLayout, Wal,
-    finish_active_publication_cleanup, read_active_ref_metadata, remove_active_ref_metadata,
-    seal_block, validate_local_branch_ref, verify_signer_trusted,
-    worktree_baseline_matches_fold_being_sealed,
+    finish_active_publication_cleanup, read_active_ref_metadata, seal_block,
+    validate_local_branch_ref, verify_signer_trusted, worktree_baseline_matches_fold_being_sealed,
 };
 
 mod support;
@@ -147,12 +146,9 @@ fn seal_active_no_audit(
         return Err("active WAL has a damaged record; run verify/doctor before seal".to_string());
     }
     if replay.records.is_empty() {
-        match &owning_ref_now {
-            ActiveRefMetadata::Missing => {}
-            ActiveRefMetadata::Valid(_) | ActiveRefMetadata::Invalid(_) => {
-                remove_active_ref_metadata(&layout).map_err(|err| err.to_string())?;
-            }
-        }
+        // 0.58.0 step 0b: a refusal comes before the first write ("every refusal before the first write"). This used to remove
+        // stale active ref metadata and then refuse, so the command that said "nothing to seal" had written. The metadata stays;
+        // `verify` and `doctor` report it as information, and the next `prikk commit` replaces it.
         return Err("active WAL has no patch records to seal".to_string());
     }
     match owning_ref_now {

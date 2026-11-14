@@ -161,7 +161,16 @@ fn run(layout: &RepositoryLayout, patch_id: ObjectId, mode: Mode) -> Result<Unco
         layout.ensure_write_state()?;
     }
     layout.require_current_format()?;
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        // 0.58.0 step 0b: name the command that finishes the interrupted publication where one does (`prikk seal
+        // --allow-no-audit` for a seal stopped after it published; `prikk ref complete` for a genuine lead), as `commit` does.
+        if matches!(&error, PrikkError::IncompletePublication(_)) {
+            crate::ref_completion::incomplete_publication_refusal_naming_any_lead(layout, None)
+                .unwrap_or(error)
+        } else {
+            error
+        }
+    })?;
     if crate::worktree_marker::worktree_is_dirty(layout)? {
         return Err(PrikkError::Precondition(format!(
             "worktree materialization was interrupted, so the worktree is not verified against its baseline and nothing can be \

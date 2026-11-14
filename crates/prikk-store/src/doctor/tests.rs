@@ -559,7 +559,7 @@ fn doctor_reports_non_empty_active_wal_missing_metadata_as_error() {
 }
 
 #[test]
-fn doctor_reports_empty_active_metadata_debris_as_warning() {
+fn doctor_reports_empty_active_metadata_debris_as_information() {
     let root = unique_temp_dir("doctor-active-metadata-debris");
     let layout = RepositoryLayout::init(root.clone());
     assert!(layout.is_ok());
@@ -568,10 +568,19 @@ fn doctor_reports_empty_active_metadata_debris_as_warning() {
 
         let report = doctor_repository(&layout);
         assert!(report.is_healthy());
-        // Two warnings: the debris this test is about, and (0.57.0 step 1c) the ignored worktree record --
-        // a store-level `init` writes none (the CLI's `init`/`setup` does), the worktree is clean, and
-        // `branch switch` would restore it.
-        assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 2);
+        // One warning: the ignored worktree record (0.57.0 step 1c) -- a store-level `init` writes none (the CLI's
+        // `init`/`setup` does), the worktree is clean, and `branch switch` would restore it. The debris this test is about is
+        // information since 0.58.0 step 0b (nothing is wrong, and the next `prikk commit` replaces it): one `info`, and it names
+        // that command.
+        assert_eq!(report.count_by_severity(DoctorSeverity::Warning), 1);
+        let debris = report
+            .issues
+            .iter()
+            .find(|issue| issue.code == "PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS");
+        assert!(
+            debris.is_some_and(|issue| issue.severity == DoctorSeverity::Info
+                && issue.recommendation.contains("prikk commit"))
+        );
         assert!(
             report
                 .issues

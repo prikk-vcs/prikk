@@ -441,7 +441,10 @@ fn an_unknown_holder_is_refused_by_yes_names_its_reason_and_force_clears_it() {
             stderr.contains(reason),
             "{label} names its reason: {stderr}"
         );
-        assert!(stderr.contains("is unknown"), "{label}: {stderr}");
+        assert!(
+            stderr.contains("a lock whose holder's liveness is unknown"),
+            "{label}: {stderr}"
+        );
         assert!(
             stderr.contains("--force") && stderr.contains("corrupting"),
             "{label} names --force and what it risks: {stderr}"
@@ -517,7 +520,7 @@ fn a_typed_yes_does_not_clear_an_unknown_holder() {
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("is unknown") && stderr.contains("--force"),
+        stderr.contains("a lock whose holder's liveness is unknown") && stderr.contains("--force"),
         "{stderr}"
     );
     assert!(

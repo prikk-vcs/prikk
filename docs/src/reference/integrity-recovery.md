@@ -138,8 +138,8 @@ truncation boundary are covered by the
 | State | CLI meaning | Doctor issue |
 |---|---|---|
 | `MissingForEmptyWal` | Empty active WAL with no metadata. | Healthy; no issue by itself. |
-| `ValidForEmptyWal` | Empty active WAL with stale but valid metadata. | Warning: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS`. |
-| `InvalidForEmptyWal` | Empty active WAL with malformed metadata. | Warning: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS`. |
+| `ValidForEmptyWal` | Empty active WAL with stale but valid metadata. | Info: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS`; the next `prikk commit` replaces it. |
+| `InvalidForEmptyWal` | Empty active WAL with malformed metadata. | Info: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS`; the next `prikk commit` replaces it. |
 | `ValidForNonEmptyWal` | Non-empty active WAL with valid ownership metadata. | Healthy; no issue by itself. |
 | `MissingForNonEmptyWal` | Non-empty active WAL without ownership metadata. | Error: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING`. |
 | `InvalidForNonEmptyWal` | Non-empty active WAL with malformed ownership metadata. | Error: `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED`. |
@@ -185,10 +185,10 @@ Current doctor severities are `info`, `warning`, and `error`.
 | `PRIKK-DOCTOR-TRUST-POLICY-INTERIOR-DAMAGE` | `error` | 0.50.0 P3c: the trust policy container has a damaged snapshot, read directly. No repair exists; the recommendation names a copy of the whole `.prikk/` directory from a backup, then re-applying every trust change made since (an older copy could re-trust a revoked key). Printed first, the same as the pointer-index row above. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MISSING` | `error` | Default session's WAL has records but its ref metadata is missing. |
 | `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED` | `error` | Default session's WAL has records but its ref metadata is malformed. |
-| `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `warning` | Default session's WAL is empty but stale valid ref metadata remains. |
-| `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS` | `warning` | Default session's WAL is empty but malformed ref metadata remains. |
+| `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS` | `info` | Default session's WAL is empty but stale valid ref metadata remains (through 0.57.0: `warning`). |
+| `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS` | `info` | Default session's WAL is empty but malformed ref metadata remains (through 0.57.0: `warning`). |
 | `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-MISSING` / `-MALFORMED` | `error` | The same two conditions for a non-default active session; the message names the session. |
-| `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-DEBRIS` / `-MALFORMED-DEBRIS` | `warning` | The same two debris conditions for a non-default active session. |
+| `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-DEBRIS` / `-MALFORMED-DEBRIS` | `info` | The same two debris conditions for a non-default active session (through 0.57.0: `warning`). |
 | `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-UNREADABLE` | `error` | A non-default active session's ref metadata failed to read. |
 | `PRIKK-DOCTOR-ACTIVE-SESSION-WAL-UNREADABLE` | `error` | A non-default active session's WAL failed to read. |
 | `PRIKK-DOCTOR-COMMIT-WITNESS-STALE` | `info` | The session's own acknowledgment history is stale (an older binary's seal drained the queue it covered). No action; the next commit or `--repair-tails` replaces it. |

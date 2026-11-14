@@ -24,6 +24,14 @@ For each invocation, the CLI reports:
   named, then run prikk checkout --patch-materialize --ref <branch> or prikk branch switch <branch>`,
   naming the current branch (`interrupted_materialization` in `--format json`, holding those two
   `routes`, `null` otherwise; see [troubleshooting](troubleshooting.md));
+- in `--format json`, `queue.already_sealed`: `null` for an ordinary queue; `{"block_id": "<id>", "route": "prikk seal
+  --allow-no-audit"}` when a `seal` published its Block and was stopped before it cleaned the queue. The field means
+  exactly this: **the queue is the patches of `block_id`, which the ref already points at** (the state `verify` calls
+  `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`, decided by the same predicate), so `queue.patches` lists what that Block
+  sealed, not new work, and `route` is the command that finishes the cleanup (see
+  [troubleshooting](troubleshooting.md#seal-stopped-after-it-published-before-it-cleaned-the-queue)). It is an
+  addition within `status-report-v1`: no existing field moved. Through 0.57.0, `status --format json` exited 1 in this
+  state (`integrity error: lifecycle replay: … node_id is already live`);
 - a warning once the queued-patch count reaches the recommended threshold or the configured hard
   limit (`PRIKK_ACTIVE_PATCH_WARN`/`PRIKK_ACTIVE_PATCH_LIMIT`; see NFR-PERF-02), the same thresholds
   [`prikk commit`](patches/worktree-patch.md) enforces on the write path.

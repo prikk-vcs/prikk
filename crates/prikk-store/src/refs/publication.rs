@@ -10,7 +10,8 @@ use super::{
 };
 use crate::foundation::layout::{LockableContainer, RepositoryFormat, ref_name_key_bytes};
 use crate::lock::{ContainerLockGuard, RefLock, acquire_container_locks};
-use crate::object_store::ObjectWriter;
+use crate::object_store::{FileObjectStore, ObjectReader, ObjectWriter};
+use crate::wal::WalRecord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::refs) enum PublicationState {
@@ -399,4 +400,57 @@ pub(in crate::refs) fn ensure_agreement(
         }
     }
     Ok(())
+}
+
+/// A `seal` that published its Block and was stopped before it cleaned the queue leaves **a queue that is exactly the patches of
+/// the Block its ref points at** (0.58.0 step 0b; `verify` calls this to report `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`, and
+/// `status --format json` calls it to say the queued patches are already sealed). One definition, so the two cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QueueAlreadySealed {
+    /// The Block the ref points at, whose patches are the queue.
+    pub(crate) block: ObjectId,
+    /// That Block's one parent, which is what the queue was authored against; `None` for a root Block. (Only a Block with at
+    /// most one parent is reported: a seal publishes a Normal or Root Block.)
+    pub(crate) parent: Option<ObjectId>,
+}
+
+/// The state above for `ref_name` and the active WAL's `records`, or `None` when the queue is empty, the ref has no published
+/// state, or the ref's Block holds different patches.
+///
+/// # Errors
+///
+/// A missing RefState or Block object the ref names, or an undecodable payload.
+pub(crate) fn queue_already_sealed(
+    layout: &crate::foundation::layout::RepositoryLayout,
+    ref_name: &str,
+    records: &[WalRecord],
+) -> Result<Option<QueueAlreadySealed>> {
+    if records.is_empty() {
+        return Ok(None);
+    }
+    let Some(state_id) = RefStore::new(layout.clone()).read_current_ref_state_id(ref_name)? else {
+        return Ok(None);
+    };
+    let objects = FileObjectStore::new(layout.clone());
+    let state = objects
+        .read_typed(state_id, prikk_object::ObjectType::RefState)?
+        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {state_id}")))?;
+    let target = RefStatePayload::decode_canonical(&state.canonical_payload, state.schema_version)?
+        .target_object_id;
+    let block = objects
+        .read_typed(target, prikk_object::ObjectType::Block)?
+        .ok_or_else(|| PrikkError::Integrity(format!("missing Block object: {target}")))?;
+    let payload = prikk_object::BlockPayload::decode_canonical(&block.canonical_payload)?;
+    let holds_the_queue = payload
+        .patch_ids
+        .iter()
+        .copied()
+        .eq(records.iter().map(|record| record.envelope.object_id()));
+    if !holds_the_queue || payload.parent_block_ids.len() > 1 {
+        return Ok(None);
+    }
+    Ok(Some(QueueAlreadySealed {
+        block: target,
+        parent: payload.parent_block_ids.first().copied(),
+    }))
 }
