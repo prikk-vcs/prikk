@@ -210,3 +210,15 @@ CI.
 directory holds the built release assets, so it cannot run before the release run. Drop that step. Instead, report the
 heading line exactly (`sed -n 3p CHANGELOG.md`), with its em dash shown as U+2014 (`od -c`, or the bytes `e2 80 94`).
 The architect checks the published notes against the section after the release run.
+
+**P4 ACCEPTED (`149a9e3d`). 0.57.0 RELEASED 2026-11-14:**
+- **The tag:** signed `0.57.0` on `149a9e3d`. CI on it was `43538758692`, 17/17, and the local `ci-status-check`
+  said "release may proceed".
+- **The release run:** `43540695531`, 12/12 (the CI gate, 4 builds, publication, the AUR build and push, 4 Windows
+  install cells).
+- **The release page:** 20 assets. Its notes begin with the tagged CHANGELOG section byte for byte (57,291 bytes),
+  then the standing appendix.
+- **crates.io:** all eight crates at 0.57.0.
+- **AUR:** `prikk` and `prikk-bin` at 0.57.0-1.
+
+This handoff is complete.
