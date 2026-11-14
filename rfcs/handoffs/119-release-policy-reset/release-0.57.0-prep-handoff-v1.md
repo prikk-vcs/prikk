@@ -187,3 +187,21 @@ architect is drafted for the owner. **P4 waits for the owner's word on the tag.*
 - `reproduce.sh` is identical to `74984253`.
 
 **P4 waits only for the owner's word on the tag.**
+
+**Owner, 2026-11-14:** *"Yes. Authorized. You may do the tag and the publish."* **The architect's reading:** the signed
+tag `0.57.0`, and the crates.io publication of all eight crates, are both authorized, once P4's commit is green in
+CI.
+
+## Part P4, LIVE: the tag-day commit (20 min, stop at 40; report `release-0.57.0-prep-P4-report.md`)
+
+1. **`CHANGELOG.md:3`:** `## 0.57.0 — <the day you make this commit>`, with an em dash (U+2014), the shape
+   `release-notes` extracts. Run `date` first and write that day.
+2. **One sentence in the format-8 Upgrading entry** (review 050 §1), next to the artifact-declaration sentence: a sync
+   artifact declares no repository format, so a format-6/7 receiver's `sync accept` refuses one only when it carries a
+   non-ASCII path. That is harmless, since nothing stored differs between format 7 and 8.
+3. **Nothing else.** No version change (it is 0.57.0 already) and no other file.
+4. **The 15 gates** on that commit (`test` on 1.100.0, `test-msrv` on 1.85.0), tree clean. Then
+   `cargo run -p prikk-release-policy -- release-notes 0.57.0` (or the gate's own extraction) prints the section.
+   Say its byte count.
+
+**Not the team's:** pushing, the tag, crates.io, the AUR, verifying the shipped assets.
