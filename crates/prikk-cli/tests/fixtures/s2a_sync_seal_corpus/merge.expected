@@ -1,0 +1,24 @@
+== merge
+exit 0
+stdout:
+claim 0728369bfbc75952b8072b29d849c94fc8fbe928f54c5cfd11ea0d8668de22c3: sealed 1 patch(es) into heads/main
+  block id: 83172273094c9b72aa48d3290ab4975d681628898fe0b1919ebd191d5b3a807b
+  heads/main RefState: 582bd2cf6d260b0650398909d887bd07cc78bb9b735709629df9e1df95d35a53
+  claim signature: Sound (dc67-test-maintainer)
+claim 15d6cf3cfbb80c3c859db425382a006cffc8ad49c709f4d5f85675477e665f56: sealed 1 patch(es) into heads/main
+  block id: 730b57268c89a77cd92863357e345bbcb41c5bcfae335bd3c3dc903bdd36edc8
+  heads/main RefState: 8c93a123491a8e15647a0ce39d990cd64ed01653924cbb0a58c51d75792445dd
+  claim signature: Sound (dc67-test-maintainer)
+claim 983c4ade006b2d00fd15e7dd1b484b52fc959cb6449f84b18d003c56f043360b: sealed 1 patch(es) into heads/main
+  block id: f5f028e5dab5e6b4dd97f451c22f19c33e313d8162b57ec9a82fb3225cb42d01
+  heads/main RefState: 48ae3955322cae312df1f74afa8539d31e0ad250e80a3c5a8a5807120714f66b
+  claim signature: Sound (dc67-test-maintainer)
+claim f1d3d48c0dfece2e4087481c755dfa27b1c4954635c0b417843a1c472c220727: heads/main was already fully sealed -- no-op
+materialized into the worktree: files written: 3, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 1a28bd3c9a92b299da0f25c8f489a2664d26c0ffd62b2037b9ea947906ae142c
+pointer-index.sha256 b642bb58be32b0df5b6cdb0ddd488bb8576619a7f52eee2eca31b0d923cf1181
+log-json.sha256 4fba379f87224ab3cabcab54a6ea686b20f0ebccf7b8e1e9efe98b04ee74938d
+verify.exit 0

@@ -1,0 +1,17 @@
+== mid-batch-refusal
+exit 1
+stdout:
+claim 9744c9c8be07ec9a0b3b0606657f95c1a55f3bee5a2b3b4503d888ae1881b1e4: sealed 1 patch(es) into heads/main
+  block id: 08bbe1ed42bacc0cc15c5d5b8d8f6bb19b9b10ab6fb57ab2bea7ceb08a788baf
+  heads/main RefState: 6deb927ba8b97fbaba43bd6431d761c1c212327736cc4064e710545acf4c08db
+  claim signature: Sound (dc67-test-maintainer)
+claim b7c3eba79a031da9582f6276677c2c22922955caa530130e1fa242ed6888d5b5: FAILED: integrity error: seal refused: divergence -- an accepted patch did not apply cleanly to this repository's own tip (lifecycle replay: operation could not be applied to the replayed state (integrity error: cannot create node at already-occupied path collide.txt)); the two histories moved differently, nothing is corrupt, and resolving this is merge's job, not this operation's
+materialized into the worktree: files written: 1, unchanged: 0, deleted: 0
+
+stderr:
+error: integrity error: seal refused: divergence -- an accepted patch did not apply cleanly to this repository's own tip (lifecycle replay: operation could not be applied to the replayed state (integrity error: cannot create node at already-occupied path collide.txt)); the two histories moved differently, nothing is corrupt, and resolving this is merge's job, not this operation's
+
+log.sha256 ecb6fdb4bd4d6d9bea97d7381fee4da6c209f7e6ba003db85e50b0ad7d0d2447
+pointer-index.sha256 7b61bed6fad0b67abaf096ea785fce3eb8789dd474821e815d53e99bf111818e
+log-json.sha256 babb5f158e2ba2c2459f3afa0bb99b56d5c0d790972ca62fc5e6ea072cb83dc9
+verify.exit 0

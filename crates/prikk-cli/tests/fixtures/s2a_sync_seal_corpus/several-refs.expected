@@ -1,0 +1,45 @@
+== several-refs: heads/main
+exit 0
+stdout:
+claim 32501059f134dc05bd58935b9d65605164cf5c8198aa166f58d46ac36cfd9abb: sealed 1 patch(es) into heads/main
+  block id: 6a6eb90929acd61303209eeb336326a2b07e2bf895f3aa4090759d1de45f67a3
+  heads/main RefState: 650b72fa5a56df54d3f87ce8cdfcdb652cb19895223a3d97cb4185dbb4099ad8
+  claim signature: Sound (dc67-test-maintainer)
+claim a211e5f367ba4bd77b2b54e05fa2550493d3d7ae1a2d53f3d9dde79df4cbefc4: sealed 1 patch(es) into heads/main
+  block id: 59004488c0a92b7fd782560a3adf5318d72529e5c255a56eaa2cd063df2034b8
+  heads/main RefState: 82f4d38a1a048b24fa39d1947c1700189130c6bd40b3fd8d5fd6266de8fec947
+  claim signature: Sound (dc67-test-maintainer)
+claim f50442f984a412226ab6bc99e34df38afb0b92b5c5cf9032de453923fa4b8686: sealed 1 patch(es) into heads/main
+  block id: d9696d04183e93dcf095cdbca0aa3eca4b14f00b35de30670744a7bba24c5e2b
+  heads/main RefState: 9590b32937fb46d14f158fae043953229db172cdedc201059f7cd70b19d40326
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 1, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 98b765fbf5efdd79bc36fc3d5f314e1902ef6187bdaf1fc8effaa02d71e10e37
+pointer-index.sha256 1df02a2972fcfefaee457f3dbf37a6c426f2c92714b2ece1fabcf57229309a52
+log-json.sha256 b219a24ec8dac1eb01efc3353b985248fe3cf78bfc8474acd7e5212f4cda92ae
+verify.exit 0
+== several-refs: heads/other
+exit 0
+stdout:
+claim 32501059f134dc05bd58935b9d65605164cf5c8198aa166f58d46ac36cfd9abb: sealed 1 patch(es) into heads/other
+  block id: 6a6eb90929acd61303209eeb336326a2b07e2bf895f3aa4090759d1de45f67a3
+  heads/other RefState: 1a9e10233737a855e6255c140f1d8137ae0de8710ab44bc88c6c091cddad0940
+  claim signature: Sound (dc67-test-maintainer)
+claim a211e5f367ba4bd77b2b54e05fa2550493d3d7ae1a2d53f3d9dde79df4cbefc4: sealed 1 patch(es) into heads/other
+  block id: 59004488c0a92b7fd782560a3adf5318d72529e5c255a56eaa2cd063df2034b8
+  heads/other RefState: 428db4d0af59ad7d4fb698f0888736a4be7cbcbfcba8622fb40be310afb010f7
+  claim signature: Sound (dc67-test-maintainer)
+claim f50442f984a412226ab6bc99e34df38afb0b92b5c5cf9032de453923fa4b8686: sealed 1 patch(es) into heads/other
+  block id: d9696d04183e93dcf095cdbca0aa3eca4b14f00b35de30670744a7bba24c5e2b
+  heads/other RefState: d9290e44ab0429ca2be616960974ccdcd3c1245110dc2b93873cc55781e30958
+  claim signature: Sound (dc67-test-maintainer)
+
+stderr:
+
+log.sha256 80b29fb68352d52fc7573d9576d02858353aebdd9254fdeae5846d1e0fd46794
+pointer-index.sha256 30d10ac255ccfe2b1f5436bd508a44ad037352230bee3b9f92cf6ac41e1a4812
+log-json.sha256 b219a24ec8dac1eb01efc3353b985248fe3cf78bfc8474acd7e5212f4cda92ae
+verify.exit 0

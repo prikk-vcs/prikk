@@ -1,0 +1,31 @@
+== large-binaries
+exit 0
+stdout:
+claim 8c8b33c71ccdcc9e71f8a05459dd41ad9bb4a0199b7833983a061d319d0e5b27: sealed 1 patch(es) into heads/main
+  block id: 9942f25db8119295b33eee512e77fe04dda041acfb6cb4ca2979fc7c412c8b0f
+  heads/main RefState: f5b6a65db52d890a4bc86102fefe77ca71bee7a7fb0cdadf2379909d3a2f1ede
+  claim signature: Sound (dc67-test-maintainer)
+claim 5edb266471b301ad8f654b23f276140b94a8b3249278bb1c734d323002fb2ce1: sealed 1 patch(es) into heads/main
+  block id: 2b786279d966dc227f0171a65e9bf0b806fe8b9c7241619a21414415f5b81053
+  heads/main RefState: 39b246bbcd33dd9a76db48bd907b479f88094cb9d964c57a76b5145995a4606d
+  claim signature: Sound (dc67-test-maintainer)
+claim 2a7186c3c3d064f36e57bc8851a938b98ed659768d4ee844a7799212d49d5784: sealed 1 patch(es) into heads/main
+  block id: 626430eb61dd0d84294c68e47d9bf7d78fd8fe611beebe81c887e4fc0503b983
+  heads/main RefState: 76153487560175f6b2c35de55dcee3b4f163010895a0c969f44b1912873a7593
+  claim signature: Sound (dc67-test-maintainer)
+claim efc22850d7033c498a2759d3633c6646b5a4d7294a616e75293ef528feb0d2eb: sealed 1 patch(es) into heads/main
+  block id: f75137623660586603bf52415854f36b37835143ce56504b35ef5039ec10f9bb
+  heads/main RefState: ea09702bf6e80150880572f08e3f2f27c63e33720462a8f16272990e5c6945ff
+  claim signature: Sound (dc67-test-maintainer)
+claim f13193db2d2faa5ef3421cd207d27892cbdd5e5a6593f39024d600d9fbbe5fc9: sealed 1 patch(es) into heads/main
+  block id: 386eeba26d06b4b8d9d79b23f6ca60ffdf68acb4f5ce78a7cc23cbc14715668f
+  heads/main RefState: 7712c7aa7e75aa2e26c7d5fab1a09d147c1928fc75a515f15aaa8c5d4b1db147
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 5, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 728d3d7e509d6d258f80179afe37258fc401694d24abe3751b875f3979c3d674
+pointer-index.sha256 9961e0b359b90150a00ee796196ec45b01dd82e40c5eea77b115d8d578ad3f45
+log-json.sha256 f0d0d52504d1441373b73f89a882e686f01053f5901786425b334ff0c23ddc42
+verify.exit 0

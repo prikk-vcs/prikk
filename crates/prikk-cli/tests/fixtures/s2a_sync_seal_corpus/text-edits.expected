@@ -1,0 +1,43 @@
+== text-edits
+exit 0
+stdout:
+claim 5cfc7db35ee81a84f93d0c29faa38710d0fb90c4bfb371b43d027c3977232a58: sealed 1 patch(es) into heads/main
+  block id: 7893661e456b08c3d239c3c78940f5cb3ac22bd5f20a90c030d4d63f05b84500
+  heads/main RefState: 7688efb1a533a14dc41c02eb429f905f872f56d00dc709b3839d5579cce54e64
+  claim signature: Sound (dc67-test-maintainer)
+claim ed96f666a13dcb8bd756db94799e721a02593554a629a7aff8ceb168f7d67024: sealed 1 patch(es) into heads/main
+  block id: 97446e6bc1975021ffb47bbb3135b6bee811829c06b1c4304e857be975a82ff3
+  heads/main RefState: 2c49dc7de9c8b87e4452541f5b2c14a372a90a16a2e82331b4940dc45d3f1b36
+  claim signature: Sound (dc67-test-maintainer)
+claim e1fa88dd8e0a21cdbe1c7f4ba8f76db1f15284248a4d0dc91ac35984a62c7550: sealed 1 patch(es) into heads/main
+  block id: cfa7fe3ee05ab0cdc6b3d1f44a537b59181c9dd772f98dd47963b9d7d0479446
+  heads/main RefState: 17fdbd863d86786094ce40cbbac83c5cf957c5bb855100b17b82bc07c74e5020
+  claim signature: Sound (dc67-test-maintainer)
+claim f12e7384f9b56a07aad01484ed5466438c788ea5134037a401242e4ff839bdb3: sealed 1 patch(es) into heads/main
+  block id: b7e25a3bcbe907dcbb6563aada1af9185da56df34db730aaa0fbcbb88003b6bf
+  heads/main RefState: f20123f721bd8a1a0ef3306422aa1ca738f1c4095480fd96cc34a0b37d6d2c55
+  claim signature: Sound (dc67-test-maintainer)
+claim 4e5ee2ee49e61b37525037435b99d4c556727007a0c97d90199621e19f682289: sealed 1 patch(es) into heads/main
+  block id: 67449e3ab483afe7a5c2232cd93707c198a42c0020b931e13720b94e36f3fd43
+  heads/main RefState: e6e3ae70f008edb2dd84154006c05282ad294181992eb51df4980888de7f27e1
+  claim signature: Sound (dc67-test-maintainer)
+claim 65d9f8a224fef217ae1b599172311a490fe0f4684256f99a89b3e7a37b24d6fb: sealed 1 patch(es) into heads/main
+  block id: 7edae2f63ce75532d7df59fd6dc8e6d6017ed3a8cf4bb46d0aaa1184ca6d04b4
+  heads/main RefState: 3bd4b7838b11592aab1ae6868722111aad826c15b635e4efcc617ec0947ef3ee
+  claim signature: Sound (dc67-test-maintainer)
+claim e99aa27e3dd4e2648450a89743deccac296447404eac4f2ea9c2311af1d862d5: sealed 1 patch(es) into heads/main
+  block id: f0fb3f67f5b6eecb337248ea62b4993726b95c9866a49d98e1103cb1f114aea9
+  heads/main RefState: 5513a1a5b5581cee2d8e569a3dd166f218767ec998a949a438fe40bf3e711456
+  claim signature: Sound (dc67-test-maintainer)
+claim b405435e60aedd759c50d9456fe134f50f28ff2b6dd71a5de88697fccf6a5fb3: sealed 1 patch(es) into heads/main
+  block id: 7918cf7f5d5c42ab0e5b27cfa1d3b4ae3ac842648d8a1e11570e2b9aa92d2ae6
+  heads/main RefState: 3ff025206f66eefc5862058dccd9c1d9ff9437978ef27b65eb1ce36adcc5ce5b
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 10, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 c43439a323671a4279cc4c978eb8f6f22f4ce3beaca23d606e744b3ffceecaa6
+pointer-index.sha256 b1ec66bab9769f92b5652d36ce218d2dca7765ead1142cd2f7184da462e72579
+log-json.sha256 327a34c6c23688756f06828ae16a59ad650a69b7d94ef73429c2a142a8dac2ba
+verify.exit 0

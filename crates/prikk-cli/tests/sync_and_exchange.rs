@@ -17,6 +17,8 @@ mod rfc132_absent_and_received_refs;
 mod rfc146_unpublished_current_branch_listing;
 #[path = "sync_and_exchange/rfc147_unpublished_current_branch.rs"]
 mod rfc147_unpublished_current_branch;
+#[path = "sync_and_exchange/s2a_sync_seal_corpus.rs"]
+mod s2a_sync_seal_corpus;
 #[path = "sync_and_exchange/step0a_sync_seal_onto_an_unheld_branch.rs"]
 mod step0a_sync_seal_onto_an_unheld_branch;
 #[path = "support/mod.rs"]

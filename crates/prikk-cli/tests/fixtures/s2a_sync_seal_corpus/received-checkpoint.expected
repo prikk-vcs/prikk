@@ -1,0 +1,19 @@
+== received-checkpoint
+exit 0
+stdout:
+claim c88d845959f5bf73528ad8bb128874dc3cd2af88616bc7033cde89f620c82a56: sealed 1 patch(es) into heads/main
+  block id: 4fa738ffb8b93e5d8951224f27ef1242ee171cea936f320b923f536a67bab289
+  heads/main RefState: 7c609af2fe52a0114248e377d5a272e05fb5c01d13e2fdc9d17e0437171d302e
+  claim signature: Sound (dc67-test-maintainer)
+claim f80f5854318e07b83014ab94280961fd45a0dc7b30e09fc17ffe880aeddea97c: sealed 1 patch(es) into heads/main
+  block id: dffdced1a72793318fec71cd8c2ff14c349aea27659cca76c36fb436e9b97a31
+  heads/main RefState: b42a3cda2b307fe9e45ee1e4a06d00d42f53ae2b03a56130d6fc579e5ed1ebbd
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 1, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 17b0a12362ff29483da2d092c04ce636c2d5f69daa88f11531d9d3b82f470b50
+pointer-index.sha256 25fc7a71b6b1ceeecad9c9389c2b607a6ccf250ffb583e86789633dffea19364
+log-json.sha256 179555c13ba729eb7244d5a01affd021e35bd56959365f047346b7ee615f4006
+verify.exit 0

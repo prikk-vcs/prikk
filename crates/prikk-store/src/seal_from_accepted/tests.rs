@@ -1127,3 +1127,155 @@ fn the_refusal_names_a_held_claim_for_the_parent_and_the_carry_when_none_is_held
     cleanup(&layout);
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// 0.58.0 S2a: the per-claim refusals that had no test of their own (S1 §3). Each fires at the claim, with nothing published (the ref has
+// no tip afterwards). The rest of the checklist is held where `s2a_sync_seal_corpus.rs`'s header lists it.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/// `seal_from_accepted.rs:168`: a ref name that is not `heads/<name>`.
+#[test]
+fn s2a_an_invalid_ref_name_refuses_before_anything() -> Result<()> {
+    let fixture = base_fixture("s2a-ref-name")?;
+    let err = seal_from_accepted_claim(&fixture.layout, "topic", fixture.claim_id, &fixture.signer)
+        .err()
+        .ok_or_else(|| PrikkError::Integrity("an invalid ref name must refuse".to_string()))?;
+    assert!(err.to_string().contains("expected heads/<name>"), "{err}");
+    assert!(matches!(err, PrikkError::InvalidName(_)), "{err:?}");
+    assert!(current_tip(&fixture.layout)?.is_none());
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// `seal_from_accepted.rs:186`: the named claim does not exist.
+#[test]
+fn s2a_a_claim_that_does_not_exist_refuses() -> Result<()> {
+    let fixture = base_fixture("s2a-claim-missing")?;
+    let missing = ObjectId::from_bytes([0xEE; 32]);
+    let err = seal_from_accepted_claim(&fixture.layout, TARGET_REF, missing, &fixture.signer)
+        .err()
+        .ok_or_else(|| PrikkError::Integrity("a missing claim must refuse".to_string()))?;
+    assert!(
+        err.to_string()
+            .contains(&format!("recognition claim {missing} does not exist")),
+        "{err}"
+    );
+    assert!(current_tip(&fixture.layout)?.is_none());
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// `seal_from_accepted.rs:291` / `:298` (and `:287`, the commit-witness classification that speaks first): an active WAL with a torn
+/// tail or a damaged record refuses with nothing sealed. The queue is made non-trivially owned first, as row 10 does.
+#[test]
+fn s2a_an_active_wal_with_a_torn_tail_refuses() -> Result<()> {
+    let fixture = base_fixture("s2a-wal-tail")?;
+    crate::commit_boundary::active::prepare_empty_active_ref_for_append(
+        &fixture.layout,
+        TARGET_REF,
+    )?;
+    let wal = Wal::for_layout(&fixture.layout, DEFAULT_ACTIVE_NAME);
+    let author = author_signer(0x9C)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let blob_id = write_blob(&mut objects, b"queued\n")?;
+    wal.append_patch(&create_file_patch(&author, "queued.txt", 0x9D, blob_id)?)?;
+    // A torn tail: a few bytes of the next record.
+    let mut file = std::fs::OpenOptions::new().append(true).open(wal.path())?;
+    std::io::Write::write_all(&mut file, &[0x50, 0x57, 0x41])?;
+    drop(file);
+
+    let err = seal_from_accepted_claim(
+        &fixture.layout,
+        TARGET_REF,
+        fixture.claim_id,
+        &fixture.signer,
+    )
+    .err()
+    .ok_or_else(|| PrikkError::Integrity("a torn WAL tail must refuse".to_string()))?;
+    assert!(
+        err.to_string().contains("active WAL has 3 trailing partial bytes; run verify/doctor before sealing from an accepted claim"),
+        "{err}"
+    );
+    assert!(current_tip(&fixture.layout)?.is_none());
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// `seal_from_accepted.rs:298`: a complete but damaged WAL record (two records; one byte flipped inside the first, so the second is a
+/// sound record behind a damaged one). A flip inside a lone last record reads as a torn tail (`:291`), not as this.
+#[test]
+fn s2a_an_active_wal_with_a_damaged_record_refuses() -> Result<()> {
+    let fixture = base_fixture("s2a-wal-damaged")?;
+    crate::commit_boundary::active::prepare_empty_active_ref_for_append(
+        &fixture.layout,
+        TARGET_REF,
+    )?;
+    let wal = Wal::for_layout(&fixture.layout, DEFAULT_ACTIVE_NAME);
+    let author = author_signer(0x9E)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let first_blob = write_blob(&mut objects, b"queued one\n")?;
+    wal.append_patch(&create_file_patch(&author, "one.txt", 0x9F, first_blob)?)?;
+    let first_len = std::fs::metadata(wal.path())?.len() as usize;
+    let second_blob = write_blob(&mut objects, b"queued two\n")?;
+    wal.append_patch(&create_file_patch(&author, "two.txt", 0xA0, second_blob)?)?;
+    let mut bytes = std::fs::read(wal.path())?;
+    bytes[first_len / 2] ^= 0xff;
+    std::fs::write(wal.path(), bytes)?;
+
+    let err = seal_from_accepted_claim(
+        &fixture.layout,
+        TARGET_REF,
+        fixture.claim_id,
+        &fixture.signer,
+    )
+    .err()
+    .ok_or_else(|| PrikkError::Integrity("a damaged WAL record must refuse".to_string()))?;
+    // The commit-witness classification (`:287`, RFC 166) speaks before the `:298` check, so this is its sentence.
+    assert!(
+        err.to_string().contains("active WAL has a damaged record"),
+        "{err}"
+    );
+    assert!(current_tip(&fixture.layout)?.is_none());
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// `seal_from_accepted.rs:169` / `:247`: a ref whose RefState the store no longer holds is refused as an incomplete publication, before
+/// `read_current_tip` (`:689-714`) can name it: those three messages are defensive, behind this check.
+#[test]
+fn s2a_a_ref_pointing_at_a_missing_ref_state_refuses_as_an_incomplete_publication() -> Result<()> {
+    let fixture = base_fixture("s2a-tip-missing")?;
+    // Seal once, so the ref has a tip; then lose the RefState objects and the index that names them.
+    seal_from_accepted_claim(
+        &fixture.layout,
+        TARGET_REF,
+        fixture.claim_id,
+        &fixture.signer,
+    )?;
+    let ref_state_container = fixture
+        .layout
+        .container_slot_path(prikk_object::ObjectType::RefState, crate::ContainerSlot::A);
+    std::fs::write(&ref_state_container, b"")?;
+    std::fs::write(fixture.layout.container_index_path(), b"")?;
+
+    let author = author_signer(0xA5)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let blob_id = write_blob(&mut objects, b"second\n")?;
+    let second_patch = write_create_file_patch(&mut objects, &author, "b.txt", 0xA6, blob_id)?;
+    let second_claim = write_claim(
+        &mut objects,
+        &fixture.signer,
+        ObjectId::from_bytes([0xAB; 32]),
+        vec![second_patch],
+    )?;
+    let err = seal_from_accepted_claim(&fixture.layout, TARGET_REF, second_claim, &fixture.signer)
+        .err()
+        .ok_or_else(|| PrikkError::Integrity("a missing RefState must refuse".to_string()))?;
+    assert!(
+        err.to_string()
+            .contains("repository mutation is blocked by incomplete ref publication"),
+        "{err}"
+    );
+    cleanup(&fixture.layout);
+    Ok(())
+}

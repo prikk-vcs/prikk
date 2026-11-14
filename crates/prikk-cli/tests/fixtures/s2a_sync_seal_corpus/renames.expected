@@ -1,0 +1,23 @@
+== renames
+exit 0
+stdout:
+claim e67b4d378d28e09af2e45a01cf0e126101ded10e19be23ddcc4a2746d6eb192f: sealed 1 patch(es) into heads/main
+  block id: e0f322e3d329edbee2d6abc6e7417450983358ec7a5985d0bd0b32c867a3aa59
+  heads/main RefState: ef1faced348a9eb23ff4c07dfeceea58d471e3eb1559510988f8525b5fa3b9e3
+  claim signature: Sound (dc67-test-maintainer)
+claim cf2c2a5e736aa6a8905737c160d790b5ec67d2380c3d4f828f721d2f587b8e91: sealed 1 patch(es) into heads/main
+  block id: 20a53c9f540dfba0936d724928da0d16440688780c737859b4f5acfcdb154e5e
+  heads/main RefState: 0ed04f41eb8cdb10d7badce59186687e352171957813e0343c7418dcb97d6294
+  claim signature: Sound (dc67-test-maintainer)
+claim edea79429ea5a095b4827ede4bd89bfea10be4718db62e60a6ea5f8069f11ccb: sealed 1 patch(es) into heads/main
+  block id: 16942f9db97f4524e751105d2b3e50cabe26465f278cccdc2eaf23855fefa210
+  heads/main RefState: 321937f0210a0d1e4ef7585336347e225e3d0cc75ba9d5d98f5d105e5b594497
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 1, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 b8f0fd3ee021577c2cc7deb4b967c8b4ce5c5e726faaa791605f245f2f166ac2
+pointer-index.sha256 ba013a1bb8a5a1c8afb88353194f4ce69e62f9481d02cf593abff6267644e581
+log-json.sha256 74d33a477d78053501b29cb93234903075002b9a15e89c5181532101b098e869
+verify.exit 0

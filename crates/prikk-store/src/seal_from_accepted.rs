@@ -152,6 +152,32 @@ pub fn seal_from_accepted_claim_in_batch(
     seal_from_accepted_claim_impl(layout, Some(active_lock), ref_name, claim_id, signer)
 }
 
+/// S2a (0.58.0): a crash point for the real-kill tests of `sync seal`. With `prikk-store`'s `test-support` feature (which no shipped
+/// build enables) and `PRIKK_TEST_ABORT_AT=<point>:<k>` set, the process aborts, with no cleanup (a `SIGKILL`'s disk state), at `point`
+/// (`before-block`, `after-block`, `after-publish`) of the k-th claim this process seals. In every other build it is an empty function.
+#[cfg(feature = "test-support")]
+fn crash_point(point: &str) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CLAIM: AtomicUsize = AtomicUsize::new(0);
+    let Ok(spec) = std::env::var("PRIKK_TEST_ABORT_AT") else {
+        return;
+    };
+    let Some((want, k)) = spec.split_once(':') else {
+        return;
+    };
+    if point == "before-block" {
+        CLAIM.fetch_add(1, Ordering::SeqCst);
+    }
+    if want == point && k.parse::<usize>().ok() == Some(CLAIM.load(Ordering::SeqCst)) {
+        std::process::abort();
+    }
+}
+
+/// The shipped form: nothing.
+#[cfg(not(feature = "test-support"))]
+#[inline(always)]
+fn crash_point(_point: &str) {}
+
 /// Shared body for [`seal_from_accepted_claim`] and [`seal_from_accepted_claim_in_batch`]: every
 /// check and the seal itself, unchanged from before this round, except that the `ActiveLock` is
 /// either acquired here (`held_lock` is `None`, the single-claim entry point's own shape) or
@@ -362,6 +388,7 @@ fn seal_from_accepted_claim_impl(
     // check and nothing is written unless it passes; its failure keeps `LifecycleReplayError`'s own
     // variant alive to the classification point rather than flattening it into an undifferentiated
     // `PrikkError::Integrity` the way ordinary `seal_block` does.
+    crash_point("before-block");
     let mut object_store = ObjectWriteSession::open(layout)?;
     let block_id = seal_block_classified(
         layout,
@@ -376,6 +403,7 @@ fn seal_from_accepted_claim_impl(
         },
     )?;
 
+    crash_point("after-block");
     // AUD-08: untested here, deliberately -- unlike `seal`/`execute_merge`, this function's own
     // `ensure_no_incomplete_publication(layout)` call above (line 108) already refuses the only way
     // to make `current.update_seq` reach `u64::MAX` (repointing `canonical_ref` at a RefState the
@@ -434,6 +462,7 @@ fn seal_from_accepted_claim_impl(
             ref_update: ref_update_envelope,
         },
     )?;
+    crash_point("after-publish");
     drop(owned_lock);
 
     Ok(SealFromAcceptedOutcome::Sealed {
