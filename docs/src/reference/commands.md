@@ -1126,6 +1126,12 @@ unchanged), each from the very structure the text line is printed from:
   outcome (`sound`, `unverifiable`, `invalid`, as `bundle preview` reports them), beside `sealed_by` and
   never inside it. So "how many of these blocks did key K seal" is a count over `sealed_by`, answerable
   before a removal and after it.
+  **When the list is whole (0.58.0):** when `stages` reports `objects` as `evaluated` **and** `failed_objects` is empty,
+  `block_seals` holds every sealed Block reached from committed state. A damaged Block is named in `failed_objects` and is
+  not in the list, so a shorter list beside a non-empty `failed_objects` is that damage, not a missing seal. Both conditions are fields the document already carries. Held by `crates/prikk-cli/tests/verify_and_doctor/
+  step0c_block_seals_whole.rs`: a sound repository (the list is `log`'s blocks), a damaged Block (3 listed become 2, a `block`
+  in `failed_objects`), and one-byte damages to the block, RefState, patch, blob, index, ref-log, pointer-index and trust
+  containers, where the list is whole in every row in which the two conditions hold.
 - **`publication_trust_issues`**: the text's `publication-trust [code]` lines, typed: one entry per signature
   that did not count, `{"code", "object_type", "object_id", "key_id", "outcome"}`. `outcome` is
   one of **three** values: `unverifiable` (the key is not adopted here), `invalid` (the key is adopted and the

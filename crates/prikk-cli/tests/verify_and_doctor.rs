@@ -67,6 +67,8 @@ mod rfc166_round2_refusals_speak_first;
 mod rfc168_recovery_log;
 #[path = "verify_and_doctor/s5d_unreached_content_after_received_remove.rs"]
 mod s5d_unreached_content_after_received_remove;
+#[path = "verify_and_doctor/step0c_block_seals_whole.rs"]
+mod step0c_block_seals_whole;
 #[path = "verify_and_doctor/step1e_every_finding_names_a_true_way_out.rs"]
 mod step1e_every_finding_names_a_true_way_out;
 #[path = "verify_and_doctor/step3_s3_verify_json_item_level.rs"]

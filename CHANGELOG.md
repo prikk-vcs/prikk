@@ -32,6 +32,10 @@ Each of these is a defect in the released 0.57.0, measured there: the state is m
 
 `PRIKK-DOCTOR-ACTIVE-REF-METADATA-DEBRIS`, `PRIKK-DOCTOR-ACTIVE-REF-METADATA-MALFORMED-DEBRIS` and the two `PRIKK-DOCTOR-ACTIVE-SESSION-REF-METADATA-…DEBRIS` ids are `info` instead of `warning`, and `verify`'s line is a `note:` instead of a `warning:`. They said no repair was required, which made a warning with no action; the next `commit` replaces the file whether it is sound or malformed (measured on 0.57.0: `commit` exits `0`, `doctor` then reports no debris finding, `verify` exits `0`). The ids keep their spelling, so a consumer that keys on the id sees only the severity move. The `-MALFORMED-DEBRIS` pair was measured separately and carries the same rule.
 
+### Changed — the reference says when `verify --format json`'s `block_seals` is whole
+
+`commands.md` now states it: when `stages` reports `objects` as `evaluated` and `failed_objects` is empty, `block_seals` holds every sealed Block reached from committed state, and a damaged Block is named in `failed_objects` and is not in the list. No field is added and no output changes; a consumer reads both conditions from fields it already has. Measured on this build over one-byte damages (the damaged-Block and ref-log rows also on 0.57.0, by the architect's probe) to the block, RefState, patch, blob, index, ref-log, pointer-index and trust containers: a damaged Block takes the list from 3 to 2, a damaged RefState from 3 to 0 (both listed in `failed_objects`), and a damaged pointer index or trust container leaves `objects` not `evaluated`; the damages that leave both conditions true (the object index, the ref log) leave the list whole.
+
 ## 0.57.0 — 2026-11-14
 
 ### Upgrading
