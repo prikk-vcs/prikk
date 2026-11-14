@@ -42,7 +42,9 @@ pub use artifact::{
 // received` at the time of this move) moved to `patch_set_digest` (not part of the exchange
 // subsystem, so `show` may call them directly), re-exported here unchanged so every pre-existing
 // caller inside this subsystem keeps resolving the same two names. Their own doc comments stayed
-// at the new location, not duplicated here.
+// at the new location, not duplicated here. (0.58.0 S2b: `seal_from_accepted` no longer calls it -- its batch plan selects against the
+// ref's own history -- so only this subsystem's tests read it through this path.)
+#[cfg(test)]
 pub use crate::patch_set_digest::accepted_but_unsealed_patch_ids;
 
 /// One recognition claim naming a pending patch (planeter letter 2026-10-21 §2; 0.56.0 step 1

@@ -54,9 +54,10 @@ use prikk_store::{
     adopt_tag, build_have_list, build_sync_artifact, build_sync_summary, compare_sync_summary,
     decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
     mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
-    patch_ids_pending, pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
-    require_seal_batch_parents_reached, require_worktree_clean_and_capture,
-    seal_from_accepted_claim_in_batch, validate_local_branch_ref,
+    patch_ids_pending, pending_patches_with_claims, plan_seal_batch,
+    require_nothing_in_the_way_for_seal_batch, require_seal_batch_parents_reached,
+    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
+    validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
@@ -490,6 +491,11 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     require_seal_batch_parents_reached(&layout, &canonical_ref, &ordered)
         .map_err(|err| err.to_string())?;
 
+    // 0.58.0 S2b: the batch is folded once, here, before anything is written -- the pre-batch state derived once, each claim's patches
+    // applied to it in order. The in-the-way check below judges the state it ends in, and the loop seals each claim with the root it
+    // produced; a claim it could not fold is sealed from disk, as before.
+    let mut plan = plan_seal_batch(&layout, &canonical_ref, &ordered);
+
     // Steps 1-2: the clean check and the pre-write in-the-way check, once, before the first
     // claim's first write -- only when `canonical_ref` is the current branch, and only when there
     // is at least one claim to seal (an empty `--claims <file>` writes nothing regardless).
@@ -513,8 +519,7 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             require_nothing_in_the_way_for_seal_batch(
                 &layout,
                 &pending,
-                &canonical_ref,
-                &ordered,
+                &plan,
                 &format!("sealing onto {canonical_ref}"),
             )
             .map_err(|err| err.to_string())?;
@@ -543,6 +548,7 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             &parsed.ref_name,
             claim_id,
             &signer,
+            &mut plan,
         ) {
             Ok(outcome) => {
                 if matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }) {
@@ -572,8 +578,24 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // still-held lock, print no "materialized into the worktree" line, and return the claim's own
     // error unchanged -- rather than calling `materialize_after_publish`, which on a genuinely
     // unborn current branch would have no tip at all to replay.
+    //
+    // 0.58.0 S2b (crash row 5): the exception is a run that publishes nothing because an earlier run already published everything and was
+    // stopped before it wrote the worktree (the marker names this branch and the ref has a tip). Clearing the marker there would leave the
+    // worktree behind the ref with nothing saying so; this run finishes the materialization instead, as `branch switch` would, and says so.
     if let Some(pending) = pending_materialization {
-        if published_count == 0 {
+        let finishing_an_interrupted_run = published_count == 0
+            && pending.was_interrupted()
+            && RefStore::new(layout.clone())
+                .read_current_ref_state_id(&canonical_ref)
+                .ok()
+                .flatten()
+                .is_some();
+        if finishing_an_interrupted_run {
+            println!(
+                "finishing the interrupted materialization of {canonical_ref}: an earlier run published it and was stopped before it wrote the worktree"
+            );
+        }
+        if published_count == 0 && !finishing_an_interrupted_run {
             if let Err(abandon_err) = abandon_unpublished_materialization(&layout, pending) {
                 return Err(match batch_error {
                     Some(claim_err) => format!(

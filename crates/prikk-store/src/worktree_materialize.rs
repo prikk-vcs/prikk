@@ -314,6 +314,19 @@ pub(crate) fn apply_materialization_plan(
 pub struct PendingCurrentBranchMaterialization {
     current_branch: String,
     old_files: BTreeMap<String, (ObjectId, NodeKind)>,
+    /// The worktree carried this branch's interrupted-materialization marker when it was captured: an earlier run published and was
+    /// stopped before it wrote the worktree (0.58.0 S2b, crash row 5).
+    interrupted_before: bool,
+}
+
+impl PendingCurrentBranchMaterialization {
+    /// Whether an earlier run of a producer was interrupted between its publish and its materialization of this branch, so the worktree
+    /// is behind the ref and the marker is set. A batch that publishes nothing this time (every claim already sealed) must then finish
+    /// the materialization, not clear the marker (0.58.0 S2b).
+    #[must_use]
+    pub fn was_interrupted(&self) -> bool {
+        self.interrupted_before
+    }
 }
 
 /// Steps 1 and 2 of the R3 ruling (0.56.0 step W3c-1: no longer bundled with the marker -- see
@@ -331,9 +344,14 @@ pub fn require_worktree_clean_and_capture(
 ) -> Result<PendingCurrentBranchMaterialization> {
     require_worktree_clean_for_current_branch(layout, current_branch, active_replay, verb)?;
     let old_files = baseline_files_against_record_or_live(layout, current_branch, active_replay)?;
+    let interrupted_before = matches!(
+        crate::worktree_marker::interrupted_target(layout)?,
+        Some(crate::worktree_marker::MarkedTarget::Switch(ref marked)) if marked == current_branch
+    );
     Ok(PendingCurrentBranchMaterialization {
         current_branch: current_branch.to_string(),
         old_files,
+        interrupted_before,
     })
 }
 

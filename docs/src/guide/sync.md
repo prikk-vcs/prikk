@@ -72,6 +72,16 @@ claim … builds on block …, which heads/feature does not reach …`), and the
 sealed is still work for this one. If the claims file carries the whole chain, root first, the ref is
 built claim by claim and no `branch create` is needed.
 
+**A `sync seal` that was stopped can be run again.** Each claim's seal is complete on its own, so a kill (a crash, a closed terminal)
+leaves the claims already sealed sealed. If the ref is the current branch, the worktree is marked as interrupted until the batch has
+written it (`prikk status` prints `interrupted materialization: …`), and the dead process leaves its active lock behind, so the next
+command meets `lock conflict`: `prikk unlock --lock <the path it names> --yes` clears it when its holder is gone. Then run the same
+`sync seal` again. It seals what is left, skips what is sealed (`already fully sealed -- no-op`) and writes the worktree. **If every
+claim was already sealed and only the worktree was left behind, it still writes the worktree**, prints
+`finishing the interrupted materialization of <ref>: …`, and clears the marker only after the files are written; a file of yours in the
+way of one of them refuses with the path and `prikk branch switch <ref>`, and leaves everything as it was. (Through 0.57.0 that re-run
+cleared the marker without writing the worktree, which then stayed behind the ref.)
+
 ## What it does — and does not do
 
 **prikk does not move the bytes, and does not encrypt them.** A file `sync build` writes contains

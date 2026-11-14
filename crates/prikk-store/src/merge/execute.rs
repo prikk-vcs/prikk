@@ -463,6 +463,18 @@ pub(crate) fn candidate_replay_manifest(
     entries: Vec<StateRootEntry>,
     text_cache: &TextCache,
 ) -> Result<ReplayManifest> {
+    candidate_replay_manifest_wanting(reader, entries, text_cache, |_| true)
+}
+
+/// [`candidate_replay_manifest`], reading a file's bytes only where `wants_bytes(path)`; any other path carries empty bytes. For a caller
+/// that only *judges* the manifest against a worktree before any write (the in-the-way check): `plan_materialization` compares bytes only
+/// at a path where the worktree already holds a regular file, so a path with nothing there needs none (0.58.0 S2b).
+pub(crate) fn candidate_replay_manifest_wanting(
+    reader: &impl ObjectReader,
+    entries: Vec<StateRootEntry>,
+    text_cache: &TextCache,
+    wants_bytes: impl Fn(&str) -> bool,
+) -> Result<ReplayManifest> {
     let mut files = BTreeMap::new();
     let mut live_nodes = BTreeMap::new();
     for entry in entries {
@@ -473,9 +485,13 @@ pub(crate) fn candidate_replay_manifest(
                 entry.path.as_str()
             )));
         };
-        let bytes = match text_cache.get(&entry.node_id) {
-            Some(bytes) => bytes.clone(),
-            None => read_blob_bytes_with_kind(reader, blob_id)?.1,
+        let bytes = if !wants_bytes(entry.path.as_str()) {
+            Vec::new()
+        } else {
+            match text_cache.get(&entry.node_id) {
+                Some(bytes) => bytes.clone(),
+                None => read_blob_bytes_with_kind(reader, blob_id)?.1,
+            }
         };
         let path = entry.path.as_str().to_string();
         live_nodes.insert(

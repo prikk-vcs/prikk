@@ -243,10 +243,10 @@ pub(crate) struct CandidateDerivation {
     /// Every block whose root this derivation confirmed by replay: the whole lineage for the full walk, the blocks
     /// folded after the anchor for an anchored one.
     pub(crate) verified: Vec<ObjectId>,
-    /// Read by a `cfg(test)`/`test-support` control, and also by production code: the
-    /// extract-claim chain fold (`patch_replay::extract::replay_for_extract_chain`) reads this
-    /// field to seed `apply_candidate_patches` for every link past the first, in an ordinary
-    /// (non-test, non-`test-support`) build.
+    /// The derived lifecycle state. **Production reads it in two places, both to seed a fold:** the extract-claim chain
+    /// (`patch_replay::extract::replay_for_extract_chain`, for every link past the first) and the `sync seal` batch fold
+    /// ([`batch_fold::BatchFold::begin`], which keeps the pre-batch state and applies each claim's patches onto it, 0.58.0 S2b). A
+    /// `cfg(test)`/`test-support` control reads it too. Nothing else does; the fold's own state lives behind [`batch_fold::BatchFold`], not here.
     pub(crate) state: NodeLifecycleState,
     /// The anchored derivation was used (otherwise the full walk ran).
     pub(crate) anchored: bool,
@@ -258,6 +258,19 @@ pub(crate) struct CandidateDerivation {
     pub(crate) id_only_blocks: usize,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread derived a state from a parent (`derive_candidate`): the control that holds "a `sync seal` batch is
+    /// derived once" (0.58.0 S2b) counts it.
+    static DERIVE_CANDIDATE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `derive_candidate` calls on this thread so far (`cfg(test)`).
+#[cfg(test)]
+pub(crate) fn derive_candidate_calls_for_test() -> usize {
+    DERIVE_CANDIDATE_CALLS.with(std::cell::Cell::get)
+}
+
 pub(crate) fn derive_candidate(
     layout: &crate::RepositoryLayout,
     reader: &impl ObjectReader,
@@ -265,6 +278,8 @@ pub(crate) fn derive_candidate(
     patch_ids: &[ObjectId],
     anchoring: StateAnchoring,
 ) -> std::result::Result<CandidateDerivation, CandidateStateDerivationError> {
+    #[cfg(test)]
+    DERIVE_CANDIDATE_CALLS.with(|calls| calls.set(calls.get() + 1));
     let anchored_parent = match (anchoring, parent) {
         (StateAnchoring::Anchored(site), Some(parent_id)) => {
             anchored_parent::anchored_parent_state(layout, reader, parent_id, site)
@@ -350,7 +365,7 @@ pub(crate) fn without_checkpoints_for_test<T>(body: impl FnOnce() -> T) -> T {
 /// ancestor on its derivation line (mainline for a merge) is [`CHECKPOINT_CADENCE`] or more blocks
 /// back, or there is none. Depends on history alone, and reads at most `CHECKPOINT_CADENCE`
 /// ancestors: the answer is already `true` once that many blocks without a snapshot have been seen.
-fn checkpoint_due(reader: &impl ObjectReader, parent: Option<ObjectId>) -> Result<bool> {
+pub(super) fn checkpoint_due(reader: &impl ObjectReader, parent: Option<ObjectId>) -> Result<bool> {
     #[cfg(test)]
     if CHECKPOINTS_SUPPRESSED.with(std::cell::Cell::get) {
         return Ok(false);
@@ -505,15 +520,32 @@ pub(crate) fn seal_block_classified(
     } else {
         None
     };
-    let block_payload = BlockPayload {
-        parent_block_ids,
-        kind,
-        patch_ids: patch_ids.to_vec(),
-        state_merkle_root,
-        snapshot_blob_ref,
-        mainline_parent_id,
-        merge_baseline_block_id,
-    };
+    write_signed_block(
+        layout,
+        object_store,
+        BlockPayload {
+            parent_block_ids,
+            kind,
+            patch_ids: patch_ids.to_vec(),
+            state_merkle_root,
+            snapshot_blob_ref,
+            mainline_parent_id,
+            merge_baseline_block_id,
+        },
+        signer,
+        replay_verified,
+    )
+}
+
+/// Sign `block_payload`, write it, and record it (with `replay_verified`) as replay-verified: the one tail every Block's sealing ends in,
+/// whether its root was derived from the parent just now or came from the batch's running fold ([`seal_block_with_folded_root`]).
+pub(super) fn write_signed_block(
+    layout: &crate::RepositoryLayout,
+    object_store: &mut (impl ObjectReader + ObjectWriter),
+    block_payload: BlockPayload,
+    signer: &impl MaintainerSigner,
+    replay_verified: Vec<ObjectId>,
+) -> Result<ObjectId> {
     let mut block_envelope =
         ObjectEnvelope::unsigned(ObjectType::Block, 2, block_payload.to_canonical_bytes()?);
     let block_id = block_envelope.object_id();
@@ -1049,6 +1081,7 @@ fn verify_v2_lineage_roots(
 }
 
 pub(crate) mod anchored_parent;
+pub(crate) mod batch_fold;
 
 #[cfg(test)]
 mod tests;

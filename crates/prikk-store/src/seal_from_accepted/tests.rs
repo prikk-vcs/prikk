@@ -1279,3 +1279,67 @@ fn s2a_a_ref_pointing_at_a_missing_ref_state_refuses_as_an_incomplete_publicatio
     cleanup(&fixture.layout);
     Ok(())
 }
+
+/// 0.58.0 S2b, "one fold": a batch of chained claims is derived **once** (the pre-batch state), however many claims it seals, and it
+/// seals the same chain. The count is of `derive_candidate` calls on this thread. Before the fold each claim derived from its parent
+/// (and the in-the-way simulation derived the grown list again for every claim): N claims made N or more calls.
+#[test]
+fn s2b_a_batch_of_chained_claims_is_derived_once() -> Result<()> {
+    for claim_count in [5_usize, 66] {
+        let fixture = base_fixture(&format!("s2b-one-fold-{claim_count}"))?;
+        let author = author_signer(0x70)?;
+        let mut objects = FileObjectStore::new(fixture.layout.clone());
+        let mut claims = Vec::new();
+        let mut previous_block = None;
+        for index in 0..claim_count {
+            let blob = write_blob(&mut objects, format!("file {index}\n").as_bytes())?;
+            let patch = write_create_file_patch(
+                &mut objects,
+                &author,
+                &format!("f{index}.txt"),
+                0x71_u8.wrapping_add(u8::try_from(index % 100).unwrap_or(0)),
+                blob,
+            )?;
+            let mut block = [0xB0_u8; 32];
+            block[..8].copy_from_slice(&u64::try_from(index).unwrap_or(0).to_be_bytes());
+            let block_id = ObjectId::from_bytes(block);
+            claims.push(write_claim_with_parents(
+                &mut objects,
+                &fixture.signer,
+                block_id,
+                vec![patch],
+                previous_block.into_iter().collect(),
+            )?);
+            previous_block = Some(block_id);
+        }
+
+        let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+        let before = crate::block_state::derive_candidate_calls_for_test();
+        let mut plan = super::plan_seal_batch(&fixture.layout, TARGET_REF, &claims);
+        assert_eq!(plan.planned_claims(), claim_count, "every claim folds");
+        for claim in &claims {
+            let outcome = super::seal_from_accepted_claim_in_batch(
+                &fixture.layout,
+                &lock,
+                TARGET_REF,
+                *claim,
+                &fixture.signer,
+                &mut plan,
+            )?;
+            assert!(
+                matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }),
+                "{outcome:?}"
+            );
+        }
+        assert_eq!(
+            crate::block_state::derive_candidate_calls_for_test() - before,
+            1,
+            "{claim_count} claims: the pre-batch state is derived once, and no claim derives from disk (a checkpoint Block is written \
+             from the plan's kept state, not from a second derivation)"
+        );
+        assert_eq!(plan.planned_claims(), 0, "every step was consumed");
+        drop(lock);
+        cleanup(&fixture.layout);
+    }
+    Ok(())
+}

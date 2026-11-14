@@ -1292,6 +1292,9 @@ the stopped checkout had already written stays in the worktree as an untracked f
 the whole worktree as it always does. Earlier releases reported this as an `integrity error:` whose
 suggested route could refuse again.
 
+A `sync seal` onto the current branch that was stopped leaves the same marker. The same `sync seal` run again
+(after `prikk unlock` for the lock the stopped process left) finishes it: see [Sync](sync.md).
+
 ## `error: precondition not met: no object <id> in the object store or the active WAL; …`
 
 `prikk show` was given an id that names nothing here — usually a typo, or an id from another

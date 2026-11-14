@@ -593,11 +593,12 @@ fn first_block(repo: &Path) -> String {
 // Windows abort has a different exit status; the platform difference is what produces the rows, so the gate is derived.
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-/// **Row 5's one expected value.** Today a re-run that finds every claim already sealed clears the interrupted-materialization marker
-/// without materializing (the worktree stays behind the ref; `worktree-status` names `branch switch`). S2b changes it: the re-run
-/// finishes the materialization, and this constant becomes `true`.
+/// **Row 5's one expected value.** Through S2a a re-run that found every claim already sealed cleared the interrupted-materialization
+/// marker without materializing (the worktree stayed behind the ref; `worktree-status` named `branch switch`): this was `false`. S2b
+/// changed it (the architect's ruling): the re-run finishes the materialization, writes the worktree from the ref, clears the marker, and
+/// says so in one line. It never clears the marker without materializing.
 #[cfg(unix)]
-const ROW5_RERUN_MATERIALIZES: bool = false;
+const ROW5_RERUN_MATERIALIZES: bool = true;
 
 /// A 3-claim batch (`several-refs.artifact`: three blocks of one file) onto the current branch of a fresh receiver, killed at `point`
 /// of the `k`-th claim sealed. Returns the receiver and the claims.
@@ -800,8 +801,9 @@ fn crash_row4_a_claim_published_the_next_not_started() {
     assert_rerun_completes("row 4", &receiver, &second, &clean);
 }
 
-/// Row 5: every claim published, the worktree not materialized. **Today:** the re-run is a no-op for every claim, clears the marker, and
-/// leaves the worktree behind the ref (`worktree-status` names `branch switch`). `ROW5_RERUN_MATERIALIZES` is S2b's one expected value.
+/// Row 5: every claim published, the worktree not materialized. The re-run is a no-op for every claim and **finishes the
+/// materialization** (S2b); through S2a it cleared the marker and left the worktree behind the ref. `ROW5_RERUN_MATERIALIZES` is the one
+/// expected value.
 #[cfg(unix)]
 #[test]
 fn crash_row5_every_claim_published_the_worktree_not_materialized() {
@@ -816,8 +818,26 @@ fn crash_row5_every_claim_published_the_worktree_not_materialized() {
     let status = support::prikk(&receiver).arg("status").output().unwrap();
     assert!(
         !String::from_utf8_lossy(&status.stdout).contains("interrupted"),
-        "the marker is cleared (today, without materializing)"
+        "the marker is cleared"
     );
+    let rerun = String::from_utf8_lossy(&second.stdout);
+    assert_eq!(
+        rerun.contains("finishing the interrupted materialization of heads/main"),
+        ROW5_RERUN_MATERIALIZES,
+        "the one line that says so: {rerun}"
+    );
+    assert_eq!(
+        rerun.contains("materialized into the worktree: files written: 1"),
+        ROW5_RERUN_MATERIALIZES,
+        "{rerun}"
+    );
+    if ROW5_RERUN_MATERIALIZES {
+        assert_eq!(
+            std::fs::read_to_string(receiver.join("f.txt")).unwrap(),
+            "v2\n",
+            "the worktree is at the last block"
+        );
+    }
     let worktree_status = support::prikk(&receiver)
         .arg("worktree-status")
         .output()
@@ -831,5 +851,47 @@ fn crash_row5_every_claim_published_the_worktree_not_materialized() {
     assert_eq!(
         behind, !ROW5_RERUN_MATERIALIZES,
         "row 5: worktree-status says behind"
+    );
+}
+
+/// Row 5 with a file in the way: the re-run refuses (the in-the-way check, as before), names the way out, and changes nothing. The
+/// marker stays set, and the worktree keeps the user's file.
+#[cfg(unix)]
+#[test]
+fn crash_row5_with_a_file_in_the_way_refuses_and_names_the_way_out() {
+    let (receiver, claims) = killed_batch("s2a-kill-5-way", "after-publish", 3);
+    std::fs::write(receiver.join("f.txt"), "mine\n").unwrap();
+    let lock = receiver.join(".prikk/active/default/active.lock");
+    support::ok(
+        &support::prikk(&receiver)
+            .args(["unlock", "--lock"])
+            .arg(&lock)
+            .arg("--yes")
+            .output()
+            .unwrap(),
+        "unlock --yes",
+    );
+    let before = end_state(&receiver);
+    let rerun = seal(&receiver, "heads/main", &claims);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&rerun.stdout),
+        String::from_utf8_lossy(&rerun.stderr)
+    );
+    assert_eq!(rerun.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains("move them aside, then run `prikk branch switch heads/main` to finish"),
+        "names the way out: {said}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(receiver.join("f.txt")).unwrap(),
+        "mine\n",
+        "the user's file is untouched"
+    );
+    assert_eq!(end_state(&receiver), before, "no ref changed");
+    let status = support::prikk(&receiver).arg("status").output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).contains("interrupted materialization"),
+        "the marker is still set: the interrupted run is still unfinished"
     );
 }

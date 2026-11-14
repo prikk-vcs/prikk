@@ -445,8 +445,7 @@ fn pending_claims_a_merge_shaped_claim_reports_every_parent_block_id() -> Result
 /// 0.56.0 step 1a2, R2 (owner ruling 2026-10-29, "Exclude received history"); still true under
 /// 0.56.0 step 3g's redefinition, now for a different reason: a patch reachable only from a
 /// **received** pointer (never adopted into a local ref) is not pending, even though
-/// `accepted_but_unsealed_patch_ids` -- the raw query `seal_from_accepted_claim` still uses
-/// unchanged -- still reports it. The received history's own Block is held (`archive import`
+/// `accepted_but_unsealed_patch_ids` -- the raw query (which `seal_from_accepted_claim` used until 0.58.0 S2b) -- still reports it. The received history's own Block is held (`archive import`
 /// writes it into the local object store even for a `remotes/*` landing), so
 /// `patch_ids_named_by_any_held_block`'s subtraction excludes it -- no received-pointer walk
 /// needed at all any more. Both queries are asserted here to show they still genuinely diverge.
