@@ -464,45 +464,6 @@ pub(crate) fn rebuild_index_from_containers_count_for_test() -> usize {
     REBUILD_INDEX_FROM_CONTAINERS_COUNT.with(|count| count.get())
 }
 
-/// Look up one object's container location. Trusts the index for location (design §12/§10.3): one
-/// index read, then a linear search of its (already-decoded) entries -- no container scan. Refuses
-/// if the index itself has a damaged entry, rather than silently searching around it: an index this
-/// read depends on being sound is not the same question as which entries in it are damaged.
-///
-/// **Test-only since RFC 162 rule 1**: the index is a pure cache, and a reader must never refuse while
-/// the containers are sound -- `foundation` cannot itself rebuild a damaged index (the coupling gate
-/// forbids `foundation -> lock`), so the object-store layer's own lookups (`object_store.rs`'s
-/// `resolve_object_location_entries` for an unlocked reader, `resolve_object_location_locked` for a
-/// writer already holding the object-store lock) are production's real lookup, each transparently
-/// falling back to an in-memory container scan rather than surfacing this function's refusal. Kept
-/// here, unchanged, as the low-level primitive that tests the foundation-layer contract directly.
-#[cfg(test)]
-pub(crate) fn lookup_object_location(
-    layout: &RepositoryLayout,
-    object_id: ObjectId,
-) -> Result<Option<IndexEntry>> {
-    let replay = replay_index(layout)?;
-    if replay.has_item_failure() {
-        // Q1b item 4: this function is test-only (see its own doc) -- production never surfaces
-        // this text, since `object_store.rs`'s own lookups fall back to an in-memory container scan
-        // instead of returning this refusal. `doctor` itself treats the index as a pure cache
-        // (`PRIKK-DOCTOR-OBJECT-INDEX-INTERIOR-DAMAGE`'s own recommendation: "no repair is
-        // required ... run `prikk doctor --repair-index` to rebuild it on disk if desired"), so
-        // this names that command rather than the circular "run doctor before reading."
-        return Err(PrikkError::Integrity(
-            "object index has a damaged entry; no repair is required (readers rescan the \
-             containers in memory): run `prikk doctor --repair-index` to rebuild it on disk if \
-             desired"
-                .to_string(),
-        ));
-    }
-    Ok(replay
-        .entries
-        .into_iter()
-        .rev()
-        .find(|entry| entry.object_id == object_id))
-}
-
 /// Read exactly the container record `entry` names, decoding at its known offset ("one seek", design
 /// §12/§10.3) rather than scanning its container from the start. Does **not** validate the decoded
 /// envelope's recomputed id against `entry.object_id` -- callers that need that check (an ordinary

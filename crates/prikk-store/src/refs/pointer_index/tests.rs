@@ -66,7 +66,7 @@ fn no_offset_of_a_single_pointer_index_record_decodes_to_a_tail() -> Result<()> 
     Ok(())
 }
 
-/// "Last entry wins" (Step 0 §13.4's own words, mirroring `index.rs::lookup_object_location`): a
+/// "Last entry wins" (Step 0 §13.4's own words, mirroring the object index's lookup): a
 /// second publish for the same ref supersedes the first at lookup time, without needing the first
 /// entry removed or rewritten -- append-only, never overwritten in place.
 #[test]

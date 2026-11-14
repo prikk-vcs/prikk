@@ -15,6 +15,7 @@ use prikk_error::{PrikkError, Result};
 mod directory;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod failpoints;
+mod held_directories;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -34,6 +35,7 @@ mod windows;
 mod windows_authority;
 
 pub(crate) use directory::MutationRoot;
+pub(crate) use held_directories::DirectoryHold;
 #[cfg(test)]
 pub(crate) use read::read_tally;
 pub(crate) use read::{

@@ -663,8 +663,8 @@ pub(crate) fn truncate_pointer_index_trailing_partial(
     })
 }
 
-/// Look up one ref's current published pointer: the last entry matching `ref_name_key`, matching
-/// `index::lookup_object_location`'s own "last entry wins" reverse search exactly. Refuses if the
+/// Look up one ref's current published pointer: the last entry matching `ref_name_key`, with
+/// the object index's own "last entry wins" rule. Refuses if the
 /// index itself has a damaged entry, rather than silently searching around it. Also returns the
 /// index's own tail status (`trailing_partial_bytes`, `tail_offset`) from the same replay -- a reader
 /// never refuses on it (rule 1), but RFC 163's write-side guard (`RefStore::ensure_current_matches`)

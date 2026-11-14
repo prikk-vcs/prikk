@@ -361,16 +361,18 @@ fn each_operation_kind_counts_what_the_kernel_counts() {
 /// Whether a directory has a sync on this platform: Linux (`fsync`) and macOS (`F_FULLFSYNC`) do; Windows does not.
 const DIRECTORY_SYNC_EXISTS: bool = cfg!(any(target_os = "linux", target_os = "macos"));
 
-/// `(operation, file syncs, directory syncs where a directory has a sync)` on this file's fixtures. P2's baseline: each of these is what a directory opened once per held lock
+/// `(operation, file syncs, directory syncs where a directory has a sync)` on this file's fixtures. 0.58.0 P2a moved the directory
+/// column (a directory is opened once per hold) and left the file column alone: the durability promise is the same. Before P2a, in
+/// the same order: commit 58, seal 134, status/verify/log 1, bundle import 90, archive import 109, sync accept 76, sync seal 65. P2's baseline: each of these is what a directory opened once per held lock
 /// is measured against.
 const PINNED: &[(&str, usize, usize)] = &[
-    ("commit", 31, 58),
-    ("seal", 52, 134),
+    ("commit", 31, 16),
+    ("seal", 52, 51),
     ("status", 0, 1),
     ("verify", 0, 1),
     ("log", 0, 1),
-    ("bundle import", 51, 90),
-    ("archive import", 55, 109),
-    ("sync accept", 45, 76),
-    ("sync seal", 30, 65),
+    ("bundle import", 51, 18),
+    ("archive import", 55, 26),
+    ("sync accept", 45, 13),
+    ("sync seal", 30, 39),
 ];

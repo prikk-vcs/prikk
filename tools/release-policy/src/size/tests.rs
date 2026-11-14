@@ -417,7 +417,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // `cfg(test)`-invisible): 179 -> 180.
     // 0.57.0 S1b added `bundle/adopt.rs` (`bundle import --adopt`) and `bundle/adopt_local_ref.rs` (the halves both importers share): 180 -> 182.
     // 0.57.0 S5d added `verify/unreached_content.rs` (the one count line for unreached content): 182 -> 183.
-    assert_eq!(store.production_files, 183);
+    // 0.58.0 P2a added `foundation/fsutil/anchored/held_directories.rs` (the table of held directories on `MutationRoot`): 183 -> 184.
+    assert_eq!(store.production_files, 184);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

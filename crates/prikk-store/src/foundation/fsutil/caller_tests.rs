@@ -1,6 +1,7 @@
 //! Required-open propagation through authoritative storage caller classes.
 
 mod directory_matrix;
+mod held_directories;
 mod sync_count;
 mod sync_matrix;
 mod validation_matrix;

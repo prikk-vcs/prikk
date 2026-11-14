@@ -2,7 +2,7 @@
 //!
 //! Asserts that verifying a repository performs a number of full object-index decodes that does not
 //! grow with repository size. **Required to FAIL on current `main`**: `FileObjectStore::read_object`
-//! (via `index::lookup_object_location` → `index::replay_index`) decodes the entire on-disk index on
+//! (via `index::replay_index`) decodes the entire on-disk index on
 //! every single object read, so a `verify` walking N blocks and their referenced patches/blobs decodes
 //! the index roughly proportionally to N (RFC 111 §1, §5.1: ~82% of the regression). §6.1's fix turns
 //! this green; nothing here implements that fix.

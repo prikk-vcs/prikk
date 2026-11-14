@@ -6,7 +6,8 @@ use std::time::Duration;
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{
-    MutationRoot, create_new_file_required, inspect_entry, remove_file_cleanup_best_effort,
+    DirectoryHold, MutationRoot, create_new_file_required, inspect_entry,
+    remove_file_cleanup_best_effort,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 
@@ -16,6 +17,8 @@ pub struct ActiveLock {
     path: PathBuf,
     relative: PathBuf,
     mutation_root: MutationRoot,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
+    _hold: DirectoryHold,
 }
 
 impl ActiveLock {
@@ -74,11 +77,12 @@ impl ActiveLock {
         let path = layout.active_lock_path(name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
-        acquire_lock_file(&mutation_root, &relative, &path, "active")?;
+        let hold = acquire_lock_file(&mutation_root, &relative, &path, "active")?;
         Ok(Self {
             path,
             relative,
             mutation_root,
+            _hold: hold,
         })
     }
 
@@ -140,6 +144,8 @@ pub struct RefLock {
     path: PathBuf,
     relative: PathBuf,
     mutation_root: MutationRoot,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
+    _hold: DirectoryHold,
 }
 
 impl RefLock {
@@ -148,11 +154,12 @@ impl RefLock {
         let path = layout.ref_lock_path(ref_name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
-        acquire_lock_file(&mutation_root, &relative, &path, "ref")?;
+        let hold = acquire_lock_file(&mutation_root, &relative, &path, "ref")?;
         Ok(Self {
             path,
             relative,
             mutation_root,
+            _hold: hold,
         })
     }
 
@@ -180,6 +187,8 @@ struct ContainerLockHandle {
     kind: LockableContainer,
     relative: PathBuf,
     mutation_root: MutationRoot,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
+    _hold: DirectoryHold,
 }
 
 impl Drop for ContainerLockHandle {
@@ -274,7 +283,7 @@ fn acquire_container_locks_checked(
     for container in sorted {
         let path = layout.lockable_container_lock_path(container);
         let relative = layout.repository_relative(&path)?;
-        acquire_lock_file(
+        let hold = acquire_lock_file(
             &mutation_root,
             &relative,
             &path,
@@ -284,6 +293,7 @@ fn acquire_container_locks_checked(
             kind: container,
             relative,
             mutation_root: mutation_root.clone(),
+            _hold: hold,
         });
     }
     Ok(ContainerLockGuard { handles })
@@ -299,15 +309,19 @@ fn container_lock_kind(container: LockableContainer) -> &'static str {
     }
 }
 
+/// The one function every lock guard takes its lock file through, so it is also the one place a guard registers its hold on the
+/// root's held directories (0.58.0 P2a): it returns the [`DirectoryHold`], and a guard cannot be built without storing one. The hold
+/// is registered before the file is created, so the creation's own walk is already kept; on a refusal it is released here.
 fn acquire_lock_file(
     mutation_root: &MutationRoot,
     relative: &Path,
     path: &Path,
     kind: &str,
-) -> Result<()> {
+) -> Result<DirectoryHold> {
+    let hold = mutation_root.hold_directories();
     let body = lock_body(kind);
     match create_lock_file(mutation_root, relative, body.as_bytes()) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(hold),
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(PrikkError::LockConflict(format!(
                 "{kind} lock already exists: {} -- run `prikk unlock` to list held locks, or \

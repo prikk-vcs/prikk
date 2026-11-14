@@ -7,8 +7,8 @@ use prikk_object::{
 };
 
 use super::{
-    WriteDecision, append_object_to_container, decide_write_outcome, lookup_object_location,
-    rebuild_index_from_containers,
+    WriteDecision, append_object_to_container, decide_write_outcome, rebuild_index_from_containers,
+    replay_index,
 };
 use crate::foundation::container;
 use crate::foundation::fsutil::{append_file_required, read_file_range_if_exists};
@@ -16,6 +16,20 @@ use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::test_gates::test_support::{
     sample_object_id, signed_patch_blob_envelope, signed_patch_envelope,
 };
+
+/// One object's index entry, last entry wins: the foundation-layer lookup these tests read through. (0.58.0 P2a: this is what the
+/// test-only `lookup_object_location` was, minus its refusal on a damaged entry; every caller below reads a sound index, and the one
+/// test of the refusal now asserts what production does instead.)
+fn lookup_object_location(
+    layout: &RepositoryLayout,
+    object_id: ObjectId,
+) -> Result<Option<super::IndexEntry>> {
+    Ok(replay_index(layout)?
+        .entries
+        .into_iter()
+        .rev()
+        .find(|entry| entry.object_id == object_id))
+}
 
 /// Composes the pieces `write_object_to_container` used to be, exactly reproducing its old
 /// behavior (idempotency check, then unconditional append on `New`) -- for the tests below that are
@@ -283,8 +297,15 @@ fn a_format_6_repository_refuses_a_second_envelope_naming_the_upgrade() -> Resul
     Ok(())
 }
 
+/// 0.58.0 P2a: this test held `lookup_object_location`'s refusal on a damaged entry; that function was test-only and is gone. What
+/// production does is the behaviour that matters: with a damaged index entry the object-store lookup falls back to scanning the
+/// containers and finds the object (RFC 162 rule 1: the index is a pure cache), and the foundation-layer replay still reports the
+/// damage.
 #[test]
-fn a_damaged_index_entry_blocks_lookup_as_a_reported_defect() -> Result<()> {
+fn a_damaged_index_entry_is_reported_by_the_replay_and_production_still_finds_the_object()
+-> Result<()> {
+    use crate::{FileObjectStore, ObjectReader};
+
     let root = crate::test_gates::test_support::unique_temp_dir("index-damaged-entry");
     let layout = RepositoryLayout::init(root.clone())?;
     let envelope = signed_patch_envelope();
@@ -296,7 +317,17 @@ fn a_damaged_index_entry_blocks_lookup_as_a_reported_defect() -> Result<()> {
     *last ^= 0x01;
     std::fs::write(&index_path, &bytes)?;
 
-    assert!(lookup_object_location(&layout, envelope.object_id()).is_err());
+    assert!(
+        replay_index(&layout)?.has_item_failure(),
+        "the replay reports the damaged entry"
+    );
+    let store = FileObjectStore::new(layout.clone());
+    let found = store.read_object(envelope.object_id())?;
+    assert_eq!(
+        found.as_ref().map(ObjectEnvelope::object_id),
+        Some(envelope.object_id()),
+        "production falls back to a container scan and finds the object"
+    );
 
     let _ = std::fs::remove_dir_all(root);
     Ok(())

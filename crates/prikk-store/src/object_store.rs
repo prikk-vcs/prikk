@@ -349,9 +349,9 @@ fn current_index_file_length(layout: &RepositoryLayout) -> Result<u64> {
 }
 
 /// RFC 162 rule 1: the object index is a pure cache, and a reader never refuses while the containers
-/// are sound. Unlike `foundation::index::lookup_object_location` (kept as the foundation-layer
-/// primitive that still refuses on damage -- `foundation` must not depend on `crate::lock`, so it
-/// cannot rebuild itself), this is the object-store layer's own lookup: if the index is damaged, **or
+/// are sound. Unlike `foundation::index::replay_index` (the foundation-layer primitive, which reports a damaged
+/// entry rather than rebuilding -- `foundation` must not depend on `crate::lock`, so it cannot rebuild
+/// itself; 0.58.0 P2a removed its test-only wrapper `lookup_object_location`), this is the object-store layer's own lookup: if the index is damaged, **or
 /// has a trailing-partial tail (0.50.0 step 1, A5)**, it scans the containers in memory
 /// (`rebuild_index_from_containers`, the same scan `doctor --repair-index` uses, but without
 /// installing anything) -- this is the round's chosen half of rule 1's "a reader falls back to
@@ -563,7 +563,7 @@ impl IndexSnapshot {
         })
     }
 
-    /// Same last-entry-wins semantics `lookup_object_location` already has, preserved verbatim --
+    /// Last-entry-wins, as the index's reverse search it replaced (`lookup_object_location`, removed in 0.58.0 P2a) had it --
     /// 0.55.0 step 3 Part 1 (2C, ruling C1) replaced the reverse linear scan with an O(1) lookup
     /// into `by_id`, which already names whichever position is last-written for `id`.
     fn lookup(&self, id: ObjectId) -> Option<&IndexEntry> {

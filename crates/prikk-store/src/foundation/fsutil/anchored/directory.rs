@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use prikk_error::{PrikkError, Result};
 
+use super::held_directories::{DirectoryHold, HeldDirectories};
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use rustix::fd::OwnedFd;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -59,6 +61,8 @@ type Authority = PathOnlyAuthority;
 pub(crate) struct MutationRoot {
     path: Arc<PathBuf>,
     authority: Authority,
+    /// Directories kept open while a lock is held (0.58.0 P2a); see `held_directories`. Shared by every clone of this root.
+    held: Arc<HeldDirectories>,
 }
 
 impl fmt::Debug for MutationRoot {
@@ -75,11 +79,24 @@ impl MutationRoot {
             .same_as(&self.path, &other.authority, &other.path)
     }
 
+    /// Register a hold: while any hold on this root (or a clone of it) is open, the walk keeps each directory it opens, and syncs its
+    /// parent once. Every lock guard takes one (`lock::acquire_lock_file`); the last release clears the table.
+    pub(crate) fn hold_directories(&self) -> DirectoryHold {
+        self.held.hold()
+    }
+
+    /// `(holds open, directories held)` -- the tests' witness that the table is absent outside a hold.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn held_directories_for_test(&self) -> (usize, usize) {
+        self.held.counts_for_test()
+    }
+
     /// Bind mutation authority to an existing no-follow directory handle.
     pub(crate) fn open(path: &Path) -> Result<Self> {
         Ok(Self {
             path: Arc::new(path.to_path_buf()),
             authority: Authority::bind(path)?,
+            held: HeldDirectories::new(),
         })
     }
 
@@ -88,6 +105,7 @@ impl MutationRoot {
         Ok(Self {
             path: Arc::new(self.fallback_path(relative)?),
             authority: self.authority.ensure_child(relative)?,
+            held: HeldDirectories::new(),
         })
     }
 
@@ -96,6 +114,7 @@ impl MutationRoot {
         Ok(Self {
             path: Arc::new(self.fallback_path(relative)?),
             authority: self.authority.open_child(relative)?,
+            held: HeldDirectories::new(),
         })
     }
 
@@ -145,8 +164,16 @@ impl PlatformAuthority for Arc<AnchoredDirectory> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn dup(directory: &AnchoredDirectory) -> Result<AnchoredDirectory> {
-    let fd = rustix::io::dup(&directory.fd).map_err(io_error)?;
-    Ok(AnchoredDirectory { fd })
+    directory.duplicate()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl AnchoredDirectory {
+    /// A second descriptor for the same directory (no I/O; `dup(2)`).
+    pub(super) fn duplicate(&self) -> Result<AnchoredDirectory> {
+        let fd = rustix::io::dup(&self.fd).map_err(io_error)?;
+        Ok(AnchoredDirectory { fd })
+    }
 }
 
 /// Every platform that is neither Linux, macOS, nor Windows: no retained handle and no
@@ -320,16 +347,50 @@ impl AnchoredDirectory {
     }
 }
 
+/// How the held walk treats a component that is not there.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum Missing {
+    Create,
+    Refuse,
+}
+
+/// The walk every writer makes to reach a directory: from the deepest directory a hold already keeps (else from the root), open each
+/// remaining component no-follow and sync its parent (creating it, with the created-parent sync, when `missing` is `Create`),
+/// keeping each handle once its parent sync succeeded. With no hold open nothing is kept, and this is the walk it always was.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn walk_held(root: &MutationRoot, relative: &Path, missing: Missing) -> Result<AnchoredDirectory> {
+    let components = relative_components(relative)?;
+    let prefix = |count: usize| -> PathBuf { components.iter().take(count).collect() };
+    let mut start = 0;
+    let mut current = None;
+    for count in (1..=components.len()).rev() {
+        if let Some(held) = root.held.get(&prefix(count))? {
+            current = Some(held);
+            start = count;
+            break;
+        }
+    }
+    let mut current = match current {
+        Some(held) => held,
+        None => root.duplicate_directory()?,
+    };
+    for (index, component) in components.iter().enumerate().skip(start) {
+        current = match missing {
+            Missing::Create => current.ensure_child(component)?,
+            Missing::Refuse => current.open_validated_child(component)?,
+        };
+        root.held.remember(prefix(index + 1), &current)?;
+    }
+    Ok(current)
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn prepare_directory_required(
     root: &MutationRoot,
     relative: &Path,
 ) -> Result<AnchoredDirectory> {
-    let mut current = root.duplicate_directory()?;
-    for component in relative_components(relative)? {
-        current = current.ensure_child(component)?;
-    }
-    Ok(current)
+    walk_held(root, relative, Missing::Create)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -337,11 +398,7 @@ pub(super) fn open_existing_directory_required(
     root: &MutationRoot,
     relative: &Path,
 ) -> Result<AnchoredDirectory> {
-    let mut current = root.duplicate_directory()?;
-    for component in relative_components(relative)? {
-        current = current.open_validated_child(component)?;
-    }
-    Ok(current)
+    walk_held(root, relative, Missing::Refuse)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
