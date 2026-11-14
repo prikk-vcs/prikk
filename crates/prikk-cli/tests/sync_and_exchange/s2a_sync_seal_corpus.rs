@@ -6,6 +6,12 @@
 //! byte for byte: the `sync seal` exit and output (block ids, RefState ids, the `FAILED` line where there is one), the `sha256` of the
 //! receiver's ref log and pointer index, `log --format json` (the repository path replaced), and `verify`'s exit.
 //!
+//! **Which records are platform-independent, and why the path is not.** Every record but the path-shaped ones is: block ids, RefState ids,
+//! the exit, the `sync seal` output, `sha256` of the ref log and pointer index, and `verify`'s exit were identical on Linux, macOS and
+//! Windows when this corpus first ran on all three. `log --format json` carries the repository's path, which is platform-shaped, so it
+//! is compared structurally (`log_json_digest`): parsed, `repository` removed, the rest hashed canonically. `repository` is the only
+//! field of `log-report-v1` that holds a path of the run (the others are ids, kinds, counts and commit messages).
+//!
 //! **Why the senders' output is the fixture, not a regenerated history.** A `commit` mints random NodeIds, so two runs of the same
 //! script make different patch ids. A receiver signing with a fixed seed makes the same block and RefState ids from the same
 //! artifact, so the artifact is what is fixed.
@@ -49,6 +55,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::support;
+use crate::support::json::Value;
 
 const CORPUS: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -72,6 +79,46 @@ fn hex_sha256(bytes: &[u8]) -> String {
     prikk_hash::to_hex(&prikk_hash::sha256(bytes))
 }
 
+/// `Value` re-serialized canonically (objects are already key-sorted): the text a structural comparison hashes.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(text) => text.clone(),
+        Value::String(text) => format!("{text:?}"),
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", inner.join(","))
+        }
+        Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(key, item)| format!("{key:?}:{}", canonical(item)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+    }
+}
+
+/// `log --format json`, compared structurally: parsed, the one field that holds a path of this run (`repository`) removed, the rest
+/// hashed canonically. A text replacement of the printed path is platform-shaped (macOS resolves the temporary directory through
+/// `/private/var`; Windows prints backslashes, escaped inside JSON), so the path is never compared as text.
+fn log_json_digest(receiver: &Path) -> String {
+    let log = support::prikk(receiver)
+        .args(["log", "--format", "json"])
+        .output()
+        .unwrap();
+    let mut document = support::json::parse(&String::from_utf8_lossy(&log.stdout));
+    let Value::Object(map) = &mut document else {
+        panic!("`log --format json` is not an object");
+    };
+    assert!(
+        map.remove("repository").is_some(),
+        "`log --format json` carries `repository`: if it stops, this normalization is moot"
+    );
+    hex_sha256(canonical(&document).as_bytes())
+}
+
 fn scratch(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("s2a-{tag}-{}", support::unique_suffix()))
 }
@@ -84,10 +131,6 @@ fn scratch(tag: &str) -> PathBuf {
 fn record_run(receiver: &Path, label: &str, seal: &std::process::Output) -> String {
     let path = receiver.display().to_string();
     let normalize = |text: &str| text.replace(&path, "<repo>");
-    let log = support::prikk(receiver)
-        .args(["log", "--format", "json"])
-        .output()
-        .unwrap();
     let verify = support::prikk(receiver).arg("verify").output().unwrap();
     let refs = receiver.join(".prikk/refs/containers");
     let sha = |name: &str| {
@@ -103,7 +146,7 @@ fn record_run(receiver: &Path, label: &str, seal: &std::process::Output) -> Stri
         normalize(&String::from_utf8_lossy(&seal.stderr)),
         sha("log-a.container"),
         sha("pointer-index-a.container"),
-        hex_sha256(normalize(&String::from_utf8_lossy(&log.stdout)).as_bytes()),
+        log_json_digest(receiver),
         verify
             .status
             .code()
@@ -604,25 +647,16 @@ fn clean_end_state() -> String {
     end_state(&receiver)
 }
 
-/// The end state compared across runs: the ref log, the pointer index and `log --format json`, repository path removed.
+/// The end state compared across runs: the ref log, the pointer index and `log --format json` (structurally, path removed).
 #[cfg(unix)]
 fn end_state(receiver: &Path) -> String {
-    let path = receiver.display().to_string();
     let refs = receiver.join(".prikk/refs/containers");
     let sha = |name: &str| hex_sha256(&std::fs::read(refs.join(name)).unwrap());
-    let log = support::prikk(receiver)
-        .args(["log", "--format", "json"])
-        .output()
-        .unwrap();
     format!(
         "log {} pointer-index {} log-json {}",
         sha("log-a.container"),
         sha("pointer-index-a.container"),
-        hex_sha256(
-            String::from_utf8_lossy(&log.stdout)
-                .replace(&path, "<repo>")
-                .as_bytes()
-        )
+        log_json_digest(receiver)
     )
 }
 

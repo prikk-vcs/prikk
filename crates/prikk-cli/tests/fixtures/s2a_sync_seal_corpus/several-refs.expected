@@ -19,7 +19,7 @@ stderr:
 
 log.sha256 98b765fbf5efdd79bc36fc3d5f314e1902ef6187bdaf1fc8effaa02d71e10e37
 pointer-index.sha256 1df02a2972fcfefaee457f3dbf37a6c426f2c92714b2ece1fabcf57229309a52
-log-json.sha256 b219a24ec8dac1eb01efc3353b985248fe3cf78bfc8474acd7e5212f4cda92ae
+log-json.sha256 bc03fb7a69258a2b9c388b15fb076432995756ec248bc7d9685a68abefa65c4c
 verify.exit 0
 == several-refs: heads/other
 exit 0
@@ -41,5 +41,5 @@ stderr:
 
 log.sha256 80b29fb68352d52fc7573d9576d02858353aebdd9254fdeae5846d1e0fd46794
 pointer-index.sha256 30d10ac255ccfe2b1f5436bd508a44ad037352230bee3b9f92cf6ac41e1a4812
-log-json.sha256 b219a24ec8dac1eb01efc3353b985248fe3cf78bfc8474acd7e5212f4cda92ae
+log-json.sha256 bc03fb7a69258a2b9c388b15fb076432995756ec248bc7d9685a68abefa65c4c
 verify.exit 0

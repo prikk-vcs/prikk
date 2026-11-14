@@ -5,7 +5,7 @@
 
 #![allow(clippy::indexing_slicing, clippy::unwrap_used)]
 
-use prikk_error::{PrikkError, Result};
+use prikk_error::Result;
 use prikk_object::{BlockKind, ObjectId, ObjectType};
 
 use super::{AcceptOptions, ClaimSignatureVerification, accept_exchange_artifact};
@@ -984,9 +984,13 @@ fn a_patch_carrying_a_non_ascii_path_is_refused_by_a_format_7_receiver_and_accep
     Ok(())
 }
 
-/// 0.58.0 S0 (a P2b follow-up): the claims are what `sync pending` lists, so the claims-and-tags write is a publish point. A held
+/// 0.58.0 S0 (a P2b follow-up): the claims are what `sync pending` lists, so the claims-and-tags write is a publish point.
+///
+/// **Linux and macOS only.** The held-directory check exists where a command holds directories (P2a/P2b: the table is Unix-only).
+/// Windows keeps no held directory, so nothing can be moved from under a hold there and `accept` correctly succeeds. A held
 /// directory moved after the patches and blobs are written and before the first claim refuses with the P2b message, exit-1 class
 /// (`Precondition`), and the claim container is byte-identical: no claim is recorded.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_held_directory_moved_before_the_claims_refuses_and_records_no_claim() -> Result<()> {
     let author = author_signer(0x61)?;
@@ -1030,7 +1034,7 @@ fn a_held_directory_moved_before_the_claims_refuses_and_records_no_claim() -> Re
     let error =
         accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits()).unwrap_err();
     assert!(moved.is_dir(), "the seam moved the held directory");
-    let PrikkError::Precondition(message) = error else {
+    let prikk_error::PrikkError::Precondition(message) = error else {
         panic!("expected the held-directory refusal, got {error:?}");
     };
     assert!(message.contains("containers/blob"), "{message}");

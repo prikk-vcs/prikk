@@ -2,6 +2,9 @@
 name        = "prikk"
 description = "A standalone distributed version control system built around block-oriented patch theory."
 readme      = "../../README.md"
+# 0.58.0 S2a fix: the test fixtures (the sync-seal corpus, the old-format repositories, the cross-platform artifact) are test evidence, not
+# crate content; `prikk-store` excludes its own the same way.
+exclude     = ["tests/fixtures"]
 documentation = "https://docs.rs/prikk"
 version.workspace       = true
 edition.workspace       = true

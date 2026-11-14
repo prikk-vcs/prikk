@@ -493,7 +493,7 @@ thread_local! {
 
 /// Test seam, unreachable from production: run `change` once, after the patches, blobs and author keys are written and before the
 /// first claim or tag is -- where a held directory can be moved (0.58.0 S0).
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn before_accept_claims_for_test(change: impl FnOnce() + 'static) {
     BEFORE_ACCEPT_CLAIMS.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
