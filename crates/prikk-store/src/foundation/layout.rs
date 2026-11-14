@@ -233,6 +233,12 @@ impl RepositoryLayout {
             }
         }
         let worktree_mutation = MutationRoot::open(&root)?;
+        // 0.58.0 P1, rule 5: this is the one fsync a read-only command (`status`, `verify`, `log`) makes. `open_root` walks `.prikk` with
+        // `open_validated_child`, which syncs the PARENT (the worktree root) of every directory it opens, so that a directory entry an
+        // earlier run created (`init`'s `mkdir`, whose own parent sync may not have happened before a crash) is durable before this run
+        // builds on it. A reader does not need that; the writers that share this open do (nothing else ever syncs the worktree root's
+        // entry for `.prikk`), and this function cannot tell which it is serving. Removing the sync for readers is a read-only open,
+        // a new API; it is the architect's to rule (P1 report), not a one-line deletion.
         let repository_mutation = worktree_mutation.open_root(Path::new(REPO_DIR))?;
         let format = read_repository_format(&repository_mutation)?;
         Ok(Self {

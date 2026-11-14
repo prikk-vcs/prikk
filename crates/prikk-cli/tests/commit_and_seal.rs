@@ -21,6 +21,8 @@ mod dc92_lineage_replay_benchmark;
 mod genesis_end_to_end;
 #[path = "commit_and_seal/helper_uniqueness.rs"]
 mod helper_uniqueness;
+#[path = "commit_and_seal/p1_sync_count_per_operation.rs"]
+mod p1_sync_count_per_operation;
 #[path = "commit_and_seal/p2b_stale_commit_way_out_every_shape.rs"]
 mod p2b_stale_commit_way_out_every_shape;
 #[path = "commit_and_seal/p3b_worktree_record_naming_a_missing_block.rs"]

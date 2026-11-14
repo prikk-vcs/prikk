@@ -39,6 +39,29 @@ mod caller_tests;
 ))]
 mod tests;
 
+/// 0.58.0 P1. With `prikk-store`'s `test-support` feature (which no shipped build enables) and `PRIKK_TEST_REPORT_SYNC_CALLS` set, print
+/// `sync-calls: N` to stderr: how many times this process reached the platform's sync (`fsync` on Linux, `F_FULLFSYNC` on macOS,
+/// `FlushFileBuffers` on Windows), counted at the two primitives (`anchored::sync_file`, `AnchoredDirectory::sync`). A test sets it
+/// beside `strace -f`'s count of the same binary; on Linux only does `strace` witness it. Without the feature this is an empty
+/// function: no counter, no atomic and no branch exist in a shipped binary.
+#[cfg(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub fn report_sync_calls_if_requested() {
+    if std::env::var_os("PRIKK_TEST_REPORT_SYNC_CALLS").is_some() {
+        eprintln!("sync-calls: {}", anchored::process_sync_calls());
+    }
+}
+
+/// The shipped form: nothing.
+#[cfg(not(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+)))]
+#[inline(always)]
+pub fn report_sync_calls_if_requested() {}
+
 pub(crate) use anchored::{
     EntryKind, MutationRoot, RootDirEntry, RootFileStat, append_file_reporting_offset_required,
     append_file_required, create_new_file_required, ensure_directory_required, inspect_entry,
@@ -113,6 +136,8 @@ pub(crate) use anchored::fail_after_for_test;
 pub(crate) use anchored::failpoint_armed_for_test;
 // 0.55.0 step 3 Part 2: matches `caller_tests::sync_count`'s own gate (above, `caller_tests`'
 // comment) -- Linux/macOS only, not `windows`, or this re-export reads as dead code there.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use anchored::directory_sync_call_count_for_test;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) use anchored::reset_sync_call_count_for_test;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

@@ -156,6 +156,9 @@ fn decide_main_outcome(
 
 fn main() -> ExitCode {
     let outcome = run();
+    // 0.58.0 P1: an empty function in a shipped build; with `prikk-store`'s `test-support` feature and `PRIKK_TEST_REPORT_SYNC_CALLS` set
+    // it prints how many times this process reached the platform's sync, for a test to set beside `strace`.
+    prikk_store::report_sync_calls_if_requested();
     // RFC 136 increment 2c: a verified snapshot that could not supply a file's text (its manifest failed validation,
     // or the text it yielded failed its hash) sends the command back to a full replay, and that is named here, once,
     // whichever command it was and however it ended (§10.3b.4's rule: an anchor's failure is never swallowed).

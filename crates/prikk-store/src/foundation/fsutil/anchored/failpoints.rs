@@ -63,14 +63,13 @@ std::thread_local! {
     static DIRECTORY_CREATE_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
     #[cfg(target_os = "windows")]
     static ANCHOR_VERIFICATION_BARRIER: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
-    // 0.55.0 step 3 Part 2: counts real sync syscalls on this thread (`file.sync_all()`,
-    // `directory.sync()`), not opens/writes/unlinks -- `is_sync_point` below names exactly which
-    // `Point`s those are. Used to measure "syncs per object write" directly instead of inferring it
-    // by sweeping `fail_after` ordinals upward until one stops firing. Its only caller
-    // (`caller_tests::sync_count`) is Linux/macOS-only (`fsutil.rs`'s own comment on that module),
-    // so gated the same way rather than reading as dead code on Windows.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    // 0.58.0 P1: counts every call that reaches the platform's sync on this thread, at the primitive -- `anchored::sync_file`
+    // (a file's `sync_all`) and `AnchoredDirectory::sync` (a directory's `fsync`/`F_FULLFSYNC`) -- and nowhere else. It used to
+    // count at the `Point`s a list named (`is_sync_point`), which missed the directory walk's parent syncs. `cfg(test)` only: a
+    // release build has no counter, no atomic and no branch. Read only by `caller_tests::sync_count` (Linux/macOS).
     static SYNC_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // The same count, directories only (`AnchoredDirectory::sync`); the files are the difference.
+    static DIRECTORY_SYNC_CALL_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
@@ -78,25 +77,49 @@ std::thread_local! {
 /// measured.
 pub(crate) fn reset_sync_call_count_for_test() {
     SYNC_CALL_COUNT.with(|count| count.set(0));
+    DIRECTORY_SYNC_CALL_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-/// How many real sync syscalls (`file.sync_all()`/`directory.sync()`) this thread has made since
+/// How many calls to the platform's sync (`anchored::sync_file`, `AnchoredDirectory::sync`) this thread has made since
 /// the last [`reset_sync_call_count_for_test`].
 pub(crate) fn sync_call_count_for_test() -> usize {
     SYNC_CALL_COUNT.with(|count| count.get())
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-/// Whether `point` is a real sync syscall rather than an open, a write, an unlink, or a directory
-/// creation -- the three that are, on the object-write path: a file's own `sync_all()`
-/// (`RequiredFileSync`), and on Linux/macOS a directory's own `sync()`, whether required by a
-/// write (`RequiredDirectorySync`) or by a cleanup unlink (`CleanupDirectorySync`).
-fn is_sync_point(point: Point) -> bool {
-    matches!(
-        point,
-        Point::RequiredFileSync | Point::RequiredDirectorySync | Point::CleanupDirectorySync
-    )
+/// Of those, how many were a directory's (`AnchoredDirectory::sync`); the rest were a file's (`anchored::sync_file`).
+pub(crate) fn directory_sync_call_count_for_test() -> usize {
+    DIRECTORY_SYNC_CALL_COUNT.with(|count| count.get())
+}
+
+/// Calls to the platform's sync by this process, all threads (0.58.0 P1). Present only with `prikk-store`'s `test-support` feature,
+/// which no shipped build enables; `report_sync_calls_if_requested` prints it, so a test can set it beside `strace -f`'s count of
+/// the same binary.
+#[cfg(feature = "test-support")]
+static PROCESS_SYNC_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(feature = "test-support")]
+pub(crate) fn process_sync_calls() -> usize {
+    PROCESS_SYNC_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Count one call that reaches the platform's sync (see `SYNC_CALL_COUNT`, per thread under `cfg(test)`; `PROCESS_SYNC_CALLS`, per
+/// process under the `test-support` feature). Called from the two primitives only, behind the same two cfgs: a build with neither
+/// has no counter, no atomic and no branch.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn count_sync_call(directory: bool) {
+    #[cfg(test)]
+    {
+        SYNC_CALL_COUNT.with(|count| count.set(count.get() + 1));
+        if directory {
+            DIRECTORY_SYNC_CALL_COUNT.with(|count| count.set(count.get() + 1));
+        }
+    }
+    #[cfg(not(test))]
+    let _ = directory;
+    #[cfg(feature = "test-support")]
+    PROCESS_SYNC_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -348,10 +371,6 @@ fn wait_at_test_barrier(barrier: TestBarrier) {
 
 #[cfg(test)]
 fn check(point: Point) -> Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if is_sync_point(point) {
-        SYNC_CALL_COUNT.with(|count| count.set(count.get() + 1));
-    }
     NEXT.with(|next| {
         let mut next = next.borrow_mut();
         match next.as_mut() {

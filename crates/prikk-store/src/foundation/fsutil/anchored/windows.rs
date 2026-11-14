@@ -317,8 +317,7 @@ impl DurabilityContract for WindowsDurability {
         file.write_all(bytes)
             .map_err(|error| io_error(&temp_full, error))?;
         failpoints::mutable_file_sync()?;
-        file.sync_all()
-            .map_err(|error| io_error(&temp_full, error))?;
+        super::sync_file(&file).map_err(|error| io_error(&temp_full, error))?;
         drop(file);
         failpoints::mutable_rename()?;
         fs::rename(&temp_full, &destination).map_err(|error| io_error(&destination, error))
@@ -341,7 +340,7 @@ impl DurabilityContract for WindowsDurability {
         file.write_all(bytes)
             .map_err(|error| io_error(&path, error))?;
         failpoints::required_file_sync()?;
-        file.sync_all().map_err(|error| io_error(&path, error))?;
+        super::sync_file(&file).map_err(|error| io_error(&path, error))?;
         Ok(offset)
     }
 
@@ -360,7 +359,7 @@ impl DurabilityContract for WindowsDurability {
         file.write_all(bytes)
             .map_err(|error| io_error(&path, error))?;
         failpoints::required_file_sync()?;
-        file.sync_all().map_err(|error| io_error(&path, error))
+        super::sync_file(&file).map_err(|error| io_error(&path, error))
     }
 
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()> {
@@ -369,7 +368,7 @@ impl DurabilityContract for WindowsDurability {
         failpoints::truncate()?;
         file.set_len(len).map_err(|error| io_error(&path, error))?;
         failpoints::required_file_sync()?;
-        file.sync_all().map_err(|error| io_error(&path, error))
+        super::sync_file(&file).map_err(|error| io_error(&path, error))
     }
 
     fn durable_truncate_to_empty(&self, root: &MutationRoot, relative: &Path) -> Result<()> {
@@ -390,7 +389,7 @@ impl DurabilityContract for WindowsDurability {
         )?;
         file.write_all(bytes)?;
         failpoints::required_file_sync().map_err(prikk_to_io)?;
-        file.sync_all()
+        super::sync_file(&file)
     }
 
     fn set_permission_bits(&self, root: &MutationRoot, relative: &Path, mode: u32) -> Result<()> {

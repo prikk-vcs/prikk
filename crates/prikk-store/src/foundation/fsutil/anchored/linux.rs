@@ -37,7 +37,7 @@ impl DurabilityContract for LinuxDurability {
         let mut file = File::from(fd);
         file.write_all(bytes)?;
         failpoints::mutable_file_sync()?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         drop(file);
         failpoints::mutable_rename()?;
         fs::renameat(&directory.fd, temp_name, &directory.fd, destination).map_err(io_error)?;
@@ -67,7 +67,7 @@ impl DurabilityContract for LinuxDurability {
         failpoints::append_write()?;
         file.write_all(bytes)?;
         failpoints::required_file_sync()?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         Ok(offset)
     }
 
@@ -86,7 +86,7 @@ impl DurabilityContract for LinuxDurability {
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(bytes)?;
         failpoints::required_file_sync()?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         Ok(())
     }
 
@@ -98,7 +98,7 @@ impl DurabilityContract for LinuxDurability {
         failpoints::truncate()?;
         file.set_len(len)?;
         failpoints::required_file_sync()?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         failpoints::required_directory_sync()?;
         directory.sync()
     }
@@ -111,7 +111,7 @@ impl DurabilityContract for LinuxDurability {
         failpoints::truncate()?;
         file.set_len(0)?;
         failpoints::required_file_sync()?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         failpoints::required_directory_sync()?;
         directory.sync()
     }
@@ -132,7 +132,7 @@ impl DurabilityContract for LinuxDurability {
         let mut file = File::from(fd);
         file.write_all(bytes)?;
         failpoints::required_file_sync().map_err(prikk_to_io)?;
-        file.sync_all()?;
+        super::sync_file(&file)?;
         failpoints::required_directory_sync().map_err(prikk_to_io)?;
         directory.sync().map_err(prikk_to_io)
     }

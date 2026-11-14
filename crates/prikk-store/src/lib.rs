@@ -233,6 +233,7 @@ pub use extract_refusal::{
     ClaimSignatureInvalidInfo, ExtractError, ExtractRefusalKind, NoCheckpointReason,
 };
 pub use format_upgrade::{FormatUpgradeOutcome, upgrade_repository_format};
+pub use foundation::fsutil::report_sync_calls_if_requested;
 pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,

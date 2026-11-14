@@ -307,6 +307,8 @@ impl AnchoredDirectory {
     /// `os_fsync`/`os_datasync` under `cfg(target_vendor = "apple")`) — but a directory fd is never a
     /// `std::fs::File`, so this call site needs the platform branch explicitly.
     pub(super) fn sync(&self) -> Result<()> {
+        #[cfg(any(test, feature = "test-support"))]
+        failpoints::count_sync_call(true);
         #[cfg(target_os = "linux")]
         {
             fs::fsync(&self.fd).map_err(io_error)

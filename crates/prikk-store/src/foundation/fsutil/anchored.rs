@@ -92,6 +92,13 @@ pub(crate) use failpoints::fail_after as fail_after_for_test;
 // `RequiredFileSync` have no Windows counterpart). Matching that gate exactly here, rather than
 // including `windows`, is what keeps this re-export from reading as dead code on that target.
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use failpoints::directory_sync_call_count_for_test;
+#[cfg(all(
+    feature = "test-support",
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+pub(crate) use failpoints::process_sync_calls;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) use failpoints::reset_sync_call_count_for_test;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(crate) use failpoints::sync_call_count_for_test;
@@ -254,6 +261,18 @@ pub(crate) fn sync_directory_required(root: &MutationRoot, relative: &Path) -> R
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn io_error(error: rustix::io::Errno) -> PrikkError {
     PrikkError::from(std::io::Error::from(error))
+}
+
+/// **The one place a file reaches the platform's sync** (0.58.0 P1): `fsync` on Linux, `fcntl(F_FULLFSYNC)` on macOS (what
+/// `std`'s `sync_all` calls there), `FlushFileBuffers` on Windows. Every durable write in this crate syncs a file through
+/// here, so the test-only counter (`failpoints::sync_call_count_for_test`) counts at the primitive and a new caller cannot be
+/// missed. A directory reaches the platform's sync in one place too: `AnchoredDirectory::sync`. In a build that is neither
+/// `cfg(test)` nor `test-support` the count line does not exist, and this is `file.sync_all()`.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(any(test, feature = "test-support"))]
+    failpoints::count_sync_call(false);
+    file.sync_all()
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
