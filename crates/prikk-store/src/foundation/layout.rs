@@ -233,7 +233,8 @@ impl RepositoryLayout {
             }
         }
         let worktree_mutation = MutationRoot::open(&root)?;
-        // 0.58.0 P1, rule 5: this is the one fsync a read-only command (`status`, `verify`, `log`) makes. `open_root` walks `.prikk` with
+        // 0.58.0 P1, rule 5: this is the one fsync a read-only command (`status`, `verify`, `log`) makes, and it is a DIRECTORY sync: it exists on Linux and
+        // macOS only (a Windows directory has no sync), so on Windows a reader makes none. `open_root` walks `.prikk` with
         // `open_validated_child`, which syncs the PARENT (the worktree root) of every directory it opens, so that a directory entry an
         // earlier run created (`init`'s `mkdir`, whose own parent sync may not have happened before a crash) is durable before this run
         // builds on it. A reader does not need that; the writers that share this open do (nothing else ever syncs the worktree root's

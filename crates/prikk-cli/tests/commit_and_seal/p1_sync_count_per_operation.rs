@@ -4,7 +4,7 @@
 //! **What is counted.** `prikk-store`'s `test-support` build (the build these tests run against; no shipped build has it) counts every
 //! call to the platform's sync at its two primitives: a file's (`anchored::sync_file`: `fsync` on Linux, `F_FULLFSYNC` on macOS,
 //! `FlushFileBuffers` on Windows) and a directory's (`AnchoredDirectory::sync`). With `PRIKK_TEST_REPORT_SYNC_CALLS` set, the binary
-//! prints `sync-calls: N` on exit. The numbers pinned below are that count, per operation kind, on the fixtures built here.
+//! prints `sync-calls: N (files F, directories D)` on exit. The numbers pinned below are that count, per operation kind, on the fixtures built here.
 //!
 //! **What the kernel witnesses.** Linux only. Where `strace` runs, each operation is run under `strace -f -e trace=fsync,fdatasync`
 //! and the counter must equal the kernel's count of the same run. On macOS and Windows the pinned numbers are the primitive's calls
@@ -28,6 +28,8 @@ const FILES: usize = 10;
 struct Counted {
     output: Output,
     counter: usize,
+    files: usize,
+    directories: usize,
     kernel: Option<usize>,
 }
 
@@ -76,16 +78,23 @@ fn counted(repo: &Path, extra_env: &[(&str, String)], args: &[&str]) -> Counted 
     command.args(args);
     let output = command.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let counter = stderr
+    // `sync-calls: N (files F, directories D)`: the total stays first, so a reader of the total is unchanged.
+    let report = stderr
         .lines()
         .rev()
         .find_map(|line| line.strip_prefix("sync-calls: "))
         .unwrap_or_else(|| {
             panic!("no `sync-calls:` line (is the binary built with prikk-store's test-support?): {stderr}")
-        })
-        .trim()
-        .parse::<usize>()
-        .unwrap();
+        });
+    let numbers: Vec<usize> = report
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse().unwrap())
+        .collect();
+    let [counter, files, directories] = numbers[..] else {
+        panic!("`sync-calls:` line is not `N (files F, directories D)`: {report}");
+    };
+    assert_eq!(counter, files + directories, "{report}");
     let kernel = witnessed.ok().map(|()| {
         let trace = std::fs::read_to_string(&trace_file).unwrap_or_default();
         let _ = std::fs::remove_file(&trace_file);
@@ -100,6 +109,8 @@ fn counted(repo: &Path, extra_env: &[(&str, String)], args: &[&str]) -> Counted 
     Counted {
         output,
         counter,
+        files,
+        directories,
         kernel,
     }
 }
@@ -157,10 +168,16 @@ fn expect_ok(counted: &Counted, what: &str) {
 /// Every operation kind: its counter, pinned; and the kernel's count of the same run, equal, where `strace` witnessed it.
 #[test]
 fn each_operation_kind_counts_what_the_kernel_counts() {
-    let mut rows: Vec<(&str, usize, Option<usize>)> = Vec::new();
+    let mut rows: Vec<(&str, usize, usize, usize, Option<usize>)> = Vec::new();
     let mut record = |name: &'static str, counted: &Counted| {
         expect_ok(counted, name);
-        rows.push((name, counted.counter, counted.kernel));
+        rows.push((
+            name,
+            counted.files,
+            counted.directories,
+            counted.counter,
+            counted.kernel,
+        ));
     };
 
     // commit: one commit of FILES new files.
@@ -295,12 +312,15 @@ fn each_operation_kind_counts_what_the_kernel_counts() {
         ),
     );
 
-    for (name, counter, kernel) in &rows {
-        eprintln!("P1-ROW {name}: counter={counter} kernel={kernel:?}");
+    for (name, files, directories, counter, kernel) in &rows {
+        eprintln!(
+            "P1-ROW {name}: counter={counter} (files {files}, directories {directories}) kernel={kernel:?}"
+        );
     }
+    // The kernel agreement is Linux only: strace witnesses nothing elsewhere.
     match strace_available() {
         Ok(()) => {
-            for (name, counter, kernel) in &rows {
+            for (name, _, _, counter, kernel) in &rows {
                 assert_eq!(
                     Some(*counter),
                     *kernel,
@@ -310,27 +330,47 @@ fn each_operation_kind_counts_what_the_kernel_counts() {
         }
         Err(reason) => eprintln!("kernel agreement skipped: {reason}"),
     }
-    let pinned: &[(&str, usize)] = PINNED;
-    let measured: Vec<(&str, usize)> = rows
+    // Files and directories are pinned apart. The file count is one number for every platform. The directory count is derived from
+    // the platform: a Windows directory has no sync (`windows.rs` performs no directory sync anywhere), so there it is 0 by
+    // construction, not a number typed per platform. If a Windows file count differs from Linux's, that is a finding, not a pin to
+    // edit.
+    let measured: Vec<(&str, usize, usize)> = rows
         .iter()
-        .map(|(name, counter, _)| (*name, *counter))
+        .map(|(name, files, directories, _, _)| (*name, *files, *directories))
+        .collect();
+    let expected: Vec<(&str, usize, usize)> = PINNED
+        .iter()
+        .map(|(name, files, directories)| {
+            (
+                *name,
+                *files,
+                if DIRECTORY_SYNC_EXISTS {
+                    *directories
+                } else {
+                    0
+                },
+            )
+        })
         .collect();
     assert_eq!(
-        measured, pinned,
-        "the counter per operation kind on these fixtures ({FILES} files / commits)"
+        measured, expected,
+        "(operation, file syncs, directory syncs) per operation kind on these fixtures ({FILES} files / commits)"
     );
 }
 
-/// Counter per operation kind on this file's fixtures. P2's baseline: each of these is what a directory opened once per held lock
+/// Whether a directory has a sync on this platform: Linux (`fsync`) and macOS (`F_FULLFSYNC`) do; Windows does not.
+const DIRECTORY_SYNC_EXISTS: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
+/// `(operation, file syncs, directory syncs where a directory has a sync)` on this file's fixtures. P2's baseline: each of these is what a directory opened once per held lock
 /// is measured against.
-const PINNED: &[(&str, usize)] = &[
-    ("commit", 89),
-    ("seal", 186),
-    ("status", 1),
-    ("verify", 1),
-    ("log", 1),
-    ("bundle import", 141),
-    ("archive import", 164),
-    ("sync accept", 121),
-    ("sync seal", 95),
+const PINNED: &[(&str, usize, usize)] = &[
+    ("commit", 31, 58),
+    ("seal", 52, 134),
+    ("status", 0, 1),
+    ("verify", 0, 1),
+    ("log", 0, 1),
+    ("bundle import", 51, 90),
+    ("archive import", 55, 109),
+    ("sync accept", 45, 76),
+    ("sync seal", 30, 65),
 ];

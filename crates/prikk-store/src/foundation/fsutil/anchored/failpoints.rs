@@ -93,18 +93,27 @@ pub(crate) fn directory_sync_call_count_for_test() -> usize {
     DIRECTORY_SYNC_CALL_COUNT.with(|count| count.get())
 }
 
-/// Calls to the platform's sync by this process, all threads (0.58.0 P1). Present only with `prikk-store`'s `test-support` feature,
-/// which no shipped build enables; `report_sync_calls_if_requested` prints it, so a test can set it beside `strace -f`'s count of
-/// the same binary.
+/// Calls to the platform's sync by this process, all threads, files and directories apart (0.58.0 P1, the split from the P1 fix).
+/// Present only with `prikk-store`'s `test-support` feature, which no shipped build enables; `report_sync_calls_if_requested`
+/// prints them, so a test can set them beside `strace -f`'s count of the same binary. A Windows directory has no sync, so there the
+/// directory count is 0 by construction.
 #[cfg(feature = "test-support")]
-static PROCESS_SYNC_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PROCESS_FILE_SYNC_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(feature = "test-support")]
+static PROCESS_DIRECTORY_SYNC_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
+/// `(files, directories)`.
 #[cfg(feature = "test-support")]
-pub(crate) fn process_sync_calls() -> usize {
-    PROCESS_SYNC_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+pub(crate) fn process_sync_calls() -> (usize, usize) {
+    (
+        PROCESS_FILE_SYNC_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        PROCESS_DIRECTORY_SYNC_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
-/// Count one call that reaches the platform's sync (see `SYNC_CALL_COUNT`, per thread under `cfg(test)`; `PROCESS_SYNC_CALLS`, per
+/// Count one call that reaches the platform's sync (see `SYNC_CALL_COUNT`, per thread under `cfg(test)`; `PROCESS_*_SYNC_CALLS`, per
 /// process under the `test-support` feature). Called from the two primitives only, behind the same two cfgs: a build with neither
 /// has no counter, no atomic and no branch.
 #[cfg(any(test, feature = "test-support"))]
@@ -119,7 +128,11 @@ pub(super) fn count_sync_call(directory: bool) {
     #[cfg(not(test))]
     let _ = directory;
     #[cfg(feature = "test-support")]
-    PROCESS_SYNC_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if directory {
+        PROCESS_DIRECTORY_SYNC_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        PROCESS_FILE_SYNC_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]

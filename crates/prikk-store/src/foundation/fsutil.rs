@@ -40,7 +40,7 @@ mod caller_tests;
 mod tests;
 
 /// 0.58.0 P1. With `prikk-store`'s `test-support` feature (which no shipped build enables) and `PRIKK_TEST_REPORT_SYNC_CALLS` set, print
-/// `sync-calls: N` to stderr: how many times this process reached the platform's sync (`fsync` on Linux, `F_FULLFSYNC` on macOS,
+/// `sync-calls: N (files F, directories D)` to stderr: how many times this process reached the platform's sync (`fsync` on Linux, `F_FULLFSYNC` on macOS,
 /// `FlushFileBuffers` on Windows), counted at the two primitives (`anchored::sync_file`, `AnchoredDirectory::sync`). A test sets it
 /// beside `strace -f`'s count of the same binary; on Linux only does `strace` witness it. Without the feature this is an empty
 /// function: no counter, no atomic and no branch exist in a shipped binary.
@@ -50,7 +50,11 @@ mod tests;
 ))]
 pub fn report_sync_calls_if_requested() {
     if std::env::var_os("PRIKK_TEST_REPORT_SYNC_CALLS").is_some() {
-        eprintln!("sync-calls: {}", anchored::process_sync_calls());
+        let (files, directories) = anchored::process_sync_calls();
+        eprintln!(
+            "sync-calls: {} (files {files}, directories {directories})",
+            files + directories
+        );
     }
 }
 
