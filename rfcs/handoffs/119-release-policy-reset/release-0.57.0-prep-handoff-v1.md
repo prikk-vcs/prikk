@@ -179,3 +179,11 @@ between format 7 and 8 (review 050 §1). Run the 15 gates.
 **P3c ACCEPTED and pushed 2026-11-14** (`40a0362b`, CI green `43530709026`, 17/17; review
 `release-0.57.0-prep-P3c-review-v1`). **`40a0362b` is the candidate for the tag.** Acknowledgement 051 to the external
 architect is drafted for the owner. **P4 waits for the owner's word on the tag.**
+
+**External review 052 (2026-11-14) clears `40a0362b`: nothing blocks the tag.**
+- The `doctor` write is gone in every shape, the discard plan included.
+- The matrix is 294 of 297 the same and 3 better (the `worktree.baseline` cells now read `ok`); with `--hexflip`, 4
+  better.
+- `reproduce.sh` is identical to `74984253`.
+
+**P4 waits only for the owner's word on the tag.**
