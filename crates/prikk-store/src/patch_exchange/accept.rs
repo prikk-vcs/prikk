@@ -428,6 +428,17 @@ pub fn accept_exchange_artifact(
     // Claims and tags last, still under the lock: "no key material, and no claim, may be recorded
     // from an exchange that failed" (design §8.1), and RFC 117 stage 3 §5 row 6 puts a Tag on the
     // same terms -- **a refused exchange records no tag.**
+    // 0.58.0 S0 (a P2b follow-up): the claims and tags are what `sync pending` lists, so this write is a visibility point, a member of
+    // P2b's class: every directory the hold kept open is checked against its path first, and a directory moved while the command ran
+    // refuses here, exit 1, with no claim or tag written. The write order is unchanged (patches and blobs, AUTHOR key material, then
+    // claims and tags).
+    if !publication_envelopes.is_empty() {
+        #[cfg(test)]
+        if let Some(change) = BEFORE_ACCEPT_CLAIMS.with(|slot| slot.borrow_mut().take()) {
+            change();
+        }
+        layout.repository_mutation_root().check_held_directories()?;
+    }
     for envelope in &publication_envelopes {
         let id = envelope.object_id();
         if !object_store.contains_object(envelope.object_type, id)? {
@@ -472,6 +483,19 @@ fn referenced_blob_ids(kind: &DecodedOperationKind) -> Vec<ObjectId> {
         } => vec![*old_blob_id],
         _ => Vec::new(),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_ACCEPT_CLAIMS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam, unreachable from production: run `change` once, after the patches, blobs and author keys are written and before the
+/// first claim or tag is -- where a held directory can be moved (0.58.0 S0).
+#[cfg(test)]
+pub(crate) fn before_accept_claims_for_test(change: impl FnOnce() + 'static) {
+    BEFORE_ACCEPT_CLAIMS.with(|slot| *slot.borrow_mut() = Some(Box::new(change)));
 }
 
 #[cfg(test)]

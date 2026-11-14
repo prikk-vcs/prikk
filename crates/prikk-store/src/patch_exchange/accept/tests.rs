@@ -5,7 +5,7 @@
 
 #![allow(clippy::indexing_slicing, clippy::unwrap_used)]
 
-use prikk_error::Result;
+use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, ObjectId, ObjectType};
 
 use super::{AcceptOptions, ClaimSignatureVerification, accept_exchange_artifact};
@@ -980,6 +980,70 @@ fn a_patch_carrying_a_non_ascii_path_is_refused_by_a_format_7_receiver_and_accep
     accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits())?;
     let snapshot = ObjectReadSnapshot::open(&receiver)?;
     assert!(snapshot.contains_object(ObjectType::Patch, patch_id));
+    let _ = std::fs::remove_dir_all(receiver.root());
+    Ok(())
+}
+
+/// 0.58.0 S0 (a P2b follow-up): the claims are what `sync pending` lists, so the claims-and-tags write is a publish point. A held
+/// directory moved after the patches and blobs are written and before the first claim refuses with the P2b message, exit-1 class
+/// (`Precondition`), and the claim container is byte-identical: no claim is recorded.
+#[test]
+fn a_held_directory_moved_before_the_claims_refuses_and_records_no_claim() -> Result<()> {
+    let author = author_signer(0x61)?;
+    let claim_signer = maintainer_signer(0x62)?;
+
+    let sender = fresh_repo("pexch-accept-s0-sender")?;
+    let mut objects = FileObjectStore::new(sender.clone());
+    let blob = signed_blob_envelope(b"s0 fixture\n")?;
+    let blob_id = objects.write_object(&blob)?;
+    let patch = signed_author_patch_envelope(&author, "s0.txt", 0x63, blob_id)?;
+    let patch_id = objects.write_object(&patch)?;
+    {
+        let active_lock = ActiveLock::acquire(&sender, DEFAULT_ACTIVE_NAME)?;
+        record_author_key_material(
+            &sender,
+            author.key_id(),
+            author.public_key_bytes(),
+            &active_lock,
+        )?;
+    }
+    let claim = signed_claim_envelope(
+        &claim_signer,
+        ObjectId::from_bytes([0x64; 32]),
+        vec![patch_id],
+    )?;
+    let claim_id = objects.write_object(&claim)?;
+    let (_, bytes) = export_exchange_artifact(&sender, &[patch_id], &[claim_id], &[], None)?;
+    let _ = std::fs::remove_dir_all(sender.root());
+
+    let receiver = fresh_repo("pexch-accept-s0-receiver")?;
+    let claims =
+        receiver.container_slot_path(ObjectType::RecognitionClaim, crate::ContainerSlot::A);
+    let claims_before = std::fs::read(&claims)?;
+    let blob_dir = receiver.prikk_dir().join("containers/blob");
+    let moved = receiver.prikk_dir().join("containers/blob-moved");
+    let moved_in_seam = moved.clone();
+    let blob_dir_in_seam = blob_dir.clone();
+    super::before_accept_claims_for_test(move || {
+        let _ = std::fs::rename(&blob_dir_in_seam, &moved_in_seam);
+    });
+    let error =
+        accept_exchange_artifact(&receiver, &bytes, &AcceptOptions::default_limits()).unwrap_err();
+    assert!(moved.is_dir(), "the seam moved the held directory");
+    let PrikkError::Precondition(message) = error else {
+        panic!("expected the held-directory refusal, got {error:?}");
+    };
+    assert!(message.contains("containers/blob"), "{message}");
+    assert!(
+        message.contains("moved or replaced while this command ran"),
+        "{message}"
+    );
+    assert!(message.contains("nothing was published"), "{message}");
+    assert_eq!(
+        claims_before,
+        std::fs::read(&claims)?,
+        "the claim container is byte-identical: no claim was recorded"
+    );
     let _ = std::fs::remove_dir_all(receiver.root());
     Ok(())
 }

@@ -238,9 +238,10 @@ otherwise.
 **A held directory can outlive its path.** Another process that renames a held directory away, replaces it with an empty one or with
 a symlink, or removes it, would leave the command writing into a directory the repository no longer names. So **before the first
 write that makes the command's work visible, the command checks every held directory against its path**, walked again no-follow from
-the repository root: the same device and inode, or a refusal. The three places that check are the ones that publish: a ref publication
+the repository root: the same device and inode, or a refusal. The four places that check are the ones that publish: a ref publication
 (`seal`, `sync seal`, `merge`, `branch`/`tag` creation, `bundle import --adopt`, `archive import`), a received pointer (`bundle import`,
-`archive import`), and the queue append of `commit`. It is one check per publish, not per object, and it refuses with nothing
+`archive import`), the queue append of `commit`, and the claims and tags of `sync accept` (what `sync pending` lists; the
+write order is unchanged, patches and blobs, then author key material, then claims and tags last). It is one check per publish, not per object, and it refuses with nothing
 published:
 
 ```text
