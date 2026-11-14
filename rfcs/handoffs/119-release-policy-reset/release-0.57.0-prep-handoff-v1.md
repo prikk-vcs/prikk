@@ -205,3 +205,8 @@ CI.
    Say its byte count.
 
 **Not the team's:** pushing, the tag, crates.io, the AUR, verifying the shipped assets.
+
+**Correction to P4 item 4 (the architect, the same hour):** `release-notes` takes `<tag> <dist-dir>`, and the dist
+directory holds the built release assets, so it cannot run before the release run. Drop that step. Instead, report the
+heading line exactly (`sed -n 3p CHANGELOG.md`), with its em dash shown as U+2014 (`od -c`, or the bytes `e2 80 94`).
+The architect checks the published notes against the section after the release run.
