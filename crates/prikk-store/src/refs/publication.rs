@@ -147,6 +147,12 @@ fn publish_body(
     // to either container in between (proved by `a_second_writer_between_the_reads_is_excluded_by_the_lock`,
     // which bypasses the lock on purpose to show the assumption is load-bearing, not free).
     let (state, replay) = classify_state(store, publication, &update)?;
+    // 0.58.0 P2b: the first pointer or log write below is what makes the work visible; every directory this command's hold kept open
+    // is checked against its path first, so a directory moved while the command ran refuses here, with nothing published.
+    store
+        .layout
+        .repository_mutation_root()
+        .check_held_directories()?;
     if replay.trailing_partial_bytes != 0 {
         if !allow_partial_tail_repair
             || state != PublicationState::PointerLeading

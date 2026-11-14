@@ -249,6 +249,11 @@ impl Wal {
                 envelope.schema_version
             )));
         }
+        // 0.58.0 P2b: the queue record is what makes a commit visible (`status` lists it); the directories its blobs were written
+        // into are checked first.
+        if let Some(layout) = &self.layout {
+            layout.repository_mutation_root().check_held_directories()?;
+        }
         let mut replay = self.replay()?;
         if replay.trailing_partial_bytes != 0 {
             return Err(PrikkError::Integrity(

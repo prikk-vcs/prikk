@@ -97,6 +97,8 @@ pub(crate) fn write_received_pointer(
     ref_state_id: ObjectId,
 ) -> Result<()> {
     validate_received_ref(ref_name)?;
+    // 0.58.0 P2b: the received pointer is what makes an import's objects visible; check the held directories first.
+    layout.repository_mutation_root().check_held_directories()?;
     append_received_index_entry(
         layout,
         &ReceivedIndexEntry {

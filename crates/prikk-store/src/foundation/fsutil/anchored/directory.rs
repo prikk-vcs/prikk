@@ -85,6 +85,24 @@ impl MutationRoot {
         self.held.hold()
     }
 
+    /// Before a command publishes (the first ref, pointer or queue write that makes its work visible): check every directory a hold
+    /// kept open against its path, and refuse, with nothing yet published, if any was moved, replaced or removed while the command
+    /// ran (0.58.0 P2b). One check per publish, not per object. With no hold open nothing is held and this is `Ok`. Windows keeps no
+    /// directory, so there it is always `Ok`.
+    pub(crate) fn check_held_directories(&self) -> Result<()> {
+        #[cfg(feature = "test-support")]
+        super::failpoints::pause_before_publish_for_test();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(moved) = self.held.first_moved(&self.authority)? {
+            return Err(PrikkError::Precondition(format!(
+                "the directory {} was moved or replaced while this command ran, so nothing was published; run the command again, and \
+                 `prikk verify` to see what it left behind",
+                self.path.join(&moved).display()
+            )));
+        }
+        Ok(())
+    }
+
     /// `(holds open, directories held)` -- the tests' witness that the table is absent outside a hold.
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn held_directories_for_test(&self) -> (usize, usize) {
@@ -169,6 +187,33 @@ fn dup(directory: &AnchoredDirectory) -> Result<AnchoredDirectory> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl AnchoredDirectory {
+    /// Whether walking `relative` again from `root` (no-follow, directories only, every component) reaches the directory this
+    /// handle is open on. A missing, replaced or symlinked component answers `false`; any other failure is an error.
+    pub(super) fn is_what_this_walk_reaches(
+        &self,
+        root: &AnchoredDirectory,
+        relative: &Path,
+    ) -> Result<bool> {
+        let mut current = root.duplicate()?;
+        for component in relative_components(relative)? {
+            match fs::openat(
+                &current.fd,
+                component,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(fd) => current = AnchoredDirectory { fd },
+                Err(
+                    rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR | rustix::io::Errno::LOOP,
+                ) => return Ok(false),
+                Err(error) => return Err(io_error(error)),
+            }
+        }
+        let held = fs::fstat(&self.fd).map_err(io_error)?;
+        let reached = fs::fstat(&current.fd).map_err(io_error)?;
+        Ok(reached.st_dev == held.st_dev && reached.st_ino == held.st_ino)
+    }
+
     /// A second descriptor for the same directory (no I/O; `dup(2)`).
     pub(super) fn duplicate(&self) -> Result<AnchoredDirectory> {
         let fd = rustix::io::dup(&self.fd).map_err(io_error)?;

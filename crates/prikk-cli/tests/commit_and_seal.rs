@@ -23,6 +23,12 @@ mod genesis_end_to_end;
 mod helper_uniqueness;
 #[path = "commit_and_seal/p1_sync_count_per_operation.rs"]
 mod p1_sync_count_per_operation;
+// Linux and macOS only: a Windows write retains no directory handle (`WindowsAuthority` walks paths and has no directory sync), so there
+// is no held directory to outlive its path; the rename in that test would succeed and the seal would publish. The platform difference is
+// what produces the refusal, so the gate is derived here, not typed per test.
+#[cfg(unix)]
+#[path = "commit_and_seal/p2b_held_directory_moved_before_publish.rs"]
+mod p2b_held_directory_moved_before_publish;
 #[path = "commit_and_seal/p2b_stale_commit_way_out_every_shape.rs"]
 mod p2b_stale_commit_way_out_every_shape;
 #[path = "commit_and_seal/p3b_worktree_record_naming_a_missing_block.rs"]

@@ -2,6 +2,7 @@
 
 mod directory_matrix;
 mod held_directories;
+mod held_directories_check;
 mod sync_count;
 mod sync_matrix;
 mod validation_matrix;

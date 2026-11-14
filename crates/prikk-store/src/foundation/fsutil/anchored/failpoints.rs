@@ -113,6 +113,26 @@ pub(crate) fn process_sync_calls() -> (usize, usize) {
     )
 }
 
+/// P2b's test hook for a command run as a binary: with `PRIKK_TEST_PAUSE_BEFORE_PUBLISH=<go file>` set (and `prikk-store`'s
+/// `test-support` feature, which no shipped build enables), the command writes `<go file>.waiting` when it reaches the check before a
+/// publish and waits until `<go file>` exists (at most 60 seconds), so a test can move a held directory in between.
+#[cfg(feature = "test-support")]
+pub(super) fn pause_before_publish_for_test() {
+    let Some(go) = std::env::var_os("PRIKK_TEST_PAUSE_BEFORE_PUBLISH") else {
+        return;
+    };
+    let go = std::path::PathBuf::from(go);
+    let mut waiting = go.clone().into_os_string();
+    waiting.push(".waiting");
+    let _ = std::fs::write(&waiting, b"waiting");
+    for _ in 0..1200 {
+        if go.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Count one call that reaches the platform's sync (see `SYNC_CALL_COUNT`, per thread under `cfg(test)`; `PROCESS_*_SYNC_CALLS`, per
 /// process under the `test-support` feature). Called from the two primitives only, behind the same two cfgs: a build with neither
 /// has no counter, no atomic and no branch.

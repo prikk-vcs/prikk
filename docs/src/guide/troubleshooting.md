@@ -52,6 +52,17 @@ files for Prikk to record. Change something first.
 [why the tutorial needs a second key](tutorial.md#sealing--and-the-second-key). Same three routes as
 the AUTHOR case above, with `maintainer.seed` in place of `author.seed`.
 
+## `error: precondition not met: the directory <path> was moved or replaced while this command ran, so nothing was published`
+
+Something other than this command renamed, replaced (with an empty directory or a symlink) or removed a directory under `.prikk` that
+the command had open: a backup or sync tool, a script, a person. The command noticed just before it would have published, and
+refused: no ref, pointer or queue entry was written, exit `1`. Nothing it published earlier is affected.
+
+**The way out is to run the command again.** Then run `prikk verify`: if the moved directory was one of the containers (`containers/patch`,
+`containers/block`, …), the repository is damaged by the move itself, whatever was running, and `verify` fails (`index names container …
+which does not exist` for a renamed, emptied or removed one); restore the directory from where it went (a rename can be undone) or from a backup. If nothing moves the
+directory again, the second run succeeds. See [Directories Held While a Lock Is Held](../reference/concurrency-locking.md#directories-held-while-a-lock-is-held).
+
 ## `error: precondition not met: no maintainer key is adopted in this repository yet`
 
 Your maintainer key is configured but not yet trusted by this repository. Run

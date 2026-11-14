@@ -227,6 +227,33 @@ same deliberate posture described below for every other lock: prikk does not dec
 lock is stale. It reaches the object-write path for the first time here, so it is worth knowing that
 a transient I/O error during a `commit` can require `prikk unlock` before the next one.
 
+## Directories Held While a Lock Is Held
+
+While a command holds any lock (`ActiveLock`, a `RefLock`, a container lock), the directories its writes pass through under
+`.prikk` (`containers`, `containers/blob`, `active/default`, `refs`, …) are opened once, with every component no-follow, and
+their parents synced once, at the first write; every later write reuses the open directory (Linux and macOS; a Windows write
+retains no directory and has no directory sync). The table lasts from the command's first lock to its last release and is empty
+otherwise.
+
+**A held directory can outlive its path.** Another process that renames a held directory away, replaces it with an empty one or with
+a symlink, or removes it, would leave the command writing into a directory the repository no longer names. So **before the first
+write that makes the command's work visible, the command checks every held directory against its path**, walked again no-follow from
+the repository root: the same device and inode, or a refusal. The three places that check are the ones that publish: a ref publication
+(`seal`, `sync seal`, `merge`, `branch`/`tag` creation, `bundle import --adopt`, `archive import`), a received pointer (`bundle import`,
+`archive import`), and the queue append of `commit`. It is one check per publish, not per object, and it refuses with nothing
+published:
+
+```text
+error: precondition not met: the directory <path> was moved or replaced while this command ran, so nothing was published; run the command again, and `prikk verify` to see what it left behind
+```
+
+What the command had already written into the moved directory goes with that directory: the objects are not in the repository any
+more, and the object index still names them, so `prikk verify` reports the damage (for a container renamed, replaced by an empty directory or removed: `index names
+container … which does not exist`; for one replaced by a symlink: `stage objects: failed: … Not a directory`) rather than counting
+them as unreached. That damage is the move's, not the command's. **The repository root itself is not
+compared with its path:** a command keeps writing to the directory it opened even if `.prikk` is renamed, by design. See
+[the refusal's entry](../guide/troubleshooting.md#error-precondition-not-met-the-directory-path-was-moved-or-replaced-while-this-command-ran-so-nothing-was-published).
+
 ## Stale Locks and Manual Cleanup
 
 If a process dies while holding any lock — `active.lock`, a ref lock, or one of the five container

@@ -124,6 +124,32 @@ impl HeldDirectories {
         Ok(())
     }
 
+    /// The first held directory (in path order) whose handle no longer names what its path names from `root`, if any; `None` when no
+    /// hold is open (nothing is held) or every held directory still agrees. 0.58.0 P2b. A held handle can outlive its path: a
+    /// directory another process renamed away, replaced, replaced by a symlink or removed during the command would keep receiving the
+    /// command's writes. The comparison is device and inode of the handle (`fstat`) against the same path walked again from `root`
+    /// with `O_NOFOLLOW | O_DIRECTORY` on every component (a symlink, a missing component and a non-directory are all a difference).
+    /// **The root itself is not compared with its path:** a `MutationRoot` is a retained handle by design (PR-014: a repository root
+    /// replaced between commands keeps receiving writes at the original directory; `ref_cas_log_and_publication_remain_on_retained_
+    /// repository_root` holds it), so "the path" of a held directory is the path walked from that retained root.
+    pub(super) fn first_moved(&self, root: &AnchoredDirectory) -> Result<Option<PathBuf>> {
+        let state = self.lock();
+        if state.holds == 0 {
+            return Ok(None);
+        }
+        let mut keys: Vec<&PathBuf> = state.directories.keys().collect();
+        keys.sort();
+        for key in keys {
+            let Some(held) = state.directories.get(key) else {
+                continue;
+            };
+            if !held.is_what_this_walk_reaches(root, key)? {
+                return Ok(Some(key.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     /// Holds open and directories held, for the tests that assert the table is absent outside a hold.
     #[cfg(test)]
     pub(super) fn counts_for_test(&self) -> (usize, usize) {
