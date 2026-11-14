@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.57.0 — 2026-11-12
+## 0.57.0 — 2026-11-14
 
 ### Upgrading
 
@@ -39,7 +39,7 @@
     carries a non-ASCII path whatever it declares, before the first write, naming the format and `prikk format upgrade` (`--format json`: `"refusal":
     "repository-format-too-old"`); a declaration this build does not know is refused as `outside-version-rule`, not damage. Sending **to** an older prikk (measured on 0.55.0 and 0.56.0): an archive that declares format 8 is refused
     before any write, **even when it holds only ASCII names**, so an archive exported from a format-8 repository cannot go back to those binaries; they ignore a bundle's
-    declaration, so a format-8 bundle with ASCII names only is **imported** by both (measured: `bundle verify` and `bundle import` succeed), and one that carries a non-ASCII path is refused for the path itself.
+    declaration, so a format-8 bundle with ASCII names only is **imported** by both (measured: `bundle verify` and `bundle import` succeed), and one that carries a non-ASCII path is refused for the path itself. A `sync` artifact declares no repository format, so a format-6 or format-7 receiver's `sync accept` refuses one only when it carries a non-ASCII path; that is harmless, since nothing stored differs between format 7 and 8.
   - **Names:** a non-ASCII name must be NFC (`commit` refuses another form, naming its NFC spelling and never rewriting it); U+200C and U+200D are refused with the
     other invisible format characters (a Persian or Indic spelling or an emoji sequence that needs one cannot be committed; revisited if a consumer asks); two names
     that are one name under Unicode case folding and normalization (`straße` and `strasse`) collide at `seal`, `extract`, every checkout and `branch switch`, a
