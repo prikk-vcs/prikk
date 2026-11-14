@@ -3,9 +3,11 @@
 //! Bare invocation only lists what is currently held — it never clears anything. Clearing one
 //! specific lock (`--lock <path>`) requires either an interactive `yes` confirmation or the scripting
 //! escape `--yes`; there is no default that removes a lock. **Since 0.57.0 (step 2, L2) a holder that
-//! `appears running` is refused unless `--force`**: `--yes` answers the prompt for a lock whose holder
-//! does not appear to be running or is unknown, and `--force` alone clears a live holder's lock, at the
-//! risk of corrupting what that process is writing. The two flags were synonyms before. The tool never
+//! `appears running` is refused unless `--force`, and since 0.58.0 (step 0, part 0a) so is a holder that is
+//! `unknown`** (another pid or time namespace, another machine, an older prikk, an incomplete body: external
+//! review 050 §2 found a live, frozen holder cleared by `--yes` in each of the first three): `--yes` and a typed
+//! `yes` answer the prompt only for a lock whose holder "does not appear to be running", and `--force` alone
+//! clears the other two, at the risk of corrupting what that process is writing. The tool never
 //! decides a lock is safe to clear on its own -- see `prikk_store::unlock`'s own module doc for why
 //! (PID-based auto-stealing was considered and rejected: a false positive there means two writers on
 //! one container simultaneously, the exact race Step 2 exists to close).
@@ -71,12 +73,14 @@ pub(crate) fn run_unlock(root: PathBuf, args: Vec<String>) -> std::result::Resul
     };
 
     print_locks(std::slice::from_ref(lock));
-    // L2: a holder that appears running is refused, whatever `--yes` or a typed `yes` says. Only
-    // `--force` clears it. The refusal is an operational failure (exit 1), before anything is asked
-    // or written, so a script chaining `prikk unlock --lock X --yes && proceed` never proceeds past a
-    // live writer's lock.
-    if lock.liveness == PidLiveness::AppearsRunning && !force {
-        return Err(refuse_live_holder(lock).into());
+    // L2 (0.57.0) and 0.58.0 step 0a: only a holder that "does not appear to be running" may be cleared
+    // on a `--yes` or a typed `yes`. A holder that appears running, and one whose liveness is unknown,
+    // are refused whatever either says; only `--force` clears them. The refusal is an operational failure
+    // (exit 1), before anything is asked or written, so a script chaining
+    // `prikk unlock --lock X --yes && proceed` never proceeds past a lock whose holder it cannot show
+    // to be gone.
+    if lock.liveness != PidLiveness::DoesNotAppearRunning && !force {
+        return Err(refuse_holder_not_shown_gone(lock).into());
     }
     // RFC 121 §6a: declining -- interactively, or via EOF on a non-interactive stdin, which
     // `confirm_interactively` cannot tell apart from a "no" -- must not exit `0`. A script running
@@ -125,23 +129,43 @@ fn print_locks(locks: &[HeldLock]) {
 const LIVENESS_WORDS_URL: &str =
     "https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean";
 
-/// The refusal for a holder that appears running: the pid, the start time, what `--force` does, and
-/// where the words are defined (the help line and the page at [`LIVENESS_WORDS_URL`] define them;
-/// this does not).
-fn refuse_live_holder(lock: &HeldLock) -> String {
-    let pid = lock
-        .recorded_pid
-        .map_or_else(|| "?".to_string(), |pid| pid.to_string());
-    let started = lock
-        .recorded_start
-        .as_deref()
-        .map_or_else(String::new, |start| format!(", start time {start}"));
+/// The one sentence about what `--force` risks, shared by both refusals so the risk is never worded two ways.
+const FORCE_RISK: &str =
+    "--force clears it anyway, at the risk of corrupting what that process is writing.";
+
+/// The refusal for a holder that is not shown to be gone: one that appears running (the pid and the start time), or one whose
+/// liveness is unknown (the reason the judge gave). Both name `--force` and what it risks through [`FORCE_RISK`], and point at
+/// the one definition of the words. No backticks and no source-tree path: an installed release has neither a tree to open nor
+/// a markdown renderer.
+fn refuse_holder_not_shown_gone(lock: &HeldLock) -> String {
+    let (what, state) = if lock.liveness == PidLiveness::AppearsRunning {
+        let pid = lock
+            .recorded_pid
+            .map_or_else(|| "?".to_string(), |pid| pid.to_string());
+        let started = lock
+            .recorded_start
+            .as_deref()
+            .map_or_else(String::new, |start| format!(", start time {start}"));
+        (
+            format!(
+                "the process that took {} appears running (pid {pid}{started})",
+                lock.path.display()
+            ),
+            "appears running",
+        )
+    } else {
+        (
+            format!(
+                "whether the process that took {} is still running cannot be established ({})",
+                lock.path.display(),
+                lock.liveness_reason.sentence()
+            ),
+            "is unknown",
+        )
+    };
     format!(
-        "precondition not met: the process that took {} appears running (pid {pid}{started}) -- \
-         refusing to clear its lock. --yes does not clear a lock whose holder appears running. \
-         --force clears it anyway, at the risk of corrupting what that process is writing. What \
-         \"appears running\" means: {LIVENESS_WORDS_URL}",
-        lock.path.display()
+        "precondition not met: {what} -- refusing to clear its lock. --yes does not clear a lock whose holder {state}. \
+         {FORCE_RISK} What these words mean: {LIVENESS_WORDS_URL}"
     )
 }
 

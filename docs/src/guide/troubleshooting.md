@@ -317,7 +317,8 @@ fail closed, since there is then nothing to compare `--ref` against.
 
 ```sh
 # If a previous run was interrupted mid-write, its lock may still be on disk. `prikk unlock` lists it
-# with the recorded process id; clear it only once you have confirmed that process is gone:
+# with the recorded process id; clear it only once you have confirmed that process is gone. `--yes` clears it only
+# when its holder "does not appear to be running"; an unknown or running holder needs `--force`:
 prikk unlock --lock .prikk/active/default/active.lock --yes
 
 # See what this would do first, without writing anything -- the plan shows each queued commit's own
@@ -1175,9 +1176,10 @@ file. The message is the same for the active-session lock, a ref lock and a cont
 the file. `prikk unlock` lists every held lock with the recorded process id and start time and whether the process
 that took it still appears to be running; `prikk doctor` reports each one as `PRIKK-DOCTOR-HELD-LOCK`. Wait for a
 live process to finish. Clear a lock (`prikk unlock --lock <path>`) only after you have confirmed the
-process that held it is gone: a lock that `appears running` is refused by `prikk unlock --lock <path>` unless you pass `--force`, which
-clears it anyway and can corrupt what that process is writing; note that `does not appear to be running` and
-`unknown` are not proof, and clearing a live holder's lock can corrupt the repository. The three words
+process that held it is gone: a lock that `appears running`, and one whose liveness is `unknown` (another PID namespace or
+machine, an older prikk, a body still being written), are refused by `prikk unlock --lock <path>`, even with `--yes`, unless
+you pass `--force`, which clears them anyway and can corrupt what that process is writing; only a lock that `does not appear
+to be running` is cleared by `--yes`, and even that is not proof, so confirm it yourself. The three words
 are defined once, with what each platform records, in
 [Concurrency and locking](../reference/concurrency-locking.md#what-the-three-liveness-words-mean).
 

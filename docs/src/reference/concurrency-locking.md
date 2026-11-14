@@ -247,11 +247,15 @@ recorded process id and start time, and a best-effort advisory on whether the pr
 lock is still running. `prikk unlock --lock <path>` clears one specific lock, after printing its
 details, and requires typing `yes` at an interactive prompt unless `--yes` is passed for scripting.
 
-**A holder that appears running is refused** (exit 1, a precondition naming the pid and the start time),
-whatever `--yes` or a typed `yes` says; only `--force` clears it, without asking, at the risk of
-corrupting what that process is writing. `--yes` and `--force` are two flags with two meanings (they were
-synonyms before 0.57.0): `--yes` answers the prompt for a lock whose holder *does not appear to be running*
-or is *unknown*; `--force` clears the lock whatever the holder is. The tool never decides a lock is stale on
+**A holder that appears running, and a holder whose liveness is unknown, are refused** (exit 1, a precondition: for
+*appears running* it names the pid and the start time, for *unknown* the reason the check gave), whatever `--yes`
+or a typed `yes` says; only `--force` clears them, without asking, at the risk of corrupting what that process is
+writing. `--yes` and `--force` are two flags with two meanings (they were synonyms before 0.57.0): `--yes`, and a
+typed `yes` (one answer given two ways), clear a lock only when its holder *does not appear to be running*;
+`--force` clears the lock whatever the holder is. Before 0.58.0, `--yes` also cleared an *unknown* holder; external
+review 050 found it clearing the lock of a live, frozen holder in another PID namespace, in a time namespace with an
+offset, and where the machine identity differed (a container, a sandbox, a shared drive each produce *unknown*
+every time). A lock written by 0.56.0 or earlier is *unknown* too, so it needs `--force`. The tool never decides a lock is stale on
 its own; it reports what it can check and lets the operator supply the fact it cannot. The three words are
 defined next.
 

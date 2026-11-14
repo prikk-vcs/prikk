@@ -29,13 +29,17 @@ test-support = ["prikk-object/test-support"]
 [dependencies]
 prikk-crypto                = { workspace = true }
 prikk-error                 = { workspace = true }
-prikk-ffi                   = { workspace = true }
 prikk-hash                  = { workspace = true }
 prikk-object                = { workspace = true }
 prikk-replay                = { workspace = true }
 
 getrandom                   = { workspace = true }
 rustix                      = { workspace = true }
+
+# 0.58.0 step 0a: every call into `prikk-ffi` is under `cfg(windows)` or `cfg(target_os = "macos")` (`extract.rs`, `lock_holder.rs`,
+# `foundation/fsutil/anchored/windows*.rs`); on Linux the crate compiles to nothing, and Cargo 1.100's `unused_dependencies` said so.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+prikk-ffi                   = { workspace = true }
 
 [dev-dependencies]
 proptest                    = { workspace = true }

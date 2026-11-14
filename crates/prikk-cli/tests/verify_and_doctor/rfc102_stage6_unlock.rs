@@ -357,31 +357,174 @@ fn a_dead_holder_is_cleared_by_yes_and_by_force() {
     }
 }
 
-/// An older prikk's body (no start time to check) and a cut one are `unknown`: `--yes` still clears
-/// them, as it did. The old body names a pid that IS alive (this test process); only the missing
-/// start time keeps it from `appears running`.
-#[test]
-fn an_unknown_holder_is_still_cleared_by_yes() {
-    let bodies = [
-        format!(
-            "pid={}\nkind=active\nnote=PR-007 lock has no stale-lock stealing yet\n",
-            std::process::id()
+// 0.58.0 step 0a: `--yes` (and a typed `yes`, which is the same answer given another way) clears a lock only when its holder
+// "does not appear to be running". An *unknown* holder is refused like one that appears running; only `--force` clears either.
+// External review 050 §2 found a live, frozen holder cleared by `--yes` in another PID namespace, in a time namespace with an
+// offset, and where the machine identity differed; an empty `active.lock` (a writer that is starting now) was cleared the same way.
+
+/// This test process's own lock body (a live pid, this machine's facts), with one `key=` line replaced.
+fn live_body_with(key: &str, value: &str) -> String {
+    let body = prikk_store::lock_body_naming_pid_for_test("active", std::process::id());
+    let mut replaced = false;
+    let lines: Vec<String> = body
+        .lines()
+        .map(|line| {
+            if line.starts_with(&format!("{key}=")) {
+                replaced = true;
+                format!("{key}={value}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    assert!(replaced, "the body has a {key}= line to replace: {body}");
+    format!("{}\n", lines.join("\n"))
+}
+
+/// Every *unknown* reason this suite can make on Linux, as a lock body and the words the refusal must carry. (Another PID
+/// namespace is made by recording another namespace in the body, which is what the judge compares; a real `unshare` is not
+/// needed to reach the same answer, and not every runner allows one.)
+fn unknown_holders() -> Vec<(&'static str, String, &'static str)> {
+    let mut cases = vec![
+        (
+            "an empty body",
+            String::new(),
+            "the lock body is incomplete",
         ),
-        "prikk-lock-v2\npid=1".to_string(),
+        (
+            "a body cut after its pid",
+            "prikk-lock-v2\npid=1".to_string(),
+            "the lock body is incomplete",
+        ),
+        (
+            "an older prikk's body",
+            format!(
+                "pid={}\nkind=active\nnote=PR-007 lock has no stale-lock stealing yet\n",
+                std::process::id()
+            ),
+            "written by an older prikk",
+        ),
     ];
-    for (n, body) in bodies.iter().enumerate() {
+    if cfg!(target_os = "linux") {
+        cases.push((
+            "another PID namespace",
+            live_body_with("pidns", "pid:[1]"),
+            "another pid or time namespace",
+        ));
+        cases.push((
+            "another machine",
+            live_body_with("machine", "a-machine-that-is-not-this-one"),
+            "taken on another machine",
+        ));
+    }
+    cases
+}
+
+#[test]
+fn an_unknown_holder_is_refused_by_yes_names_its_reason_and_force_clears_it() {
+    for (label, body, reason) in unknown_holders() {
         let repo = unique_repo("unlock-unknown-yes");
         init(&repo);
-        std::fs::write(active_lock_path(&repo), body).unwrap();
         let path = active_lock_path(&repo);
+        std::fs::write(&path, &body).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
         let output = prikk(&repo)
             .args(["unlock", "--lock", path.to_str().unwrap(), "--yes"])
             .stdin(Stdio::null())
             .output()
             .unwrap();
-        ok(&output, &format!("unlock --lock --yes (unknown body {n})"));
-        assert!(!path.is_file(), "--yes clears an unknown holder (body {n})");
+        assert_eq!(output.status.code(), Some(1), "{label}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("precondition not met"), "{label}: {stderr}");
+        assert!(
+            stderr.contains(reason),
+            "{label} names its reason: {stderr}"
+        );
+        assert!(stderr.contains("is unknown"), "{label}: {stderr}");
+        assert!(
+            stderr.contains("--force") && stderr.contains("corrupting"),
+            "{label} names --force and what it risks: {stderr}"
+        );
+        assert!(
+            stderr.contains("https://prikk.org/docs/reference/concurrency-locking.html#what-the-three-liveness-words-mean"),
+            "{label}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("docs/src") && !stderr.contains('`'),
+            "{label}: no source-tree path, no backticks: {stderr}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "{label}: a refused unlock leaves the lock byte-identical"
+        );
+
+        let forced = prikk(&repo)
+            .args(["unlock", "--lock", path.to_str().unwrap(), "--force"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        ok(&forced, &format!("unlock --force ({label})"));
+        assert!(!path.is_file(), "{label}: --force clears it");
     }
+}
+
+/// The two refusals word the risk of `--force` once: the same sentence for a holder that appears running and for an unknown one.
+#[test]
+fn both_refusals_word_the_force_risk_the_same_way() {
+    let risk = "--force clears it anyway, at the risk of corrupting what that process is writing.";
+    let live_repo = unique_repo("unlock-risk-live");
+    init(&live_repo);
+    let _held = hold_the_active_lock(&live_repo);
+    let live = prikk(&live_repo)
+        .args([
+            "unlock",
+            "--lock",
+            active_lock_path(&live_repo).to_str().unwrap(),
+            "--yes",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let unknown_repo = unique_repo("unlock-risk-unknown");
+    init(&unknown_repo);
+    std::fs::write(active_lock_path(&unknown_repo), "").unwrap();
+    let unknown = prikk(&unknown_repo)
+        .args([
+            "unlock",
+            "--lock",
+            active_lock_path(&unknown_repo).to_str().unwrap(),
+            "--yes",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    for (label, output) in [("appears running", live), ("unknown", unknown)] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(risk), "{label}: {stderr}");
+    }
+}
+
+/// A typed `yes` is the same answer as `--yes`: an unknown holder is refused at the prompt too, before anything is asked.
+#[test]
+fn a_typed_yes_does_not_clear_an_unknown_holder() {
+    let repo = unique_repo("unlock-unknown-typed");
+    init(&repo);
+    let path = active_lock_path(&repo);
+    std::fs::write(&path, "").unwrap();
+    let output = unlock_with_stdin(&repo, &["--lock", path.to_str().unwrap()], "yes\n");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is unknown") && stderr.contains("--force"),
+        "{stderr}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("Type 'yes'"),
+        "refused before anything is asked"
+    );
+    assert!(path.is_file());
 }
 
 #[test]

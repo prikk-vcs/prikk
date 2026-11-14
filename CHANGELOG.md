@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Upgrading
+
+- **A script that passes `prikk unlock --lock <path> --yes` from a container, a sandbox or a shared drive now refuses (exit `1`) where it used to clear the lock.** `--yes` and a typed `yes` clear a lock only when its holder "does not appear to be running"; a holder whose liveness is *unknown* (another PID or time namespace, another machine, a body still being written) is refused like one that appears running, naming the reason and `--force`. `--force` is the deliberate form. A lock written by 0.56.0 or earlier is *unknown*, so it needs `--force` too.
+
+### Output changes
+
+- **`prikk unlock --lock <path> --yes` (and a typed `yes`) on an *unknown* holder:** before, exit `0` and `cleared: <path>`; after, exit `1`, the lock untouched, and `precondition not met: whether the process that took <path> is still running cannot be established (<reason>) -- refusing to clear its lock. --yes does not clear a lock whose holder is unknown. --force clears it anyway, at the risk of corrupting what that process is writing. …`. The refusal of a holder that appears running is unchanged in meaning and now shares its `--force` sentence. The `unlock` help line says "appears running or whose liveness is unknown".
+
+### Changed — `prikk unlock --yes` no longer clears a holder whose liveness is unknown
+
+External review 050 §2 froze real `bundle import` holders with `SIGSTOP` and judged them: the judge never said "does not appear to be running" of a live holder, but in four shapes it answered *unknown* (another PID namespace, a fresh PID namespace judging an outside holder, a time namespace with an offset, a changed machine identity as on a shared drive), and in each `unlock --lock <path> --yes` cleared the lock of the live, frozen holder with exit `0`. An empty `active.lock` (a writer that is starting now: the lock is created, then written) was cleared the same way. 0.57.0 refused only a holder that appears running. Now `--yes` and a typed `yes` (one answer given two ways) clear a lock only when its holder does not appear to be running; an unknown holder is refused with the reason the check gave and `--force` named, before anything is asked or written. See [Concurrency and locking](docs/src/reference/concurrency-locking.md#what-the-three-liveness-words-mean).
+
+### Changed — `prikk-store` depends on `prikk-ffi` only on Windows and macOS
+
+Every call into `prikk-ffi` is under `cfg(windows)` or `cfg(target_os = "macos")`; on Linux the dependency was unused (Cargo 1.100's `unused_dependencies`). It is now a target-gated dependency. Nothing a Linux user can observe changes.
+
 ## 0.57.0 — 2026-11-14
 
 ### Upgrading
