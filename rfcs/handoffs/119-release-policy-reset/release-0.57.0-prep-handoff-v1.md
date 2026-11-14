@@ -175,3 +175,7 @@ architect has not traced.** Find every path, not only this one.
 the format-8 Upgrading entry: a sync artifact declares no repository format, so a format-6/7 receiver's
 `sync accept` refuses one only when it carries a non-ASCII path. That is harmless, since nothing stored differs
 between format 7 and 8 (review 050 §1). Run the 15 gates.
+
+**P3c ACCEPTED and pushed 2026-11-14** (`40a0362b`, CI green `43530709026`, 17/17; review
+`release-0.57.0-prep-P3c-review-v1`). **`40a0362b` is the candidate for the tag.** Acknowledgement 051 to the external
+architect is drafted for the owner. **P4 waits for the owner's word on the tag.**
