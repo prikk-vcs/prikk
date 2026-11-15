@@ -832,9 +832,29 @@ fn whole_read_tail_reference(
     Ok((replay, extent))
 }
 
+/// The production tail primitive ([`super::replay_index_tail_verified`], no canary) under the edge cases the whole-file decode had: a file
+/// no longer than the start offset gives no entries and its own length as the extent; a missing file gives `(empty, 0)`.
+fn tail_with_extent(layout: &RepositoryLayout, start: u64) -> Result<(super::IndexReplay, u64)> {
+    let observed = super::stat_index_file(layout)?;
+    if observed.size <= start {
+        let empty = super::IndexReplay {
+            entries: Vec::new(),
+            trailing_partial_bytes: 0,
+            record_outcomes: Vec::new(),
+        };
+        return Ok((empty, observed.size));
+    }
+    match super::replay_index_tail_verified(layout, start, observed, &[])? {
+        super::VerifiedTail::Tail(replay, extent) => Ok((replay, extent)),
+        super::VerifiedTail::NotTheSameFile => Err(prikk_error::PrikkError::Integrity(
+            "not the same file".to_string(),
+        )),
+    }
+}
+
 /// **Control -- the tail read equals the whole-file decode.** Over a run of appends across every kind of container, then with a torn
 /// index tail (the last frame cut short), a damaged frame (one flipped byte in a frame's checksummed body), a file cut short of
-/// the start offset, and a missing index: for **every** record-boundary start offset, `replay_index_tail_with_extent` returns the same
+/// the start offset, and a missing index: for **every** record-boundary start offset, `replay_index_tail_verified` returns the same
 /// entries, `trailing_partial_bytes`, record outcomes (each offset and each message the file's, not the tail's) and extent as decoding
 /// the whole file from that offset did. The damaged case is compared by its `Err`/outcome shape too.
 /// **Perturb:** decode with `base = 0` (offsets and messages relative to the tail): every case with a start offset above zero goes red;
@@ -861,7 +881,7 @@ fn the_index_tail_read_equals_the_whole_file_decode_at_every_start_offset() -> R
         starts.push(on_disk_length + 1); // beyond the end
         for start in starts {
             let reference = whole_read_tail_reference(&layout, start);
-            let tail = super::replay_index_tail_with_extent(&layout, start);
+            let tail = tail_with_extent(&layout, start);
             match (reference, tail) {
                 (Ok(expected), Ok(found)) => {
                     assert_eq!(found, expected, "{label}: start {start}");
@@ -884,7 +904,7 @@ fn the_index_tail_read_equals_the_whole_file_decode_at_every_start_offset() -> R
         std::fs::write(&index_path, &intact[..intact.len() - cut])?;
         compare(&format!("torn by {cut}"))?;
     }
-    let torn = super::replay_index_tail_with_extent(&layout, starts[starts.len() - 3])?;
+    let torn = tail_with_extent(&layout, starts[starts.len() - 3])?;
     assert!(
         torn.0.trailing_partial_bytes > 0,
         "fixture sanity: the torn case really has a torn tail"
@@ -896,8 +916,7 @@ fn the_index_tail_read_equals_the_whole_file_decode_at_every_start_offset() -> R
     damaged[middle + 60] ^= 0xff;
     std::fs::write(&index_path, &damaged)?;
     compare("damaged middle frame")?;
-    let (damaged_tail, _) =
-        super::replay_index_tail_with_extent(&layout, starts[starts.len() / 2 - 1])?;
+    let (damaged_tail, _) = tail_with_extent(&layout, starts[starts.len() / 2 - 1])?;
     assert!(
         damaged_tail.has_item_failure(),
         "fixture sanity: the damaged case is seen as damaged"
@@ -923,14 +942,14 @@ fn the_index_tail_read_equals_the_whole_file_decode_at_every_start_offset() -> R
     // A file cut short of the start offset takes the path it always took.
     std::fs::write(&index_path, &intact[..starts[3] as usize])?;
     compare("shorter than the start")?;
-    let (empty, extent) = super::replay_index_tail_with_extent(&layout, starts[5])?;
+    let (empty, extent) = tail_with_extent(&layout, starts[5])?;
     assert!(empty.entries.is_empty() && empty.record_outcomes.is_empty());
     assert_eq!(extent, starts[3], "its own length is the extent");
 
     // No index at all.
     std::fs::remove_file(&index_path)?;
     compare("missing")?;
-    let (none, extent) = super::replay_index_tail_with_extent(&layout, 0)?;
+    let (none, extent) = tail_with_extent(&layout, 0)?;
     assert!(none.entries.is_empty());
     assert_eq!(extent, 0);
     let _ = std::fs::remove_dir_all(root);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use prikk_error::{PrikkError, Result};
 
-use super::held_directories::{DirectoryHold, HeldDirectories};
+use super::held_directories::{DirectoryHold, HeldDirectories, Kept};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use rustix::fd::OwnedFd;
@@ -85,6 +85,22 @@ impl MutationRoot {
         self.held.hold()
     }
 
+    /// Keep one opaque value for as long as a hold is open (0.58.0 S4: the decoded object index). Stores nothing when no hold is open,
+    /// and on Windows, where holds keep nothing.
+    pub(crate) fn keep_value(&self, value: Kept) {
+        self.held.keep(value);
+    }
+
+    /// Remove and return the kept value, if a hold is open and one was kept. The caller owns it until it keeps a value again.
+    pub(crate) fn take_kept_value(&self) -> Option<Kept> {
+        self.held.take_kept()
+    }
+
+    /// Whether a hold is open (a kept value would be stored).
+    pub(crate) fn hold_is_open(&self) -> bool {
+        self.held.hold_is_open()
+    }
+
     /// Before a command publishes (the first ref, pointer or queue write that makes its work visible): check every directory a hold
     /// kept open against its path, and refuse, with nothing yet published, if any was moved, replaced or removed while the command
     /// ran (0.58.0 P2b). One check per publish, not per object. With no hold open nothing is held and this is `Ok`. Windows keeps no
@@ -107,6 +123,12 @@ impl MutationRoot {
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn held_directories_for_test(&self) -> (usize, usize) {
         self.held.counts_for_test()
+    }
+
+    /// Whether a kept value is held -- the tests' witness that it is absent outside a hold.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn kept_is_held_for_test(&self) -> bool {
+        self.held.kept_is_held_for_test()
     }
 
     /// Bind mutation authority to an existing no-follow directory handle.

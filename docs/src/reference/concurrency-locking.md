@@ -255,6 +255,12 @@ them as unreached. That damage is the move's, not the command's. **The repositor
 compared with its path:** a command keeps writing to the directory it opened even if `.prikk` is renamed, by design. See
 [the refusal's entry](../guide/troubleshooting.md#error-precondition-not-met-the-directory-path-was-moved-or-replaced-while-this-command-ran-so-nothing-was-published).
 
+## The Object Index a Command Keeps
+
+While a command holds any lock (the hold above), it also keeps the object index it decoded, so the next snapshot does not read the whole file again (Linux and macOS; on Windows every snapshot reads it whole, because `std` has no file identity there). Each snapshot and each write decision first looks at the index file: the same file (device and inode) at the length the copy decoded costs one `stat` and a re-read of the last record, which must be the record the copy ended with; a longer file is read from where the copy ends; anything else is read whole, as it always was: a different file (`prikk doctor --repair-index` and a writer's own rebuild install the index by rename), a shorter one, a last record that has changed, or a tail that is damaged or ends in a torn record, which takes the path a fresh read always took (a reader scans the containers and writes nothing, a writer repairs the index under its lock before it appends). Another process appending between two of a command's lookups (a `sync build` stores its claims under the object-store lock alone) is therefore seen at the next one. The copy is dropped with the last lock released.
+
+**What this does not see.** A second writer that truncates the index below the length the copy decoded, regrows it past that length, and puts a record byte for byte equal to the copy's last record at that offset, while the records before it differ. The append protocol does not produce it (offsets are container offsets), and a full checksum of the prefix would read the whole index again.
+
 ## Stale Locks and Manual Cleanup
 
 If a process dies while holding any lock — `active.lock`, a ref lock, or one of the five container

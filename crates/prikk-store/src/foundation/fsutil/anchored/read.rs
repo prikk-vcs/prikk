@@ -52,6 +52,22 @@ pub(crate) struct RootFileStat {
     pub(crate) mode: Option<u32>,
 }
 
+/// The identity of a regular file, `(device, inode)`, where the platform has one (0.58.0 S4): Linux and macOS. `None` on every other
+/// platform, where `std` offers none (`file_index` and `volume_serial_number` are unstable), and **never a synthetic stand-in**: a
+/// consumer that needs an identity (the kept object index) keeps nothing without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    pub(crate) device: u64,
+    pub(crate) inode: u64,
+}
+
+/// A regular file's identity and size, from one `stat` and no open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RootFileIdentity {
+    pub(crate) identity: Option<FileIdentity>,
+    pub(crate) size: u64,
+}
+
 /// One no-follow root-relative directory entry.
 pub(crate) struct RootDirEntry {
     pub(crate) name: OsString,
@@ -81,6 +97,19 @@ trait AnchoredReader {
         root: &MutationRoot,
         relative: &Path,
     ) -> Result<Option<RootFileStat>>;
+    /// [`Self::stat_file_state_if_exists`] with the file's `(device, inode)` where the platform has one. The default has none.
+    fn stat_file_identity_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<Option<RootFileIdentity>> {
+        Ok(self
+            .stat_file_state_if_exists(root, relative)?
+            .map(|stat| RootFileIdentity {
+                identity: None,
+                size: stat.size,
+            }))
+    }
     fn list_directory(&self, root: &MutationRoot, relative: &Path) -> Result<Vec<RootDirEntry>>;
     fn inspect_entry(&self, root: &MutationRoot, relative: &Path) -> Result<Option<EntryKind>>;
 }
@@ -129,6 +158,14 @@ pub(crate) fn stat_file_state_if_exists(
     relative: &Path,
 ) -> Result<Option<RootFileStat>> {
     ACTIVE_READER.stat_file_state_if_exists(root, relative)
+}
+
+/// Stat a regular file's size and, on Linux and macOS, its `(device, inode)`, without opening or reading its content.
+pub(crate) fn stat_file_identity_if_exists(
+    root: &MutationRoot,
+    relative: &Path,
+) -> Result<Option<RootFileIdentity>> {
+    ACTIVE_READER.stat_file_identity_if_exists(root, relative)
 }
 
 /// List a root-relative directory and classify entries without following symlinks.
@@ -275,6 +312,44 @@ impl AnchoredReader for PosixReader {
             mtime_secs: stat.st_mtime,
             mtime_nanos: u32::try_from(stat.st_mtime_nsec).unwrap_or_default(),
             mode: Some(mode),
+        }))
+    }
+
+    fn stat_file_identity_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<Option<RootFileIdentity>> {
+        let Some(directory) = open_existing_directory_for_read(root, required_parent(relative)?)?
+        else {
+            return Ok(None);
+        };
+        let stat = match fs::statat(
+            &directory.fd,
+            required_file_name(relative)?,
+            AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(error) => return Err(io_error(error)),
+        };
+        if !FileType::from_raw_mode(stat.st_mode).is_file() {
+            return Err(PrikkError::Integrity(
+                "stat target is not a regular file".to_string(),
+            ));
+        }
+        // `st_dev` is `u64` on Linux and `i32` on macOS; `st_ino` is `u64` on both. Branched, like `mode` above, so that Linux's
+        // reflexive conversion does not trip `clippy::useless_conversion`.
+        #[cfg(target_os = "linux")]
+        let device = stat.st_dev;
+        #[cfg(target_os = "macos")]
+        let device = u64::from(u32::from_ne_bytes(stat.st_dev.to_ne_bytes()));
+        Ok(Some(RootFileIdentity {
+            identity: Some(FileIdentity {
+                device,
+                inode: stat.st_ino,
+            }),
+            size: u64::try_from(stat.st_size).unwrap_or_default(),
         }))
     }
 

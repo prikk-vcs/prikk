@@ -2,6 +2,9 @@
 
 mod c1_id_position_map;
 mod d1_lookup_memo;
+// 0.58.0 S4: the kept object index is Linux and macOS only (its identity is `(device, inode)`), and so are its tests.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod index_session;
 
 // DC-98 Stage 1: `mod immutable;` and `mod races;` (G5's own conformance and race tests) removed
 // along with `DurabilityContract::publish_immutable` -- zero production callers, and G5 retired as
@@ -160,7 +163,7 @@ fn write_session_rewriting_the_same_object_is_a_no_op() -> prikk_error::Result<(
 /// opens on a repository that already holds sixty objects, then writes forty more; the anchored reader's tally for the object index shows
 /// **exactly the bytes those forty writes appended** read back (the tail since the snapshot, not the whole index). A positive control
 /// reads the whole index and sees the tally move by the whole file.
-/// **Perturb:** make `replay_index_tail_with_extent` read the whole file (`read_file_if_exists`) and decode from `start_offset`, as it
+/// **Perturb:** make `replay_index_tail_verified` read the whole file (`read_file_if_exists`) and decode from `start_offset`, as it
 /// did before this round: the tally is the whole index forty times over and the equality goes red.
 #[test]
 fn a_write_sessions_own_write_reads_only_the_index_bytes_it_appended() -> prikk_error::Result<()> {
@@ -488,6 +491,12 @@ const GUARDED: &[GuardedFunction] = &[
             ),
             (
                 "object_store.rs",
+                "index::repair_index_from_containers(layout, |lost| {",
+            ),
+            // 0.58.0 S4: `ensure_current_locked`'s repair moved with `IndexSnapshot` to its own module; `repair_and_load` is reached
+            // only with `already_locked` set (the writer's re-check under the lock).
+            (
+                "object_store/index_snapshot.rs",
                 "index::repair_index_from_containers(layout, |lost| {",
             ),
         ],

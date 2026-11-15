@@ -35,12 +35,13 @@ mod windows;
 mod windows_authority;
 
 pub(crate) use directory::MutationRoot;
-pub(crate) use held_directories::DirectoryHold;
+pub(crate) use held_directories::{DirectoryHold, Kept};
 #[cfg(test)]
 pub(crate) use read::read_tally;
 pub(crate) use read::{
-    EntryKind, RootDirEntry, RootFileStat, inspect_entry, list_directory, read_file_if_exists,
-    read_file_range_if_exists, read_file_required, stat_file_state_if_exists,
+    EntryKind, FileIdentity, RootDirEntry, RootFileStat, inspect_entry, list_directory,
+    read_file_if_exists, read_file_range_if_exists, read_file_required,
+    stat_file_identity_if_exists, stat_file_state_if_exists,
 };
 
 use crate::foundation::fsutil::contract::DurabilityContract;

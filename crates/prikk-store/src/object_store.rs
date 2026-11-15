@@ -7,6 +7,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+mod index_snapshot;
+use index_snapshot::IndexSnapshot;
+
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
@@ -493,182 +496,6 @@ fn read_object_at_entry(
     Ok(Some(envelope))
 }
 
-/// A decoded object-index snapshot, taken once. Backs both `ObjectReadSnapshot` and
-/// `ObjectWriteSession` (RFC 111 §6.1) -- the read logic (lookup, then decode at a known offset) is
-/// identical between them, so it exists here once rather than twice. Has no public API of its own;
-/// both public types below wrap it.
-struct IndexSnapshot {
-    entries: Vec<IndexEntry>,
-    /// The object index's byte length as of the last time `entries` was known-current --
-    /// `bytes.len() - trailing_partial_bytes` from whichever decode produced `entries`, never the
-    /// raw stat size (RFC 111 §6.1 addendum §3.2: a torn trailing write must not be counted as
-    /// decoded).
-    known_length: u64,
-    /// 0.55.0 step 3 Part 1 (2C, ruling C1): id -> position in `entries`, kept alongside it on every
-    /// path that changes `entries` -- a full rebuild on `open`/a replace, an incremental extend on
-    /// the one true append path. `entries` itself is kept exactly as it was (never removed): its own
-    /// forward order is what makes "last entry wins" the natural result of inserting into this map
-    /// in that same order, and `lookup`'s own callers never needed anything but by-id access.
-    by_id: HashMap<ObjectId, u32>,
-}
-
-impl IndexSnapshot {
-    /// RFC 162 rule 1: a reader never refuses while the containers are sound. Never called from inside
-    /// `append_object_under_lock`'s hold (every production caller opens a snapshot before attempting
-    /// any write), and never persists anything on damage -- see `resolve_object_location_entries`'s
-    /// own doc for why an unlocked path must not have a hidden write side effect (`verify`'s
-    /// read-only contract, `import_bundle`'s all-or-nothing refusal). Scans the containers in memory
-    /// instead.
-    ///
-    /// 0.50.0 step 1, A5: a trailing-partial tail with no `Failed` item used to be read as "nothing
-    /// to rebuild for," the same oversight `resolve_object_location_entries`'s own fix carries the
-    /// full account of. The most-recently-written object's index entry is exactly the one a crash leaves
-    /// torn, so `replay.entries` alone silently omits it -- `verify`'s own ref-publication scan,
-    /// built on this snapshot (`ObjectReadSnapshot`), read that object as a missing `RefState` though
-    /// its container record was fully sound, failing a stage that nothing had actually damaged.
-    ///
-    /// The tail case keeps `known_length` at the sound prefix's own extent (`replay_index_with_
-    /// extent`'s own `known_length`, excluding the torn bytes) rather than the raw stat size used
-    /// for interior damage below -- a first fix here used the raw stat size for both, which told a
-    /// later `ensure_current_locked` the tail was already accounted for, so a write appended behind
-    /// it instead of rebuilding the index on disk first (rule 1's writer half), exactly the
-    /// sandwiching rule 1 exists to prevent. This snapshot's own entries are still the full rescan,
-    /// correct for a read happening before any write; only the writer's own later re-check needed
-    /// the tail left visible.
-    fn open(layout: &RepositoryLayout) -> Result<Self> {
-        let (replay, known_length) = index::replay_index_with_extent(layout)?;
-        if replay.has_item_failure() {
-            let entries = index::rebuild_index_from_containers(layout)?;
-            let by_id = index_position_map(&entries)?;
-            return Ok(Self {
-                entries,
-                known_length: current_index_file_length(layout)?,
-                by_id,
-            });
-        }
-        if replay.trailing_partial_bytes != 0 {
-            let entries = index::rebuild_index_from_containers(layout)?;
-            let by_id = index_position_map(&entries)?;
-            return Ok(Self {
-                entries,
-                known_length,
-                by_id,
-            });
-        }
-        let by_id = index_position_map(&replay.entries)?;
-        Ok(Self {
-            entries: replay.entries,
-            known_length,
-            by_id,
-        })
-    }
-
-    /// Last-entry-wins, as the index's reverse search it replaced (`lookup_object_location`, removed in 0.58.0 P2a) had it --
-    /// 0.55.0 step 3 Part 1 (2C, ruling C1) replaced the reverse linear scan with an O(1) lookup
-    /// into `by_id`, which already names whichever position is last-written for `id`.
-    fn lookup(&self, id: ObjectId) -> Option<&IndexEntry> {
-        // In range by construction, as `resolve_cached`'s own comment explains; `.get()` is used
-        // anyway to satisfy `clippy::indexing_slicing`.
-        self.by_id
-            .get(&id)
-            .and_then(|&position| self.entries.get(position as usize))
-    }
-
-    /// Re-stat only; decode only if the stat disagrees with what this snapshot already knows. Every
-    /// write decision calls this first (RFC 111 §6.1 addendum, C1) -- it is what makes a stale
-    /// idempotency decision structurally impossible regardless of *what* wrote the new bytes: a
-    /// nested unmediated writer in the same process (`refs/publication.rs`'s current shape), a call
-    /// site not yet migrated to a snapshot-backed type, or a genuinely separate process. All three
-    /// grow the index file, and this catches every one the same way, because it checks the one fact
-    /// that is true regardless of cause. The common case -- nothing else wrote -- costs one stat, no
-    /// decode. `ObjectReadSnapshot` never calls this: a reader's staleness is already accepted and
-    /// bounded (RFC 111 Q3/Q4), so charging every read a stat here would buy nothing.
-    fn ensure_current(&mut self, layout: &RepositoryLayout) -> Result<()> {
-        self.ensure_current_impl(layout, false)
-    }
-
-    /// Like [`Self::ensure_current`], but for use only from inside `append_object_under_lock`'s hold --
-    /// never acquires the object-store lock itself. This is `write_object`'s own re-check under the
-    /// lock (RFC 156 Stage 2b); RFC 162 rule 1's writer half rides along with it: if the index is found
-    /// damaged here, it is rebuilt before the write decision is made, so a writer never appends behind
-    /// damage.
-    fn ensure_current_locked(&mut self, layout: &RepositoryLayout) -> Result<()> {
-        self.ensure_current_impl(layout, true)
-    }
-
-    fn ensure_current_impl(
-        &mut self,
-        layout: &RepositoryLayout,
-        already_locked: bool,
-    ) -> Result<()> {
-        let relative = layout.repository_relative(&layout.container_index_path())?;
-        let current_length = crate::foundation::fsutil::stat_file_state_if_exists(
-            layout.repository_mutation_root(),
-            &relative,
-        )?
-        .map_or(0, |stat| stat.size);
-        if current_length == self.known_length {
-            return Ok(());
-        }
-        if current_length < self.known_length {
-            // RFC 162 rule 1: the object index is a pure cache and can be rebuilt in place (`doctor
-            // --repair-index`, or a writer's own rebuild-before-append), which can legitimately shrink
-            // it -- a rebuild holds exactly the sound entries a container scan finds, discarding
-            // whatever stale, duplicate, or damaged bytes the old file carried. Reload fully and accept
-            // it only if the shorter file is now clean; otherwise this is still the genuine "something
-            // is badly wrong" case the original check existed for (RFC 111 §6.1 addendum §3.1).
-            let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
-            if fresh.has_item_failure() {
-                return Err(PrikkError::Integrity(format!(
-                    "object index shrank from {} to {current_length} bytes since it was last read, \
-                     and is still damaged; the object index only shrinks through a clean rebuild -- \
-                     run doctor",
-                    self.known_length
-                )));
-            }
-            self.entries = fresh.entries;
-            self.by_id = index_position_map(&self.entries)?;
-            self.known_length = fresh_length;
-            return Ok(());
-        }
-        let (tail, new_extent) = index::replay_index_tail_with_extent(layout, self.known_length)?;
-        // RFC 162 rule 1: "a write never buries a torn index tail." A locked caller is about to append
-        // behind whatever is at the file's current end; a trailing partial there, even with no `Failed`
-        // item, must trigger the same rebuild an item failure does, or the append would sandwich the
-        // tail into interior damage. An unlocked caller (a plain re-check, not about to append) has no
-        // such hazard: extending past a trailing partial is exactly what a tail decode already does
-        // correctly.
-        let must_rebuild =
-            tail.has_item_failure() || (already_locked && tail.trailing_partial_bytes != 0);
-        if !must_rebuild {
-            // 0.55.0 step 3 Part 1 (2C, ruling C1): the one true incremental path.
-            extend_entries_and_by_id(&mut self.entries, &mut self.by_id, tail.entries)?;
-            self.known_length = new_extent;
-            return Ok(());
-        }
-        // RFC 162 rule 1: rebuild rather than refuse. A rebuild (or a scan standing in for one)
-        // reorders the whole file relative to a tail decode's own assumptions (containers are walked
-        // in type order, not write order), so discard this snapshot's entries/known_length entirely
-        // rather than trying to extend them. `already_locked` decides whether that rebuild may be
-        // persisted: only `ensure_current_locked`'s caller, inside `append_object_under_lock`'s hold,
-        // may -- every unlocked caller scans in memory instead, for the same reason `open` above does.
-        if already_locked {
-            index::repair_index_from_containers(layout, |lost| {
-                crate::recovery_log::save_lost_ids(layout, lost)
-            })?;
-            let (fresh, fresh_length) = index::replay_index_with_extent(layout)?;
-            self.entries = fresh.entries;
-            self.by_id = index_position_map(&self.entries)?;
-            self.known_length = fresh_length;
-        } else {
-            self.entries = index::rebuild_index_from_containers(layout)?;
-            self.by_id = index_position_map(&self.entries)?;
-            self.known_length = current_index_file_length(layout)?;
-        }
-        Ok(())
-    }
-}
-
 /// Read-only object access for one operation's lifetime (RFC 111 §6.1). Takes one decoded index
 /// snapshot at construction and never re-decodes -- correct because a reader never writes, so it can
 /// never observe its *own* write as missing the way a writer holding a stale snapshot could (RFC 111
@@ -891,12 +718,12 @@ impl ObjectWriteSession {
     /// assert it lands on the true file length rather than a value this type accumulated itself (RFC
     /// 111 §6.1 addendum §3.3, the load-bearing assertion the design review named explicitly).
     pub(crate) fn known_index_length_for_test(&self) -> u64 {
-        self.snapshot.known_length
+        self.snapshot.known_length()
     }
 
     /// The session's own current view of how many index entries it holds -- exposed only for tests.
     pub(crate) fn entry_count_for_test(&self) -> usize {
-        self.snapshot.entries.len()
+        self.snapshot.entry_count()
     }
 }
 

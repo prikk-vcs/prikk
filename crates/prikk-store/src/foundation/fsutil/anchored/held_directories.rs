@@ -16,6 +16,10 @@
 //! sync. Nothing under a hold removes or renames a directory below `.prikk` (audited, P2a report), so nothing changes that entry
 //! afterwards. A handle is stored only after its parent sync succeeded.
 //!
+//! **One more thing is kept under a hold (0.58.0 S4): a single opaque value, [`Kept`]** -- the decoded object index. It is registered,
+//! counted and cleared by the same hold: absent with no hold open (`keep` stores nothing), dropped with the last release. This layer
+//! names no index type; the value is an `Arc<dyn Any + Send + Sync>` the caller downcasts.
+//!
 //! **Not here:** Windows. `WindowsAuthority` retains no handle between steps and has no directory sync, so a hold there is a
 //! zero-sized token and there is no table.
 
@@ -34,11 +38,15 @@ use prikk_error::Result;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::directory::AnchoredDirectory;
 
+/// The one value kept under a hold (0.58.0 S4); see the module doc.
+pub(crate) type Kept = Arc<dyn std::any::Any + Send + Sync>;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Default)]
 struct State {
     holds: usize,
     directories: HashMap<PathBuf, AnchoredDirectory>,
+    kept: Option<Kept>,
 }
 
 /// The table, shared by every clone of one `MutationRoot`. One `Mutex`: two threads writing under one root share one table.
@@ -50,6 +58,17 @@ pub(super) struct HeldDirectories {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) struct HeldDirectories;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+impl HeldDirectories {
+    pub(super) fn keep(&self, _value: Kept) {}
+    pub(super) fn take_kept(&self) -> Option<Kept> {
+        None
+    }
+    pub(super) fn hold_is_open(&self) -> bool {
+        false
+    }
+}
 
 impl std::fmt::Debug for HeldDirectories {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -150,6 +169,30 @@ impl HeldDirectories {
         Ok(None)
     }
 
+    /// Keep `value` as the one kept value, replacing any other, when a hold is open; stores nothing otherwise.
+    pub(super) fn keep(&self, value: Kept) {
+        let mut state = self.lock();
+        if state.holds > 0 {
+            state.kept = Some(value);
+        }
+    }
+
+    /// Remove and return the kept value: the caller owns it (and so may be its only owner) until it keeps it again.
+    pub(super) fn take_kept(&self) -> Option<Kept> {
+        self.lock().kept.take()
+    }
+
+    /// Whether a hold is open, i.e. whether `keep` would store.
+    pub(super) fn hold_is_open(&self) -> bool {
+        self.lock().holds > 0
+    }
+
+    /// Whether a value is kept, for the tests that assert it is absent outside a hold.
+    #[cfg(test)]
+    pub(super) fn kept_is_held_for_test(&self) -> bool {
+        self.lock().kept.is_some()
+    }
+
     /// Holds open and directories held, for the tests that assert the table is absent outside a hold.
     #[cfg(test)]
     pub(super) fn counts_for_test(&self) -> (usize, usize) {
@@ -165,6 +208,7 @@ impl Drop for DirectoryHold {
         state.holds = state.holds.saturating_sub(1);
         if state.holds == 0 {
             state.directories.clear();
+            state.kept = None;
         }
     }
 }
