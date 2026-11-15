@@ -67,7 +67,7 @@ pub fn report_sync_calls_if_requested() {
 pub fn report_sync_calls_if_requested() {}
 
 pub(crate) use anchored::{
-    DirectoryHold, EntryKind, FileIdentity, Kept, MutationRoot, RootDirEntry, RootFileStat,
+    DirectoryHold, EntryKind, FileIdentity, MutationRoot, RootDirEntry, RootFileStat,
     append_file_reporting_offset_required, append_file_required, create_new_file_required,
     ensure_directory_required, inspect_entry, list_directory, overwrite_in_place_required,
     read_file_if_exists, read_file_range_if_exists, read_file_required,

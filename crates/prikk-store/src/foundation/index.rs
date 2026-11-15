@@ -31,10 +31,10 @@ use crate::foundation::frame_resync::{
     sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    FileIdentity, append_file_reporting_offset_required, append_file_required, len_to_u64,
-    read_file_if_exists, read_file_range_if_exists, stat_file_identity_if_exists,
-    write_file_atomically,
+    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
+    read_file_range_if_exists, write_file_atomically,
 };
+use crate::foundation::kept_file;
 use crate::foundation::layout::{
     ContainerSlot, RepositoryFormat, RepositoryLayout, persisted_object_types,
 };
@@ -374,89 +374,49 @@ pub(crate) fn replay_index_with_extent(layout: &RepositoryLayout) -> Result<(Ind
     Ok((replay, extent))
 }
 
-/// The index file as one `stat` shows it: its identity where the platform has one (Linux and macOS) and its size; a missing file is
-/// `(None, 0)`. 0.58.0 S4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct IndexFileState {
-    pub(crate) identity: Option<FileIdentity>,
-    pub(crate) size: u64,
-}
+/// The index file as one `stat` shows it (see [`kept_file::FileState`]).
+pub(crate) type IndexFileState = kept_file::FileState;
 
 /// One `stat` of the index file.
 pub(crate) fn stat_index_file(layout: &RepositoryLayout) -> Result<IndexFileState> {
     let relative = layout.repository_relative(&layout.container_index_path())?;
-    Ok(
-        stat_file_identity_if_exists(layout.repository_mutation_root(), &relative)?.map_or(
-            IndexFileState {
-                identity: None,
-                size: 0,
-            },
-            |stat| IndexFileState {
-                identity: stat.identity,
-                size: stat.size,
-            },
-        ),
-    )
+    kept_file::stat_file(layout.repository_mutation_root(), &relative)
 }
 
 /// What [`replay_index_tail_verified`] found.
 pub(crate) enum VerifiedTail {
-    /// The file is no longer the one the caller's copy was decoded from (a different identity after the read than before it), is shorter
-    /// than the copy's extent, or its bytes at the copy's last record are not the ones the copy decoded (the canary). The caller
-    /// re-reads the file whole.
+    /// The file is no longer the one the caller's copy was decoded from, is shorter than the copy's extent, or its bytes at the copy's
+    /// last record are not the ones the copy decoded (the canary). The caller re-reads the file whole.
     NotTheSameFile,
     /// The same file, with these appended records decoded and the extent they end at.
     Tail(IndexReplay, u64),
 }
 
 /// Decode what was appended to the index since `start_offset` **and prove the file is the one the caller's decoded copy came from**
-/// (0.58.0 S4). `observed` is the caller's own `stat` of the file just before; `canary` is the last record the copy decoded, `canary.len()`
-/// bytes ending at `start_offset` (empty: no canary).
-///
-/// One positioned read covers `[start_offset - canary.len(), observed.size)`; a `stat` after the read must name the same identity, so a
-/// file replaced between the first `stat` and the read cannot pass its bytes off as a tail. The canary must equal the file's bytes at
-/// its offset. Where the platform has no file identity (`observed.identity` is `None`, Windows) the two `stat`s agree trivially and the
-/// read is the bounded tail read it was before S4; nothing is *kept* without an identity (the caller's rule). A tail that is damaged or ends in a partial record is **returned, not judged**: the caller applies the damaged-index
-/// rule (rule 3) it has always applied.
+/// (0.58.0 S4): [`kept_file::read_verified_tail`] with the index's frame decoder. A tail that is damaged or ends in a partial record is
+/// **returned, not judged**: the caller applies the damaged-index rule (rule 3) it has always applied.
 pub(crate) fn replay_index_tail_verified(
     layout: &RepositoryLayout,
     start_offset: u64,
     observed: IndexFileState,
     canary: &[u8],
 ) -> Result<VerifiedTail> {
-    let canary_len = len_to_u64(canary.len())?;
-    if observed.size < start_offset || start_offset < canary_len {
-        return Ok(VerifiedTail::NotTheSameFile);
-    }
     #[cfg(test)]
     record_replay_index_decode_for_test();
     let relative = layout.repository_relative(&layout.container_index_path())?;
-    let read_from = start_offset - canary_len;
-    let wanted = usize::try_from(observed.size - read_from)
-        .map_err(|_| PrikkError::Integrity("index tail length exceeds usize".to_string()))?;
-    let bytes = if wanted == 0 {
-        Vec::new()
-    } else {
-        match read_file_range_if_exists(
-            layout.repository_mutation_root(),
-            &relative,
-            read_from,
-            wanted,
-        )? {
-            Some(bytes) => bytes,
-            None => return Ok(VerifiedTail::NotTheSameFile),
-        }
+    let kept_file::VerifiedBytes::Tail(tail) = kept_file::read_verified_tail(
+        layout.repository_mutation_root(),
+        &relative,
+        start_offset,
+        observed,
+        canary,
+    )?
+    else {
+        return Ok(VerifiedTail::NotTheSameFile);
     };
-    if bytes.len() != wanted || stat_index_file(layout)?.identity != observed.identity {
-        return Ok(VerifiedTail::NotTheSameFile);
-    }
-    let (found_canary, tail) = bytes.split_at(canary.len());
-    if found_canary != canary {
-        return Ok(VerifiedTail::NotTheSameFile);
-    }
     let start = usize::try_from(start_offset)
         .map_err(|_| PrikkError::Integrity("index start offset exceeds usize".to_string()))?;
-    let replay = decode_index_records_at(tail, 0, start)?;
+    let replay = decode_index_records_at(&tail, 0, start)?;
     let extent = len_to_u64(start + tail.len().saturating_sub(replay.trailing_partial_bytes))?;
     Ok(VerifiedTail::Tail(replay, extent))
 }

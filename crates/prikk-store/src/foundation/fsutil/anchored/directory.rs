@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use prikk_error::{PrikkError, Result};
 
-use super::held_directories::{DirectoryHold, HeldDirectories, Kept};
+use super::held_directories::{DirectoryHold, HeldDirectories};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use rustix::fd::OwnedFd;
@@ -85,15 +85,18 @@ impl MutationRoot {
         self.held.hold()
     }
 
-    /// Keep one opaque value for as long as a hold is open (0.58.0 S4: the decoded object index). Stores nothing when no hold is open,
-    /// and on Windows, where holds keep nothing.
-    pub(crate) fn keep_value(&self, value: Kept) {
-        self.held.keep(value);
+    /// Keep one value per type for as long as a hold is open (0.58.0 S4, S5: the decoded object index, the pointer index and the
+    /// ref log). Stores nothing when no hold is open, and on Windows, where holds keep nothing.
+    pub(crate) fn keep_value<T: std::any::Any + Send + Sync>(&self, value: Arc<T>) {
+        self.held.keep(std::any::TypeId::of::<T>(), value);
     }
 
-    /// Remove and return the kept value, if a hold is open and one was kept. The caller owns it until it keeps a value again.
-    pub(crate) fn take_kept_value(&self) -> Option<Kept> {
-        self.held.take_kept()
+    /// Remove and return the value kept for `T`, if a hold is open and one was kept. The caller owns it until it keeps one again.
+    pub(crate) fn take_kept_value<T: std::any::Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        self.held
+            .take_kept(std::any::TypeId::of::<T>())?
+            .downcast::<T>()
+            .ok()
     }
 
     /// Whether a hold is open (a kept value would be stored).
@@ -125,10 +128,16 @@ impl MutationRoot {
         self.held.counts_for_test()
     }
 
-    /// Whether a kept value is held -- the tests' witness that it is absent outside a hold.
+    /// Whether any kept value is held -- the tests' witness that it is absent outside a hold.
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn kept_is_held_for_test(&self) -> bool {
-        self.held.kept_is_held_for_test()
+        self.held.kept_count_for_test() > 0
+    }
+
+    /// Whether a value of type `T` is kept.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+    pub(crate) fn kept_value_is_held_for_test<T: std::any::Any + Send + Sync>(&self) -> bool {
+        self.held.kept_is_held_for_test(std::any::TypeId::of::<T>())
     }
 
     /// Bind mutation authority to an existing no-follow directory handle.

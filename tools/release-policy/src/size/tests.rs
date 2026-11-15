@@ -421,7 +421,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.58.0 S2b added `block_state/batch_fold.rs` (the batch fold of `sync seal`, split out of `block_state.rs`, which it would have pushed past 1,200 lines): 184 -> 185.
     // 0.58.0 S3 added `seal_from_accepted/batch.rs` (the batch plan of `sync seal`, split out of `seal_from_accepted.rs` for the same limit): 185 -> 186.
     // 0.58.0 S4 added `object_store/index_snapshot.rs` (the decoded object index a hold keeps, split out of `object_store.rs` for the same limit): 186 -> 187.
-    assert_eq!(store.production_files, 187);
+    // 0.58.0 S5 added `foundation/kept_file.rs` (the proof every kept decode shares) and `refs/kept_pointer_index.rs` (the pointer index a hold keeps): 187 -> 189.
+    assert_eq!(store.production_files, 189);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

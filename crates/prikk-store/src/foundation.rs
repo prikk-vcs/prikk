@@ -11,5 +11,6 @@ pub(crate) mod fsutil;
 pub(crate) mod generation;
 pub(crate) mod import_journal_marker;
 pub(crate) mod index;
+pub(crate) mod kept_file;
 pub(crate) mod layout;
 pub(crate) mod tail_guard;

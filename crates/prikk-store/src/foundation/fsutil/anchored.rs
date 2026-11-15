@@ -35,7 +35,7 @@ mod windows;
 mod windows_authority;
 
 pub(crate) use directory::MutationRoot;
-pub(crate) use held_directories::{DirectoryHold, Kept};
+pub(crate) use held_directories::DirectoryHold;
 #[cfg(test)]
 pub(crate) use read::read_tally;
 pub(crate) use read::{

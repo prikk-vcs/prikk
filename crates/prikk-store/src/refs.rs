@@ -7,6 +7,7 @@
 
 mod container;
 mod evidence;
+mod kept_pointer_index;
 mod pointer_index;
 pub(crate) mod publication;
 mod rebuild_discovery;
@@ -287,7 +288,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
 
     let excluded_key = exclude_ref_name.map(crate::foundation::layout::ref_name_key_bytes);
 
-    let pointer_replay = replay_pointer_index(layout)?;
+    let pointer_replay = kept_pointer_index::replay_pointer_index_shared(layout)?;
     if pointer_replay.has_item_failure() {
         return Err(incomplete_publication_refusal());
     }
@@ -770,7 +771,7 @@ impl RefStore {
     /// old `by-id/` directory listing, which named the complete set of ref pointers directly; the
     /// index now does.
     pub fn list_ref_pointers(&self) -> Result<Vec<RefPointerSummary>> {
-        let replay = pointer_index::replay_pointer_index(&self.layout)?;
+        let replay = kept_pointer_index::replay_pointer_index_shared(&self.layout)?;
         if replay.has_item_failure() {
             return Err(PrikkError::Integrity(
                 "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
@@ -778,11 +779,7 @@ impl RefStore {
                     .to_string(),
             ));
         }
-        let mut latest: std::collections::BTreeMap<[u8; 32], pointer_index::PointerIndexEntry> =
-            std::collections::BTreeMap::new();
-        for entry in replay.entries {
-            latest.insert(entry.ref_name_key, entry);
-        }
+        let latest = kept_pointer_index::latest_per_key(&replay);
         let mut summaries: Vec<RefPointerSummary> = latest
             .into_values()
             .map(|entry| RefPointerSummary {

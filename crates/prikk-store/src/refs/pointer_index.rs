@@ -542,14 +542,11 @@ pub(crate) fn empty_pointer_index_replay() -> PointerIndexReplay {
     }
 }
 
-/// Read and replay the on-disk pointer index, off the durability path -- a missing file replays as
-/// empty, the same reader-equivalence rule Stage 1 established for the WAL. Generation-aware (RFC 102
-/// Stage 6 Step 1, design-v1.md §15.6): resolves to `A` today, since nothing has ever appended a
-/// generation record -- Step 2's compactor is what will ever make this resolve to `B`.
-pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerIndexReplay> {
-    #[cfg(test)]
-    let _whole_read_scope =
-        crate::foundation::fsutil::whole_read_guard::declare("pointer-index-replay");
+/// The pointer index's live slot as the generation log resolves it, and that slot's path relative to the repository. The one resolution
+/// `replay_pointer_index` and the kept view (`kept_pointer_index.rs`) share, so neither can resolve a different slot than the other.
+pub(in crate::refs) fn live_pointer_index_slot(
+    layout: &RepositoryLayout,
+) -> Result<(ContainerSlot, std::path::PathBuf)> {
     let slot = resolve_live_slot(
         layout,
         &layout.ref_pointer_index_generation_log_path(),
@@ -561,13 +558,23 @@ pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerI
         fold_one_pointer_index_entry,
     )?;
     let relative = layout.repository_relative(&layout.ref_pointer_index_slot_path(slot))?;
+    Ok((slot, relative))
+}
+
+/// Read and replay the on-disk pointer index, off the durability path -- a missing file replays as
+/// empty, the same reader-equivalence rule Stage 1 established for the WAL. Generation-aware (RFC 102
+/// Stage 6 Step 1, design-v1.md §15.6): resolves to `A` today, since nothing has ever appended a
+/// generation record -- Step 2's compactor is what will ever make this resolve to `B`.
+///
+/// Always a whole read. A command that holds a lock and asks again and again uses
+/// [`super::kept_pointer_index::replay_pointer_index_shared`] (0.58.0 S5), which keeps this decode for the length of the hold.
+pub(crate) fn replay_pointer_index(layout: &RepositoryLayout) -> Result<PointerIndexReplay> {
+    #[cfg(test)]
+    let _whole_read_scope =
+        crate::foundation::fsutil::whole_read_guard::declare("pointer-index-replay");
+    let (_slot, relative) = live_pointer_index_slot(layout)?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
-        return Ok(PointerIndexReplay {
-            entries: Vec::new(),
-            trailing_partial_bytes: 0,
-            tail_offset: 0,
-            record_outcomes: Vec::new(),
-        });
+        return Ok(empty_pointer_index_replay());
     };
     decode_pointer_index_records(&bytes)
 }
@@ -674,7 +681,7 @@ pub(in crate::refs) fn lookup_ref_pointer(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<(Option<PointerIndexEntry>, PointerIndexTailStatus)> {
-    let replay = replay_pointer_index(layout)?;
+    let replay = super::kept_pointer_index::replay_pointer_index_shared(layout)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
@@ -688,9 +695,10 @@ pub(in crate::refs) fn lookup_ref_pointer(
     };
     let entry = replay
         .entries
-        .into_iter()
+        .iter()
         .rev()
-        .find(|entry| entry.ref_name_key == ref_name_key);
+        .find(|entry| entry.ref_name_key == ref_name_key)
+        .cloned();
     Ok((entry, tail))
 }
 

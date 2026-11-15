@@ -43,7 +43,7 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
 use super::{current_index_file_length, extend_entries_and_by_id, index_position_map};
-use crate::foundation::fsutil::{FileIdentity, Kept};
+use crate::foundation::fsutil::FileIdentity;
 use crate::foundation::index::{self, IndexEntry, VerifiedTail};
 use crate::foundation::layout::RepositoryLayout;
 
@@ -190,27 +190,22 @@ impl IndexSnapshot {
             },
             None => Vec::new(),
         };
-        let kept: Kept = Arc::new(KeptIndex {
+        root.keep_value(Arc::new(KeptIndex {
             data: Arc::clone(&self.data),
             known_length: self.known_length,
             identity,
             canary,
-        });
-        root.keep_value(kept);
+        }));
     }
 
     /// Give back the kept copy's reference to this snapshot's data, so that an extension does not copy it. A kept value that is not this
     /// snapshot's data is put back.
     fn release_kept(&self, layout: &RepositoryLayout) {
         let root = layout.repository_mutation_root();
-        let Some(value) = root.take_kept_value() else {
+        let Some(value) = root.take_kept_value::<KeptIndex>() else {
             return;
         };
-        let same = value
-            .clone()
-            .downcast::<KeptIndex>()
-            .is_ok_and(|kept| Arc::ptr_eq(&kept.data, &self.data));
-        if !same {
+        if !Arc::ptr_eq(&value.data, &self.data) {
             root.keep_value(value);
         }
     }
@@ -257,8 +252,12 @@ impl IndexSnapshot {
         }
         if !same_file {
             // 0.58.0 S4: another file now stands at the index's path (`doctor --repair-index` installs by rename, a writer's own rebuild the
-            // same), or this snapshot never knew which file it read. Today's check compared the length only, and an equal-length rebuild
-            // went unseen. Read it whole, as a fresh open does.
+            // same), or this snapshot never knew which file it read. Before S4 the check compared the length only, and an equal-length rebuild
+            // went unseen. The case: `doctor --repair-index` repairing an index in which an entry points at the wrong record (damage from
+            // before the object-store lock) rewrites it at the same length, and a command that had decoded the old file kept the wrong
+            // location. It fails closed (the read of that object refuses with an integrity error naming the entry; nothing is written
+            // from it), it is reproduced by a unit test and not on a binary, and so it has no release note.
+            // Read it whole, as a fresh open does.
             return self.reload(layout, already_locked);
         }
         if observed.size < self.known_length {
@@ -376,8 +375,9 @@ fn data_of(entries: Vec<IndexEntry>) -> Result<IndexData> {
 
 /// The kept index of this hold, taken out of the root (the caller owns it until it keeps again), if one was kept.
 fn take_kept(layout: &RepositoryLayout) -> Option<KeptIndex> {
-    let value = layout.repository_mutation_root().take_kept_value()?;
-    let kept = value.downcast::<KeptIndex>().ok()?;
+    let kept = layout
+        .repository_mutation_root()
+        .take_kept_value::<KeptIndex>()?;
     Some(Arc::try_unwrap(kept).unwrap_or_else(|shared| KeptIndex {
         data: Arc::clone(&shared.data),
         known_length: shared.known_length,
