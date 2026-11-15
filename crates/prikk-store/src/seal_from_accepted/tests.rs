@@ -1412,6 +1412,137 @@ fn s3_a_batch_reads_the_claims_and_the_history_once() -> Result<()> {
     Ok(())
 }
 
+/// 0.58.0 S6, part two: a batch builds its claims index (the by-block map and the by-patch lists the parent check and the order-ambiguity
+/// check read) **once per claim set**, not once per claim: six claims, one build. A claim stored mid-batch re-reads the set and builds it
+/// again, once (`s3_a_claim_stored_mid_batch_is_seen_by_the_next_claim` keeps passing).
+#[test]
+fn s6_a_batch_builds_its_claims_index_once() -> Result<()> {
+    let (fixture, claims) = chained_batch_fixture("s6-index-once", 6)?;
+    let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+    let before = super::batch::claims_index_builds_for_test();
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    plan.require_parents_reached(&fixture.layout, &claims)?;
+    plan.fold(&fixture.layout, &claims);
+    for claim in &claims {
+        let outcome = super::seal_from_accepted_claim_in_batch(
+            &fixture.layout,
+            &lock,
+            TARGET_REF,
+            *claim,
+            &fixture.signer,
+            &mut plan,
+        )?;
+        assert!(
+            matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }),
+            "{outcome:?}"
+        );
+    }
+    assert_eq!(
+        super::batch::claims_index_builds_for_test() - before,
+        1,
+        "one index for {} claims",
+        claims.len()
+    );
+    drop(lock);
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// 0.58.0 S6: the indexed order-ambiguity check answers as the whole-set check does -- the same refusal, naming the same (first stored) claim --
+/// over claims that overlap in several ways: disjoint, agreeing, and two that disagree with the selected one (the first stored is named).
+#[test]
+fn s6_the_indexed_ambiguity_check_equals_the_whole_set_check() -> Result<()> {
+    let id = |byte: u8| ObjectId::from_bytes([byte; 32]);
+    let claim = |block: u8, patches: &[u8]| RecognitionClaimPayload {
+        block_id: id(block),
+        patch_ids: patches.iter().map(|byte| id(*byte)).collect(),
+        parent_block_ids: Vec::new(),
+    };
+    let stored = vec![
+        (id(101), claim(1, &[10, 11])),
+        (id(102), claim(2, &[20, 21])),
+        (id(103), claim(3, &[11, 10])), // disagrees with [10, 11]
+        (id(104), claim(4, &[10, 12])),
+        (id(105), claim(5, &[12, 11, 10])), // disagrees too, after 103
+    ];
+    let index = super::batch::ClaimsIndex::build(&stored);
+    for selected in [
+        claim(9, &[10, 11, 12]),
+        claim(9, &[20, 21]),
+        claim(9, &[21, 20]),
+        claim(9, &[30]),
+        claim(9, &[11, 12]),
+    ] {
+        for selected_id in [id(200), id(103)] {
+            let whole = super::refuse_if_order_ambiguous_among(&stored, selected_id, &selected);
+            let indexed = super::refuse_if_order_ambiguous_indexed(
+                &stored,
+                &index.by_patch,
+                selected_id,
+                &selected,
+            );
+            assert_eq!(
+                whole.map_err(|error| error.to_string()),
+                indexed.map_err(|error| error.to_string()),
+                "selected {:?} as {selected_id}",
+                selected.patch_ids
+            );
+        }
+    }
+    Ok(())
+}
+
+/// 0.58.0 S6, rule 2: a batch writes the replay-verified record **once**, when it ends, and a later claim sees an earlier claim's entry in
+/// the meantime. After each sealed claim its Block is in `load_verified_blocks` (what a disk derivation anchors on) while the record file is
+/// still not there; `finish_records` writes it; and what is written is exactly the Blocks the batch sealed (plus none the batch did not
+/// confirm: every id is a Block this repository holds).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn s6_a_batch_writes_the_record_once_and_a_later_claim_sees_an_earlier_entry() -> Result<()> {
+    let (fixture, claims) = chained_batch_fixture("s6-record-once", 5)?;
+    let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    plan.require_parents_reached(&fixture.layout, &claims)?;
+    plan.fold(&fixture.layout, &claims);
+    let record = crate::verified_blocks::record_path(&fixture.layout);
+    let mut sealed = Vec::new();
+    for claim in &claims {
+        let outcome = super::seal_from_accepted_claim_in_batch(
+            &fixture.layout,
+            &lock,
+            TARGET_REF,
+            *claim,
+            &fixture.signer,
+            &mut plan,
+        )?;
+        let SealFromAcceptedOutcome::Sealed { block_id, .. } = outcome else {
+            panic!("{outcome:?}");
+        };
+        sealed.push(block_id);
+        assert!(
+            crate::verified_blocks::load_verified_blocks(&fixture.layout).contains(&block_id),
+            "the entry is visible to the next claim"
+        );
+        assert!(!record.exists(), "and nothing is written yet");
+    }
+    plan.finish_records();
+    let recorded = crate::verified_blocks::load_verified_blocks(&fixture.layout);
+    assert!(record.exists(), "written when the batch ends");
+    for block_id in &sealed {
+        assert!(recorded.contains(block_id));
+    }
+    let objects = FileObjectStore::new(fixture.layout.clone());
+    for id in recorded.iter() {
+        assert!(
+            crate::ObjectReader::has_object(&objects, *id, ObjectType::Block)?,
+            "every recorded id is a Block this repository holds"
+        );
+    }
+    drop(lock);
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
 /// 0.58.0 S3, rule 1: a claim stored **mid-batch** is seen by the next claim's checks, as a per-claim enumeration saw it. `sync accept`
 /// cannot add one while a batch holds the active lock, but `sync build` stores claims for the repository's own blocks under the
 /// object-store lock alone. Here a claim that names the second claim's patches in the other order is stored after the first claim is

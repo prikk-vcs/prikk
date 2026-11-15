@@ -272,7 +272,7 @@ fn seal_from_accepted_claim_impl(
     match plan.as_deref_mut() {
         Some(plan) if plan.reads.is_some() => {
             plan.refresh_claims(layout)?;
-            refuse_if_order_ambiguous_among(plan.claims().unwrap_or(&[]), claim_id, &claim)?;
+            plan.refuse_if_order_ambiguous(claim_id, &claim)?;
         }
         _ => refuse_if_order_ambiguous(layout, claim_id, &claim)?,
     }
@@ -399,15 +399,13 @@ fn seal_from_accepted_claim_impl(
         // does not reach (see the module doc).
         if !claim.parent_block_ids.is_empty() {
             let enumerated;
-            let claims: &[(ObjectId, RecognitionClaimPayload)] =
-                match plan.as_deref().and_then(SealBatchPlan::claims) {
-                    Some(claims) => claims,
-                    None => {
-                        enumerated = enumerate_stored_claims(layout)?;
-                        &enumerated
-                    }
-                };
-            let by_block = claims_by_block(claims);
+            let by_block = match plan.as_deref().and_then(SealBatchPlan::claims_by_block) {
+                Some(by_block) => by_block,
+                None => {
+                    enumerated = enumerate_stored_claims(layout)?;
+                    claims_by_block(&enumerated)
+                }
+            };
             for &parent_id in &claim.parent_block_ids {
                 if !parent_reached(&read_snapshot, &by_block, history, parent_id)? {
                     return Err(parent_not_reached_refusal(
@@ -661,6 +659,38 @@ fn refuse_if_order_ambiguous_among(
     selected_claim_id: ObjectId,
     selected: &RecognitionClaimPayload,
 ) -> Result<()> {
+    refuse_if_order_ambiguous_over(claims.iter(), selected_claim_id, selected)
+}
+
+/// The same check over the stored claims that name at least one of `selected`'s patches, found through the batch's index (0.58.0 S6): the
+/// claims are walked in their stored order, as the whole set is, so the first disagreeing claim -- the one the refusal names -- is the same.
+pub(super) fn refuse_if_order_ambiguous_indexed(
+    claims: &[(ObjectId, RecognitionClaimPayload)],
+    by_patch: &BTreeMap<ObjectId, Vec<usize>>,
+    selected_claim_id: ObjectId,
+    selected: &RecognitionClaimPayload,
+) -> Result<()> {
+    let positions: BTreeSet<usize> = selected
+        .patch_ids
+        .iter()
+        .filter_map(|patch_id| by_patch.get(patch_id))
+        .flatten()
+        .copied()
+        .collect();
+    refuse_if_order_ambiguous_over(
+        positions
+            .into_iter()
+            .filter_map(|position| claims.get(position)),
+        selected_claim_id,
+        selected,
+    )
+}
+
+fn refuse_if_order_ambiguous_over<'a>(
+    claims: impl Iterator<Item = &'a (ObjectId, RecognitionClaimPayload)>,
+    selected_claim_id: ObjectId,
+    selected: &RecognitionClaimPayload,
+) -> Result<()> {
     let selected_set: BTreeSet<ObjectId> = selected.patch_ids.iter().copied().collect();
     for (other_id, other) in claims {
         let other_id = *other_id;
@@ -737,15 +767,35 @@ fn ref_history(object_store: &impl ObjectReader, tip: Option<ObjectId>) -> Resul
 /// The held claims keyed by the block they are about (the first claim for a block is kept: claims
 /// about one block carry the same patches and parents).
 fn claims_by_block(claims: &[(ObjectId, RecognitionClaimPayload)]) -> ClaimsByBlock<'_> {
-    let mut by_block = BTreeMap::new();
-    for (claim_id, claim) in claims {
-        by_block.entry(claim.block_id).or_insert((*claim_id, claim));
+    ClaimsByBlock {
+        claims,
+        index: std::borrow::Cow::Owned(batch::ClaimsIndex::build(claims).by_block),
     }
-    by_block
 }
 
-/// A block id -> (the id of a held claim about it, that claim's payload).
-type ClaimsByBlock<'a> = BTreeMap<ObjectId, (ObjectId, &'a RecognitionClaimPayload)>;
+/// A block id -> (the id of a held claim about it, that claim's payload): the held claims and each block's position among them. A batch
+/// builds the positions once per claim set (0.58.0 S6, [`batch::ClaimsIndex`]) and lends them; any other caller builds its own.
+pub(crate) struct ClaimsByBlock<'a> {
+    claims: &'a [(ObjectId, RecognitionClaimPayload)],
+    index: std::borrow::Cow<'a, BTreeMap<ObjectId, usize>>,
+}
+
+impl<'a> ClaimsByBlock<'a> {
+    pub(crate) fn lent(
+        claims: &'a [(ObjectId, RecognitionClaimPayload)],
+        index: &'a BTreeMap<ObjectId, usize>,
+    ) -> Self {
+        Self {
+            claims,
+            index: std::borrow::Cow::Borrowed(index),
+        }
+    }
+
+    fn get(&self, block: &ObjectId) -> Option<(ObjectId, &'a RecognitionClaimPayload)> {
+        let (claim_id, claim) = self.claims.get(*self.index.get(block)?)?;
+        Some((*claim_id, claim))
+    }
+}
 
 /// Whether `parent` -- a block id a claim names -- is reached by `history`. See the module doc:
 /// its id is in the history, or every patch of its own ancestry this repository can name is
@@ -909,7 +959,7 @@ fn held_unsealed_ancestry(
         for &ancestor in &claim.parent_block_ids {
             visit(object_store, by_block, history, ancestor, seen, out)?;
         }
-        out.push(*claim_id);
+        out.push(claim_id);
         Some(())
     }
     let mut out = Vec::new();

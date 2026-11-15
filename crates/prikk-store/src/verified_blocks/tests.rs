@@ -1,5 +1,9 @@
 //! The record's own format controls (RFC 136 increment 2b §3, "record failure is safe").
 
+// 0.58.0 S6: the kept record and the deferral scope are Linux and macOS only (the kept set is compared by `(device, inode, size)`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod deferred;
+
 use prikk_object::ObjectId;
 
 use super::{RECORD_MAGIC, encode, load_verified_blocks, record_path, record_verified_blocks};
@@ -22,7 +26,8 @@ fn the_record_round_trips_and_only_grows() -> prikk_error::Result<()> {
     record_verified_blocks(&layout, [id(2), id(3)]);
     assert_eq!(
         load_verified_blocks(&layout)
-            .into_iter()
+            .iter()
+            .copied()
             .collect::<Vec<_>>(),
         vec![id(1), id(2), id(3)]
     );

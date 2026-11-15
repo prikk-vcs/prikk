@@ -569,6 +569,9 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
         }
     }
 
+    // 0.58.0 S6: the batch's replay-verified ids are written once, here, not once per sealed Block.
+    plan.finish_records();
+
     // Step 4 (materialize once, after the last claim) and the mid-batch-failure rule: even when
     // `batch_error` is set, this still runs on whatever tip was really published, so the worktree
     // matches what is there -- and if this call itself fails too, the marker stays set, and the

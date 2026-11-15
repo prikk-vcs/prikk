@@ -150,7 +150,7 @@ pub(crate) enum Admission {
 /// set, and an unreadable or empty policy adopts nothing: either way there is no anchor and the full derivation runs.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct AnchorTrust {
-    verified: BTreeSet<ObjectId>,
+    verified: std::sync::Arc<BTreeSet<ObjectId>>,
     policy: MaintainerTrustPolicy,
 }
 

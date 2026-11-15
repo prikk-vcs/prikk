@@ -785,6 +785,43 @@ fn crash_row3_a_block_written_and_not_published() {
     assert_rerun_completes("row 3", &receiver, &second, &clean);
 }
 
+/// 0.58.0 S6, crash rule 3: the replay-verified record is written once, when the batch ends, so a kill between claims (row 2's state: one
+/// claim published, the second not started) leaves the record **without** the published claim's Block -- absence, which costs a later run a
+/// replay and is never a wrong entry. The re-run ends in the corpus's clean state, and the record then holds the Blocks it sealed. (Before
+/// S6 the record held the first claim's Block at the kill; the cache is never authoritative, and no other output differs.)
+#[cfg(unix)]
+#[test]
+fn crash_row2_leaves_the_verified_record_without_the_deferred_ids_and_the_rerun_fills_it() {
+    let clean = clean_end_state();
+    let (receiver, claims) = killed_batch("s6-kill-cache", "before-block", 2);
+    assert_eq!(
+        published_blocks(&receiver),
+        1,
+        "one claim published at the kill"
+    );
+    let record = receiver.join(".prikk/cache/replay-verified-blocks.v1");
+    assert!(
+        !record.exists(),
+        "the record holds nothing from the killed batch: its ids were in memory"
+    );
+    let lock = receiver.join(".prikk/active/default/active.lock");
+    support::ok(
+        &support::prikk(&receiver)
+            .args(["unlock", "--lock"])
+            .arg(&lock)
+            .arg("--yes")
+            .output()
+            .unwrap(),
+        "unlock --yes",
+    );
+    let second = seal(&receiver, "heads/main", &claims);
+    assert_rerun_completes("row 2 + record", &receiver, &second, &clean);
+    assert!(
+        record.exists() && std::fs::metadata(&record).unwrap().len() > 100,
+        "the re-run wrote the record once it ended"
+    );
+}
+
 /// A point the table does not list: the first claim's Block written and not published. It is row 3's state with nothing published; the
 /// re-run ends in the same clean state.
 #[cfg(unix)]
