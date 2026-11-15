@@ -1626,6 +1626,9 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 .sentence();
                 let doctor_issue = if issue.blocking {
                     DoctorIssue::error(issue.code, issue.message.clone(), recommendation)
+                } else if issue.code == crate::refs::in_flight::IN_FLIGHT_CODE {
+                    // 0.58.0 F2: a publication still running is information, not a finding to act on.
+                    DoctorIssue::info(issue.code, issue.message.clone(), recommendation)
                 } else {
                     DoctorIssue::warning(issue.code, issue.message.clone(), recommendation)
                 };

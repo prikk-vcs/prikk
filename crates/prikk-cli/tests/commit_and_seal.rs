@@ -17,6 +17,9 @@ mod dc66_multi_commit_queuing;
 mod dc67_ordinary_use_conformance;
 #[path = "commit_and_seal/dc92_lineage_replay_benchmark.rs"]
 mod dc92_lineage_replay_benchmark;
+#[cfg(unix)]
+#[path = "commit_and_seal/f2_publication_in_flight.rs"]
+mod f2_publication_in_flight;
 #[path = "commit_and_seal/genesis_end_to_end.rs"]
 mod genesis_end_to_end;
 #[path = "commit_and_seal/helper_uniqueness.rs"]

@@ -777,6 +777,12 @@ as the previous entry describes — this warning simply means doing so is option
 reclassified as damage — the previous entry's error — on the very next run: reachability is always
 recomputed fresh, never cached.
 
+## `error: precondition not met: another command is publishing <ref> (pid N, from its lock)`
+
+A ref's pointer is written before its log record (`branch create`, `tag create`, `sync adopt-tag`, `merge`, `seal`, `sync seal` and the archive and bundle landings all publish this way), under the ref's lock. For the moment between the two writes the pointer **leads** the log: the same bytes a crash leaves behind. Since 0.58.0 a command that finds a lead looks at that lock: if the process that took it is **still running** (a definite answer from the same judge `prikk unlock` uses), the publication is **in flight**, not interrupted, and the command refuses before writing anything with this message. **Run the command again when the other one finishes.** `prikk ref complete <ref>` says the same (`is being published by another command right now`) and does not try to finish it from under its publisher; `prikk verify` reports `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT` as information and exits `0`, and `doctor` lists it as `info`.
+
+If the holder is gone (killed, or its lock outlived it) the answer is the interrupted-publication one below, and the message now adds what was said about the lock that is still on disk ("the lock it took is still on disk: its holder does not appear to be running: …"). A holder that cannot be judged (a lock taken in another pid namespace, on another machine, by an older prikk, or still being written) is **not** called in flight: only a holder that appears running is.
+
 ## `error: repository has interrupted or divergent ref publication state`
 
 Seen from `verify` after `branch create`, `tag create`, `sync adopt-tag`, `merge`, or `seal` was

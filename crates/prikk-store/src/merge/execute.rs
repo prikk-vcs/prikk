@@ -128,11 +128,18 @@ pub fn execute_merge(
     // pointer and a publish computed from it would carry the wrong `expected_previous_ref_state_id`
     // and fail deep inside the write, not here where the real cause is nameable. Checked before any
     // evidence gathering or write.
-    if crate::ref_completion::plan_ref_completion(layout, &into_ref)?.is_ok() {
-        return Err(PrikkError::Precondition(format!(
-            "ref {into_ref} has an interrupted publication; run `prikk ref complete {into_ref}` \
-             before merging into it"
-        )));
+    match crate::ref_completion::plan_ref_completion(layout, &into_ref)? {
+        Ok(_) => {
+            return Err(PrikkError::Precondition(format!(
+                "ref {into_ref} has an interrupted publication; run `prikk ref complete {into_ref}` \
+                 before merging into it"
+            )));
+        }
+        // 0.58.0 F2: the publisher is running; neither interrupted nor a ref to merge into yet.
+        Err(refusal @ crate::ref_completion::CompletionRefusal::PublicationInFlight(_)) => {
+            return Err(PrikkError::Precondition(format!("{into_ref} {refusal}")));
+        }
+        Err(_) => {}
     }
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;

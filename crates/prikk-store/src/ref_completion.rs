@@ -97,6 +97,8 @@ pub enum CompletionRefusal {
     InvalidTarget(String),
     /// Condition (d): a WAL-consuming publication's retained evidence does not match.
     WalEvidenceMismatch(String),
+    /// 0.58.0 F2: the lead is a publication in flight -- another command holds the ref's lock and appears to be running (its pid).
+    PublicationInFlight(u32),
 }
 
 impl std::fmt::Display for CompletionRefusal {
@@ -116,6 +118,10 @@ impl std::fmt::Display for CompletionRefusal {
             Self::OwnLogDamaged => write!(
                 formatter,
                 "this ref's own log subsequence has a damaged record"
+            ),
+            Self::PublicationInFlight(pid) => write!(
+                formatter,
+                "is being published by another command right now (pid {pid}, from its lock); run this command again when it finishes"
             ),
             Self::UntrustedSigner(message) => write!(
                 formatter,
@@ -157,7 +163,19 @@ pub fn plan_ref_completion(
     let Some(leading_id) = store.read_current_ref_state_id(ref_name)? else {
         return Ok(Err(CompletionRefusal::NoPointer));
     };
-    evaluate_known_lead(layout, ref_name, leading_id)
+    let plan = evaluate_known_lead(layout, ref_name, leading_id)?;
+    if plan.is_err() {
+        return Ok(plan);
+    }
+    // 0.58.0 F2: the lead, then the holder, then the lead again. A publication still running is not completed from under its publisher.
+    use crate::refs::in_flight::{Lead, decide, lead_persists};
+    Ok(
+        match decide(layout, ref_name, || lead_persists(layout, ref_name))? {
+            Lead::InFlight { pid } => Err(CompletionRefusal::PublicationInFlight(pid)),
+            Lead::Gone => Err(CompletionRefusal::NotALead),
+            Lead::Interrupted { .. } => plan,
+        },
+    )
 }
 
 /// 019 §5.2: the message a caller gives when [`crate::refs::ensure_may_publish`] or
@@ -178,10 +196,16 @@ pub fn incomplete_publication_refusal_naming_any_lead(
         return generic_or_cleanup_pending_refusal(layout);
     };
     match evaluate_known_lead(layout, &ref_name, leading_id)? {
-        Ok(_plan) => Ok(PrikkError::Precondition(format!(
-            "repository mutation is blocked by an interrupted publication for {ref_name}: its \
-             pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`"
-        ))),
+        Ok(_plan) => {
+            // 0.58.0 F2: a lock the interrupted publisher left is named, with what the judge said about its holder.
+            let lock_note = crate::refs::in_flight::holder_note(layout, &ref_name)?
+                .map(|note| format!(" (the lock it took is still on disk: its holder {note})"))
+                .unwrap_or_default();
+            Ok(PrikkError::Precondition(format!(
+                "repository mutation is blocked by an interrupted publication for {ref_name}: its \
+                 pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`{lock_note}"
+            )))
+        }
         Err(_) => generic_or_cleanup_pending_refusal(layout),
     }
 }

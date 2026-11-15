@@ -243,15 +243,21 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         // RFC 165 R4 item 5: `ensure_may_publish` above excludes `canonical`, so a crashed
         // `branch create` for this exact ref reads as a pointer already present here, not as the
         // precondition refusing -- name the way out instead of the permanent "already exists".
-        if prikk_store::plan_ref_completion(&layout, &canonical)
+        match prikk_store::plan_ref_completion(&layout, &canonical)
             .map_err(|err| err.to_string())?
-            .is_ok()
         {
-            return Err(format!(
-                "branch {canonical} has an interrupted publication; run `prikk ref complete \
-                 {canonical}` to finish it"
-            )
-            .into());
+            Ok(_) => {
+                return Err(format!(
+                    "branch {canonical} has an interrupted publication; run `prikk ref complete \
+                     {canonical}` to finish it"
+                )
+                .into());
+            }
+            // 0.58.0 F2: the publisher is running; this is neither "already create" nor an interrupted publication.
+            Err(refusal @ prikk_store::CompletionRefusal::PublicationInFlight(_)) => {
+                return Err(format!("{canonical} {refusal}").into());
+            }
+            Err(_) => {}
         }
         return Err(format!("branch {canonical} already exists").into());
     }
@@ -564,15 +570,21 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
         // `branch close` for this exact ref reads as already closed here (the pointer already
         // carries the closed flag), not as the precondition refusing -- name the way out instead
         // of the permanent "already closed".
-        if prikk_store::plan_ref_completion(&layout, &canonical)
+        match prikk_store::plan_ref_completion(&layout, &canonical)
             .map_err(|err| err.to_string())?
-            .is_ok()
         {
-            return Err(format!(
-                "branch {canonical} has an interrupted publication; run `prikk ref complete \
-                 {canonical}` to finish it"
-            )
-            .into());
+            Ok(_) => {
+                return Err(format!(
+                    "branch {canonical} has an interrupted publication; run `prikk ref complete \
+                     {canonical}` to finish it"
+                )
+                .into());
+            }
+            // 0.58.0 F2: the publisher is running; this is neither "already close" nor an interrupted publication.
+            Err(refusal @ prikk_store::CompletionRefusal::PublicationInFlight(_)) => {
+                return Err(format!("{canonical} {refusal}").into());
+            }
+            Err(_) => {}
         }
         return Err(format!("branch {canonical} is already closed").into());
     }

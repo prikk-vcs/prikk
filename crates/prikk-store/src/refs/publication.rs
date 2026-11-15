@@ -200,6 +200,8 @@ fn publish_body(
                     ref_state_id,
                 },
             )?;
+            #[cfg(feature = "test-support")]
+            pause_after_pointer_for_test();
             container::append_ref_container_record_with_replay(
                 &store.layout,
                 ref_name_key,
@@ -459,4 +461,24 @@ pub(crate) fn queue_already_sealed(
         block: target,
         parent: payload.parent_block_ids.first().copied(),
     }))
+}
+
+/// 0.58.0 F2's test hook for a command run as a binary: with `PRIKK_TEST_PAUSE_AFTER_POINTER=<go file>` set (and `prikk-store`'s `test-support`
+/// feature, which no shipped build enables), a publication writes `<go file>.waiting` when its pointer is written and its log record is not, and
+/// waits until `<go file>` exists (at most 60 seconds): the window in which the ref's pointer leads its log while the publisher is running.
+#[cfg(feature = "test-support")]
+fn pause_after_pointer_for_test() {
+    let Some(go) = std::env::var_os("PRIKK_TEST_PAUSE_AFTER_POINTER") else {
+        return;
+    };
+    let go = std::path::PathBuf::from(go);
+    let mut waiting = go.clone().into_os_string();
+    waiting.push(".waiting");
+    let _ = std::fs::write(&waiting, b"waiting");
+    for _ in 0..1200 {
+        if go.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }

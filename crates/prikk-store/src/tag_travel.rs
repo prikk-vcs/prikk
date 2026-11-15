@@ -292,11 +292,18 @@ pub fn create_local_tag(
         // publication for this exact ref (via `tag create` or `sync adopt-tag`, both of which reach
         // this function) reads as a pointer already present here, not as the precondition refusing
         // -- name the way out instead of the permanent "already exists".
-        if crate::ref_completion::plan_ref_completion(layout, &canonical)?.is_ok() {
-            return Err(PrikkError::Precondition(format!(
-                "tag {canonical} has an interrupted publication; run `prikk ref complete \
-                 {canonical}` to finish it"
-            )));
+        match crate::ref_completion::plan_ref_completion(layout, &canonical)? {
+            Ok(_) => {
+                return Err(PrikkError::Precondition(format!(
+                    "tag {canonical} has an interrupted publication; run `prikk ref complete \
+                     {canonical}` to finish it"
+                )));
+            }
+            // 0.58.0 F2: the publisher is running; this is neither "already exists" nor an interrupted publication.
+            Err(refusal @ crate::ref_completion::CompletionRefusal::PublicationInFlight(_)) => {
+                return Err(PrikkError::Precondition(format!("{canonical} {refusal}")));
+            }
+            Err(_) => {}
         }
         return Err(PrikkError::Integrity(format!(
             "tag {canonical} already exists"

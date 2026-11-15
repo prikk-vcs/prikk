@@ -423,7 +423,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.58.0 S4 added `object_store/index_snapshot.rs` (the decoded object index a hold keeps, split out of `object_store.rs` for the same limit): 186 -> 187.
     // 0.58.0 S5 added `foundation/kept_file.rs` (the proof every kept decode shares) and `refs/kept_pointer_index.rs` (the pointer index a hold keeps): 187 -> 189.
     // 0.58.0 S5 added `refs/kept_ref_log.rs` (the ref log a hold keeps): 189 -> 190.
-    assert_eq!(store.production_files, 190);
+    // 0.58.0 F2 added `refs/in_flight.rs` (is a pointer lead a publication in flight, or an interrupted one): 190 -> 191.
+    assert_eq!(store.production_files, 191);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

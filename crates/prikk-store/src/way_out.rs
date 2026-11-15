@@ -162,6 +162,10 @@ impl WayOut {
                     "run signer-backed `prikk seal --allow-no-audit` for the affected ref only when the retained \
                      active state matches; otherwise no command repairs a missing ref pointer in place: {SOUND_COPY}"
                 ),
+                "PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT" => {
+                    "nothing to do: another command is still publishing; run `prikk verify` again when it finishes"
+                        .to_string()
+                }
                 "PRIKK-VERIFY-REF-LEGACY-TIMESTAMP" => {
                     "treat the value as non-authoritative legacy data; do not normalize signed bytes in place"
                         .to_string()

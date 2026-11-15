@@ -19,6 +19,40 @@ pub(crate) fn require_retained_evidence(
     trust_is_valid: bool,
     issues: &mut Vec<RefPublicationIssue>,
 ) -> Result<()> {
+    // 0.58.0 F2: before anything else, a lead is either a publication in flight, a lead that has since gone, or interrupted.
+    let mut gone: Vec<usize> = Vec::new();
+    for (position, issue) in issues.iter_mut().enumerate() {
+        if issue.code != "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" {
+            continue;
+        }
+        let Some(ref_name) = issue.ref_name.clone() else {
+            continue;
+        };
+        match crate::refs::in_flight::decide(layout, &ref_name, || {
+            crate::refs::in_flight::lead_persists(layout, &ref_name)
+        })? {
+            crate::refs::in_flight::Lead::Gone => gone.push(position),
+            crate::refs::in_flight::Lead::InFlight { pid } => {
+                issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
+                issue.blocking = false;
+                issue.message = format!(
+                    "a publication of {ref_name} is in flight (pid {pid}, from its lock); nothing to complete, run verify again when it finishes"
+                );
+            }
+            crate::refs::in_flight::Lead::Interrupted {
+                holder_note: Some(note),
+            } => {
+                issue.message = format!(
+                    "{} (the lock it took is still on disk: its holder {note})",
+                    issue.message
+                );
+            }
+            crate::refs::in_flight::Lead::Interrupted { holder_note: None } => {}
+        }
+    }
+    for position in gone.into_iter().rev() {
+        issues.remove(position);
+    }
     for issue in issues.iter_mut() {
         if !matches!(
             issue.code,
@@ -56,6 +90,13 @@ pub(crate) fn require_retained_evidence(
             // `doctor`'s own issues do, so the command has to be in the message itself.
             Ok(_plan) => {
                 issue.message = format!("{}; run `prikk ref complete {ref_name}`", issue.message)
+            }
+            Err(crate::ref_completion::CompletionRefusal::PublicationInFlight(pid)) => {
+                issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
+                issue.blocking = false;
+                issue.message = format!(
+                    "a publication of {ref_name} is in flight (pid {pid}, from its lock); nothing to complete, run verify again when it finishes"
+                );
             }
             Err(_refusal) => mark_unproved(issue),
         }

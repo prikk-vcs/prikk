@@ -627,7 +627,11 @@ fn refuse_on_blocking_ref_publication(layout: &RepositoryLayout) -> Result<()> {
         &mut issues,
     )?;
 
-    let blocking: Vec<_> = issues.iter().filter(|issue| issue.blocking).collect();
+    // 0.58.0 F2: a lead whose publisher is running is not blocking for `verify`, but an archive taken now would carry the pointer without its log record.
+    let blocking: Vec<_> = issues
+        .iter()
+        .filter(|issue| issue.blocking || issue.code == crate::refs::in_flight::IN_FLIGHT_CODE)
+        .collect();
     if blocking.is_empty() {
         return Ok(());
     }

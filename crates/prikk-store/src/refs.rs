@@ -7,6 +7,7 @@
 
 mod container;
 mod evidence;
+pub(crate) mod in_flight;
 mod kept_pointer_index;
 mod kept_ref_log;
 mod pointer_index;
@@ -360,7 +361,10 @@ pub(crate) fn ensure_publication_precondition_with_replay(
             continue;
         }
         if newest_pointer.get(&key) != newest_log.get(&key) {
-            return Err(incomplete_publication_refusal());
+            // 0.58.0 F2: a lead whose publisher is still running is not an interrupted publication (`in_flight`).
+            if let Some(refusal) = in_flight::refusal_for_mismatch(layout, &pointer_replay, key)? {
+                return Err(refusal);
+            }
         }
     }
 

@@ -265,6 +265,12 @@ While a command holds any lock (the hold above), it also keeps the object index 
 
 **What this does not see.** A second writer that truncates the index below the length the copy decoded, regrows it past that length, and puts a record byte for byte equal to the copy's last record at that offset, while the records before it differ. The append protocol does not produce it (offsets are container offsets), and a full checksum of the prefix would read the whole index again.
 
+## A Publication in Flight
+
+A ref publication writes the ref's pointer, then its log record, while holding the ref's lock (and the pointer-index and log container locks). Between the two writes the pointer leads the log, and a reader that takes no lock cannot tell that from a crash. The write-path precondition (`commit`, `seal`, `sync seal`, `merge`, `branch`, `tag create` and the rest), `prikk ref complete`, `verify` and `doctor` therefore ask **the ref's lock**: the lead is read, then the lock's holder is judged with the same judge `prikk unlock` uses, then the lead is read again. A lead that is gone on the second read is no lead (the publication finished in between). A holder that **appears to be running** is a publication in flight: the command refuses before any write with `another command is publishing <ref> (pid N, from its lock); run this command again when it finishes`, and `verify`/`doctor` report information, not a finding. Anything else keeps the interrupted-publication answer, with what the judge said about a lock still on disk. It does not wait (every lock here fails fast), and it takes no lock and writes nothing: one small read of the ref's lock file when a lead is found.
+
+**What is made permanent by a writer stepping onto an interrupted publication** (the reason the block is repository-wide): not the lead itself — another ref's publication leaves a pure lead completable — but a **torn ref-log tail**: an append for any ref lands behind it and turns it into interior damage that `prikk ref complete` can no longer remove. That half is Rule D's tail check, and it is unchanged.
+
 ## Stale Locks and Manual Cleanup
 
 If a process dies while holding any lock — `active.lock`, a ref lock, or one of the five container
