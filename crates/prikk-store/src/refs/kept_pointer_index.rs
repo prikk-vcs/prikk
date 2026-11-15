@@ -196,4 +196,4 @@ fn refresh(
 
 // 0.58.0 S5: Linux and macOS only, like the mechanism (its identity is `(device, inode)`).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
-mod tests;
+pub(in crate::refs) mod tests;

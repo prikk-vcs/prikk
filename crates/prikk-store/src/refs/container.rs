@@ -853,8 +853,8 @@ pub(in crate::refs) fn replay_ref_subsequence(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
-    match read_and_decode_ref_log(layout, "ref-log-replay")? {
-        Some(decoded) => ref_subsequence_of(&decoded, ref_name_key),
+    match super::kept_ref_log::load_ref_log_shared(layout)? {
+        Some(loaded) => ref_subsequence_of_parts(&loaded.replay, &loaded.bytes, ref_name_key),
         None => Ok(RefLogReplay {
             records: Vec::new(),
             trailing_partial_bytes: 0,
@@ -869,8 +869,16 @@ pub(in crate::refs) fn ref_subsequence_of(
     decoded: &DecodedRefLog,
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
-    let bytes = &decoded.bytes;
-    let replay = &decoded.replay;
+    ref_subsequence_of_parts(&decoded.replay, &decoded.bytes, ref_name_key)
+}
+
+/// [`ref_subsequence_of`] over the replay and the bytes it was decoded from. `bytes` is read only to attribute a trailing partial record,
+/// so it may be empty when the replay has none (a kept copy never has one).
+pub(in crate::refs) fn ref_subsequence_of_parts(
+    replay: &RefContainerReplay,
+    bytes: &[u8],
+    ref_name_key: [u8; 32],
+) -> Result<RefLogReplay> {
     let mut records = replay.records.iter();
     let mut ref_records = Vec::new();
     let mut ref_outcomes = Vec::new();

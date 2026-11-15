@@ -8,6 +8,7 @@
 mod container;
 mod evidence;
 mod kept_pointer_index;
+mod kept_ref_log;
 mod pointer_index;
 pub(crate) mod publication;
 mod rebuild_discovery;
@@ -297,21 +298,12 @@ pub(crate) fn ensure_publication_precondition_with_replay(
         newest_pointer.insert(entry.ref_name_key, entry.ref_state_id);
     }
 
-    // RFC 165 R2: this is the one whole-container read this precondition now does, in total --
-    // the `ref-log-replay` open finding (`whole_read_guard.rs`'s own `SCOPES` table), reached here
-    // once per precondition check instead of once per ref.
-    #[cfg(test)]
-    let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
-    let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
-    )?;
+    // RFC 165 R2: this is the one whole-container read this precondition now does, in total (`ref-log-replay`, once per check, not
+    // once per ref) -- or, under a hold that kept a decode of the log, its tail (0.58.0 S5: `kept_ref_log.rs`).
     let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
     let mut pending_tail_refusal: Option<(usize, usize)> = None;
-    if let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
-        layout.repository_mutation_root(),
-        &relative,
-    )? {
-        let discovery = container::decode_ref_container_records(&bytes)?;
+    if let Some(loaded) = kept_ref_log::load_ref_log_shared(layout)? {
+        let (bytes, discovery) = (&loaded.bytes, &*loaded.replay);
         // RFC 165 R5 (§9.2): `has_damage()` is true for a complete, fully-written record whose later
         // validation failed (damage, wherever it sits) or a `Failed` frame with something sound or
         // failed after it (interior damage) -- never for the container's own genuine, lead-free tail
@@ -321,7 +313,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
         // so this refuses for the whole repository rather than naming which ref, unlike `verify`'s own
         // per-ref attribution.
         if discovery.has_damage() {
-            return Err(ref_log_damage_refusal(&discovery));
+            return Err(ref_log_damage_refusal(discovery));
         }
         for record in &discovery.records {
             let update = RefUpdatePayload::decode_canonical(&record.envelope.canonical_payload)?;
@@ -343,7 +335,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
         // resolved early, so the checks below run unconditionally first; `excluded_ref_leads` below
         // still decides whether a tail is even a candidate refusal at all.
         if check_ref_log_tail {
-            if let Some(tail) = container::ref_log_container_tail(&bytes, &discovery) {
+            if let Some(tail) = container::ref_log_container_tail(bytes, discovery) {
                 // RFC 165 Addendum 1 §1: tests whether the *excluded* ref itself has a pointer lead,
                 // not whether the tail's own header names it -- a torn tail can be too short to carry
                 // a readable `ref_name_key`, and `tail.attributed_ref_name_key == excluded_key` wrongly
