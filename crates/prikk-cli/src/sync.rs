@@ -49,13 +49,12 @@ use prikk_store::{
     DEFAULT_ACTIVE_NAME, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
     DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
-    ReceivedTagResolution, RefStore, SealFromAcceptedOutcome, SyncArtifactOutcome,
+    ReceivedTagResolution, RefStore, SealBatchPlan, SealFromAcceptedOutcome, SyncArtifactOutcome,
     TagSignatureVerification, Wal, abandon_unpublished_materialization, accept_exchange_artifact,
     adopt_tag, build_have_list, build_sync_artifact, build_sync_summary, compare_sync_summary,
     decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
     mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
-    patch_ids_pending, pending_patches_with_claims, plan_seal_batch,
-    require_nothing_in_the_way_for_seal_batch, require_seal_batch_parents_reached,
+    patch_ids_pending, pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
     require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
     validate_local_branch_ref,
 };
@@ -488,13 +487,17 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // claim that builds on a block `canonical_ref`'s history does not reach (an unborn ref, another
     // line, or a ref behind the parent). Judged claim by claim against the ref's own history, each
     // claim's patches joining it for the claims after: a complete chain sealed in order passes.
-    require_seal_batch_parents_reached(&layout, &canonical_ref, &ordered)
+    //
+    // 0.58.0 S3: the batch reads the stored claims and the ref's history once (`SealBatchPlan::open`), and this check, the fold below and
+    // every per-claim check in the loop read those sets, not the containers again.
+    let mut plan = SealBatchPlan::open(&layout, &canonical_ref).map_err(|err| err.to_string())?;
+    plan.require_parents_reached(&layout, &ordered)
         .map_err(|err| err.to_string())?;
 
     // 0.58.0 S2b: the batch is folded once, here, before anything is written -- the pre-batch state derived once, each claim's patches
     // applied to it in order. The in-the-way check below judges the state it ends in, and the loop seals each claim with the root it
     // produced; a claim it could not fold is sealed from disk, as before.
-    let mut plan = plan_seal_batch(&layout, &canonical_ref, &ordered);
+    plan.fold(&layout, &ordered);
 
     // Steps 1-2: the clean check and the pre-write in-the-way check, once, before the first
     // claim's first write -- only when `canonical_ref` is the current branch, and only when there

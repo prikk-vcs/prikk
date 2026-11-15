@@ -1,0 +1,19 @@
+== non-commuting
+exit 0
+stdout:
+claim c993ceaada7dbc436a26393217bcccd6c16c60c70452c8f616c471a03708a00f: sealed 3 patch(es) into heads/main
+  block id: dcce8b2689e0bab7a748ce64c07fc0baad5bc9b34fb6153a499f87e902fcddcc
+  heads/main RefState: 59b36380ed42e2d84cd7f5b92ca8d991aad6d141980fbb2fd1d88684d0b33a70
+  claim signature: Sound (dc67-test-maintainer)
+claim 0f6731ebc563129a843318b2a0f55605abf1c37377a101fcca5cc701840d65be: sealed 3 patch(es) into heads/main
+  block id: 30d2bdb28f6664c43f21e7ea187ea72c04c5f65a59ba976415b261838e748692
+  heads/main RefState: b80a5175599a38eb4466e78a7b612a8d842fd0d963b77c73e4215dea3adf07fa
+  claim signature: Sound (dc67-test-maintainer)
+materialized into the worktree: files written: 2, unchanged: 0, deleted: 0
+
+stderr:
+
+log.sha256 9efd65c4c2967f30a928c45e3d7a12bfc3ff2264585d48066a196c78301937ea
+pointer-index.sha256 aebcf5c8a482b93867c5d680bc8674da3b36cf495d675fc852bab9590f8dcdb3
+log-json.sha256 df3553c861d61d1505ca499a7deba43abc8ecd9f9074fa11798de4a659e6c412
+verify.exit 0

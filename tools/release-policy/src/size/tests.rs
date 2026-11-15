@@ -419,7 +419,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.57.0 S5d added `verify/unreached_content.rs` (the one count line for unreached content): 182 -> 183.
     // 0.58.0 P2a added `foundation/fsutil/anchored/held_directories.rs` (the table of held directories on `MutationRoot`): 183 -> 184.
     // 0.58.0 S2b added `block_state/batch_fold.rs` (the batch fold of `sync seal`, split out of `block_state.rs`, which it would have pushed past 1,200 lines): 184 -> 185.
-    assert_eq!(store.production_files, 185);
+    // 0.58.0 S3 added `seal_from_accepted/batch.rs` (the batch plan of `sync seal`, split out of `seal_from_accepted.rs` for the same limit): 185 -> 186.
+    assert_eq!(store.production_files, 186);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

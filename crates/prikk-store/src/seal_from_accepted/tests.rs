@@ -1280,6 +1280,37 @@ fn s2a_a_ref_pointing_at_a_missing_ref_state_refuses_as_an_incomplete_publicatio
     Ok(())
 }
 
+/// A `claim_count`-long chain of single-patch claims (each naming the previous as its parent) over `base_fixture`'s repository.
+fn chained_batch_fixture(name: &str, claim_count: usize) -> Result<(BaseFixture, Vec<ObjectId>)> {
+    let fixture = base_fixture(name)?;
+    let author = author_signer(0x70)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let mut claims = Vec::new();
+    let mut previous_block = None;
+    for index in 0..claim_count {
+        let blob = write_blob(&mut objects, format!("file {index}\n").as_bytes())?;
+        let patch = write_create_file_patch(
+            &mut objects,
+            &author,
+            &format!("f{index}.txt"),
+            0x71_u8.wrapping_add(u8::try_from(index % 100).unwrap_or(0)),
+            blob,
+        )?;
+        let mut block = [0xB0_u8; 32];
+        block[..8].copy_from_slice(&u64::try_from(index).unwrap_or(0).to_be_bytes());
+        let block_id = ObjectId::from_bytes(block);
+        claims.push(write_claim_with_parents(
+            &mut objects,
+            &fixture.signer,
+            block_id,
+            vec![patch],
+            previous_block.into_iter().collect(),
+        )?);
+        previous_block = Some(block_id);
+    }
+    Ok((fixture, claims))
+}
+
 /// 0.58.0 S2b, "one fold": a batch of chained claims is derived **once** (the pre-batch state), however many claims it seals, and it
 /// seals the same chain. The count is of `derive_candidate` calls on this thread. Before the fold each claim derived from its parent
 /// (and the in-the-way simulation derived the grown list again for every claim): N claims made N or more calls.
@@ -1341,5 +1372,119 @@ fn s2b_a_batch_of_chained_claims_is_derived_once() -> Result<()> {
         drop(lock);
         cleanup(&fixture.layout);
     }
+    Ok(())
+}
+
+/// 0.58.0 S3: a chained batch reads the stored claims **once** and walks the ref's history **once**, however many claims it seals.
+/// Before S3 each claim enumerated the claim container two or three times (the ambiguity check, the parent check, the plan's mirror) and
+/// walked the history twice. The counts are of whole-container enumerations and history walks on this thread.
+#[test]
+fn s3_a_batch_reads_the_claims_and_the_history_once() -> Result<()> {
+    let (fixture, claims) = chained_batch_fixture("s3-reads-once", 6)?;
+    let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+    let before = super::batch_reads_for_test();
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    plan.require_parents_reached(&fixture.layout, &claims)?;
+    plan.fold(&fixture.layout, &claims);
+    for claim in &claims {
+        let outcome = super::seal_from_accepted_claim_in_batch(
+            &fixture.layout,
+            &lock,
+            TARGET_REF,
+            *claim,
+            &fixture.signer,
+            &mut plan,
+        )?;
+        assert!(
+            matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }),
+            "{outcome:?}"
+        );
+    }
+    let after = super::batch_reads_for_test();
+    assert_eq!(
+        (after.0 - before.0, after.1 - before.1),
+        (1, 1),
+        "one enumeration of the stored claims and one walk of the history, for {} claims",
+        claims.len()
+    );
+    drop(lock);
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// 0.58.0 S3, rule 1: a claim stored **mid-batch** is seen by the next claim's checks, as a per-claim enumeration saw it. `sync accept`
+/// cannot add one while a batch holds the active lock, but `sync build` stores claims for the repository's own blocks under the
+/// object-store lock alone. Here a claim that names the second claim's patches in the other order is stored after the first claim is
+/// sealed: the second claim must refuse as ambiguous (the claim container changed, so the batch re-read it), at that claim, with the
+/// first claim's seal kept.
+#[test]
+fn s3_a_claim_stored_mid_batch_is_seen_by_the_next_claim() -> Result<()> {
+    let fixture = base_fixture("s3-mid-batch-claim")?;
+    let author = author_signer(0x80)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let blob_a = write_blob(&mut objects, b"a\n")?;
+    let blob_b = write_blob(&mut objects, b"b\n")?;
+    let blob_c = write_blob(&mut objects, b"c\n")?;
+    let first = write_create_file_patch(&mut objects, &author, "first.txt", 0x81, blob_a)?;
+    let second_a = write_create_file_patch(&mut objects, &author, "second_a.txt", 0x82, blob_b)?;
+    let second_b = write_create_file_patch(&mut objects, &author, "second_b.txt", 0x83, blob_c)?;
+    let first_block = ObjectId::from_bytes([0xC1; 32]);
+    let second_block = ObjectId::from_bytes([0xC2; 32]);
+    let first_claim = write_claim(&mut objects, &fixture.signer, first_block, vec![first])?;
+    let second_claim = write_claim_with_parents(
+        &mut objects,
+        &fixture.signer,
+        second_block,
+        vec![second_a, second_b],
+        vec![first_block],
+    )?;
+    let claims = vec![first_claim, second_claim];
+
+    let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    plan.require_parents_reached(&fixture.layout, &claims)?;
+    plan.fold(&fixture.layout, &claims);
+    let sealed = super::seal_from_accepted_claim_in_batch(
+        &fixture.layout,
+        &lock,
+        TARGET_REF,
+        first_claim,
+        &fixture.signer,
+        &mut plan,
+    )?;
+    assert!(matches!(sealed, SealFromAcceptedOutcome::Sealed { .. }));
+
+    // What a concurrent `sync build` would store: a claim about a local block that holds the second claim's patches in the other order.
+    let _ambiguous = write_claim(
+        &mut objects,
+        &fixture.signer,
+        ObjectId::from_bytes([0xC3; 32]),
+        vec![second_b, second_a],
+    )?;
+
+    let refused = super::seal_from_accepted_claim_in_batch(
+        &fixture.layout,
+        &lock,
+        TARGET_REF,
+        second_claim,
+        &fixture.signer,
+        &mut plan,
+    )
+    .err()
+    .ok_or_else(|| {
+        PrikkError::Integrity("the mid-batch claim must refuse the second claim".to_string())
+    })?;
+    assert!(
+        refused
+            .to_string()
+            .contains("disagree on their relative order"),
+        "{refused}"
+    );
+    assert!(
+        current_tip(&fixture.layout)?.is_some(),
+        "the first claim's seal is kept"
+    );
+    drop(lock);
+    cleanup(&fixture.layout);
     Ok(())
 }

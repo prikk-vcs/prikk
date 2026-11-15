@@ -23,7 +23,8 @@
 //! **The shapes:** text edits; large binaries (4 blocks of 64 KiB); a merge in the history; renames; several refs (the same claims
 //! sealed onto two branches); a received checkpoint (a receiver pre-filled by `bundle import --adopt` of 66 blocks, then 2 more by sync);
 //! a mid-batch refusal (a divergent claim at position 2); multi-patch claims (three blocks of three queued commits each, so a claim
-//! names several patches and their order matters).
+//! names several patches and their order matters); non-commuting claims (0.58.0 S3: a claim that creates a file and edits it twice, with
+//! a second claim after it, so a patch order other than the claim's own cannot give the same state).
 //!
 //! **The refusal checklist `sync seal` keeps (S1 §3; S2b must keep every row, with the same message at the same claim; it may fire
 //! earlier, never later).** Per claim, `seal_from_accepted.rs` (line numbers at `cb1857d6`), and where each is held:
@@ -205,7 +206,7 @@ fn replay(shape: &str) -> String {
             .collect()
     };
     match shape {
-        "text-edits" | "large-binaries" | "merge" | "renames" | "multi-patch" => {
+        "text-edits" | "large-binaries" | "merge" | "renames" | "multi-patch" | "non-commuting" => {
             let claims = accept_all(&receiver, &artifacts(&["artifact"]));
             record_run(&receiver, shape, &seal(&receiver, "heads/main", &claims))
         }
@@ -252,6 +253,7 @@ const SHAPES: &[&str] = &[
     "received-checkpoint",
     "mid-batch-refusal",
     "multi-patch",
+    "non-commuting",
 ];
 
 /// The corpus: every shape replays to the recorded bytes. **Do not regenerate the fixture to make a build pass.**
@@ -894,4 +896,74 @@ fn crash_row5_with_a_file_in_the_way_refuses_and_names_the_way_out() {
         String::from_utf8_lossy(&status.stdout).contains("interrupted materialization"),
         "the marker is still set: the interrupted run is still unfinished"
     );
+}
+
+/// **Adds the ninth shape only** (0.58.0 S3; the S2b review, ruling 1): a claim whose patches do not commute -- it creates a file and then
+/// edits it twice, in one claim -- with a second claim after it. The other eight shapes' fixtures are not touched.
+///
+/// **It must be recorded by a binary built before the fold**, never by the code it judges:
+/// `CARGO_BIN_EXE_prikk=<the binary at cb1857d6> cargo test -p prikk --test sync_and_exchange -- --ignored add_non_commuting_shape`
+/// (the test harness runs the binary that variable names, for the sender's commands and for the receiver's `sync accept` and `sync
+/// seal` that `expected` records). Like `regenerate_corpus` it needs the architect's ruling to run again.
+#[test]
+#[ignore = "recording the S3 shape needs a binary built before the fold and the architect's ruling"]
+fn add_non_commuting_shape() {
+    ensure_fixture_dir();
+    let nc = sender();
+    let mut body = String::new();
+    // Claim 1: three queued commits sealed once -- create, edit, edit.
+    for (index, line) in ["one", "two", "three"].iter().enumerate() {
+        body.push_str(line);
+        body.push('\n');
+        std::fs::write(nc.join("n.txt"), &body).unwrap();
+        support::ok(
+            &support::commit(&nc, "heads/main", &format!("n{index}")),
+            "commit",
+        );
+    }
+    support::ok(&support::seal(&nc, "heads/main"), "seal");
+    // Claim 2: an edit of the first file, then a new file and an edit of it.
+    body.push_str("four\n");
+    std::fs::write(nc.join("n.txt"), &body).unwrap();
+    support::ok(&support::commit(&nc, "heads/main", "n3"), "commit");
+    std::fs::write(nc.join("m.txt"), "m one\n").unwrap();
+    support::ok(&support::commit(&nc, "heads/main", "m0"), "commit");
+    std::fs::write(nc.join("m.txt"), "m one\nm two\n").unwrap();
+    support::ok(&support::commit(&nc, "heads/main", "m1"), "commit");
+    support::ok(&support::seal(&nc, "heads/main"), "seal");
+    build_artifact(
+        &nc,
+        &empty_receiver(),
+        "heads/main",
+        &fixture("non-commuting.artifact"),
+    );
+    std::fs::write(fixture("non-commuting.expected"), replay("non-commuting")).unwrap();
+}
+
+/// The plan takes every claim of these shapes (0.58.0 S3, the S2b review's ruling 1). Without it a fold that fails -- for instance one that
+/// applies a claim's patches in the wrong order -- is **invisible to the corpus**: the plan abandons itself at the first claim it cannot
+/// fold, every claim then seals from disk exactly as before, and the output is byte-identical. The corpus holds the *output*; this holds
+/// that the fold *took* the claims, including a claim whose patches do not commute (create, edit, edit), where applying them in any other
+/// order cannot fold.
+#[test]
+fn the_plan_folds_every_claim_of_these_shapes() {
+    for (shape, claims_expected) in [("text-edits", 8), ("multi-patch", 3), ("non-commuting", 2)] {
+        let receiver = fresh_receiver(&format!("s2a-plan-{shape}"));
+        let claims_text = accept_all(&receiver, &[fixture(&format!("{shape}.artifact"))]);
+        let claims: Vec<prikk_object::ObjectId> = claims_text
+            .lines()
+            .map(|line| line.trim().parse().unwrap())
+            .collect();
+        let layout = prikk_store::RepositoryLayout::new(&receiver).unwrap();
+        // The batch's own order, as `sync seal --claims` derives it from the claims' signed parent relationships.
+        let snapshot = prikk_store::ObjectReadSnapshot::open(&layout).unwrap();
+        let ordered = prikk_store::order_claims_for_sealing(&snapshot, &claims).unwrap();
+        let plan = prikk_store::plan_seal_batch(&layout, "heads/main", &ordered);
+        assert_eq!(
+            plan.planned_claims(),
+            claims_expected,
+            "{shape}: the plan folds every claim ({} in the batch)",
+            claims.len()
+        );
+    }
 }

@@ -381,8 +381,8 @@ pub use way_out::{SOUND_COPY, WayOut, ways_out};
 pub use lock_holder::lock_body_naming_pid_for_test;
 pub use seal_from_accepted::{
     SealBatchPlan, SealFromAcceptedOutcome, plan_seal_batch,
-    require_nothing_in_the_way_for_seal_batch, require_seal_batch_parents_reached,
-    seal_from_accepted_claim, seal_from_accepted_claim_in_batch,
+    require_nothing_in_the_way_for_seal_batch, seal_from_accepted_claim,
+    seal_from_accepted_claim_in_batch,
 };
 pub use show::{
     PatchState, ShowBlobContent, ShowDeletePreimage, ShowOperation, ShowOperationContent,

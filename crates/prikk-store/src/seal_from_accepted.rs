@@ -77,15 +77,11 @@ use crate::lifecycle_cache::replay::LifecycleReplayError;
 use crate::lock::ActiveLock;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::merge::evidence::ancestors_inclusive;
-use crate::merge::execute::candidate_replay_manifest_wanting;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
 use crate::recognition_claim::{ClaimSignatureVerification, verify_claim_signature};
 use crate::refs::{RefPublication, RefStore, validate_local_branch_ref};
 use crate::trust::{GatedOperation, load_maintainer_trust_policy_or_empty, verify_signer_trusted};
 use crate::wal::Wal;
-use crate::worktree_materialize::{
-    PendingCurrentBranchMaterialization, require_nothing_in_the_way,
-};
 
 /// The result of [`seal_from_accepted_claim`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +191,7 @@ fn seal_from_accepted_claim_impl(
     ref_name: &str,
     claim_id: ObjectId,
     signer: &impl MaintainerSigner,
-    plan: Option<&mut SealBatchPlan>,
+    mut plan: Option<&mut SealBatchPlan>,
 ) -> Result<SealFromAcceptedOutcome> {
     layout.require_current_format()?;
     let canonical_ref = validate_local_branch_ref(ref_name)?;
@@ -247,7 +243,16 @@ fn seal_from_accepted_claim_impl(
         let ref_store = RefStore::new(layout.clone());
         let tip = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?
             .map(|tip| tip.target_block_id);
-        let history = ref_history(&read_snapshot, tip)?;
+        // 0.58.0 S3: a batch holds the ref's history already, ending at the tip it expects; a different tip (something moved the ref)
+        // is walked here, as every claim used to be.
+        let walked;
+        let history = match plan.as_deref().and_then(|plan| plan.history_at(tip)) {
+            Some(history) => history,
+            None => {
+                walked = ref_history(&read_snapshot, tip)?;
+                &walked
+            }
+        };
         if claim
             .patch_ids
             .iter()
@@ -263,7 +268,14 @@ fn seal_from_accepted_claim_impl(
     // §3 item 4: if a stored claim overlaps this one's patch set and disagrees on their relative
     // order, refuse rather than guess. Checked only once we know there is real sealing work to do
     // -- ambiguity about an order that will not be applied is moot.
-    refuse_if_order_ambiguous(layout, claim_id, &claim)?;
+    // 0.58.0 S3: the batch's stored claims (re-read only if the claim container changed since it read them), else the container as ever.
+    match plan.as_deref_mut() {
+        Some(plan) if plan.reads.is_some() => {
+            plan.refresh_claims(layout)?;
+            refuse_if_order_ambiguous_among(plan.claims().unwrap_or(&[]), claim_id, &claim)?;
+        }
+        _ => refuse_if_order_ambiguous(layout, claim_id, &claim)?,
+    }
 
     // §6 row 1: sealing requires a locally trusted signer. Checked before any lock or WAL read --
     // an untrusted signer must refuse cheaply, the same fail-fast shape Stage 3 gives its own
@@ -355,40 +367,64 @@ fn seal_from_accepted_claim_impl(
     ref_store.ensure_pointer_index_has_no_tail(&canonical_ref)?;
     let current = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?;
     let parent = current.as_ref().map(|tip| tip.target_block_id);
-    let history = ref_history(&read_snapshot, parent)?;
-    let selected_patch_ids: Vec<ObjectId> = claim
-        .patch_ids
-        .iter()
-        .copied()
-        .filter(|patch_id| !history.patches.contains(patch_id))
-        .collect();
-    if selected_patch_ids.is_empty() {
-        // Another writer sealed it between the first read and the lock: nothing left to do.
-        return Ok(SealFromAcceptedOutcome::AlreadySealed {
-            ref_name: canonical_ref,
-            claim_id,
-        });
-    }
-    // 0.57.0 step 0a: refuse before any write when the claim builds on history this ref's tip
-    // does not reach (see the module doc).
+    // 0.58.0 S3: the batch's history, when it ends at the tip just read; the claims, refreshed if the container changed.
     if !claim.parent_block_ids.is_empty() {
-        let claims = enumerate_stored_claims(layout)?;
-        let by_block = claims_by_block(&claims);
-        for &parent_id in &claim.parent_block_ids {
-            if !parent_reached(&read_snapshot, &by_block, &history, parent_id)? {
-                return Err(parent_not_reached_refusal(
-                    layout,
-                    &read_snapshot,
-                    &ref_store,
-                    &by_block,
-                    &canonical_ref,
-                    parent,
-                    claim_id,
-                    parent_id,
-                ));
-            }
+        if let Some(plan) = plan.as_deref_mut() {
+            plan.refresh_claims(layout)?;
         }
     }
+    let selected_patch_ids: Vec<ObjectId> = {
+        let walked;
+        let history = match plan.as_deref().and_then(|plan| plan.history_at(parent)) {
+            Some(history) => history,
+            None => {
+                walked = ref_history(&read_snapshot, parent)?;
+                &walked
+            }
+        };
+        let selected: Vec<ObjectId> = claim
+            .patch_ids
+            .iter()
+            .copied()
+            .filter(|patch_id| !history.patches.contains(patch_id))
+            .collect();
+        if selected.is_empty() {
+            // Another writer sealed it between the first read and the lock: nothing left to do.
+            return Ok(SealFromAcceptedOutcome::AlreadySealed {
+                ref_name: canonical_ref,
+                claim_id,
+            });
+        }
+        // 0.57.0 step 0a: refuse before any write when the claim builds on history this ref's tip
+        // does not reach (see the module doc).
+        if !claim.parent_block_ids.is_empty() {
+            let enumerated;
+            let claims: &[(ObjectId, RecognitionClaimPayload)] =
+                match plan.as_deref().and_then(SealBatchPlan::claims) {
+                    Some(claims) => claims,
+                    None => {
+                        enumerated = enumerate_stored_claims(layout)?;
+                        &enumerated
+                    }
+                };
+            let by_block = claims_by_block(claims);
+            for &parent_id in &claim.parent_block_ids {
+                if !parent_reached(&read_snapshot, &by_block, history, parent_id)? {
+                    return Err(parent_not_reached_refusal(
+                        layout,
+                        &read_snapshot,
+                        &ref_store,
+                        &by_block,
+                        &canonical_ref,
+                        parent,
+                        claim_id,
+                        parent_id,
+                    ));
+                }
+            }
+        }
+        selected
+    };
 
     // §4 and Phase D: seal the new Block under the receiver's own key, carrying the claim's own
     // order restricted to the unsealed subset, verbatim (D7, §6 row 11). The derivation is the last
@@ -400,7 +436,9 @@ fn seal_from_accepted_claim_impl(
     // 0.58.0 S2b: the root this claim's Block carries is the one the batch's single fold produced, when the plan still holds it (its next
     // step's selection is exactly this claim's) and no checkpoint is due (that Block carries a snapshot of its own state, which the plan
     // does not hold). Otherwise this claim is sealed from disk exactly as it was before, with the same checks and the same messages.
-    let planned = plan.and_then(|plan| plan.take_step_for(&selected_patch_ids));
+    let planned = plan
+        .as_deref_mut()
+        .and_then(|plan| plan.take_step_for(&selected_patch_ids));
     let folded_block = match planned {
         Some((root, verified)) => crate::block_state::batch_fold::seal_block_with_folded_root(
             layout,
@@ -491,6 +529,10 @@ fn seal_from_accepted_claim_impl(
         },
     )?;
     crash_point("after-publish");
+    // 0.58.0 S3: the Block just published is the ref's tip now, and its patches and the Block itself join the batch's history.
+    if let Some(plan) = plan {
+        plan.note_published(block_id, &selected_patch_ids);
+    }
     drop(owned_lock);
 
     Ok(SealFromAcceptedOutcome::Sealed {
@@ -532,209 +574,8 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
     }
 }
 
-/// The batch, folded once (0.58.0 S2b; RFC 159's mechanism with the batch's running state as an in-memory anchor). Built before the
-/// first write by [`plan_seal_batch`]: the pre-batch state is derived once, and each claim's patches are applied to that one state in
-/// the batch's order, producing the state root each claim's Block will carry and, at the end, the state the batch will publish -- the
-/// target of the pre-write in-the-way check ([`require_nothing_in_the_way_for_seal_batch`]). The real loop
-/// ([`seal_from_accepted_claim_in_batch`]) then consumes it claim by claim, so the batch is derived **once**, not once for the check and
-/// again per claim.
-///
-/// **A plan never refuses and never decides.** It stops, with no opinion, at the first claim it cannot fold, or whose selection it
-/// cannot reproduce; every claim from there on is sealed from disk exactly as before this round, with the same checks and the same
-/// messages. The real loop also compares each claim's own selection with the plan's, and abandons the plan at the first difference.
-pub struct SealBatchPlan {
-    steps: std::collections::VecDeque<PlannedStep>,
-    /// The state after the last claim folded (its entries and text cache); `None` when no claim folded. The in-the-way check turns it
-    /// into the replay manifest it judges, only when it runs: that manifest holds every file's bytes, which a batch onto a branch that is
-    /// not the current one never needs.
-    final_state: Option<(
-        Vec<crate::state_root::StateRootEntry>,
-        crate::lifecycle_cache::replay::TextCache,
-    )>,
-    /// Blocks the starting derivation verified, recorded with the first Block this plan seals.
-    verified: Option<Vec<ObjectId>>,
-}
-
-struct PlannedStep {
-    /// The patches this claim seals (its own, less what the ref's history already holds), in the claim's order.
-    selected: Vec<ObjectId>,
-    /// The root of the state after them, and (for a checkpoint) what its snapshot is written from.
-    folded: crate::block_state::batch_fold::FoldedStep,
-}
-
-impl SealBatchPlan {
-    fn empty() -> Self {
-        Self {
-            steps: std::collections::VecDeque::new(),
-            final_state: None,
-            verified: None,
-        }
-    }
-
-    /// The planned root for the claim whose own selection is `selected`, if the plan is still the plan: the next step's selection must be
-    /// exactly this one. Any other selection abandons the plan (every claim after it seals from disk).
-    fn take_step_for(
-        &mut self,
-        selected: &[ObjectId],
-    ) -> Option<(crate::block_state::batch_fold::FoldedStep, Vec<ObjectId>)> {
-        let matches = self
-            .steps
-            .front()
-            .is_some_and(|step| step.selected == selected);
-        if !matches {
-            self.steps.clear();
-            return None;
-        }
-        let step = self.steps.pop_front()?;
-        Some((step.folded, self.verified.take().unwrap_or_default()))
-    }
-
-    /// How many claims are still planned (for the controls).
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn planned_claims(&self) -> usize {
-        self.steps.len()
-    }
-}
-
-/// Fold the batch once, before anything is written. See [`SealBatchPlan`]. Stops with no opinion at the first doubt.
-#[must_use]
-pub fn plan_seal_batch(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    ordered_claim_ids: &[ObjectId],
-) -> SealBatchPlan {
-    plan_seal_batch_inner(layout, ref_name, ordered_claim_ids).unwrap_or_else(SealBatchPlan::empty)
-}
-
-fn plan_seal_batch_inner(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    ordered_claim_ids: &[ObjectId],
-) -> Option<SealBatchPlan> {
-    let canonical_ref = validate_local_branch_ref(ref_name).ok()?;
-    let read_snapshot = ObjectReadSnapshot::open(layout).ok()?;
-    let ref_store = RefStore::new(layout.clone());
-    let tip = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)
-        .ok()?
-        .map(|tip| tip.target_block_id);
-    // The ref's own history, as the real loop selects against it (`seal_from_accepted_claim_impl`): a claim's patches the history
-    // already holds are skipped, and each claim's selection joins the history for the claims after it.
-    let mut history = ref_history(&read_snapshot, tip).ok()?;
-    let mut fold = crate::block_state::batch_fold::BatchFold::begin(
-        layout,
-        &read_snapshot,
-        tip,
-        StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
-    )
-    .ok()?;
-    let verified = fold.verified().to_vec();
-    // Which claims' Blocks are checkpoints (they carry a snapshot of their own state, so their fold keeps its entries): tracked from the
-    // starting tip as `checkpoint_due` reads it -- the distance back to the nearest snapshot, `None` once none lies within the cadence.
-    let mut snapshot_distance =
-        crate::block_state::batch_fold::nearest_snapshot_within_cadence(&read_snapshot, tip)
-            .ok()?;
-    let mut steps = std::collections::VecDeque::new();
-    for &claim_id in ordered_claim_ids {
-        let Some(claim_envelope) = read_snapshot
-            .read_typed(claim_id, ObjectType::RecognitionClaim)
-            .ok()?
-        else {
-            break;
-        };
-        let Ok(claim) =
-            RecognitionClaimPayload::decode_canonical(&claim_envelope.canonical_payload)
-        else {
-            break;
-        };
-        // A claim naming a patch this repository does not hold is the real loop's refusal to make, at that claim.
-        if !claim
-            .patch_ids
-            .iter()
-            .all(|patch_id| read_snapshot.contains_object(ObjectType::Patch, *patch_id))
-        {
-            break;
-        }
-        let selected: Vec<ObjectId> = claim
-            .patch_ids
-            .iter()
-            .copied()
-            .filter(|patch_id| !history.patches.contains(patch_id))
-            .collect();
-        if selected.is_empty() {
-            // `AlreadySealed`: no Block, no step.
-            continue;
-        }
-        // The real loop refuses an order-ambiguous claim before it derives anything; the plan stops where it would.
-        if refuse_if_order_ambiguous(layout, claim_id, &claim).is_err() {
-            break;
-        }
-        let checkpoint = snapshot_distance.is_none();
-        let Ok(folded) = fold.fold(&read_snapshot, &selected, checkpoint) else {
-            break;
-        };
-        // The Block this claim will seal becomes the new tip: it carries a snapshot if it is a checkpoint, else the nearest snapshot is one
-        // block further back (and out of reach once it is the cadence away).
-        snapshot_distance = if checkpoint {
-            Some(1)
-        } else {
-            snapshot_distance
-                .map(|distance| distance + 1)
-                .filter(|distance| *distance < crate::snapshot::CHECKPOINT_CADENCE)
-        };
-        history.patches.extend(selected.iter().copied());
-        steps.push_back(PlannedStep { selected, folded });
-    }
-    let final_state = if steps.is_empty() {
-        None
-    } else {
-        Some(fold.into_last_state())
-    };
-    Some(SealBatchPlan {
-        steps,
-        final_state,
-        verified: Some(verified),
-    })
-}
-
-/// 0.56.0 step W3c-4 / 0.58.0 S2b: the pre-write in-the-way check for a whole `sync seal` batch onto the current branch, called once from
-/// `prikk-cli`'s `run_seal` after [`crate::require_worktree_clean_and_capture`] and before the batch's first claim is sealed. It judges
-/// the state the batch will publish, which the plan ([`plan_seal_batch`]) folded once: the state after the last claim that folded, the
-/// exact tip the real loop will publish and then materialize. If no claim folded there is no state to check, and this skips itself.
-///
-/// **This check only ever *skips itself*, never refuses on its own simulation's behalf.** `sync.rs`'s module doc states §3 as a firm
-/// policy -- "stop at the first failure... no rollback" -- so an earlier claim's valid seal is never pre-empted by a later claim's failure.
-/// A genuine file-in-the-way collision is orthogonal to claim-vs-claim ordering (the worktree is not party to any claim), so refusing on
-/// that basis never pre-empts a legitimate earlier seal. Before 0.58.0 this simulated the batch itself, re-deriving the whole grown list
-/// for every claim; it now reads the plan's one fold.
-pub fn require_nothing_in_the_way_for_seal_batch(
-    layout: &RepositoryLayout,
-    pending: &PendingCurrentBranchMaterialization,
-    plan: &SealBatchPlan,
-    action: &str,
-) -> Result<()> {
-    let Some((entries, text_cache)) = plan.final_state.as_ref() else {
-        return Ok(());
-    };
-    // The manifest holds every file's bytes, so it is built here, when the check runs, and not when the plan is made. A fold the manifest
-    // cannot be built from (a symlink in the state) has no opinion, as the simulation had.
-    let Ok(read_snapshot) = ObjectReadSnapshot::open(layout) else {
-        return Ok(());
-    };
-    // Bytes only where the worktree already holds a regular file: that is the only place `plan_materialization` compares them, and this
-    // check discards its plan. A path with nothing in the worktree (a fresh receiver's whole tree) reads no blob.
-    let worktree = layout.worktree_mutation_root();
-    let Ok(target_manifest) =
-        candidate_replay_manifest_wanting(&read_snapshot, entries.clone(), text_cache, |path| {
-            matches!(
-                crate::foundation::fsutil::inspect_entry(worktree, std::path::Path::new(path)),
-                Ok(Some(crate::foundation::fsutil::EntryKind::Regular)) | Err(_)
-            )
-        })
-    else {
-        return Ok(());
-    };
-    require_nothing_in_the_way(layout, pending, &target_manifest, action, None)
-}
+mod batch;
+pub use batch::{SealBatchPlan, plan_seal_batch, require_nothing_in_the_way_for_seal_batch};
 
 struct CurrentTip {
     ref_state_id: ObjectId,
@@ -807,8 +648,22 @@ fn refuse_if_order_ambiguous(
     selected_claim_id: ObjectId,
     selected: &RecognitionClaimPayload,
 ) -> Result<()> {
+    refuse_if_order_ambiguous_among(
+        &enumerate_stored_claims(layout)?,
+        selected_claim_id,
+        selected,
+    )
+}
+
+/// [`refuse_if_order_ambiguous`] against a set of stored claims the caller already holds (a batch reads them once, 0.58.0 S3).
+fn refuse_if_order_ambiguous_among(
+    claims: &[(ObjectId, RecognitionClaimPayload)],
+    selected_claim_id: ObjectId,
+    selected: &RecognitionClaimPayload,
+) -> Result<()> {
     let selected_set: BTreeSet<ObjectId> = selected.patch_ids.iter().copied().collect();
-    for (other_id, other) in enumerate_stored_claims(layout)? {
+    for (other_id, other) in claims {
+        let other_id = *other_id;
         if other_id == selected_claim_id {
             continue;
         }
@@ -864,6 +719,8 @@ struct RefHistory {
 }
 
 fn ref_history(object_store: &impl ObjectReader, tip: Option<ObjectId>) -> Result<RefHistory> {
+    #[cfg(test)]
+    BATCH_READS.with(|reads| reads.set((reads.get().0, reads.get().1 + 1)));
     let mut history = RefHistory {
         blocks: BTreeSet::new(),
         patches: BTreeSet::new(),
@@ -1093,68 +950,24 @@ fn local_branch_reaching(
     None
 }
 
-/// Before a `sync seal` batch writes anything: simulate the batch against `ref_name`'s history,
-/// claim by claim in order, each claim's patches joining the history for the claims after it, and
-/// refuse the whole batch -- with nothing written -- at the first claim that builds on a block the
-/// history does not reach (0.57.0 step 0a). A claim the real loop would refuse for another reason
-/// (it does not exist, a patch is missing) ends the simulation with no opinion: the loop reports
-/// that, as it always has. The per-claim check inside the seal itself stays, as the backstop for a
-/// claim this simulation could not foresee.
-pub fn require_seal_batch_parents_reached(
-    layout: &RepositoryLayout,
-    ref_name: &str,
-    ordered_claim_ids: &[ObjectId],
-) -> Result<()> {
-    let canonical_ref = validate_local_branch_ref(ref_name)?;
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
-    let tip =
-        read_current_tip(&object_store, &ref_store, &canonical_ref)?.map(|tip| tip.target_block_id);
-    let mut history = ref_history(&object_store, tip)?;
-    let claims = enumerate_stored_claims(layout)?;
-    let by_block = claims_by_block(&claims);
-    for claim_id in ordered_claim_ids {
-        let Some((_, claim)) = claims.iter().find(|(id, _)| id == claim_id) else {
-            return Ok(());
-        };
-        if !claim
-            .patch_ids
-            .iter()
-            .all(|id| object_store.contains_object(ObjectType::Patch, *id))
-        {
-            return Ok(());
-        }
-        let selected: Vec<ObjectId> = claim
-            .patch_ids
-            .iter()
-            .copied()
-            .filter(|id| !history.patches.contains(id))
-            .collect();
-        if selected.is_empty() {
-            continue;
-        }
-        for &parent_id in &claim.parent_block_ids {
-            if !parent_reached(&object_store, &by_block, &history, parent_id)? {
-                return Err(parent_not_reached_refusal(
-                    layout,
-                    &object_store,
-                    &ref_store,
-                    &by_block,
-                    &canonical_ref,
-                    tip,
-                    *claim_id,
-                    parent_id,
-                ));
-            }
-        }
-        history.patches.extend(selected);
-    }
-    Ok(())
+#[cfg(test)]
+thread_local! {
+    /// `(whole-container enumerations of the stored claims, walks of a ref's history)` on this thread: the controls that hold "a batch
+    /// reads each once" (0.58.0 S3) count them.
+    static BATCH_READS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// `(claim enumerations, history walks)` on this thread so far (`cfg(test)`).
+#[cfg(test)]
+pub(crate) fn batch_reads_for_test() -> (usize, usize) {
+    BATCH_READS.with(std::cell::Cell::get)
 }
 
 fn enumerate_stored_claims(
     layout: &RepositoryLayout,
 ) -> Result<Vec<(ObjectId, RecognitionClaimPayload)>> {
+    #[cfg(test)]
+    BATCH_READS.with(|reads| reads.set((reads.get().0 + 1, reads.get().1)));
     debug_assert!(
         persisted_object_types().contains(&ObjectType::RecognitionClaim),
         "RecognitionClaim must remain a persisted, containerized object type"
