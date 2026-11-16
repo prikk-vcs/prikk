@@ -223,6 +223,15 @@ fn verify_and_doctor_see_the_difference_between_in_flight_and_interrupted() {
         "{text}"
     );
     assert!(!text.contains("POINTER-LEADS-LOG"), "{text}");
+    // 0.58.0 R: the information finding is printed and is not counted among the issues.
+    assert!(
+        text.contains("ref publication issues: 0"),
+        "an information finding is not an issue: {text}"
+    );
+    assert!(
+        text.contains("ref-publication [PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT]"),
+        "and its line is printed: {text}"
+    );
     let doctor = support::prikk(&repo).arg("doctor").output().unwrap();
     let doctor_text = stdout(&doctor);
     assert_eq!(doctor.status.code(), Some(0), "{doctor_text}");
@@ -242,6 +251,10 @@ fn verify_and_doctor_see_the_difference_between_in_flight_and_interrupted() {
         "{text}"
     );
     assert!(!text.contains("PUBLICATION-IN-FLIGHT"), "{text}");
+    assert!(
+        text.contains("ref publication issues: 1"),
+        "a finding is counted: {text}"
+    );
     assert!(
         text.contains("the lock it took is still on disk")
             && text.contains("does not appear to be running"),

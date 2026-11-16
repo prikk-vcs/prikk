@@ -702,9 +702,14 @@ pub(crate) fn print_verify_report(
         "checked ref-log records: {}",
         format_count(report.checked_ref_log_records)
     );
+    // 0.58.0 R: an information finding (a publication still in flight) is printed below and is not an issue to count.
     println!(
         "ref publication issues: {}",
-        report.ref_publication_issues.len()
+        report
+            .ref_publication_issues
+            .iter()
+            .filter(|issue| !issue.is_information())
+            .count()
     );
     for issue in &report.ref_publication_issues {
         println!("ref-publication [{}]: {}", issue.code, issue.message);

@@ -34,6 +34,15 @@ pub struct RefPublicationIssue {
     pub blocking: bool,
 }
 
+impl RefPublicationIssue {
+    /// Whether this is information, not a finding: a state that asks nothing of the user (0.58.0 R: `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT`, a
+    /// publication whose publisher is still running). The report prints it and does not count it among the issues.
+    #[must_use]
+    pub fn is_information(&self) -> bool {
+        self.code == super::in_flight::IN_FLIGHT_CODE
+    }
+}
+
 /// Outcome of attempting to classify one ref by name (DC-95 Stage 2 Level 2), after its pointer
 /// and/or log file (whichever exist) were themselves read. No `NotEvaluated` distinct from
 /// `Failed`: unlike Level 1's stages or Phase B's blocks, a ref has no *peer* ref it depends on --
