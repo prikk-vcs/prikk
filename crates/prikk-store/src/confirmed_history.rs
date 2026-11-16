@@ -66,9 +66,22 @@ fn record_lineage(
     }
     let walked = confirm_lineage(reader, tip);
     record_verified_blocks(layout, walked.confirmed);
+    #[cfg(feature = "test-support")]
+    if let Some(note) = note_forced_for_test(tip) {
+        return Some(note);
+    }
     walked
         .failure
         .map(|(block_id, _)| AdoptedHistoryNote { block_id })
+}
+
+/// 0.58.0 P3m's test hook for a command run as a binary: with `PRIKK_TEST_ADOPTED_HISTORY_NOTE` set (and `prikk-store`'s `test-support`
+/// feature, which no shipped build enables), an adopting import's walk returns its note, for the tip, as if that Block had not replayed. No
+/// command can author a Block with a wrong root, so this is how the one line a failing walk prints is held end to end.
+#[cfg(feature = "test-support")]
+fn note_forced_for_test(tip: ObjectId) -> Option<AdoptedHistoryNote> {
+    std::env::var_os("PRIKK_TEST_ADOPTED_HISTORY_NOTE")?;
+    Some(AdoptedHistoryNote { block_id: tip })
 }
 
 fn tip_block(reader: &impl ObjectReader, ref_state_id: ObjectId) -> Result<ObjectId> {

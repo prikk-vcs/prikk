@@ -1,7 +1,9 @@
 //! 0.58.0 R2 (i): `archive import --adopt` and `bundle import --adopt` record, in `verify`'s record, the Blocks they confirmed by
 //! replay -- exactly the adopted branch's lineage -- so a receiver can anchor from its first command. A landing under `remotes/`
 //! (nothing adopted) records nothing. The walk's failure path (a Block that does not replay: one stderr line, exit 0, the Blocks before
-//! it recorded) is held by `prikk-store`'s `confirmed_history` tests, which can write such a Block; no command can.
+//! it recorded) is held by `prikk-store`'s `confirmed_history` tests, which can write such a Block; no command can. The one line itself --
+//! its stderr placement, exit 0, and an unchanged JSON on stdout -- is held through the binary by the last two tests, with
+//! `PRIKK_TEST_ADOPTED_HISTORY_NOTE` (a `test-support` hook that makes the walk return its note).
 //!
 //! The record is `<repo>/.prikk/cache/replay-verified-blocks.v1`: its tail is the 32-byte ids, preceded by their count.
 
@@ -235,4 +237,162 @@ fn a_remotes_landing_records_nothing() {
         "a landing under remotes/ records nothing"
     );
     let _ = std::fs::remove_dir_all(&receiver);
+}
+
+/// The tip Block of a sender's `heads/main`.
+fn tip_of(sender: &Path) -> String {
+    let log = support::prikk(sender)
+        .args(["log", "--format", "json"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&log.stdout).to_string();
+    let marker = "\"block_id\": \"";
+    let at = said.find(marker).expect("a block in the log") + marker.len();
+    said[at..at + 64].to_string()
+}
+
+/// Run an adopting import with the walk forced to return its note.
+fn forced_import(receiver: &Path, args: &[&str]) -> Output {
+    support::prikk(receiver)
+        .env("PRIKK_MAINTAINER_KEY_ID", RECEIVER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&RECEIVER_SEED)),
+        )
+        .env("PRIKK_TEST_ADOPTED_HISTORY_NOTE", "1")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// The one line a history that did not replay prints, end to end. **Red control:** the CLI drops the note and both go red.
+#[test]
+fn a_history_that_did_not_replay_prints_one_stderr_line_and_still_exits_0_for_bundle_import() {
+    let (sender, _blocks) = sender("r2-line-bundle");
+    let tip = tip_of(&sender);
+    let bundle = std::env::temp_dir().join(format!("r2-{}.pbndl", support::unique_suffix()));
+    support::ok(
+        &support::prikk(&sender)
+            .args(["bundle", "export", "--ref", "heads/main", "--output"])
+            .arg(&bundle)
+            .output()
+            .unwrap(),
+        "bundle export",
+    );
+    let line =
+        format!("the imported history did not replay cleanly at block {tip}; run `prikk verify`");
+    let import = |tag: &str, json: bool| {
+        let receiver = support::unique_repo(tag);
+        support::init(&receiver);
+        support::trust_maintainer(&receiver);
+        trust_receiver_key(&receiver);
+        let mut args = vec![
+            "bundle",
+            "import",
+            "--input",
+            bundle.to_str().unwrap(),
+            "--adopt",
+        ];
+        if json {
+            args.extend(["--format", "json"]);
+        }
+        let output = forced_import(&receiver, &args);
+        let _ = std::fs::remove_dir_all(&receiver);
+        output
+    };
+
+    let plain = import("r2-line-bundle-plain", false);
+    assert_eq!(plain.status.code(), Some(0), "{}", text(&plain));
+    let stderr = String::from_utf8_lossy(&plain.stderr).to_string();
+    assert_eq!(
+        stderr.matches(&line).count(),
+        1,
+        "one line, on stderr: {stderr}"
+    );
+    assert!(!String::from_utf8_lossy(&plain.stdout).contains("did not replay"));
+
+    let json = import("r2-line-bundle-json", true);
+    assert_eq!(json.status.code(), Some(0), "{}", text(&json));
+    assert!(
+        String::from_utf8_lossy(&json.stderr).contains(&line),
+        "{}",
+        text(&json)
+    );
+    let stdout = String::from_utf8_lossy(&json.stdout).to_string();
+    assert!(
+        stdout.contains("\"schema_version\": \"bundle-import-report-v1\"")
+            && !stdout.contains("did not replay"),
+        "the JSON on stdout carries no note: {stdout}"
+    );
+    // Unforced, the same import prints nothing of the kind.
+    let receiver = support::unique_repo("r2-line-bundle-clean");
+    support::init(&receiver);
+    support::trust_maintainer(&receiver);
+    trust_receiver_key(&receiver);
+    let clean = as_receiver(
+        &receiver,
+        &[
+            "bundle",
+            "import",
+            "--input",
+            bundle.to_str().unwrap(),
+            "--adopt",
+        ],
+    );
+    assert!(!text(&clean).contains("did not replay"), "{}", text(&clean));
+    let _ = std::fs::remove_dir_all(&receiver);
+}
+
+#[test]
+fn a_history_that_did_not_replay_prints_one_stderr_line_and_still_exits_0_for_archive_import() {
+    let (sender, _blocks) = sender("r2-line-archive");
+    let tip = tip_of(&sender);
+    let archive = std::env::temp_dir().join(format!("r2-{}.parchive", support::unique_suffix()));
+    support::ok(
+        &support::prikk(&sender)
+            .args(["archive", "export"])
+            .arg(&archive)
+            .output()
+            .unwrap(),
+        "archive export",
+    );
+    let line =
+        format!("the imported history did not replay cleanly at block {tip}; run `prikk verify`");
+    let import = |tag: &str, json: bool| {
+        let receiver = support::unique_repo(tag);
+        support::init(&receiver);
+        support::trust_maintainer(&receiver);
+        trust_receiver_key(&receiver);
+        let mut args = vec!["archive", "import", archive.to_str().unwrap(), "--adopt"];
+        if json {
+            args.extend(["--format", "json"]);
+        }
+        let output = forced_import(&receiver, &args);
+        let _ = std::fs::remove_dir_all(&receiver);
+        output
+    };
+
+    let plain = import("r2-line-archive-plain", false);
+    assert_eq!(plain.status.code(), Some(0), "{}", text(&plain));
+    let stderr = String::from_utf8_lossy(&plain.stderr).to_string();
+    assert_eq!(
+        stderr.matches(&line).count(),
+        1,
+        "one line, on stderr: {stderr}"
+    );
+    assert!(!String::from_utf8_lossy(&plain.stdout).contains("did not replay"));
+
+    let json = import("r2-line-archive-json", true);
+    assert_eq!(json.status.code(), Some(0), "{}", text(&json));
+    assert!(
+        String::from_utf8_lossy(&json.stderr).contains(&line),
+        "{}",
+        text(&json)
+    );
+    let stdout = String::from_utf8_lossy(&json.stdout).to_string();
+    assert!(
+        stdout.contains("\"schema_version\": \"prepo-import-report-v1\"")
+            && !stdout.contains("did not replay"),
+        "the JSON on stdout carries no note: {stdout}"
+    );
 }
