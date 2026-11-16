@@ -1910,7 +1910,7 @@ fn current_text_for_node(
     };
     // RFC 136 increment 2c: from the nearest replay-verified anchor when there is one (and it yields a text
     // hashing to the content id this baseline names), otherwise a full replay, as before.
-    crate::lifecycle_cache::materialize_edited_text_anchored(
+    crate::confirmed_history::materialize_edited_text_recording(
         layout,
         object_store,
         baseline_block_id,

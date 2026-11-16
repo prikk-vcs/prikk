@@ -334,6 +334,9 @@ pub struct BundleImportReport {
     pub adopt_reason: Option<String>,
     /// 0.57.0 S1b: set when the adopted branch is the current branch and was materialized into the worktree.
     pub materialization: Option<adopt_local_ref::CurrentBranchMaterializeReport>,
+    /// 0.58.0 R2: set when an adopted branch's history did not replay cleanly (the Blocks before it are recorded as verified, it and the
+    /// rest are not). The import still succeeded. `None` when nothing was adopted or the history replayed cleanly.
+    pub adopted_history_note: Option<crate::AdoptedHistoryNote>,
 }
 
 /// The six block-content connectivity classes (0.56.0 step 3a, design review v2 ruling A2), from
@@ -2755,6 +2758,7 @@ pub fn import_bundle_adopting(
     let mut landed_as = received_ref_name.clone();
     let mut adopt_reason: Option<String> = None;
     let mut materialization = None;
+    let mut adopted_history_note = None;
     match (&adoption_decision, adoption) {
         (adopt::AdoptionDecision::Adopt(plan), Some(adoption)) => {
             let outcome = adopt::publish_adoption(
@@ -2770,6 +2774,14 @@ pub fn import_bundle_adopting(
             landed_as.clone_from(&origin_ref_name);
             adopt_reason.clone_from(&plan.remote_reason);
             materialization = outcome.materialization;
+            // 0.58.0 R2 (i): record what the adopted history confirms, in `verify`'s record. Best effort; never a refusal.
+            if let Some((final_state_id, _)) = plan.states.last() {
+                adopted_history_note = crate::confirmed_history::record_adopted_history(
+                    layout,
+                    &object_store,
+                    *final_state_id,
+                );
+            }
         }
         (adopt::AdoptionDecision::FellThrough { reason }, _) => {
             adopt_reason = Some(reason.clone());
@@ -2799,6 +2811,7 @@ pub fn import_bundle_adopting(
         landed_as,
         adopt_reason,
         materialization,
+        adopted_history_note,
     })
 }
 

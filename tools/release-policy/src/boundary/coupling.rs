@@ -433,6 +433,27 @@ const DECLARED_CYCLES: &[DeclaredCycle] = &[
                                 `anchored_parent_state` at all",
     },
     DeclaredCycle {
+        edges: &[
+            ("commit_boundary::worktree_patch", "confirmed_history"),
+            ("confirmed_history", "block_state::confirm_lineage"),
+            ("confirmed_history", "refs"),
+            ("block_state::confirm_lineage", "lifecycle_cache::replay"),
+        ],
+        reason: "0.58.0 R2 (ii): a `commit` that edits a text file whose baseline text no stored blob holds, in a repository whose \
+                  record of replay-verified Blocks does not cover that history (a receiver's), takes the text from the root-checking \
+                  walk `seal` and `verify` make (`block_state::confirm_lineage`, built on the same per-Block check and the same \
+                  `lifecycle_cache::replay` fold) instead of an unchecked whole-lineage replay, and records what the walk confirmed. \
+                  The same sharing of a derivation RFC 122 and stack B above declare: the walk is one, and `node_authoring` asks for \
+                  its result at the one site that needs the text. `confirmed_history -> refs` is the adopting imports' lookup of the \
+                  adopted tip's Block (`resolve_ref_tip_block`), which sits in the same module as the commit's miss",
+        what_would_remove_it: "passing the walked text into authoring from a caller above `commit_boundary` (the commit entry), \
+                                which would drop `worktree_patch -> confirmed_history` and move the decision of when to walk out of \
+                                authoring -- not attempted: authoring is where the miss is discovered, per file, and the caller \
+                                would have to guess which files will need a text; splitting the adopting imports' half into its own \
+                                top-level module would drop `confirmed_history -> refs`, a real option at the price of a second \
+                                module for one function",
+    },
+    DeclaredCycle {
         edges: &[("commit_boundary::worktree_patch", "worktree_baseline")],
         reason: "0.56.0 step W2 (R1/R2): `node_authoring.rs` calls `worktree_baseline::read_\
                   worktree_baseline`/`resolve_state_at_recorded_baseline` to tell a deliberate \

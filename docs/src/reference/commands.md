@@ -817,8 +817,8 @@ where a writer would**:
 the same admitted-anchor rule `checkout`'s own worktree writes use, never the weaker rule that lets `cat`
 and `tree` display any snapshot that merely decodes correctly. A `remotes/...` ref under a key this
 repository has not adopted therefore always replays fully from its own genesis; past 63 blocks with no
-admitted snapshot in reach, `extract` refuses by name, giving the distance and `--allow-full-replay` to
-read it anyway. Every file whose content has not changed since the admitted anchor streams straight from
+admitted snapshot in reach, `extract` refuses by name, giving the distance, `--allow-full-replay` to
+read it anyway, and `prikk verify` once so this repository records the history it confirms. Every file whose content has not changed since the admitted anchor streams straight from
 its stored blob id, nothing is held resident past the one file's own size, and a path renamed after the
 anchor still streams from that same id, at its new path. The target must not already exist; a leftover
 `<dir>.prikk-extract-tmp` from an interrupted run refuses by name rather than being reused or deleted; the

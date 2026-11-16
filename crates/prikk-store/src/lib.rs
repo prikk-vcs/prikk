@@ -27,6 +27,7 @@
 // RFC 131 §2.2a ruling (b): the `author` name family (author_key_index, author_signing).
 mod anchor_fallback;
 mod anchor_trust;
+mod confirmed_history;
 // RFC 155 §9: `prikk archive export|verify|import`, the whole-repository artifact. Implemented
 // across four parts (export, verify, import A, import B); only export exists so far.
 mod archive;
@@ -210,6 +211,7 @@ pub use compact::{
     precheck_received_index_before_compaction, precheck_ref_pointer_index_before_compaction,
     precheck_trust_policy_before_compaction,
 };
+pub use confirmed_history::AdoptedHistoryNote;
 pub use declaration_resolution::{DeclarationOutcome, DeclarationResolution};
 pub use diff::{
     DiffEntry, DiffPoint, DiffReport, DiffStatus, UnsupportedPath, WORKTREE_POINT,

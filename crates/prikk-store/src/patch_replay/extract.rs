@@ -294,7 +294,8 @@ fn refuse_past_the_bound_unless_allowed_for_chain(
                  {hop_count} further unsealed claim hop(s) beyond that -- older or crafted \
                  history, or a long chain of unsealed claims, per this repository's own checkpoint \
                  cadence; refusing before reading a single patch, to avoid an unbounded replay from \
-                 genesis -- pass --allow-full-replay to read it anyway"
+                 genesis -- pass --allow-full-replay to read it anyway, or run `prikk verify` once so this \
+                 repository records the history it confirms"
             )),
         ));
     }

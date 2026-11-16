@@ -93,11 +93,13 @@ fn a_damaged_or_foreign_record_reads_empty() -> prikk_error::Result<()> {
 }
 
 /// RFC 136 increment 2b §1: only operations that have just confirmed roots by replay write the record.
-/// `bundle import`, `sync accept`, `branch create`, `checkout`, `status` and `worktree-status` cannot add
-/// an id because nothing but `block_state.rs` (seal) and `verify.rs` calls the writer.
+/// `sync accept`, `branch create`, `checkout`, `status` and `worktree-status` cannot add an id because nothing but `block_state.rs`
+/// (seal), `verify.rs` and, since 0.58.0 R2, `confirmed_history.rs` calls the writer. `confirmed_history.rs` is the adopting imports
+/// (`archive import --adopt`, `bundle import --adopt`: nothing is recorded for a landing under `remotes/`) and the commit's text miss,
+/// each of which records only what the root-checking walk (`block_state::confirm_lineage`) confirmed.
 #[test]
-fn only_seal_and_verify_write_the_record() {
-    const WRITERS: &[&str] = &["block_state.rs", "verify.rs"];
+fn only_seal_verify_and_the_confirming_walks_write_the_record() {
+    const WRITERS: &[&str] = &["block_state.rs", "confirmed_history.rs", "verify.rs"];
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut stack = vec![src.clone()];
     let mut callers = Vec::new();

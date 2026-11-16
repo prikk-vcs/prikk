@@ -164,6 +164,8 @@ fn run_import(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     } else {
         print_bundle_import_plain(&report);
     }
+    // 0.58.0 R2: stderr, after the report, in both formats: JSON on stdout is unchanged.
+    crate::warn_adopted_history(report.adopted_history_note.iter());
     Ok(())
 }
 

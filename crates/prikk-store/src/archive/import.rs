@@ -498,6 +498,9 @@ pub struct ArchiveImportReport {
     /// The replay-verified snapshot the materialization could not anchor at, if any (RFC 136
     /// increment 2b).
     pub materialization_anchor_fallback: Option<SnapshotAnchorFallback>,
+    /// 0.58.0 R2: one note per adopted branch whose history did not replay cleanly (the import still succeeded; the Blocks before the
+    /// failing one are recorded as verified, it and the rest are not). Empty when nothing was adopted or all replayed cleanly.
+    pub adopted_history_notes: Vec<crate::AdoptedHistoryNote>,
 }
 
 /// `doctor`'s own `PRIKK-DOCTOR-INTERRUPTED-IMPORT` issue reads this: `Some(id)` when a journal is
@@ -1156,6 +1159,19 @@ pub fn import_archive<R: Read + Seek>(
     // Windows).
     empty_journal(layout)?;
 
+    // 0.58.0 R2 (i), after the commit point so it can never be part of the import's crash semantics: record what each adopted branch's
+    // history confirms, in `verify`'s record. Best effort; never a refusal.
+    let adopted_history_notes: Vec<crate::AdoptedHistoryNote> = landing_outcomes
+        .iter()
+        .filter(|outcome| outcome.adopted)
+        .filter_map(|outcome| {
+            let tip = ref_store
+                .read_current_ref_state_id(&outcome.landed_as)
+                .ok()??;
+            crate::confirmed_history::record_adopted_history(layout, &object_store, tip)
+        })
+        .collect();
+
     // §9.7: "re-importing the same archive reports 'already imported'" -- computed from this same
     // report's own other fields (see `ArchiveImportReport::already_imported`'s own doc note on why
     // no separate ledger exists), not before the fields themselves are final.
@@ -1198,6 +1214,7 @@ pub fn import_archive<R: Read + Seek>(
         materialized_unchanged_files,
         materialized_deleted_files,
         materialization_anchor_fallback,
+        adopted_history_notes,
     })
 }
 

@@ -167,4 +167,21 @@ pub(crate) fn materialize_edited_text_anchored(
 }
 
 #[cfg(test)]
+std::thread_local! {
+    static WHOLE_LINEAGE_TEXT_REPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_whole_lineage_text_replay_for_test() {
+    WHOLE_LINEAGE_TEXT_REPLAYS.with(|calls| calls.set(calls.get() + 1));
+}
+
+/// Whole-lineage text replays this thread has made (`cfg(test)`): 0.58.0 R2 pins "the second miss anchors" and "the walk replaces the
+/// replay" by this count, not by bytes.
+#[cfg(test)]
+pub(crate) fn whole_lineage_text_replays_for_test() -> usize {
+    WHOLE_LINEAGE_TEXT_REPLAYS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
 mod tests;

@@ -1149,6 +1149,15 @@ pub(crate) fn warn_anchor_fallbacks<'a>(
     }
 }
 
+/// 0.58.0 R2: one stderr line for an adopted branch whose history did not replay cleanly. The import succeeded; `prikk verify` names it.
+pub(crate) fn warn_adopted_history<'a>(
+    notes: impl Iterator<Item = &'a prikk_store::AdoptedHistoryNote>,
+) {
+    for note in notes {
+        eprintln!("{note}");
+    }
+}
+
 fn run_verify(args: Vec<String>) -> std::result::Result<(), CliError> {
     let verify_args = parse_verify_args(args)?;
     let layout = open_repository(verify_args.root)?;

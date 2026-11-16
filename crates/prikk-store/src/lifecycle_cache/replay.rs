@@ -364,6 +364,8 @@ pub(in crate::lifecycle_cache) fn replay_lineage_with_materialized_text(
     baseline: ObjectId,
     horizon: ObjectId,
 ) -> Result<(NodeLifecycleState, TextCache), LifecycleReplayError> {
+    #[cfg(test)]
+    super::count_whole_lineage_text_replay_for_test();
     let chain = walk_lineage(reader, baseline, horizon)?;
     replay_chain_with_appended_patches(reader, &chain, &[], false)
 }

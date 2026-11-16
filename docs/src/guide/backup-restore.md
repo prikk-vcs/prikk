@@ -183,6 +183,8 @@ is not landed, and the import's own report names it and the `RefState` it would 
 objects are still imported either way). A successful `--adopt` lands the exporter's own ref as a
 real local branch instead, so there is no collision at all in that case.
 
+An adopting import also replays the adopted branch's history once after it publishes, checking that each Block's recorded state root is what its patches produce, and records what it confirmed in the same record `prikk verify` writes; that is why the next `commit` or `extract` does not replay the whole history, and it costs one more read of the content at import time. If a Block does not replay, the import still succeeds and prints one line naming the Block and `prikk verify`. A history landed under `remotes/` is not replayed and records nothing; `prikk verify` records it.
+
 **If `archive import` is killed or lost partway through**, `prikk doctor` names it
 (`PRIKK-DOCTOR-INTERRUPTED-IMPORT`) and its id, with two ways out: run the same import again (it
 resumes from wherever it stopped), or `prikk doctor --cancel-import <id>` to restore the repository

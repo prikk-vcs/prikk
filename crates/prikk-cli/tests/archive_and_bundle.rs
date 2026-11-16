@@ -21,6 +21,8 @@ mod dc44_sync_output_durability;
 mod dc78_bundle_exchange;
 #[path = "archive_and_bundle/dc78_export_after_deleting_an_edited_file.rs"]
 mod dc78_export_after_deleting_an_edited_file;
+#[path = "archive_and_bundle/r2_adopting_import_records.rs"]
+mod r2_adopting_import_records;
 #[path = "archive_and_bundle/rfc144_bundle_preview.rs"]
 mod rfc144_bundle_preview;
 #[path = "archive_and_bundle/rfc155_archive_export_memory.rs"]

@@ -15,8 +15,8 @@ use prikk_object::{
 use crate::commit_boundary::worktree_patch::commit_worktree_changes_with_generator;
 use crate::node::node_id_gen::{NodeIdGenerator, SequenceEntropySource};
 use crate::test_gates::test_support::{
-    dummy_signature, signed_block, signed_ref_state_envelope, signed_ref_update_envelope,
-    unique_temp_dir,
+    dummy_signature, signed_block_with_state_root, signed_ref_state_envelope,
+    signed_ref_update_envelope, unique_temp_dir,
 };
 use crate::{
     ActiveLock, ActiveRefMetadata, AuthorSigner, DEFAULT_ACTIVE_NAME, Ed25519AuthorSigner,
@@ -89,7 +89,16 @@ fn publish_node_baseline(layout: &RepositoryLayout, files: &[(&str, &[u8], BlobK
     let patch_id = patch_env.object_id();
     object_store.write_object(&patch_env).unwrap();
 
-    let block = signed_block(BlockKind::Root, Vec::new(), vec![patch_id], None);
+    // The root a replay of the patch produces: `commit` now takes a missing text from the walk that checks each Block's root (0.58.0 R2), so the
+    // fixture's history must be one a replay agrees with.
+    let state_root = crate::derive_next_state_root(&object_store, None, &[patch_id]).unwrap();
+    let block = signed_block_with_state_root(
+        BlockKind::Root,
+        Vec::new(),
+        vec![patch_id],
+        None,
+        state_root,
+    );
     let block_id = block.object_id();
     object_store.write_object(&block).unwrap();
 
@@ -146,7 +155,15 @@ fn seal_active_patch(layout: &RepositoryLayout, ref_name: &str) -> ObjectId {
     .unwrap();
     let parent_block_id = current_payload.target_object_id;
 
-    let block = signed_block(BlockKind::Normal, vec![parent_block_id], patch_ids, None);
+    let state_root =
+        crate::derive_next_state_root(&object_store, Some(parent_block_id), &patch_ids).unwrap();
+    let block = signed_block_with_state_root(
+        BlockKind::Normal,
+        vec![parent_block_id],
+        patch_ids,
+        None,
+        state_root,
+    );
     let block_id = block.object_id();
     object_store.write_object(&block).unwrap();
 

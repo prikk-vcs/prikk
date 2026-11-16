@@ -1008,6 +1008,15 @@ fn validate_v2_lineage(
     tip: ObjectId,
     memo: &LineageStateMemo,
 ) -> Result<Vec<(ObjectId, BlockPayload)>> {
+    collect_v2_lineage(reader, tip, memo).map_err(|(_, err)| err)
+}
+
+/// [`validate_v2_lineage`], naming the Block it stopped at (0.58.0 R2: the adopting import and the commit's miss say which).
+fn collect_v2_lineage(
+    reader: &impl ObjectReader,
+    tip: ObjectId,
+    memo: &LineageStateMemo,
+) -> std::result::Result<Vec<(ObjectId, BlockPayload)>, (ObjectId, PrikkError)> {
     let mut visited = BTreeSet::new();
     let mut lineage = Vec::new();
     let mut current = Some(tip);
@@ -1015,32 +1024,56 @@ fn validate_v2_lineage(
         if memo.verified.contains_key(&block_id) {
             break;
         }
-        if !visited.insert(block_id) {
-            return Err(PrikkError::Integrity(format!(
-                "format-2 Block lineage cycle at {block_id}"
-            )));
-        }
-        let envelope = reader.read_object(block_id)?.ok_or_else(|| {
-            PrikkError::Integrity(format!("format-2 parent Block {block_id} is missing"))
-        })?;
-        if envelope.object_type != ObjectType::Block {
-            return Err(PrikkError::ObjectTypeMismatch {
-                expected: ObjectType::Block.to_string(),
-                actual: envelope.object_type.to_string(),
-            });
-        }
-        if envelope.schema_version != 2 {
-            return Err(PrikkError::Integrity(format!(
-                "format-2 lineage contains Block {block_id} with schema {}",
-                envelope.schema_version
-            )));
-        }
-        let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-        validate_block_v2_shape(&payload)?;
+        let step = (|| -> Result<BlockPayload> {
+            if !visited.insert(block_id) {
+                return Err(PrikkError::Integrity(format!(
+                    "format-2 Block lineage cycle at {block_id}"
+                )));
+            }
+            let envelope = reader.read_object(block_id)?.ok_or_else(|| {
+                PrikkError::Integrity(format!("format-2 parent Block {block_id} is missing"))
+            })?;
+            if envelope.object_type != ObjectType::Block {
+                return Err(PrikkError::ObjectTypeMismatch {
+                    expected: ObjectType::Block.to_string(),
+                    actual: envelope.object_type.to_string(),
+                });
+            }
+            if envelope.schema_version != 2 {
+                return Err(PrikkError::Integrity(format!(
+                    "format-2 lineage contains Block {block_id} with schema {}",
+                    envelope.schema_version
+                )));
+            }
+            let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+            validate_block_v2_shape(&payload)?;
+            Ok(payload)
+        })();
+        let payload = step.map_err(|err| (block_id, err))?;
         current = state_derivation_parent(&payload);
         lineage.push((block_id, payload));
     }
     Ok(lineage)
+}
+
+/// The one per-Block check every lineage walk makes (`verify`, `seal`, and since 0.58.0 R2 the adopting import and the commit's
+/// miss): apply `payload`'s patches to the state of its derivation parent, recompute the state root, and compare it to the root the
+/// Block signs. On success `state` and `text_cache` are the Block's own.
+fn confirm_block_root(
+    reader: &impl ObjectReader,
+    block_id: ObjectId,
+    payload: &BlockPayload,
+    state: &mut NodeLifecycleState,
+    text_cache: &mut TextCache,
+) -> Result<()> {
+    apply_one_block_with_text_cache(reader, payload, state, text_cache)?;
+    let computed = compute_state_root(&entries_from_state(state)?)?;
+    if computed != payload.state_merkle_root {
+        return Err(PrikkError::Integrity(format!(
+            "format-2 parent Block {block_id} state root does not match authoritative replay"
+        )));
+    }
+    Ok(())
 }
 
 /// Verify and memoize every not-yet-memoized entry `validate_v2_lineage` returned, genesis-to-tip
@@ -1067,13 +1100,7 @@ fn verify_v2_lineage_roots(
         None => (NodeLifecycleState::new(), TextCache::new()),
     };
     for (block_id, payload) in lineage_from_tip.iter().rev() {
-        apply_one_block_with_text_cache(reader, payload, &mut state, &mut text_cache)?;
-        let computed = compute_state_root(&entries_from_state(&state)?)?;
-        if computed != payload.state_merkle_root {
-            return Err(PrikkError::Integrity(format!(
-                "format-2 parent Block {block_id} state root does not match authoritative replay"
-            )));
-        }
+        confirm_block_root(reader, *block_id, payload, &mut state, &mut text_cache)?;
         memo.verified
             .insert(*block_id, (state.clone(), text_cache.clone()));
     }
@@ -1082,6 +1109,7 @@ fn verify_v2_lineage_roots(
 
 pub(crate) mod anchored_parent;
 pub(crate) mod batch_fold;
+pub(crate) mod confirm_lineage;
 
 #[cfg(test)]
 mod tests;
