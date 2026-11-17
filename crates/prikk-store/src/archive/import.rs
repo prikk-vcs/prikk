@@ -37,12 +37,11 @@
 //! ever append a same-kind dependency (a `Block`'s own parents, a `RefState`'s own
 //! `previous_ref_state_id`) *before* whatever will later reference it -- container order is
 //! already a valid topological order for these, unlike a *bundle*'s own carried order, which
-//! [`crate::bundle::objects_in_dependency_order`]'s own doc comment notes can list a child before
-//! its parent (that function keeps re-sorting for `bundle import`'s own, differently-assembled
-//! envelope list; this module no longer needs it). **An id already present locally may gain a
+//! `bundle import`'s own `dependency_order_indices` orders for (a bundle's carried order can list a child before
+//! its parent; this module needs no such re-sort). **An id already present locally may gain a
 //! carried signature** (§9.7, RFC 156 §4's merge), through [`crate::bundle::
 //! CarriedSignatureAdmitter::admit_one`] -- the same rule `bundle import`/`patch_exchange::accept`
-//! apply through [`crate::bundle::admit_carried_signatures`], factored so both share one admission
+//! apply through `admit_one` too, so all three share one admission
 //! decision rather than this module re-deriving it. A signature that does not qualify (an unadopted
 //! MAINTAINER key, an unrecorded AUTHOR key, an unverifiable role) is dropped and named, never
 //! silently discarded.
@@ -465,7 +464,7 @@ pub struct ArchiveImportReport {
     /// locally, and left as it was (no signature to merge, or format 6), is not counted here.
     pub written_object_counts: Vec<(ObjectType, usize)>,
     /// Objects already present locally that gained at least one carried signature this run, per
-    /// type (§9.7, RFC 156 §4's merge through `admit_carried_signatures`) -- format 7 only; always
+    /// type (§9.7, RFC 156 §4's merge through `admit_one`) -- format 7 only; always
     /// zero on a format-6 repository, which keeps one record per id and merges nothing.
     pub merged_object_counts: Vec<(ObjectType, usize)>,
     /// Every carried signature this run could not admit to a stored object, named (§9.7: "a

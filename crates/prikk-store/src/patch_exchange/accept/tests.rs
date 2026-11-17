@@ -775,8 +775,12 @@ fn decode_rejects_a_declared_tag_count_over_the_configured_limit() -> Result<()>
     Ok(())
 }
 
-/// A refused exchange writes nothing. A key recorded by another writer after the early read-only check
-/// but before the lock must still refuse the exchange, and nothing the artifact carries may be written.
+/// A refused exchange writes nothing. A key recorded by another writer after the artifact's structure is read
+/// and before the lock must still refuse the exchange, and nothing the artifact carries may be written.
+///
+/// 0.58.0 P3b: the lock is now taken **before** the first object is read, and the one author-key conflict decision is
+/// made under it, so a key recorded *during* pass 1 cannot happen (every other recorder needs the same lock). The seam
+/// is therefore where it always was -- after the structural reads, before the lock -- and this is the window left.
 #[test]
 fn a_key_recorded_concurrently_after_the_early_check_refuses_with_nothing_written() -> Result<()> {
     let signer = author_signer(0x41)?;

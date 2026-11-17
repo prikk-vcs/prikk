@@ -32,6 +32,7 @@ mod artifact;
 
 pub use accept::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification, accept_exchange_artifact,
+    accept_exchange_artifact_streaming,
 };
 pub use artifact::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,

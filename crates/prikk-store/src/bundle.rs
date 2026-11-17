@@ -71,7 +71,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::ops::Range;
 
 mod adopt;
@@ -100,6 +100,11 @@ use crate::foundation::file_codec::{
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::layout::{
     DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,
+};
+pub use crate::framed_source::BundleSource;
+use crate::framed_source::{
+    read_array_from, read_bytes_u64_from, read_exact_from, read_frame_body_from, read_u64_from,
+    skip_object_frames, stream_position_usize, u64_to_usize,
 };
 use crate::lock::{ActiveLock, acquire_container_locks};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader, ObjectWriteSession};
@@ -1271,150 +1276,6 @@ pub fn export_bundle(
     ))
 }
 
-/// 0.55.0 step 3 Part 3b-i2 (Q2): what `bundle import` reads from -- an open regular file's own
-/// handle, seekable in place, or (for a non-regular input: a FIFO, a pipe) the existing fully
-/// buffered fallback wrapped in a `Cursor` so both branches satisfy the identical `Read + Seek`
-/// interface pass 1 and pass 2 both need. Built by `prikk-cli`'s `bounded_read` module (which
-/// decides, from the open handle's own metadata, which variant to construct) -- `prikk-store` has
-/// no notion of a CLI bound or a path, and only ever reads from whichever variant it is handed.
-///
-/// Release 0.55.0 prep: deliberately not `#[non_exhaustive]`. A library caller of `import_bundle`/
-/// `verify_bundle`/`preview_bundle` needs to construct a variant directly -- its own open `File`,
-/// or its own buffered bytes -- and this crate provides no separate constructor function for
-/// either; `#[non_exhaustive]` would block exactly that construction. The two variants are also a
-/// complete classification of what a `Read + Seek` source over a bundle can be (seekable, or not);
-/// a third kind would be a visible, deliberate addition worth its own match-arm update at every
-/// call site, not something to hide behind a forward-compatibility attribute.
-pub enum BundleSource {
-    /// A regular file, already opened by the caller. Pass 1 still enforces the real per-object and
-    /// per-import bounds against the bytes it actually reads, independently of any declared size
-    /// (RFC 158 Stage A's own "metadata can lie" rule) -- this variant carries no promise beyond
-    /// "seekable."
-    File(std::fs::File),
-    /// A non-regular input, already read fully into memory and bounded by the caller -- wrapped so
-    /// it exposes the identical `Read + Seek` surface the file-backed variant does.
-    Buffered(std::io::Cursor<Vec<u8>>),
-}
-
-impl Read for BundleSource {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::File(file) => file.read(buf),
-            Self::Buffered(cursor) => cursor.read(buf),
-        }
-    }
-}
-
-impl Seek for BundleSource {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        match self {
-            Self::File(file) => file.seek(pos),
-            Self::Buffered(cursor) => cursor.seek(pos),
-        }
-    }
-}
-
-fn u64_to_usize(value: u64) -> Result<usize> {
-    usize::try_from(value)
-        .map_err(|_| PrikkError::MalformedData("u64 length does not fit usize".to_string()))
-}
-
-fn stream_position_usize(source: &mut BundleSource) -> Result<usize> {
-    let position = source.stream_position().map_err(|err| {
-        PrikkError::Integrity(format!(
-            "bundle import: failed to read the input's current position: {err}"
-        ))
-    })?;
-    u64_to_usize(position)
-}
-
-fn read_exact_from(source: &mut BundleSource, len: usize) -> Result<Vec<u8>> {
-    let mut buf = vec![0_u8; len];
-    source
-        .read_exact(&mut buf)
-        .map_err(|err| PrikkError::MalformedData(format!("unexpected end of bundle: {err}")))?;
-    Ok(buf)
-}
-
-fn read_array_from<const N: usize>(source: &mut BundleSource) -> Result<[u8; N]> {
-    let bytes = read_exact_from(source, N)?;
-    let mut out = [0_u8; N];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-fn read_u64_from(source: &mut BundleSource) -> Result<u64> {
-    Ok(u64::from_be_bytes(read_array_from::<8>(source)?))
-}
-
-/// A u64-length-prefixed byte string, read from the stream -- the streaming counterpart of
-/// `ByteCursor::read_bytes_u64`, bounded by `max_len` (the bundle's own declared total size: no
-/// legitimate ref name, author key id, or manifest string can exceed the bundle that carries it).
-fn read_bytes_u64_from(source: &mut BundleSource, max_len: usize) -> Result<Vec<u8>> {
-    let len = read_u64_from(source)?;
-    if len > len_to_u64(max_len)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle declares a {len}-byte field, over the bundle's own declared total size"
-        )));
-    }
-    read_exact_from(source, u64_to_usize(len)?)
-}
-
-/// One object frame's declared length and body, read separately -- 0.55.0 step 3 Part 3b-ii2
-/// (N1): pass 1 used to concatenate the 8-byte length prefix and the body into one combined
-/// `frame` buffer solely so R3's digest could be computed over "the length-prefixed frame exactly
-/// as read" in a single `sha256` call. `sha256_parts` already exists for exactly this split --
-/// "a checksum covers a header and a body that are held apart" -- so this reads only `body`
-/// (never a second, prefix-prepended copy of it), and the caller hashes the prefix and body as
-/// two parts instead. Refuses on the length prefix, before the body is read, exactly as before.
-fn read_frame_body_from(
-    source: &mut BundleSource,
-    max_object_bytes: usize,
-) -> Result<(u64, Vec<u8>)> {
-    let declared_bytes = read_u64_from(source)?;
-    let bound_bytes = len_to_u64(max_object_bytes)?;
-    if declared_bytes > bound_bytes {
-        return Err(PrikkError::ObjectOverBound {
-            declared_bytes,
-            bound_bytes,
-        });
-    }
-    let body = read_exact_from(source, u64_to_usize(declared_bytes)?)?;
-    Ok((declared_bytes, body))
-}
-
-/// 0.55.0 step 3 Part 3b-i2: the author-key section comes *after* every object frame in the wire
-/// format (`encode_bundle`'s own section order), but RFC 156 §4 admission needs that section's own
-/// transported material available *while* streaming the object frames, to verify a signature a
-/// newly-carried key_id introduces. Skipped here without reading a single frame's body: each
-/// frame's own length prefix says exactly how far to seek forward, so this walk costs `count` seeks
-/// and transfers no object content -- landing exactly at the author-key section's own first byte.
-fn skip_object_frames(
-    source: &mut BundleSource,
-    count: u64,
-    max_object_bytes: usize,
-) -> Result<()> {
-    let bound_bytes = len_to_u64(max_object_bytes)?;
-    for _ in 0..count {
-        let declared_bytes = read_u64_from(source)?;
-        if declared_bytes > bound_bytes {
-            return Err(PrikkError::ObjectOverBound {
-                declared_bytes,
-                bound_bytes,
-            });
-        }
-        let offset = i64::try_from(declared_bytes).map_err(|_| {
-            PrikkError::MalformedData("u64 length does not fit a seek offset".to_string())
-        })?;
-        source.seek(SeekFrom::Current(offset)).map_err(|err| {
-            PrikkError::Integrity(format!(
-                "bundle import: failed to skip an object frame: {err}"
-            ))
-        })?;
-    }
-    Ok(())
-}
-
 /// 0.55.0 step 3 Part 3b-i2 (Q1): the handful of ids `validate_bundle_contents`'s own closure
 /// checks used to read straight off a fully decoded [`ObjectEnvelope`] -- extracted once, during
 /// the same streaming pass that decides admission, and never the envelope or its payload again.
@@ -1523,7 +1384,7 @@ fn closure_metadata_for(
 /// `validate_bundle_contents` used to (its own "same id, different signature bytes" rule, restated
 /// against a real file instead of an in-memory map). Restores the stream's position to where it was
 /// when called, whichever branch it took.
-fn prepared_matches_existing(
+pub(crate) fn prepared_matches_existing(
     source: &mut BundleSource,
     prepared: &[PreparedObject],
     existing_index: usize,
@@ -2937,124 +2798,18 @@ pub(crate) fn object_type_dependency_rank(object_type: ObjectType) -> u8 {
     }
 }
 
-/// This envelope's own same-kind dependencies among `envelopes` -- the ids, of the *same*
-/// `ObjectType`, it must be written after. Only `Block` (parents, `mainline_parent_id` -- already a
-/// member of `parent_block_ids`, so adding it again would be redundant, not wrong --, and
-/// `merge_baseline_block_id`, which is not necessarily a parent) and `RefState`
-/// (`previous_ref_state_id`) carry one; every other type's own same-kind fields (Addendum 1 review
-/// §1: "any other same-kind reference the payload structs show") were checked and carry none.
-fn same_kind_dependencies(envelope: &ObjectEnvelope) -> Result<Vec<ObjectId>> {
-    match envelope.object_type {
-        ObjectType::Block => {
-            let payload = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-            let mut deps = payload.parent_block_ids;
-            deps.extend(payload.merge_baseline_block_id);
-            Ok(deps)
-        }
-        ObjectType::RefState => {
-            let payload = RefStatePayload::decode_canonical(
-                &envelope.canonical_payload,
-                envelope.schema_version,
-            )?;
-            Ok(payload.previous_ref_state_id.into_iter().collect())
-        }
-        ObjectType::Blob
-        | ObjectType::Patch
-        | ObjectType::Attestation
-        | ObjectType::Tag
-        | ObjectType::RecognitionClaim
-        | ObjectType::RefUpdate
-        | ObjectType::RecoveryNote
-        | ObjectType::BlockSummaryCache => Ok(Vec::new()),
-    }
-}
-
-/// Orders one same-`ObjectType` run so a referenced id (per [`same_kind_dependencies`]) is always
-/// written before whatever names it -- Kahn's algorithm, scoped to ids present in `group` only: an
-/// id this batch does not carry is either already durable (nothing to order against here) or
-/// missing (already refused earlier, above this function's only caller), never a cycle risk this
-/// function introduces. Each pass keeps the earliest-ready envelope first, the same "trust the
-/// caller's own order where the graph allows it" spirit the old stable sort documented.
-fn same_kind_topological_order(group: Vec<ObjectEnvelope>) -> Result<Vec<ObjectEnvelope>> {
-    let mut pending: Vec<(ObjectId, Vec<ObjectId>, ObjectEnvelope)> =
-        Vec::with_capacity(group.len());
-    for envelope in group {
-        let id = envelope.object_id();
-        let dependencies = same_kind_dependencies(&envelope)?;
-        pending.push((id, dependencies, envelope));
-    }
-    let present: BTreeSet<ObjectId> = pending.iter().map(|(id, ..)| *id).collect();
-
-    let mut written: BTreeSet<ObjectId> = BTreeSet::new();
-    let mut ordered = Vec::with_capacity(pending.len());
-    while !pending.is_empty() {
-        let before = pending.len();
-        let mut still_pending = Vec::with_capacity(pending.len());
-        for (id, dependencies, envelope) in pending {
-            let ready = dependencies
-                .iter()
-                .all(|dependency| !present.contains(dependency) || written.contains(dependency));
-            if ready {
-                written.insert(id);
-                ordered.push(envelope);
-            } else {
-                still_pending.push((id, dependencies, envelope));
-            }
-        }
-        pending = still_pending;
-        if pending.len() == before {
-            // Cannot happen for real content -- parent/previous chains are acyclic by construction,
-            // and `verify`'s own ancestry walk would already refuse a genuine cycle -- but refuse
-            // rather than write an arbitrary order if a malformed bundle somehow produces one.
-            return Err(PrikkError::Integrity(
-                "bundle contents: a same-kind object reference forms a cycle among carried objects"
-                    .to_string(),
-            ));
-        }
-    }
-    Ok(ordered)
-}
-
-/// Orders `envelopes` into the dependency order `object_type_dependency_rank` defines across kinds,
-/// then, within each contiguous same-kind run that sort produces, topologically by
-/// [`same_kind_topological_order`] -- Addendum 1 (review `stability-follow-up-review-v1`): the
-/// original stable-only sort left same-kind order exactly as the caller supplied it, which is safe
-/// for a chain of `Block`s already collected ancestor-first but not for a bundle whose own carried
-/// order lists a child before its parent.
-pub(crate) fn objects_in_dependency_order(
-    envelopes: Vec<ObjectEnvelope>,
-) -> Result<Vec<ObjectEnvelope>> {
-    let mut envelopes = envelopes;
-    envelopes.sort_by_key(|envelope| object_type_dependency_rank(envelope.object_type));
-
-    let mut result = Vec::with_capacity(envelopes.len());
-    let mut group: Vec<ObjectEnvelope> = Vec::new();
-    for envelope in envelopes {
-        if let Some(last) = group.last() {
-            if last.object_type != envelope.object_type {
-                result.extend(same_kind_topological_order(std::mem::take(&mut group))?);
-            }
-        }
-        group.push(envelope);
-    }
-    if !group.is_empty() {
-        result.extend(same_kind_topological_order(group)?);
-    }
-    Ok(result)
-}
-
 /// 0.55.0 step 3 Part 3b-i (R4): what pass 1 keeps for one carried object between `import_bundle`'s
 /// own two passes -- never its decoded envelope, payload, or signatures. `frame_range` is where
 /// pass 2 re-finds the object's own bytes in the original bundle bytes (length prefix included);
 /// `frame_digest` (R3) and `admission_outcome` (R4) are what pass 2 must reproduce exactly, from
 /// those bytes alone, before writing.
 pub(crate) struct PreparedObject {
-    object_id: ObjectId,
-    object_type: ObjectType,
-    same_kind_dependencies: Vec<ObjectId>,
-    frame_range: Range<usize>,
-    frame_digest: prikk_hash::Sha256Digest,
-    admission_outcome: AdmissionOutcomeKind,
+    pub(crate) object_id: ObjectId,
+    pub(crate) object_type: ObjectType,
+    pub(crate) same_kind_dependencies: Vec<ObjectId>,
+    pub(crate) frame_range: Range<usize>,
+    pub(crate) frame_digest: prikk_hash::Sha256Digest,
+    pub(crate) admission_outcome: AdmissionOutcomeKind,
 }
 
 /// 0.55.0 step 3 Part 3b-i (R4): the admission outcome pass 1 decided for one object, which pass 2
@@ -3062,7 +2817,7 @@ pub(crate) struct PreparedObject {
 /// different outcome the second time is an internal error, not a legitimate result ("the store
 /// cannot change while the lock is held," R4's own reasoning).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AdmissionOutcomeKind {
+pub(crate) enum AdmissionOutcomeKind {
     /// Not held locally before this import; stored as carried.
     New,
     /// Held locally already, and this bundle's own copy added no signature.
@@ -3078,7 +2833,7 @@ enum AdmissionOutcomeKind {
 /// rather than cloning or moving any envelope. The ranking and topological-sort logic themselves
 /// are unchanged from [`object_type_dependency_rank`]/[`same_kind_topological_order`]; only the
 /// carried payload (an index, not an envelope) differs.
-fn dependency_order_indices(prepared: &[PreparedObject]) -> Result<Vec<usize>> {
+pub(crate) fn dependency_order_indices(prepared: &[PreparedObject]) -> Result<Vec<usize>> {
     let mut by_rank: Vec<usize> = (0..prepared.len()).collect();
     by_rank.sort_by_key(|&index| {
         prepared.get(index).map_or(u8::MAX, |object| {
@@ -3283,33 +3038,18 @@ fn check_simulated_pass_two_read_failure_for_test(
     Ok(())
 }
 
-/// Every carried envelope as it will be handed to the store, after RFC 156 §4's admission.
-pub(crate) struct CarriedAdmission {
-    /// One per carried object, in order: unchanged for an object this repository does not hold (or in
-    /// format 6); the stored record plus every admitted signature for one it does.
-    pub(crate) envelopes: Vec<ObjectEnvelope>,
-    /// Objects this repository held that gained at least one signature.
-    pub(crate) merged_object_count: usize,
-    /// Signatures carried for held objects and not stored.
-    pub(crate) dropped: Vec<crate::DroppedSignature>,
-}
-
 /// One carried envelope's own RFC 156 §4 admission outcome -- [`CarriedSignatureAdmitter::
-/// admit_one`]'s own return type, factored out of [`admit_carried_signatures`]'s own loop body (RFC
-/// 155 Part P2b) so a streaming caller can admit and write one object at a time, never collecting a
-/// whole batch of carried envelopes first just to call this rule.
+/// admit_one`]'s own return type, so a streaming caller (`bundle import`, `archive import`, and since 0.58.0 P3b `sync accept`) can admit
+/// and write one object at a time, never collecting a whole batch of carried envelopes first just to call this rule.
 pub(crate) struct AdmittedOne {
     pub(crate) envelope: ObjectEnvelope,
     pub(crate) merged: bool,
     pub(crate) dropped: Vec<crate::DroppedSignature>,
 }
 
-/// RFC 156 §4 rules 1–3's own policy, loaded once and reused across many [`Self::admit_one`] calls
-/// -- the batching `admit_carried_signatures` already did per call, now also available to a caller
-/// that admits one envelope at a time instead of a whole pre-built slice (RFC 155 Part P2b:
-/// `archive::import`'s stage 1 used to collect a whole object type's own envelopes into one `Vec`
-/// specifically so it could call `admit_carried_signatures` once; this type lets it load the same
-/// policy once and admit each envelope as it streams in, instead).
+/// RFC 156 §4 rules 1–3's own policy, loaded once and reused across many [`Self::admit_one`] calls, for a caller that admits one
+/// envelope at a time as it streams in. (Until 0.58.0 P3b a batch wrapper over a pre-built slice also existed, for `sync accept`; it cloned
+/// every envelope twice and is gone.)
 pub(crate) struct CarriedSignatureAdmitter {
     policy: crate::trust::MaintainerTrustPolicy,
     several_records: bool,
@@ -3328,15 +3068,11 @@ impl CarriedSignatureAdmitter {
         })
     }
 
-    /// RFC 156 §4 rules 1-3 for one carried object -- the exact decision [`admit_carried_signatures`]
-    /// makes per envelope in its own loop; factored out, not re-derived, so the two never drift
-    /// apart.
+    /// RFC 156 §4 rules 1-3 for one carried object.
     ///
     /// Takes `envelope` by value (0.55.0 step 3 Part 3b-ii): the two "nothing to merge" branches
     /// (not already stored, and format 6) move it straight into the returned [`AdmittedOne`]
-    /// instead of cloning it, since neither branch changes it. A caller that still needs the
-    /// original afterward for its own reasons (`admit_carried_signatures`, over a borrowed slice
-    /// it does not own) clones at its own call site -- a scoped cost, not this function's.
+    /// instead of cloning it, since neither branch changes it.
     pub(crate) fn admit_one(
         &self,
         stored_objects: &impl ObjectReader,
@@ -3383,42 +3119,6 @@ impl CarriedSignatureAdmitter {
             dropped: decided.dropped,
         })
     }
-}
-
-/// RFC 156 §4 rules 1–3 over a batch of carried objects — `bundle import` and `sync accept` both. Reads
-/// only; the caller writes `envelopes` afterwards. A thin loop over [`CarriedSignatureAdmitter::
-/// admit_one`] now (RFC 155 Part P2b) -- unchanged behavior and signature for this function's own
-/// two existing callers; see [`CarriedSignatureAdmitter`] for the streaming-shaped alternative
-/// `archive::import`'s stage 1 uses instead of calling this one over a whole pre-collected type.
-pub(crate) fn admit_carried_signatures(
-    layout: &RepositoryLayout,
-    stored_objects: &impl ObjectReader,
-    carried: &[ObjectEnvelope],
-    command: &'static str,
-    mut author_material: impl FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
-) -> Result<CarriedAdmission> {
-    let admitter = CarriedSignatureAdmitter::new(layout, command)?;
-    let mut admission = CarriedAdmission {
-        envelopes: Vec::with_capacity(carried.len()),
-        merged_object_count: 0,
-        dropped: Vec::new(),
-    };
-    for envelope in carried {
-        // 0.55.0 step 3 Part 3b-ii: `admit_one` now takes ownership (so its own two "nothing to
-        // merge" branches can move rather than clone); this loop only ever holds a borrow from
-        // `carried`, so it clones here instead -- a scoped cost for this caller, not `admit_one`'s.
-        let admitted =
-            admitter.admit_one(stored_objects, envelope.clone(), &mut author_material)?;
-        if admitted.merged {
-            admission.merged_object_count = admission
-                .merged_object_count
-                .checked_add(1)
-                .ok_or_else(|| PrikkError::Integrity("merged-object count overflow".to_string()))?;
-        }
-        admission.dropped.extend(admitted.dropped);
-        admission.envelopes.push(admitted.envelope);
-    }
-    Ok(admission)
 }
 
 #[cfg(test)]

@@ -112,9 +112,9 @@ const ALLOWED: &[Allowed] = &[
         witness: "ObjectOverBound",
     },
     Allowed {
-        file: "bundle.rs",
+        file: "framed_source.rs",
         expr: "len",
-        bound: "0.55.0 step 3 Part 3b-i2: `read_exact_from`'s own one allocation site, called only with a length already checked against `ObjectOverBound`'s own bound -- freshly, by every caller that reads a fresh length-prefixed field or frame straight off the wire (`read_bytes_u64_from`, `read_frame_from`), or transitively, by a caller that re-derives a `PreparedObject.frame_range`'s own width, which was itself bounded the same way when that frame was first read",
+        bound: "0.55.0 step 3 Part 3b-i2 (hoisted from `bundle.rs` into `framed_source.rs` by 0.58.0 P3b, shared by `bundle import` and `sync accept`): `read_exact_from`'s own one allocation site, called only with a length already checked against `ObjectOverBound`'s own bound -- freshly, by every caller that reads a fresh length-prefixed field or frame straight off the wire (`read_bytes_u64_from`, `read_frame_from`), or transitively, by a caller that re-derives a `PreparedObject.frame_range`'s own width, which was itself bounded the same way when that frame was first read",
         witness: "ObjectOverBound",
     },
 ];

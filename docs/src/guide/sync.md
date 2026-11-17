@@ -115,14 +115,23 @@ sealing one accepted claim under its own maintainer key got the sender's block a
 ids. A sender's tag and the receiver's adopted tag are different objects: `adopt-tag` writes a tag object
 and `RefState` of its own, naming the same target block.
 
-**An `accept` interrupted partway never leaves a dangling reference.** `accept` writes under one
-lock, held continuously from the first write to the last, in a fixed order: patches and blobs first
+**An `accept` interrupted partway never leaves a dangling reference.** `accept` takes its lock before it
+validates anything (so a second writer meets a lock conflict while it validates, not only while it writes)
+and holds it continuously through the last write, which it makes in a fixed order: patches and blobs first
 (content-addressed and idempotent, so a replayed `accept` writes nothing new for anything already
 present), then AUTHOR key material, then claims and tags last. Claims and tags are what every other
 command treats as "this was accepted," so if `accept` is interrupted partway through, part of the
 artifact may already be sitting in the object store, but nothing yet points at it as accepted — there
 is no reference naming content that was never stored. Running the exact same `accept` again simply
 continues it to completion: the content already written is skipped, not rewritten.
+
+**How much memory `accept` uses.** `accept` reads the artifact file twice, one object at a time, and never
+holds it whole: the first pass validates every object (nothing is written), the second writes each one after
+checking it is the object the first pass validated (an artifact file changed between the passes is refused
+before the changed object is written). So its memory follows the **largest object** the artifact carries,
+not the artifact: an artifact of many small objects needs a few megabytes however large it is, and one file
+of N bytes costs about four times N while it is stored, the store's own write path, as with `bundle import`.
+A named pipe cannot be read twice, so it is read once into memory (up to `PRIKK_EXCHANGE_MAX_BYTES`).
 
 **One id, several signers, in format 7 and later.** After the receiver has sealed the sender's patches as above,
 importing the sender's bundle of that ref merges: each shared object keeps one stored copy carrying both

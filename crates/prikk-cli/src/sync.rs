@@ -50,20 +50,22 @@ use prikk_store::{
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT, DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES,
     DEFAULT_SYNC_SUMMARY_MAX_REF_COUNT, DEFAULT_SYNC_SUMMARY_MAX_TOTAL_BYTES, ObjectReadSnapshot,
     ReceivedTagResolution, RefStore, SealBatchPlan, SealFromAcceptedOutcome, SyncArtifactOutcome,
-    TagSignatureVerification, Wal, abandon_unpublished_materialization, accept_exchange_artifact,
-    adopt_tag, build_have_list, build_sync_artifact, build_sync_summary, compare_sync_summary,
-    decode_sync_summary, ensure_worktree_replay_verified, list_received_tags,
-    mark_current_branch_switch_pending, materialize_after_publish, order_claims_for_sealing,
-    patch_ids_pending, pending_patches_with_claims, require_nothing_in_the_way_for_seal_batch,
-    require_worktree_clean_and_capture, seal_from_accepted_claim_in_batch,
-    validate_local_branch_ref,
+    TagSignatureVerification, Wal, abandon_unpublished_materialization,
+    accept_exchange_artifact_streaming, adopt_tag, build_have_list, build_sync_artifact,
+    build_sync_summary, compare_sync_summary, decode_sync_summary, ensure_worktree_replay_verified,
+    list_received_tags, mark_current_branch_switch_pending, materialize_after_publish,
+    order_claims_for_sealing, patch_ids_pending, pending_patches_with_claims,
+    require_nothing_in_the_way_for_seal_batch, require_worktree_clean_and_capture,
+    seal_from_accepted_claim_in_batch, validate_local_branch_ref,
 };
 
 // RFC 121 §2.1: shadows the prelude's `println!`/`print!` -- see `crate::stdout`'s module doc.
 use crate::stdout::println;
 
 use crate::arg_scan::{SetOnce, flag_value, mark_seen, unknown_argument};
-use crate::bounded_read::{SizeBound, read_bounded_file, render_incoming_error};
+use crate::bounded_read::{
+    SizeBound, open_bundle_source, read_bounded_file, render_incoming_error,
+};
 use crate::commands::CliError;
 use crate::config::resolve_max_object_bytes;
 use crate::maintainer_signer_from_env;
@@ -219,8 +221,10 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         }
     }
     let layout = crate::open_repository(root)?;
-    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata.
-    let bytes = read_bounded_file(
+    // RFC 158 Stage A §1: refused before a byte is read, on the open handle's own metadata. 0.58.0 P3: a regular file stays an open,
+    // seekable handle and is read twice, a frame at a time (never held whole); a non-regular input (a FIFO) is buffered once under the same
+    // bound, because it cannot be read twice.
+    let mut source = open_bundle_source(
         "sync exchange artifact",
         &parsed.input,
         &SizeBound::from_env(
@@ -234,7 +238,7 @@ fn run_accept(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES,
     )?;
     let options = accept_options(&object_bound)?;
-    let report = accept_exchange_artifact(&layout, &bytes, &options)
+    let report = accept_exchange_artifact_streaming(&layout, &mut source, &options)
         .map_err(|err| render_incoming_error(err, &object_bound))?;
     println!("accepted sync artifact");
     println!("patches: {}", report.patch_count);

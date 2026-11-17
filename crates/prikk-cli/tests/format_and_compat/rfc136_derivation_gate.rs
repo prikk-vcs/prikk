@@ -143,9 +143,10 @@ const GATED: &[(&str, &str, &str, &str)] = &[
         "ensure_worktree_replay_verified(layout)",
     ),
     (
+        // 0.58.0 P3b: the entry point `prikk sync accept` calls is the streaming one; `accept_exchange_artifact` (the bytes form) wraps it.
         "sync accept",
         "crates/prikk-store/src/patch_exchange/accept.rs",
-        "pub fn accept_exchange_artifact(",
+        "pub fn accept_exchange_artifact_streaming(",
         "ensure_worktree_replay_verified(layout)",
     ),
     (

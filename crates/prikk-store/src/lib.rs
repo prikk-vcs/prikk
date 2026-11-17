@@ -28,6 +28,7 @@
 mod anchor_fallback;
 mod anchor_trust;
 mod confirmed_history;
+mod framed_source;
 // RFC 155 §9: `prikk archive export|verify|import`, the whole-repository artifact. Implemented
 // across four parts (export, verify, import A, import B); only export exists so far.
 mod archive;
@@ -281,8 +282,8 @@ pub use patch_exchange::{
     AcceptOptions, AcceptReport, ClaimSignatureVerification,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_BYTES, DEFAULT_EXCHANGE_ARTIFACT_MAX_OBJECT_COUNT,
     DEFAULT_EXCHANGE_ARTIFACT_MAX_TOTAL_BYTES, ExchangeExportReport, PendingClaimSignatureOutcome,
-    PendingPatchClaim, PendingPatchEntry, accept_exchange_artifact, export_exchange_artifact,
-    pending_patches_with_claims,
+    PendingPatchClaim, PendingPatchEntry, accept_exchange_artifact,
+    accept_exchange_artifact_streaming, export_exchange_artifact, pending_patches_with_claims,
 };
 pub use patch_inverse::{
     PatchInverseOperationKind, PatchInverseOperationSummary, PatchInversePlan,

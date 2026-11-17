@@ -87,7 +87,7 @@ pub(super) const UPPER_LAYER: [&str; 33] = [
 /// A new top-level module appears on neither list and fails the gate until someone decides which
 /// side it belongs on. That decision is the growth-direction control: without it, a new module lands
 /// on whichever side a default puts it and the rule silently stops describing the store.
-pub(super) const LOWER_LAYER: [&str; 42] = [
+pub(super) const LOWER_LAYER: [&str; 43] = [
     // The core: the five modules of the declared cycles.
     "commit_boundary",
     "lifecycle_cache",
@@ -140,6 +140,10 @@ pub(super) const LOWER_LAYER: [&str; 42] = [
     // record what they walked, and `commit_boundary::worktree_patch` (lower) takes a text from the same walk on a miss. Depends on
     // `block_state`, `refs`, `verified_blocks`, `lifecycle_cache` and `object_store` (all lower); nothing upper is reached from it.
     "confirmed_history",
+    // 0.58.0 P3b: the seekable, framed input both streaming importers read (`bundle import`/`preview`/`verify` and `sync accept`) and the
+    // small frame readers over it, hoisted out of `bundle.rs`. A leaf over `prikk-error` and `foundation::fsutil`; `bundle` and
+    // `patch_exchange` (both upper) are its callers.
+    "framed_source",
     // RFC 136 increment 2b: the replay-verified block record, a rebuildable cache under `.prikk/cache/`
     // that `block_state` (seal) and `verify` write and the anchored worktree writes read. It depends
     // only on `foundation`, so it sits with the lower-layer state it records.

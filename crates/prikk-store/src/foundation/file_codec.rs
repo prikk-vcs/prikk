@@ -128,6 +128,7 @@ pub(crate) fn push_bytes_u64(out: &mut Vec<u8>, value: &[u8]) -> Result<()> {
 /// frame is copied or decoded"). Shared by `decode_bundle`'s object loop and
 /// `patch_exchange::artifact::decode_envelope_section` -- the one place both formats read a
 /// caller-bounded object frame out of an already-buffered, already-total-bounded input.
+#[cfg(test)]
 pub(crate) fn read_bounded_object_frame(
     cursor: &mut ByteCursor<'_>,
     max_object_bytes: usize,

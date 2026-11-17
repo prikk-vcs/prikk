@@ -3,6 +3,8 @@
 //! and this grouping file's `mod` line are new. See the module's own file under
 //! `tests/sync_and_exchange/` for its own doc comment.
 
+#[path = "sync_and_exchange/p3b_streaming_accept.rs"]
+mod p3b_streaming_accept;
 #[path = "sync_and_exchange/received.rs"]
 mod received;
 #[path = "sync_and_exchange/release_0_52_0_p3b_received_ref_failure_named.rs"]

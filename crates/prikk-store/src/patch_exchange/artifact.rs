@@ -32,17 +32,23 @@
 //! its own declared counts with one shared ceiling.
 
 use std::collections::BTreeSet;
+use std::io::{Seek, SeekFrom};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType, Signature, SignerRole};
 
 use crate::author::author_key_index::{AuthorKeyEntry, lookup_author_key_entries};
-use crate::foundation::byte_cursor::ByteCursor;
-use crate::foundation::file_codec::{
-    decode_envelope_file, encode_envelope_file, push_bytes_u64, push_u64, read_bounded_object_frame,
-};
+#[cfg(test)]
+use crate::foundation::file_codec::decode_envelope_file;
+use crate::foundation::file_codec::{encode_envelope_file, push_bytes_u64, push_u64};
 use crate::foundation::fsutil::len_to_u64;
 use crate::foundation::layout::RepositoryLayout;
+#[cfg(test)]
+use crate::framed_source::read_frame_body_from;
+use crate::framed_source::{
+    BundleSource, read_array_from, read_bytes_u64_from, read_u64_from, skip_object_frames,
+    stream_position_usize, u64_to_usize,
+};
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, decode_patch_operations,
@@ -86,9 +92,10 @@ pub struct ExchangeExportReport {
     pub tag_count: usize,
 }
 
-/// The artifact's decoded sections, before any of the accept path's own checks run. Purely
-/// structural -- decoding this says nothing about whether the artifact's content is trustworthy or
-/// even internally consistent; that is every later phase's job, not this one's.
+/// The artifact's decoded sections, before any of the accept path's own checks run. **Test fixture code only** (0.58.0 P3b): the tests take
+/// an artifact apart with it to build a mutated one. `accept` never calls it -- it reads the artifact a frame at a time through
+/// [`read_exchange_layout`] and never holds the decoded set.
+#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct DecodedExchangeArtifact {
     pub(super) declared_digest: PatchSetDigest,
@@ -312,32 +319,89 @@ fn encode_exchange_artifact(
     Ok(out)
 }
 
-/// Decode a `PEXCH002` artifact structurally. Bounds every declared count against
-/// `max_object_count` at the point it is read, before the section it governs is looped over
-/// (handoff §4.2 Phase A item 2: "a declared count over the limit must not cost more than reading
-/// one integer to reject"). Performs no cross-section checks at all -- no digest recomputation, no
-/// conflict checks, no signature verification, no closure check. Those are the accept path's own
-/// Phase B/C, deliberately kept out of this function: decoding a shape and judging its content are
-/// different questions, the same separation `decode_bundle` keeps from `import_bundle`.
-pub(super) fn decode_exchange_artifact(
-    bytes: &[u8],
+/// Where one section's frames start in the artifact, and how many there are.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SectionSpan {
+    pub(super) count: u64,
+    /// The offset of the section's first frame (just after its count).
+    pub(super) start: u64,
+}
+
+/// What a walk over the artifact's *structure* found, without reading a single object's body: the declared digest, where each of the four
+/// frame sections starts and how many frames it holds, and the author-key section (which sits **between** the blobs and the claims, but is
+/// needed before the first patch's signature can be checked -- the same order problem `bundle import` has, solved the same way:
+/// [`skip_object_frames`] seeks over each frame by its length prefix, so this costs one 8-byte read per frame and transfers no content).
+#[derive(Debug)]
+pub(super) struct ExchangeLayout {
+    pub(super) declared_digest: PatchSetDigest,
+    pub(super) patches: SectionSpan,
+    pub(super) blobs: SectionSpan,
+    pub(super) author_keys: Vec<AuthorKeyEntry>,
+    pub(super) claims: SectionSpan,
+    pub(super) tags: SectionSpan,
+}
+
+/// A `bundle`-worded refusal from the shared frame reader, said of this format instead: the reader's messages name the bundle, and a
+/// patch-exchange artifact that ends early or declares an impossible field is not one.
+pub(super) fn in_artifact<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|err| match err {
+        PrikkError::MalformedData(message) => PrikkError::MalformedData(
+            message
+                .replace(
+                    "unexpected end of bundle",
+                    "unexpected end of patch-exchange artifact",
+                )
+                .replace("bundle declares", "patch-exchange artifact declares")
+                .replace(
+                    "the bundle's own declared",
+                    "the patch-exchange artifact's own declared",
+                ),
+        ),
+        other => other,
+    })
+}
+
+/// Walk a `PEXCH002` artifact's structure. Bounds every declared count against `max_object_count` at the moment it is read, before the
+/// section it governs is walked (handoff §4.2 Phase A item 2: "a declared count over the limit must not cost more than reading one integer
+/// to reject"), and every frame's length against `max_object_bytes` on its length prefix. Performs no cross-section check at all -- no
+/// digest, no conflict, no signature, no closure: those are the accept path's own phases, kept out of here as `decode_bundle` keeps them
+/// out of `import_bundle`.
+pub(super) fn read_exchange_layout(
+    source: &mut BundleSource,
+    total_len: u64,
     max_object_count: usize,
     max_object_bytes: usize,
-) -> Result<DecodedExchangeArtifact> {
-    let mut cursor = ByteCursor::new(bytes);
-    let magic = cursor.read_array::<8>()?;
+) -> Result<ExchangeLayout> {
+    let total = u64_to_usize(total_len)?;
+    source.seek(SeekFrom::Start(0)).map_err(|err| {
+        PrikkError::Integrity(format!(
+            "patch-exchange artifact: failed to rewind the input: {err}"
+        ))
+    })?;
+    let magic = in_artifact(read_array_from::<8>(source))?;
     if &magic != EXCHANGE_ARTIFACT_MAGIC {
         return Err(PrikkError::MalformedData(
             "invalid patch-exchange artifact magic".to_string(),
         ));
     }
-    let declared_digest = PatchSetDigest(cursor.read_array::<32>()?);
+    let declared_digest = PatchSetDigest(in_artifact(read_array_from::<32>(source))?);
 
-    let patches =
-        decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "patches")?;
-    let blobs = decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "blobs")?;
+    let mut section = |name: &str| -> Result<SectionSpan> {
+        let count = in_artifact(read_u64_from(source))?;
+        if count > len_to_u64(max_object_count)? {
+            return Err(PrikkError::MalformedData(format!(
+                "patch-exchange artifact declares {count} {name}, over the configured limit \
+                 of {max_object_count}"
+            )));
+        }
+        let start = in_artifact(stream_position_usize(source))? as u64;
+        in_artifact(skip_object_frames(source, count, max_object_bytes))?;
+        Ok(SectionSpan { count, start })
+    };
+    let patches = section("patches")?;
+    let blobs = section("blobs")?;
 
-    let author_key_count = cursor.read_u64()?;
+    let author_key_count = in_artifact(read_u64_from(source))?;
     if author_key_count > len_to_u64(max_object_count)? {
         return Err(PrikkError::MalformedData(format!(
             "patch-exchange artifact declares {author_key_count} author key entries, over the \
@@ -346,32 +410,48 @@ pub(super) fn decode_exchange_artifact(
     }
     let mut author_keys = Vec::new();
     for _ in 0..author_key_count {
-        let key_id_bytes = cursor.read_bytes_u64()?;
+        let key_id_bytes = in_artifact(read_bytes_u64_from(source, total))?;
         let key_id = String::from_utf8(key_id_bytes).map_err(|err| {
             PrikkError::MalformedData(format!(
                 "invalid patch-exchange artifact author key_id utf-8: {err}"
             ))
         })?;
         Signature::validate_key_id(&key_id)?;
-        let public_key = cursor.read_array::<32>()?;
+        let public_key = in_artifact(read_array_from::<32>(source))?;
         author_keys.push(AuthorKeyEntry { key_id, public_key });
     }
 
-    let claims = decode_envelope_section(
-        &mut cursor,
-        max_object_count,
-        max_object_bytes,
-        "recognition claims",
-    )?;
-    let tags = decode_envelope_section(&mut cursor, max_object_count, max_object_bytes, "tags")?;
+    let claims = {
+        let count = in_artifact(read_u64_from(source))?;
+        if count > len_to_u64(max_object_count)? {
+            return Err(PrikkError::MalformedData(format!(
+                "patch-exchange artifact declares {count} recognition claims, over the configured limit \
+                 of {max_object_count}"
+            )));
+        }
+        let start = in_artifact(stream_position_usize(source))? as u64;
+        in_artifact(skip_object_frames(source, count, max_object_bytes))?;
+        SectionSpan { count, start }
+    };
+    let tags = {
+        let count = in_artifact(read_u64_from(source))?;
+        if count > len_to_u64(max_object_count)? {
+            return Err(PrikkError::MalformedData(format!(
+                "patch-exchange artifact declares {count} tags, over the configured limit \
+                 of {max_object_count}"
+            )));
+        }
+        let start = in_artifact(stream_position_usize(source))? as u64;
+        in_artifact(skip_object_frames(source, count, max_object_bytes))?;
+        SectionSpan { count, start }
+    };
 
-    if !cursor.is_finished() {
+    if stream_position_usize(source)? as u64 != total_len {
         return Err(PrikkError::MalformedData(
             "trailing bytes in patch-exchange artifact".to_string(),
         ));
     }
-
-    Ok(DecodedExchangeArtifact {
+    Ok(ExchangeLayout {
         declared_digest,
         patches,
         blobs,
@@ -381,28 +461,53 @@ pub(super) fn decode_exchange_artifact(
     })
 }
 
-fn decode_envelope_section(
-    cursor: &mut ByteCursor<'_>,
+#[cfg(test)]
+thread_local! {
+    static WHOLE_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `cfg(test)`: how many times this thread took an artifact apart whole. `accept` must never be one of them.
+#[cfg(test)]
+pub(super) fn whole_decodes_for_test() -> usize {
+    WHOLE_DECODES.with(std::cell::Cell::get)
+}
+
+/// Test fixture code: decode a whole artifact into owned sections, from the same per-frame reader `accept` uses
+/// ([`read_exchange_layout`], then [`read_frame_body_from`] and `decode_envelope_file` per frame). **Not reachable from `accept`**, and
+/// compiled only for tests.
+#[cfg(test)]
+pub(super) fn decode_exchange_artifact(
+    bytes: &[u8],
     max_object_count: usize,
     max_object_bytes: usize,
-    section_name: &str,
-) -> Result<Vec<ObjectEnvelope>> {
-    let count = cursor.read_u64()?;
-    if count > len_to_u64(max_object_count)? {
-        return Err(PrikkError::MalformedData(format!(
-            "patch-exchange artifact declares {count} {section_name}, over the configured limit \
-             of {max_object_count}"
-        )));
-    }
-    let mut envelopes = Vec::new();
-    for _ in 0..count {
-        // RFC 158 Stage A §3: checked on the length prefix, before this frame is copied or
-        // decoded -- applies to every section this function reads, not blobs alone, since any of
-        // them can in principle carry an outsized frame.
-        let encoded = read_bounded_object_frame(cursor, max_object_bytes)?;
-        envelopes.push(decode_envelope_file(&encoded)?);
-    }
-    Ok(envelopes)
+) -> Result<DecodedExchangeArtifact> {
+    WHOLE_DECODES.with(|calls| calls.set(calls.get() + 1));
+    let mut source = BundleSource::Buffered(std::io::Cursor::new(bytes.to_vec()));
+    let layout = read_exchange_layout(
+        &mut source,
+        len_to_u64(bytes.len())?,
+        max_object_count,
+        max_object_bytes,
+    )?;
+    let mut read_section = |span: SectionSpan| -> Result<Vec<ObjectEnvelope>> {
+        source
+            .seek(SeekFrom::Start(span.start))
+            .map_err(|err| PrikkError::Integrity(format!("patch-exchange artifact: {err}")))?;
+        let mut envelopes = Vec::new();
+        for _ in 0..span.count {
+            let (_, body) = read_frame_body_from(&mut source, max_object_bytes)?;
+            envelopes.push(decode_envelope_file(&body)?);
+        }
+        Ok(envelopes)
+    };
+    Ok(DecodedExchangeArtifact {
+        declared_digest: layout.declared_digest,
+        patches: read_section(layout.patches)?,
+        blobs: read_section(layout.blobs)?,
+        author_keys: layout.author_keys,
+        claims: read_section(layout.claims)?,
+        tags: read_section(layout.tags)?,
+    })
 }
 
 #[cfg(test)]
