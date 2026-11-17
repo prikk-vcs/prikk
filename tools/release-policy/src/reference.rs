@@ -1,3 +1,4 @@
+mod assurance;
 mod msrv;
 
 use std::collections::BTreeSet;
@@ -207,6 +208,7 @@ fn verify(root: &Path, inventory: &Inventory) -> Result<Vec<String>> {
     }
     docs_repository_paths(root, &mut errors)?;
     msrv::check(root, &mut errors)?;
+    assurance::check(root, &mut errors)?;
     errors.sort();
     Ok(errors)
 }

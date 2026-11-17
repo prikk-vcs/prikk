@@ -24,12 +24,29 @@ fn msrv_authority_fixture(temporary: &std::path::Path) {
     fs::create_dir_all(temporary.join(".github/workflows")).unwrap();
     fs::write(
         temporary.join("Cargo.toml"),
-        "[workspace.package]\nrust-version = \"1.85\"\n",
+        "[workspace]\nmembers = [\"crates/t\"]\n\n[workspace.package]\nrust-version = \"1.85\"\n",
+    )
+    .unwrap();
+    // The assurance gate (0.58.0 A) reads a crate with one cited test, the job map from this workflow and the page's table.
+    fs::create_dir_all(temporary.join("crates/t/src")).unwrap();
+    fs::write(
+        temporary.join("crates/t/Cargo.toml"),
+        "[package]\nname = \"t\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.join("crates/t/src/lib.rs"),
+        "#[test]\nfn t() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.join("docs/src/reference/durability-recovery.md"),
+        "not that it still asserts the property\n<!-- assurance-table:begin -->\n| a | `t` (`crates/t/src/lib.rs`) | unit | Linux, macOS, Windows | |\n<!-- assurance-table:end -->\n",
     )
     .unwrap();
     fs::write(
         temporary.join(".github/workflows/ci.yml"),
-        "jobs:\n  msrv:\n    name: msrv-1.85.0\n    steps:\n      - uses: dtolnay/rust-toolchain@1.85.0\n",
+        "jobs:\n  msrv:\n    name: msrv-1.85.0\n    steps:\n      - uses: dtolnay/rust-toolchain@1.85.0\n  suites-linux:\n    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test --workspace --locked\n  suites-macos:\n    runs-on: macos-latest\n    steps:\n      - run: cargo test --workspace --locked\n  suites-windows:\n    runs-on: windows-latest\n    steps:\n      - run: cargo test --workspace --locked\n",
     )
     .unwrap();
     fs::write(

@@ -44,7 +44,7 @@ use super::cfg_expr::{self, CfgExpr};
 
 /// One classified byte span of source text.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SpanKind {
+pub(crate) enum SpanKind {
     Code,
     Comment,
     StringOrChar,
@@ -55,8 +55,30 @@ enum SpanKind {
 /// instead of `bytes[i]`, and every reader here already gates on `i < bytes.len()` around its own
 /// loop, so the `0` sentinel is never actually reached in practice; it exists only so a boundary
 /// slip degrades to "no match" instead of a panic).
-fn byte_at(bytes: &[u8], i: usize) -> u8 {
+pub(crate) fn byte_at(bytes: &[u8], i: usize) -> u8 {
     bytes.get(i).copied().unwrap_or(0)
+}
+
+/// For an `r` at `at` that opens a raw string (`r"`, `r#"`, `r##"`, ... and the `br` form's `r`), the number of `#`; `None` when
+/// the `r` is part of an identifier or is not followed by `#*"`.
+fn raw_string_hashes(bytes: &[u8], at: usize) -> Option<usize> {
+    let before = if at == 0 { 0 } else { byte_at(bytes, at - 1) };
+    let identifier_before = before.is_ascii_alphanumeric() || before == b'_';
+    // `br"` / `b"`-prefixed raw strings have a `b` before the `r`: that is the one identifier character allowed.
+    let byte_prefixed = before == b'b'
+        && (at < 2
+            || !{
+                let earlier = byte_at(bytes, at - 2);
+                earlier.is_ascii_alphanumeric() || earlier == b'_'
+            });
+    if identifier_before && !byte_prefixed {
+        return None;
+    }
+    let mut hashes = 0;
+    while byte_at(bytes, at + 1 + hashes) == b'#' {
+        hashes += 1;
+    }
+    (byte_at(bytes, at + 1 + hashes) == b'"').then_some(hashes)
 }
 
 /// Classify every byte of `text` as code, a comment, or a string/char literal -- one shared scan
@@ -64,7 +86,7 @@ fn byte_at(bytes: &[u8], i: usize) -> u8 {
 /// inside a `cfg` attribute is meaningful) and blanking comments-and-strings (for the edge scan,
 /// where a `crate::` substring inside a string or comment must never be mistaken for a real path)
 /// can never disagree about where one span ends and the next begins.
-fn classify(text: &str) -> Vec<SpanKind> {
+pub(crate) fn classify(text: &str) -> Vec<SpanKind> {
     let bytes = text.as_bytes();
     let mut kinds = vec![SpanKind::Code; bytes.len()];
     let mut i = 0;
@@ -96,6 +118,26 @@ fn classify(text: &str) -> Vec<SpanKind> {
                 }
                 if let Some(span) = kinds.get_mut(start..i) {
                     span.fill(SpanKind::Comment);
+                }
+            }
+            // A raw string (`r"…"`, `r#"…"#`, `br##"…"##`): no escapes, ends at a quote followed by the same number of `#`.
+            // Without this its inner quotes flip the scan into and out of "string" and the code after it is misread.
+            b'r' if raw_string_hashes(bytes, i).is_some() => {
+                let hashes = raw_string_hashes(bytes, i).unwrap_or(0);
+                let start = i;
+                i += 1 + hashes + 1;
+                while i < bytes.len() {
+                    let closes = byte_at(bytes, i) == b'"'
+                        && (1..=hashes).all(|offset| byte_at(bytes, i + offset) == b'#');
+                    i += 1;
+                    if closes {
+                        i += hashes;
+                        break;
+                    }
+                }
+                i = i.min(bytes.len());
+                if let Some(span) = kinds.get_mut(start..i) {
+                    span.fill(SpanKind::StringOrChar);
                 }
             }
             b'"' => {
@@ -168,7 +210,12 @@ fn is_char_literal_start(bytes: &[u8], quote_pos: usize) -> bool {
 /// multi-byte character is never split between two spans) -- so replacing every blanked byte with
 /// `b' '` independently, leaving `\n` bytes alone, always yields valid UTF-8 of the exact same
 /// byte length as the input.
-fn blank(text: &str, kinds: &[SpanKind], blank_comments: bool, blank_strings: bool) -> String {
+pub(crate) fn blank(
+    text: &str,
+    kinds: &[SpanKind],
+    blank_comments: bool,
+    blank_strings: bool,
+) -> String {
     let mut bytes = text.as_bytes().to_vec();
     for (index, byte) in bytes.iter_mut().enumerate() {
         let kind = kinds.get(index).copied().unwrap_or(SpanKind::Code);
@@ -299,7 +346,7 @@ fn find_mod_declarations(comment_blanked: &str) -> Vec<ModDecl> {
     decls
 }
 
-fn find_matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
+pub(crate) fn find_matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
     let mut depth = 1_u32;
     let mut i = open;
     while i < bytes.len() {
@@ -340,7 +387,7 @@ fn find_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
     None
 }
 
-fn find_matching_brace(bytes: &[u8], open: usize) -> Option<usize> {
+pub(crate) fn find_matching_brace(bytes: &[u8], open: usize) -> Option<usize> {
     let mut depth = 1_u32;
     let mut i = open + 1;
     while i < bytes.len() {

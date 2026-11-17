@@ -130,7 +130,7 @@ fn parse_expr(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<Cf
 }
 
 /// Every distinct atom text appearing in `expr`.
-fn atoms(expr: &CfgExpr, out: &mut BTreeSet<String>) {
+pub(crate) fn atoms(expr: &CfgExpr, out: &mut BTreeSet<String>) {
     match expr {
         CfgExpr::Atom(text) => {
             out.insert(text.clone());
@@ -144,7 +144,7 @@ fn atoms(expr: &CfgExpr, out: &mut BTreeSet<String>) {
     }
 }
 
-fn eval(expr: &CfgExpr, assignment: &std::collections::BTreeMap<String, bool>) -> bool {
+pub(crate) fn eval(expr: &CfgExpr, assignment: &std::collections::BTreeMap<String, bool>) -> bool {
     match expr {
         CfgExpr::Atom(text) => assignment.get(text).copied().unwrap_or(false),
         CfgExpr::All(items) => items.iter().all(|item| eval(item, assignment)),

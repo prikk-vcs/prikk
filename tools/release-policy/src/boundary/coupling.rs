@@ -43,7 +43,7 @@
 //! this_edge_set` and `graph::tests::recognition_claim_to_trust_survives_but_is_no_longer_cyclic`
 //! pin both facts against the real repository.
 
-mod cfg_expr;
+pub(crate) mod cfg_expr;
 mod layers;
 // RFC 130 §8: the size gate reads this graph's production-file walk, so "a production file" means one thing.
 pub(crate) mod graph;

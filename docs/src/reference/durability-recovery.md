@@ -260,11 +260,13 @@ a unique same-directory exclusive temp, complete file sync, atomic replace renam
 (`foundation/fsutil/anchored/linux.rs:30`). An error after rename leaves the final name in place and returns
 failure for verification or retry; it does not blindly roll back visible state.
 
-Immutable object publication uses a separate no-clobber operation. It syncs a unique same-shard temp,
-installs the final name without replacement, syncs the shard, removes only its invocation-owned temp,
-and syncs the shard again. If another publisher wins, success requires same-handle validation and
-exact persisted-byte equality; malformed, wrong-identity, wrong-type, or byte-different winners fail
-without replacement. Crash-left object temps are warning-only debris and are never object authority.
+Object publication is an append to the object's type container, not the install of a file (the record is made durable before its
+index entry, see *An interrupted append in an object container* above). A write of an id the repository already holds is a no-op
+when the stored envelope is byte-identical to the candidate, a merge of signatures outside format 6 (RFC 156), and a refusal when the
+payload differs, or when the signatures differ in a format-6 repository. No object temp file exists in the current layout.
+`verify` and `doctor` still name a leftover `.pobj.tmp.` file under an object-type directory (`PRIKK-DOCTOR-OBJECT-TEMP-DEBRIS`, a
+warning that preserves the file), a diagnostic kept from the retired loose-file layout; nothing in this version creates one, and no
+test holds that warning. (Until 0.58.0 this paragraph described a no-clobber temp-and-install operation that was retired in DC-98.)
 
 Worktree writes and removals use separately named strict operations. Their errors propagate and may
 leave partial worktree effects, but the worktree does not become repository authority. Lock removal
@@ -593,6 +595,109 @@ automatic stale-lock repair, and they remain deliberately absent: clearing a loc
 still running would let two writers hold the same container. The current lock and compare-and-swap
 behavior is covered by the [concurrency and locking](./concurrency-locking.md#stale-locks-and-manual-cleanup)
 reference.
+
+## Which Test Holds Which Crash Point
+
+This is **not a crash matrix**. For each crash point this page states a behaviour for, it names one test that holds it, the kind of
+test it is, and the platforms that run it. A crash point no test holds is listed as such, below the table. The test names are
+checked by `release-policy reference-check`: **the gate checks that each cited test exists and where it runs, not that it still
+asserts the property.** A name is a place to look, not a proof; what a test proves is the paragraph on its kind, and a reader's own
+reading of the test.
+
+<!-- assurance-table:begin -->
+| Crash point | Test (file) | Kind | Runs on | Note |
+|---|---|---|---|---|
+| WAL append: required sync fails; record retained for replay | `wal_file_sync_failure_retains_replayable_record` (`crates/prikk-store/src/wal/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| WAL append: write fails, retry | `existing_wal_append_write_failure_is_retryable` (`crates/prikk-store/src/wal/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| `commit` killed at every write ordinal | `m6_commit_kill_sweep_recovers_at_every_write_ordinal` (`crates/prikk-store/src/commit_boundary/witness/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| WAL torn tail (zeros/garbage/prefix) repaired | `m3_wal_tails_at_every_size_the_review_measured_all_repair_to_a_working_repository` (`crates/prikk-cli/tests/verify_and_doctor/rfc162_recovery_matrix.rs`) | byte-state | Linux, macOS, Windows |  |
+| WAL: sound record behind the fault is interior damage, repair refuses | `a_torn_frame_whose_payload_holds_a_sound_frame_is_damage_and_the_repair_refuses` (`crates/prikk-cli/tests/verify_and_doctor/torn_tail_is_one_frame.rs`) | byte-state | Linux, macOS, Windows |  |
+| WAL: hostile scan resolves to damage within the work budget | `budgeted_scan_is_linear_and_resolves_to_damage` (`crates/prikk-store/src/test_gates/runaway_guards.rs`) | byte-state | Linux, macOS, Windows |  |
+| `--repair-wal-tail` saves the removed bytes first | `a_repair_saves_exactly_the_torn_bytes_it_removes` (`crates/prikk-store/src/wal/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| `--repair-wal-tail`: failure between save and truncate | `a_failure_between_the_save_and_the_truncation_leaves_the_wal_and_a_complete_recovery_file` (`crates/prikk-store/src/wal/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| `--recovery-restore` undoes a WAL repair | `a_wal_repair_restores_byte_for_byte_from_the_log` (`crates/prikk-store/src/wal/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| Acknowledged record damaged/lost (commit witness) | `row4_acknowledged_damage` (`crates/prikk-store/src/commit_boundary/classification/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| `--discard-damaged-commits`: crash saving the recovery file | `a_crash_saving_the_recovery_file_leaves_the_wal_and_witness_untouched` (`crates/prikk-store/src/doctor/discard_damaged_commits/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| `--discard-damaged-commits`: crash between truncate and witness rewrite | `a_crash_between_truncation_and_the_witness_rewrite_is_read_as_acknowledged_loss_and_finished` (`crates/prikk-store/src/doctor/discard_damaged_commits/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Witness in-place write torn at its truncate | `a_witness_clear_torn_at_its_truncate_still_reads_as_its_record_never_as_cleared` (`crates/prikk-store/src/commit_boundary/witness/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Non-empty WAL, active ref metadata missing | `non_empty_wal_missing_active_ref_metadata_fails_closed` (`crates/prikk-store/src/commit_boundary/worktree_patch/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| Empty WAL with leftover metadata (debris) | `doctor_reports_empty_active_metadata_debris_as_information` (`crates/prikk-store/src/doctor/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| `ref-name`/active metadata write and removal failures | `active_metadata_write_and_removal_failures_pin_retained_state` (`crates/prikk-store/src/commit_boundary/active/tests.rs`) | failpoint | Linux, macOS |  |
+| Seal: object finalization fails before the pointer append | `object_finalization_failures_precede_pointer_and_log_mutation` (`crates/prikk-store/src/refs/tests/publication_recovery/failpoints.rs`) | failpoint | Linux, macOS, Windows |  |
+| Seal: pointer appended, log not (completed by `seal` again) | `seal_finishes_pointer_leading_log_once` (`crates/prikk-cli/tests/commit_and_seal/seal_recovery.rs`) | byte-state | Linux, macOS, Windows |  |
+| Pointer lead with a partial log tail truncated, then completed | `pointer_lead_with_partial_tail_is_truncated_then_completed` (`crates/prikk-store/src/refs/tests/publication_recovery.rs`) | failpoint | Linux, macOS, Windows |  |
+| Log appended, WAL retained (incomplete cleanup) | `seal_cleans_matching_retained_active_state_without_append` (`crates/prikk-cli/tests/commit_and_seal/seal_recovery.rs`) | byte-state | Linux, macOS, Windows |  |
+| Every persisted publication state: retry and exact post-state | `every_state_has_explicit_production_retry_and_exact_post_state` (`crates/prikk-store/src/refs/tests/publication_recovery/state_matrix.rs`) | byte-state | Linux, macOS, Windows |  |
+| `tag create` killed with the pointer lead written | `verify_and_doctor_see_the_difference_between_in_flight_and_interrupted` (`crates/prikk-cli/tests/commit_and_seal/f2_publication_in_flight.rs`) | real-kill | Linux, macOS |  |
+| `ref complete`: refuses on each unmet condition, writes nothing | `failpoints_at_every_write_ordinal_then_a_second_call_finishes_it` (`crates/prikk-store/src/ref_completion/tests/k4_failpoints_and_race.rs`) | failpoint | Linux, macOS, Windows |  |
+| Ref log: torn tail repaired / complete damaged record refused | `fully_framed_checksum_failure_is_never_truncated` (`crates/prikk-store/src/refs/tests/publication_recovery.rs`) | byte-state | Linux, macOS, Windows |  |
+| Pointer index: tail repaired, saves bytes | `truncate_pointer_index_trailing_partial_truncates_a_torn_tail_and_saves_the_bytes` (`crates/prikk-store/src/refs/pointer_index/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| `--rebuild-pointer-index`: every write ordinal reads old or new | `failpoints_at_every_write_ordinal_read_as_old_or_new_never_a_mix` (`crates/prikk-store/src/pointer_rebuild/tests/k4_failpoints_and_race.rs`) | failpoint | Linux, macOS, Windows |  |
+| `sync seal` row 1 (before the first claim's first write) | `crash_row1_before_the_first_claims_first_write` (`crates/prikk-cli/tests/sync_and_exchange/s2a_sync_seal_corpus.rs`) | real-kill | Linux, macOS |  |
+| `sync seal` row 2 (between claims) | `crash_row2_between_claims` (`crates/prikk-cli/tests/sync_and_exchange/s2a_sync_seal_corpus.rs`) | real-kill | Linux, macOS |  |
+| `sync seal` row 3 (a block written, not published) | `crash_row3_a_block_written_and_not_published` (`crates/prikk-cli/tests/sync_and_exchange/s2a_sync_seal_corpus.rs`) | real-kill | Linux, macOS |  |
+| `sync seal` row 4 (a claim published, next not started) | `crash_row4_a_claim_published_the_next_not_started` (`crates/prikk-cli/tests/sync_and_exchange/s2a_sync_seal_corpus.rs`) | real-kill | Linux, macOS |  |
+| `sync seal` row 5 (all published, worktree not materialized) | `crash_row5_every_claim_published_the_worktree_not_materialized` (`crates/prikk-cli/tests/sync_and_exchange/s2a_sync_seal_corpus.rs`) | real-kill | Linux, macOS |  |
+| Rule D: `seal` refuses on a pointer-index fault before any write | `seal_refuses_on_every_pointer_index_fault_before_any_write` (`crates/prikk-cli/tests/verify_and_doctor/rfc164_rule_d_refuse_before_first_write.rs`) | byte-state | Linux, macOS, Windows |  |
+| Object container: interrupted append is a warning, later objects scanned | `an_interrupted_append_that_nothing_names_is_a_warning_and_every_later_object_is_scanned` (`crates/prikk-cli/tests/verify_and_doctor/interrupted_append.rs`) | byte-state | Linux, macOS, Windows |  |
+| Object write: sync failure retains and classifies | `object_write_sync_failure_retains_and_classifies` (`crates/prikk-store/src/foundation/fsutil/caller_tests/sync_matrix.rs`) | failpoint | Linux, macOS |  |
+| Object index: torn append, next write rebuilds | `m2_a_torn_index_append_then_a_write_no_longer_refuses_everything` (`crates/prikk-cli/tests/verify_and_doctor/rfc162_recovery_matrix.rs`) | byte-state | Linux, macOS, Windows |  |
+| Object index: crash during `--repair-index` leaves the old index | `a_crash_during_index_repair_leaves_the_previous_index_intact` (`crates/prikk-store/src/object_store/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Cache atomic replace: sync/rename failure keeps the old file | `failed_mutable_rename_keeps_previous_authoritative_state` (`crates/prikk-store/src/foundation/fsutil/tests.rs`) | failpoint | Linux, macOS |  |
+| Lifecycle cache/commit index: `commit` killed at every write ordinal | `a_cold_anchored_commit_kill_sweep_recovers_at_every_write_ordinal` (`crates/prikk-store/src/lifecycle_cache/incremental/tests/baseline.rs`) | failpoint | Linux, macOS, Windows |  |
+| Verified-blocks record: damaged file reads empty | `a_damaged_or_foreign_record_reads_empty` (`crates/prikk-store/src/verified_blocks/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| Current-branch pointer: switch torn between truncate and append | `a_switch_interrupted_between_the_pointer_truncate_and_append_leaves_a_torn_pointer_and_the_named_switch_completes_it` (`crates/prikk-store/src/branch_switch/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| `FORMAT` marker write torn | `a_format_marker_write_torn_before_its_byte_leaves_the_marker_at_six` (`crates/prikk-store/src/format_upgrade/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Switch marker: crash at clear leaves it dirty | `crash_during_clear_leaves_the_marker_dirty_not_clean` (`crates/prikk-store/src/worktree_marker/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Publish then materialize crash recovered by `branch switch` | `a_crash_between_publish_and_materialize_recovers_via_branch_switch` (`crates/prikk-store/src/worktree_materialize/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Torn tail at each guarded file: a writer refuses, writes nothing (pointer index) | `pointer_index_a_write_refuses_on_an_unclean_tail_then_the_repair_lets_it_through` (`crates/prikk-cli/tests/verify_and_doctor/rfc163_write_never_buries_a_crash_state.rs`) | byte-state | Linux, macOS, Windows |  |
+| `--repair-tails`: interior damage in one file refuses, truncates nothing | `interior_damage_on_one_file_refuses_and_touches_nothing` (`crates/prikk-store/src/doctor/repair_tails/tests.rs`) | byte-state | Linux, macOS, Windows |  |
+| `compact`: slot-switch failpoint | `a_crash_while_truncating_the_retired_slot_leaves_the_previous_generation_authoritative` (`crates/prikk-store/src/compact/tests.rs`) | failpoint | Linux, macOS |  |
+| `bundle import` killed mid-import | `a_real_sigkill_mid_write_loop_leaves_a_clean_repository_and_stale_locks_until_unlock` (`crates/prikk-cli/tests/archive_and_bundle/bundle_import_real_kill.rs`) | real-kill | Linux, macOS |  |
+| Archive import killed mid-objects: resume, or cancel restores every container | `killed_mid_objects_resumes_cleanly_and_a_separate_cancel_restores_every_container` (`crates/prikk-store/src/archive/import/tests.rs`) | failpoint | Linux, macOS, Windows |  |
+| Archive import killed (real SIGKILL) mid-objects, recovered through `doctor` and `unlock` | `a_real_sigkill_mid_objects_is_recovered_through_doctor_and_unlock` (`crates/prikk-cli/tests/rfc155_part_ib2_real_kill.rs`) | real-kill | Linux, macOS |  |
+| `sync accept`: failpoint between passes | `a_write_error_exits_1_and_a_rerun_finishes_from_the_state_it_left` (`crates/prikk-cli/tests/sync_and_exchange/p3b_streaming_accept.rs`) | failpoint | Linux, macOS, Windows |  |
+| Lock left by a crashed holder: verdict by liveness | `an_exited_but_unreaped_child_does_not_appear_running` (`crates/prikk-store/src/lock_holder/tests.rs`) | unit | Linux, macOS |  |
+| A pointer lead whose holder's liveness is unknown reads as interrupted, with its reason | `an_unknown_holder_is_interrupted_and_says_why` (`crates/prikk-store/src/refs/in_flight/tests.rs`) | unit | Linux, macOS, Windows | [os-varies] |
+<!-- assurance-table:end -->
+
+**What each kind proves, and what it does not.**
+
+- **real-kill**: a `prikk` process is killed or aborted at a chosen point, and a second process reads and recovers. It proves the
+  recovery reads the state a killed process of this binary leaves on this filesystem, locks included. It does not prove a state the
+  chosen point does not reach, and it does not prove what the operating system does after a power cut: a killed process's written
+  bytes still reach the disk, a power cut can lose them.
+- **failpoint**: an error is injected at a named write or sync, counted by ordinal (a sweep tries every ordinal). It proves the
+  recovery from the state the code would leave at that point. It does not prove the list of points is complete (a write with no
+  failpoint is not tried), and it does not stop the process or lose any bytes: the injected error returns.
+- **byte-state**: the test writes the torn, damaged or leftover bytes by hand, then runs the command. It proves the command's
+  behaviour on exactly those bytes. It does not prove the code can leave them, or that no other shape exists.
+- **unit**: a recovery or classification function is called on a built input. It proves the function's decision for that input. It
+  does not prove the command calls it, or calls it at the right moment.
+
+**Where each test runs.** The column is derived by the gate, not typed in from memory: a test's platforms are the operating systems
+on which CI runs a whole, unfiltered `cargo test --workspace` (read from `.github/workflows/ci.yml`: Linux, macOS and Windows, the
+Linux job twice, on the stable and the minimum toolchain) intersected with the `cfg` of the test and of every module and file above
+it. A change that makes the gate unable to read this (a filter on a suite step, a matrix, an unknown `cfg`) fails it rather than
+narrowing the column. **No real-kill test runs on Windows**: every one is `cfg(unix)`, as are the fsutil failpoint matrices; on
+Windows the evidence for a crash point is a failpoint or a hand-built state. `[os-varies]` in the note column marks a test that
+branches on the operating system *while it runs* (`cfg!`): it is built and run everywhere, but may assert less on some, which the
+column cannot show. The gate sees the test's own body only, not the helpers it calls.
+
+**Crash points no test holds**, so that this table is not read as wider than it is (each is a candidate in the ROADMAP, not a
+defect found by running anything):
+
+- There is **no real kill of `commit`, `seal`, or the repair verbs** (`--repair-wal-tail`, `--discard-damaged-commits`,
+  `--restore-queue-target`); `seal` is held between its pointer append and its log append by failpoints and hand-built states, and
+  not between its object writes and the pointer append. Only `bundle import`, `archive import`, `tag create` and `sync seal` are
+  killed for real.
+- **No real-kill test runs on Windows**, and a power loss that loses the recovery log's first-creation name on Windows is not
+  injectable (the residual stated above).
+- A torn write of `ref-name` by `doctor --restore-queue-target`, undone by `--recovery-restore`; a failure *saving* the recovery
+  log during `--repair-wal-tail`; a kill or failpoint on the received-pointer append and on `bundle import --adopt`'s publish; the
+  archive import journal read by `verify`, and a torn or damaged journal; a crash during the atomic replace of the verified-blocks
+  record, the commit index or the lifecycle cache on its own; `sync accept` killed for real; `compact` killed for real and
+  `compact --plan-only` over a tail; crash-left object temp files (above).
 
 ## Deferred Work
 

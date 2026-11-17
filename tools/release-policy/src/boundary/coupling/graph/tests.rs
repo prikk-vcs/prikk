@@ -24,6 +24,22 @@ fn write_module(root: &Path, relative: &str, content: &str) {
     std::fs::write(full, content).unwrap();
 }
 
+/// 0.58.0 A: a raw string (`r#"…"#`) ends at its own terminator, so a quote inside it does not flip the scan into and out of
+/// "string" and a `crate::` path after it is still seen (and one inside it is not). **Red control:** without the raw-string branch in
+/// `classify`, the inner quote ends the span early and `crate::inside_raw` is read as code.
+#[test]
+fn a_raw_string_is_one_span_whatever_quotes_it_holds() {
+    let raw = "fn f() { let s = r#\"say \"crate::inside_raw\" now\"#; crate::after_raw::Thing::new(); let b = br\"crate::in_bytes\"; }";
+    let text = production_edge_text_for_tests(raw);
+    assert!(!text.contains("crate::inside_raw"), "{text}");
+    assert!(!text.contains("crate::in_bytes"), "{text}");
+    assert!(text.contains("crate::after_raw"), "{text}");
+    // An identifier that merely ends in `r` is not a raw-string opener.
+    let text =
+        production_edge_text_for_tests("fn f() { let o = bar#\"x\"; crate::kept::T::new(); }");
+    assert!(text.contains("crate::kept"), "{text}");
+}
+
 #[test]
 fn production_edge_text_strips_comments_and_strings() {
     let raw = "// crate::commented_out\nfn f() { let s = \"crate::in_a_string\"; crate::real_edge::Thing::new(); }";
