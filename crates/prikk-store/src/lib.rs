@@ -165,13 +165,14 @@ pub use block_state::{
 };
 pub use branch_switch::{BranchSwitchReport, switch_branch};
 pub use bundle::{
-    BundleAdoption, BundleConnectivityClass, BundleExportReport, BundleImportOptions,
-    BundleImportRefusal, BundleImportReport, BundleManifest, BundlePreviewConflict,
-    BundlePreviewConnectivity, BundlePreviewEffect, BundlePreviewEffectKind, BundlePreviewReport,
-    BundlePreviewSealerSignature, BundleScope, BundleSource, BundleVerifyReport,
-    DEFAULT_BUNDLE_MAX_OBJECT_BYTES, DEFAULT_BUNDLE_MAX_OBJECT_COUNT,
-    DEFAULT_BUNDLE_MAX_TOTAL_BYTES, RefStateChainRelation, export_bundle, import_bundle,
-    import_bundle_adopting, preview_bundle, preview_bundle_reporting_anchor, verify_bundle,
+    AdoptionRequest, BundleAdoption, BundleConnectivityClass, BundleExportReport,
+    BundleImportAdoption, BundleImportOptions, BundleImportRefusal, BundleImportReport,
+    BundleManifest, BundlePreviewConflict, BundlePreviewConnectivity, BundlePreviewEffect,
+    BundlePreviewEffectKind, BundlePreviewReport, BundlePreviewSealerSignature, BundleScope,
+    BundleSource, BundleVerifyReport, DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
+    DEFAULT_BUNDLE_MAX_OBJECT_COUNT, DEFAULT_BUNDLE_MAX_TOTAL_BYTES, RefStateChainRelation,
+    export_bundle, import_bundle, import_bundle_adopting, preview_bundle, preview_bundle_adopting,
+    preview_bundle_reporting_anchor, verify_bundle,
 };
 #[cfg(feature = "test-support")]
 pub use bundle::{

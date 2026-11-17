@@ -76,9 +76,10 @@ use std::ops::Range;
 
 mod adopt;
 pub(crate) mod adopt_local_ref;
+mod decision;
 mod preview;
 
-pub use adopt::BundleAdoption;
+pub use adopt::{AdoptionRequest, BundleAdoption};
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
@@ -87,8 +88,7 @@ use prikk_object::{
 };
 
 use crate::author::author_key_index::{
-    AuthorKeyEntry, check_author_key_conflict, lookup_author_key_entries,
-    record_author_key_material,
+    AuthorKeyEntry, lookup_author_key_entries, record_author_key_material,
 };
 #[cfg(test)]
 use crate::foundation::byte_cursor::ByteCursor;
@@ -562,6 +562,18 @@ pub struct BundleImportRefusal {
     pub message: String,
 }
 
+/// Where `bundle import --adopt` of this exact delivery would land it (0.58.0 B′b), reported by `bundle preview --adopt`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BundleImportAdoption {
+    /// `true`: published as a real local branch. `false`: it lands under `remotes/`, and `reason` says why.
+    pub adopted: bool,
+    /// The ref the delivery would land as (`heads/<name>` or `remotes/<name>`).
+    pub landed_as: String,
+    /// Why it would not be adopted (or the import's note when it would be, despite a rollback).
+    pub reason: Option<String>,
+}
+
 /// Full report of previewing a bundle's impact on a local ref (RFC 144 §4m), never mutating
 /// anything -- see [`preview_bundle`]'s own doc comment for the write-nothing guarantee and its
 /// control.
@@ -628,6 +640,9 @@ pub struct BundlePreviewReport {
     /// the import's own check costs: one Ed25519 verification per signature of each unique Block and
     /// RefState.
     pub import_refusals: Vec<BundleImportRefusal>,
+    /// 0.58.0 B′b: where `bundle import --adopt` of this exact delivery would land it. `None` without `--adopt`, and when a refusal in
+    /// `import_refusals` stops the adoption (it says which).
+    pub import_adoption: Option<BundleImportAdoption>,
 }
 
 /// Preview what a bundle would do to `ref_name` in this repository, **writing nothing** (RFC 144
@@ -669,34 +684,53 @@ pub fn preview_bundle_reporting_anchor(
     BundlePreviewReport,
     Vec<crate::patch_replay::SnapshotAnchorFallback>,
 )> {
-    let read_snapshot = ObjectReadSnapshot::open(layout)?;
-    let metadata = decode_bundle_closure_metadata(source, options, Some(layout.format()))?;
-    // 0.57.0 U4: the same refusal `import_bundle` gives, so a preview never says an import would work when it cannot.
-    if let Some(declared) = &metadata.manifest {
-        crate::artifact_format::require_receiver_can_hold(
-            crate::artifact_format::ArtifactKind::Bundle,
-            declared.repository_format,
-            layout.format(),
-        )?;
-    }
-    // No lock: this never writes, so there is nothing to protect. `local: Some(&read_snapshot)`
-    // -- a referenced object may be satisfied by the bundle or the repository's own existing
-    // objects (D7's incremental-import rule). `validate_bundle_closure` already resolves and
-    // present-checks the bundle's own exported-ref tip as part of item 1, so `bundle_target` is
-    // returned here rather than re-derived with a second `resolve_ref_tip_block` call.
-    let (ref_state_id, _bundle_key_ids, bundle_target) = validate_bundle_closure(
-        source,
-        &metadata.origin_ref_name,
-        &metadata.prepared,
-        &metadata.index_by_id,
-        &metadata.membership,
-        &metadata.closure_by_id,
-        Some(&read_snapshot),
-        &metadata.author_keys,
-        metadata.manifest.as_ref(),
-        metadata.object_count,
-    )?;
+    preview_bundle_adopting(layout, source, options, ref_name, None)
+}
 
+/// [`preview_bundle_reporting_anchor`], optionally also answering `bundle import --adopt` (0.58.0 B′b). `options` carries the import's
+/// decision-changing flags (`--max-object-bytes`, `--allow-non-fast-forward`); `adoption` is `--adopt`, as the receiver's configured
+/// maintainer key id (never the seed: a preview opens no secret; `bundle import`, which signs, is what proves the id is the seed's) and
+/// current branch.
+///
+/// **The decision is the import's own function** (`decision::decide`), called without a lock: every refusal the import's first pass
+/// raises is listed in `import_refusals`, in the import's order, **against this repository as it reads it now**. It does not run the
+/// second pass's per-object checks (a frame that changed since, an I/O failure while writing).
+pub fn preview_bundle_adopting(
+    layout: &RepositoryLayout,
+    source: &mut BundleSource,
+    options: &BundleImportOptions,
+    ref_name: &str,
+    adoption: Option<&AdoptionRequest>,
+) -> Result<(
+    BundlePreviewReport,
+    Vec<crate::patch_replay::SnapshotAnchorFallback>,
+)> {
+    let header = decision::read_header(source, options)?;
+    let mut read_snapshot = ObjectReadSnapshot::open(layout)?;
+    // No lock: this never writes, so there is nothing to protect. The decision reads a referenced object from the bundle or from the
+    // repository's own existing objects (D7's incremental-import rule), and already resolved the bundle's exported-ref tip.
+    let decided = decision::decide(
+        layout,
+        options,
+        adoption,
+        header,
+        source,
+        &mut read_snapshot,
+    )?;
+    let decision::ImportDecision {
+        origin_ref_name,
+        received_ref_name: import_received_ref_name,
+        prepared,
+        index_by_id,
+        manifest,
+        ref_state_id,
+        tip_block_id: bundle_target,
+        class: import_class,
+        ref_state_chain: import_ref_state_chain,
+        adoption: adoption_decision,
+        refusals,
+        ..
+    } = decided;
     // 0.55.0 step 3 Part 3b-iv: one shared seekable source and one shared decode cache behind
     // both readers built from it below -- a read through either reuses a decode the other
     // already paid for, and `source` is borrowed, never duplicated (there is only one real
@@ -705,8 +739,8 @@ pub fn preview_bundle_reporting_anchor(
     let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
     let bundle_only_reader = BundleAndLocalReader {
         source: &source_cell,
-        prepared: &metadata.prepared,
-        index_by_id: &metadata.index_by_id,
+        prepared: &prepared,
+        index_by_id: &index_by_id,
         cache: &cache,
         local: None,
     };
@@ -787,8 +821,8 @@ pub fn preview_bundle_reporting_anchor(
                 crate::refs::resolve_ref_tip_block(&read_snapshot, &local_ref_state_payload)?;
             let combined_reader = BundleAndLocalReader {
                 source: &source_cell,
-                prepared: &metadata.prepared,
-                index_by_id: &metadata.index_by_id,
+                prepared: &prepared,
+                index_by_id: &index_by_id,
                 cache: &cache,
                 local: Some(&read_snapshot),
             };
@@ -813,102 +847,32 @@ pub fn preview_bundle_reporting_anchor(
         }
     };
 
-    // 0.56.0 step 3c2 (R3): always compute the classification `bundle import` of this exact
-    // delivery would actually make -- against the received pointer at `remotes/<the bundle's
-    // own exported ref name>`, independent of whatever `ref_name` was asked for display purposes
-    // above (the two can genuinely differ: previewing a `heads/feature`-named bundle's impact
-    // against a local `heads/main`, say, while `bundle import` would still only ever write to
-    // `remotes/feature`). Reuses `import_bundle`'s own pre-write classification
-    // (`classify_import_connectivity`), over the identical pass-1 `closure_by_id` metadata and
-    // `read_snapshot` this function already built above -- no new reader, no second decode of
-    // anything the bundle carries.
-    let import_received_ref_name = format!("remotes/{}", metadata.origin_ref_name);
-    let import_received_pointer =
-        crate::received::read_received_pointer(layout, &import_received_ref_name)?;
-    let (import_class, import_ref_state_chain) = match &import_received_pointer {
-        None => (BundleConnectivityClass::NoLocalHistory, None),
-        Some(pointer) => {
-            let (class, chain) = classify_import_connectivity(
-                &read_snapshot,
-                &metadata.closure_by_id,
-                pointer,
-                bundle_target,
-                ref_state_id,
-                &import_received_ref_name,
-            )?;
-            (class, Some(chain))
-        }
-    };
-
-    // 0.57.0 step 1b2/1b3: the refusals for the delivery's class and its maintainer signatures that
-    // `bundle import` of this exact delivery would raise without flags, **in the import's own order**,
-    // each from the import's own function:
-    //   1. pass 1's signature admission of an object this repository already holds
-    //      (`CarriedSignatureAdmitter::admit_one`, read-only), which refuses a forged extra signature
-    //      with the same `forged-publication-signature` as the new-object check;
-    //   2. the delivery-class refusal (`non_fast_forward_refusal`, with the option off);
-    //   3. the new-object check (`find_forged_publication_signature`).
-    // **At most one signature entry**: the first the import would meet (a held-object forgery is met
-    // before the class check, a new-object one after it). A class refusal does not stop the
-    // signature checks from running: the user who lifts it with `--allow-non-fast-forward` would meet
-    // the signature one.
-    let forged_entry = |forged: ForgedPublicationFinding| BundleImportRefusal {
-        id: "forged-publication-signature",
-        object_type: Some(forged.object_type),
-        object_id: Some(forged.object_id),
-        message: forged.error.to_string(),
-    };
-    let held_admission_forgery = {
-        let admitter = CarriedSignatureAdmitter::new(layout, "bundle-import")?;
-        let mut author_material = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
-            let mut entries = lookup_author_key_entries(layout, key_id)?;
-            entries.extend(
-                metadata
-                    .author_keys
-                    .iter()
-                    .filter(|entry| entry.key_id == key_id)
-                    .cloned(),
-            );
-            Ok(entries)
-        };
-        find_forged_in_held_admission(
-            &admitter,
-            &read_snapshot,
-            &bundle_only_reader,
-            &mut author_material,
-        )?
-    };
-    let mut import_refusals: Vec<BundleImportRefusal> = Vec::new();
-    let signature_entry_found = held_admission_forgery.is_some();
-    if let Some(forged) = held_admission_forgery {
-        import_refusals.push(forged_entry(forged));
-    }
-    if let Some(error) = non_fast_forward_refusal(
-        import_received_pointer.is_some(),
-        import_class,
-        &import_received_ref_name,
-        false,
-    ) {
-        let id = match &error {
-            PrikkError::BundleNonFastForward { class, .. } => *class,
-            _ => import_class.as_str(),
-        };
-        import_refusals.push(BundleImportRefusal {
-            id,
-            object_type: None,
-            object_id: None,
-            message: error.to_string(),
-        });
-    }
-    if !signature_entry_found {
-        if let Some(forged) = find_forged_publication_signature(
-            "bundle-import",
-            &adopted_policy,
-            &bundle_only_reader,
-        )? {
-            import_refusals.push(forged_entry(forged));
-        }
-    }
+    // The classification and every refusal `bundle import` of this exact delivery would raise, from the import's own decision (0.58.0
+    // B′b): the class against the received pointer at `remotes/<the bundle's own exported ref name>` -- independent of the `ref_name`
+    // asked for display above (the two can genuinely differ) -- and then each refusal in the import's order, with the import's sentence.
+    let import_refusals: Vec<BundleImportRefusal> = refusals
+        .into_iter()
+        .map(|refusal| BundleImportRefusal {
+            id: refusal.id,
+            object_type: refusal.object.map(|(object_type, _)| object_type),
+            object_id: refusal.object.map(|(_, object_id)| object_id),
+            message: refusal.error.to_string(),
+        })
+        .collect();
+    let import_adoption = adoption.and_then(|_| match &adoption_decision {
+        adopt::AdoptionDecision::Adopt(plan) => Some(BundleImportAdoption {
+            adopted: true,
+            landed_as: origin_ref_name.clone(),
+            reason: plan.remote_reason.clone(),
+        }),
+        adopt::AdoptionDecision::FellThrough { reason } => Some(BundleImportAdoption {
+            adopted: false,
+            landed_as: import_received_ref_name.clone(),
+            reason: Some(reason.clone()),
+        }),
+        // A hard adoption refusal: `import_refusals` says which.
+        adopt::AdoptionDecision::NotRequested => None,
+    });
 
     let connectivity = match preview.connectivity {
         preview::BundleConnectivity::NoLocalHistory => BundlePreviewConnectivity::NoLocalHistory,
@@ -953,14 +917,14 @@ pub fn preview_bundle_reporting_anchor(
 
     Ok((
         BundlePreviewReport {
-            bundle_ref_name: metadata.origin_ref_name,
+            bundle_ref_name: origin_ref_name,
             local_ref_name: ref_name.to_string(),
             connectivity,
             conflict,
             sealed_by,
             sealed_by_signatures,
             effects,
-            manifest: metadata.manifest.map(|raw| BundleManifest {
+            manifest: manifest.map(|raw| BundleManifest {
                 repository_format: raw.repository_format,
                 tool_version: raw.tool_version,
                 scope: raw.scope,
@@ -970,6 +934,7 @@ pub fn preview_bundle_reporting_anchor(
             import_class,
             import_ref_state_chain,
             import_refusals,
+            import_adoption,
         },
         anchor_fallbacks,
     ))
@@ -2043,51 +2008,7 @@ pub fn import_bundle_adopting(
     options: &BundleImportOptions,
     adoption: Option<&BundleAdoption<'_>>,
 ) -> Result<BundleImportReport> {
-    let read_snapshot = ObjectReadSnapshot::open(layout)?;
-
-    // Header-only checks, before the lock (Q1): the declared total size and the format magic.
-    let total_len = source.seek(SeekFrom::End(0)).map_err(|err| {
-        PrikkError::Integrity(format!("bundle import: failed to measure the input: {err}"))
-    })?;
-    source.seek(SeekFrom::Start(0)).map_err(|err| {
-        PrikkError::Integrity(format!("bundle import: failed to rewind the input: {err}"))
-    })?;
-    if total_len > len_to_u64(options.max_total_bytes)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle is {total_len} bytes, over the configured limit of {} bytes",
-            options.max_total_bytes
-        )));
-    }
-    let magic: [u8; 8] = read_array_from(source)?;
-    let (has_author_key_section, has_manifest_section) = if &magic == BUNDLE_MAGIC {
-        (true, true)
-    } else if &magic == RETIRED_BUNDLE_MAGIC_V2 {
-        (true, false)
-    } else if &magic == RETIRED_BUNDLE_MAGIC_V1 {
-        (false, false)
-    } else {
-        return Err(PrikkError::MalformedData(
-            "invalid bundle magic".to_string(),
-        ));
-    };
-    // The origin ref name is a header field too (distinct from the exported RefState's own signed
-    // `ref_name`, checked against it below) -- cheap, needed for `validate_received_ref` before the
-    // lock, and part of the judgment call Q1 leaves to this implementation.
-    let origin_ref_name = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-        .map_err(|err| {
-            PrikkError::MalformedData(format!("invalid bundle ref name utf-8: {err}"))
-        })?;
-    let count = read_u64_from(source)?;
-    if count > len_to_u64(options.max_object_count)? {
-        return Err(PrikkError::MalformedData(format!(
-            "bundle declares {count} objects, over the configured limit of {}",
-            options.max_object_count
-        )));
-    }
-    let object_count = u64_to_usize(count)?;
-
-    let received_ref_name = format!("remotes/{origin_ref_name}");
-    crate::received::validate_received_ref(&received_ref_name)?;
+    let header = decision::read_header(source, options)?;
 
     // Gated like its only caller: `bundle`'s tests are Linux-only.
     #[cfg(test)]
@@ -2116,95 +2037,40 @@ pub fn import_bundle_adopting(
         lock_set.push(LockableContainer::RefLog);
     }
     let _container_locks = acquire_container_locks(layout, &lock_set)?;
-    crate::received::received_index::require_received_index_clean_tail(layout)?;
 
-    let objects_start = stream_position_usize(source)?;
-    // RFC 156 §4 needs the author-key section's own transported material before admission can run
-    // for a Patch a newly-carried key_id introduces -- skip past the object frames (without reading
-    // any of their bodies) to reach it, read it, then seek back to do the real per-object pass.
-    skip_object_frames(source, count, options.max_object_bytes)?;
-    let mut author_keys: Vec<AuthorKeyEntry> = Vec::new();
-    if has_author_key_section {
-        let author_key_count = read_u64_from(source)?;
-        if author_key_count > len_to_u64(options.max_object_count)? {
-            return Err(PrikkError::MalformedData(format!(
-                "bundle declares {author_key_count} author key entries, over the configured limit \
-                 of {}",
-                options.max_object_count
-            )));
-        }
-        for _ in 0..author_key_count {
-            let key_id = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-                .map_err(|err| {
-                PrikkError::MalformedData(format!("invalid bundle author key_id utf-8: {err}"))
-            })?;
-            Signature::validate_key_id(&key_id)?;
-            let public_key = read_array_from::<32>(source)?;
-            author_keys.push(AuthorKeyEntry { key_id, public_key });
-        }
-    }
-    let manifest = if has_manifest_section {
-        let repository_format = u32::try_from(read_u64_from(source)?).map_err(|_| {
-            PrikkError::MalformedData(
-                "bundle manifest declares a repository format number that does not fit in u32"
-                    .to_string(),
-            )
-        })?;
-        // 0.57.0 U4: the bundle's declared format used to be informational; a number this build does not know is
-        // now refused, as the archive's always was.
-        crate::artifact_format::require_known_declared_format(
-            crate::artifact_format::ArtifactKind::Bundle,
-            repository_format,
-        )?;
-        let tool_version = String::from_utf8(read_bytes_u64_from(source, options.max_total_bytes)?)
-            .map_err(|err| {
-                PrikkError::MalformedData(format!(
-                    "invalid bundle manifest tool version utf-8: {err}"
-                ))
-            })?;
-        let declared_ref_name = String::from_utf8(read_bytes_u64_from(
-            source,
-            options.max_total_bytes,
-        )?)
-        .map_err(|err| {
-            PrikkError::MalformedData(format!("invalid bundle manifest ref name utf-8: {err}"))
-        })?;
-        let declared_object_count = read_u64_from(source)?;
-        let scope = BundleScope::from_wire_tag(read_u64_from(source)?)?;
-        Some(DecodedManifest {
-            repository_format,
-            tool_version,
-            scope,
-            declared_ref_name,
-            declared_object_count,
-        })
-    } else {
-        None
-    };
-    let end_position = stream_position_usize(source)?;
-    if end_position as u64 != total_len {
-        return Err(PrikkError::MalformedData(
-            "trailing bytes in bundle".to_string(),
-        ));
-    }
-    // 0.57.0 U4: a bundle from a repository that can hold non-ASCII paths (format 8 and later) is refused by one that
-    // cannot, before the first object is written, naming `prikk format upgrade`.
-    if let Some(declared) = &manifest {
-        crate::artifact_format::require_receiver_can_hold(
-            crate::artifact_format::ArtifactKind::Bundle,
-            declared.repository_format,
-            layout.format(),
-        )?;
+    // **The decision**, under the locks, by the one function the preview also calls (0.58.0 B′b): nothing below the first refusal is
+    // written, and the refusal raised is the first one the import has always raised. The snapshot is opened here, under the locks (it
+    // used to be opened before them and again, as a write session, after), and dropped before the write session is opened.
+    let mut store = ObjectReadSnapshot::open(layout)?;
+    let request = adoption.map(BundleAdoption::request);
+    let decided = decision::decide(
+        layout,
+        options,
+        request.as_ref(),
+        header,
+        source,
+        &mut store,
+    )?;
+    drop(store);
+    let decision::ImportDecision {
+        origin_ref_name,
+        received_ref_name,
+        object_count,
+        prepared,
+        author_keys,
+        ref_state_id,
+        class: connectivity_class,
+        ref_state_chain,
+        adoption: adoption_decision,
+        write_order,
+        refusals,
+        ..
+    } = decided;
+    if let Some(refusal) = refusals.into_iter().next() {
+        return Err(refusal.error);
     }
 
-    source
-        .seek(SeekFrom::Start(objects_start as u64))
-        .map_err(|err| {
-            PrikkError::Integrity(format!(
-                "bundle import: failed to seek back to the object frames: {err}"
-            ))
-        })?;
-
+    // The plan is applied from here. The write session, the admitter and the author material are the apply phase's own.
     let mut object_store = ObjectWriteSession::open(layout)?;
     let admitter = CarriedSignatureAdmitter::new(layout, "bundle-import")?;
     let mut author_material_closure = |key_id: &str| -> Result<Vec<AuthorKeyEntry>> {
@@ -2217,254 +2083,6 @@ pub fn import_bundle_adopting(
         );
         Ok(entries)
     };
-
-    // 0.55.0 step 3 Part 3b-i2 (Q1/Q2, fusing what used to be `validate_bundle_contents`'s own
-    // decode and `import_bundle`'s own pass 1): one forward walk over the object frames, reading
-    // each exactly once, in file order. For every object it decides RFC 156 §4 admission and the
-    // store's own write decision (R4), and extracts the handful of ids `validate_bundle_closure`
-    // below needs (Q1) -- never the decoded envelope itself past its own turn in this loop, and
-    // never more than one frame's content in memory at a time.
-    let mut prepared: Vec<PreparedObject> = Vec::new();
-    let mut index_by_id: BTreeMap<ObjectId, usize> = BTreeMap::new();
-    let mut membership: BTreeMap<ObjectId, ObjectType> = BTreeMap::new();
-    let mut closure_by_id: BTreeMap<ObjectId, ClosureMetadata> = BTreeMap::new();
-    for _ in 0..count {
-        let start = stream_position_usize(source)?;
-        let (declared_bytes, body) = read_frame_body_from(source, options.max_object_bytes)?;
-        let end = start
-            .checked_add(8)
-            .and_then(|v| v.checked_add(body.len()))
-            .ok_or_else(|| {
-                PrikkError::Integrity("bundle import: frame range overflow".to_string())
-            })?;
-        let real_frame_digest = prikk_hash::sha256_parts(&[&declared_bytes.to_be_bytes(), &body]);
-        let envelope = decode_envelope_file(&body)?;
-        // 0.55.0 step 3 Part 3b-ii2 (N1): `body` (the largest buffer this turn holds) is never
-        // read again past this point -- `envelope.canonical_payload` already owns its own copy.
-        // Dropped here rather than left to the end of this loop's own scope, so it is not still
-        // resident while `admit_one`/`closure_metadata_for` run their own allocations below.
-        drop(body);
-        let object_id = envelope.object_id();
-
-        // 0.55.0 step 3 Part 3b-i's own fix, restated for the streaming walk: a bundle may carry
-        // the same id twice with byte-identical bytes ("an exact repeat is harmless and allowed").
-        // Resolved here, as each occurrence is read, rather than after the fact -- the second
-        // occurrence of a harmless repeat is never admitted at all, so R4's cross-pass assertion
-        // can no longer be tripped by this import's own duplicate the way it once was.
-        if let Some(&existing_index) = index_by_id.get(&object_id) {
-            if !prepared_matches_existing(
-                source,
-                &prepared,
-                existing_index,
-                real_frame_digest,
-                &envelope,
-            )? {
-                return Err(PrikkError::MalformedData(format!(
-                    "bundle carries object {object_id} twice with different envelopes -- \
-                     refusing the whole bundle"
-                )));
-            }
-            continue;
-        }
-
-        let already_present = object_store.contains_object(envelope.object_type, object_id)?;
-        let object_type = envelope.object_type;
-        // 0.55.0 step 3 Part 3b-ii: extracted before `admit_one`, not after -- closure metadata
-        // never depends on the admission result, and `admit_one` now takes `envelope` by value
-        // (below), so this must read it first.
-        let (same_kind_dependencies, closure) =
-            closure_metadata_for(&envelope, Some(layout.format()))?;
-        // RFC 156 §4 rules 1-3, format 7: for every carried object this repository already holds,
-        // which of its signatures may join the stored record. Verified here, before anything is
-        // written; an invalid one refuses the whole import.
-        let admitted = admitter.admit_one(&object_store, envelope, &mut author_material_closure)?;
-        object_store.check_write(&admitted.envelope)?;
-        let merged = admitted.merged;
-        // 0.55.0 step 3 Part 3b-ii2 (N1): `admitted.envelope` (the decoded payload, same size as
-        // `body` above) is never read again once `check_write` has validated it -- pass 1 keeps
-        // only `merged` from here on. Dropped explicitly rather than left alive through the push
-        // below, for the same reason as `body`'s own early drop.
-        drop(admitted);
-        #[cfg_attr(not(test), allow(unused_mut))]
-        let mut admission_outcome = if !already_present {
-            AdmissionOutcomeKind::New
-        } else if merged {
-            AdmissionOutcomeKind::Merged
-        } else {
-            AdmissionOutcomeKind::AlreadyPresent
-        };
-        #[cfg(test)]
-        {
-            admission_outcome = corrupted_admission_outcome_for_test(object_id, admission_outcome);
-        }
-        #[cfg_attr(not(test), allow(unused_mut))]
-        let mut frame_digest = real_frame_digest;
-        #[cfg(test)]
-        {
-            frame_digest = corrupted_frame_digest_for_test(object_id, frame_digest);
-        }
-
-        let index = prepared.len();
-        prepared.push(PreparedObject {
-            object_id,
-            object_type,
-            same_kind_dependencies,
-            frame_range: start..end,
-            frame_digest,
-            admission_outcome,
-        });
-        index_by_id.insert(object_id, index);
-        membership.insert(object_id, object_type);
-        closure_by_id.insert(object_id, closure);
-    }
-
-    // The same structural/closure validation `validate_bundle_contents` used to run before any
-    // lock was even taken (Q1): now run against the cheap metadata collected above, under this
-    // same held lock, after admission -- both are decide-only (neither writes), so running
-    // admission first changes only which refusal surfaces for a bundle invalid on more than one
-    // ground, never the "nothing written on any refusal" guarantee.
-    // 0.55.0 step 3 Part 3b-iv: `validate_bundle_closure` also returns the resolved tip block --
-    // `import` itself has no use for it (a received pointer names a RefState, not a Block), so
-    // it's discarded here; `verify`/`preview` are the callers that need it.
-    let (ref_state_id, bundle_key_ids, tip_block_id) = validate_bundle_closure(
-        source,
-        &origin_ref_name,
-        &prepared,
-        &index_by_id,
-        &membership,
-        &closure_by_id,
-        Some(&read_snapshot),
-        &author_keys,
-        manifest.as_ref(),
-        count,
-    )?;
-
-    // RFC 163 §2, Addendum 1 item 1 / the author-key conflict check: both still run before the
-    // first object write, under the same lock the pointer write later runs under.
-    for (key_id, public_key) in &bundle_key_ids {
-        check_author_key_conflict(layout, key_id, *public_key)?;
-    }
-
-    // `BundleImportReport` carries no manifest field (unlike `BundleVerifyReport`/
-    // `BundlePreviewReport`) -- `manifest` above was consulted only for the cross-check and is
-    // dropped here, same as the pre-streaming code's own `contents.manifest` was for this caller.
-
-    // 0.56.0 step 3a (A2/A3): read the pointer this delivery would replace, classify it, and
-    // refuse a non-fast-forward by default -- all still before the first object write (R4's own
-    // discipline below), under the `ReceivedIndex`/`ObjectStore` locks already held continuously
-    // since before pass 1. Pass 1 has already finished, so the delivered tip's full closure
-    // (including whatever RefState chain it carries) is already resolved in `prepared`.
-    let received_pointer = crate::received::read_received_pointer(layout, &received_ref_name)?;
-    // Purely over pass-1 metadata already in memory (`closure_by_id`) -- no reader, no re-decode
-    // of anything the bundle carries; see `classify_import_connectivity`'s own doc.
-    let (connectivity_class, ref_state_chain) = match &received_pointer {
-        None => (BundleConnectivityClass::NoLocalHistory, None),
-        Some(pointer) => {
-            let (class, chain) = classify_import_connectivity(
-                &read_snapshot,
-                &closure_by_id,
-                pointer,
-                tip_block_id,
-                ref_state_id,
-                &received_ref_name,
-            )?;
-            (class, Some(chain))
-        }
-    };
-    #[cfg(test)]
-    let connectivity_class = force_connectivity_class_for_test(connectivity_class);
-    // A3: when a pointer already existed, a rollback, a divergent rewrite, or an unrelated history
-    // all refuse by default -- naming the class, as its own `refusal-v1` id would once `bundle
-    // import --format json` exists (0.56.0 step 3b, not this round).
-    if let Some(refusal) = non_fast_forward_refusal(
-        received_pointer.is_some(),
-        connectivity_class,
-        &received_ref_name,
-        options.allow_non_fast_forward,
-    ) {
-        return Err(refusal);
-    }
-
-    // 0.56.0 F2 item 1 (stikk's part-6 finding, one block back): refuse a forged MAINTAINER
-    // signature on *every* Block and RefState this delivery is about to admit, not only the
-    // delivered tip's own -- the review's own measured gap, `.git-exclude/reviewed/
-    // 0.56.0-step-3-f-review-v1.md` "F2 item 1": a sound tip over a forged ancestor used to
-    // import clean (the old check here resolved only `ref_state_id`/`tip_block_id`), and only a
-    // later `verify` caught it. `prepared` already carries at most one entry per unique object
-    // id in this bundle (pass 1's own dedup, `index_by_id.insert` above never runs twice for the
-    // same id), so filtering it for `Block`/`RefState` and checking each once is exactly "every
-    // Block and RefState, deduplicated" -- one Ed25519 verification per signature, linear in the
-    // delivery, on objects pass 1 has already decoded. This subsumes the former tip-only check
-    // (the tip's own ids are themselves entries in `prepared`), so there is no separate tip check
-    // left to run. Read through a bundle-only `BundleAndLocalReader`, built the same way
-    // `preview_bundle` already builds one (`local: None` -- nothing here is about the local
-    // store, only the bundle's own delivered content). `&mut *source` reborrows rather than moves
-    // `source`, so the outer binding is still usable for the write loop below once this block
-    // ends. Still before the first object write, the same "all still before the first object
-    // write" zone as the connectivity refusal just above.
-    let adopted_policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
-    {
-        let source_cell: RefCell<&mut BundleSource> = RefCell::new(&mut *source);
-        let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
-        let bundle_only_reader = BundleAndLocalReader {
-            source: &source_cell,
-            prepared: &prepared,
-            index_by_id: &index_by_id,
-            cache: &cache,
-            local: None,
-        };
-        // 0.57.0 step 1b: the one check, shared with `bundle preview` (which reports what it
-        // finds instead of refusing).
-        if let Some(forged) = find_forged_publication_signature(
-            "bundle-import",
-            &adopted_policy,
-            &bundle_only_reader,
-        )? {
-            return Err(forged.error);
-        }
-    }
-
-    // 0.57.0 S1b: decide, still before the first write, whether `--adopt` lands the delivered branch as a local branch (see
-    // `bundle/adopt.rs`): the shared start (absent ref, queue, class), the signer's standing, and the whole RefState chain's trust.
-    // A delivery that cannot be adopted still lands under `remotes/`, with the reason reported. For the current branch the clean
-    // worktree and nothing-in-the-way refusals are here too, so they too leave nothing written.
-    let adoption_decision = {
-        let source_cell: RefCell<&mut BundleSource> = RefCell::new(&mut *source);
-        let cache: RefCell<BTreeMap<ObjectId, ObjectEnvelope>> = RefCell::new(BTreeMap::new());
-        let reader = BundleAndLocalReader {
-            source: &source_cell,
-            prepared: &prepared,
-            index_by_id: &index_by_id,
-            cache: &cache,
-            local: Some(&read_snapshot),
-        };
-        let decision = adopt::plan_adoption(
-            layout,
-            adoption,
-            &origin_ref_name,
-            &received_ref_name,
-            ref_state_id,
-            connectivity_class,
-            ref_state_chain,
-            options.allow_non_fast_forward,
-            &adopted_policy,
-            &reader,
-        )?;
-        if let (adopt::AdoptionDecision::Adopt(_), Some(adoption)) = (&decision, adoption) {
-            adopt_local_ref::refuse_current_branch_obstacles(
-                layout,
-                adoption.current_branch.as_deref(),
-                &origin_ref_name,
-                &reader,
-                tip_block_id,
-            )?;
-        }
-        decision
-    };
-
-    // 0.49.0 step 0, finding 3 / 0.55.0 step 3 Part 3b-i (R1): dependency order, computed purely
-    // over `prepared`'s own cheap `(id, type, dependency ids)` metadata.
-    let write_order = dependency_order_indices(&prepared)?;
 
     #[cfg(test)]
     if let Some(change) = CORRUPT_FILE_BETWEEN_PASSES_FOR_TEST.with(|slot| slot.borrow_mut().take())
@@ -3319,41 +2937,6 @@ pub(crate) fn non_fast_forward_refusal(
         });
     }
     None
-}
-
-/// The first Block or RefState in a delivery that `bundle import`'s pass-1 signature admission would
-/// refuse as a forged publication signature: an object this repository already holds, re-sent with an
-/// extra MAINTAINER signature by an adopted key that does not verify (0.57.0 step 1b3). Runs the
-/// import's own [`CarriedSignatureAdmitter::admit_one`] read-only, over Blocks and RefStates only (the
-/// only types the forged-publication id names); any other admission refusal on them is not a forgery
-/// and propagates as the preview's own failure with the import's sentence, except `InvalidSignature`
-/// (an AUTHOR signature that does not verify), which this list does not cover and skips.
-fn find_forged_in_held_admission(
-    admitter: &CarriedSignatureAdmitter,
-    stored: &impl ObjectReader,
-    reader: &BundleAndLocalReader<'_>,
-    author_material: &mut dyn FnMut(&str) -> Result<Vec<AuthorKeyEntry>>,
-) -> Result<Option<ForgedPublicationFinding>> {
-    for object in reader.prepared {
-        if !matches!(object.object_type, ObjectType::Block | ObjectType::RefState) {
-            continue;
-        }
-        let Some(envelope) = reader.read_object(object.object_id)? else {
-            continue;
-        };
-        match admitter.admit_one(stored, envelope, &mut *author_material) {
-            Ok(_) | Err(PrikkError::InvalidSignature(_)) => {}
-            Err(error @ PrikkError::ForgedPublicationSignature { .. }) => {
-                return Ok(Some(ForgedPublicationFinding {
-                    object_type: object.object_type,
-                    object_id: object.object_id,
-                    error,
-                }));
-            }
-            Err(other) => return Err(other),
-        }
-    }
-    Ok(None)
 }
 
 /// The first Block or RefState a delivery carries whose MAINTAINER signature is by an adopted key and

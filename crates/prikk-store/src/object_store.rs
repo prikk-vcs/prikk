@@ -526,6 +526,26 @@ impl ObjectReadSnapshot {
     }
 }
 
+impl ObjectReadSnapshot {
+    /// Every refusal [`ObjectWriteSession::check_write`] can return for `envelope`, decided without any write capability: an unsupported
+    /// type, an envelope the repository format rejects, or an id already stored under different bytes. The decision half of a write,
+    /// for a caller that must know what the store would refuse (`bundle import`'s and `bundle preview`'s one decision, 0.58.0 B′b).
+    /// It refreshes the snapshot's own index tail (a read), appends nothing, and takes no lock; a caller that needs the answer to hold
+    /// for a later write holds the lock itself.
+    pub(crate) fn check_write(&mut self, envelope: &ObjectEnvelope) -> Result<()> {
+        if envelope.object_type == ObjectType::RefUpdate {
+            return Err(PrikkError::UnsupportedObjectType(
+                "RefUpdate is stored inline in ref logs for v1".to_string(),
+            ));
+        }
+        self.layout.validate_format()?;
+        crate::format::validate_object_envelope(self.layout.format(), envelope)?;
+        self.snapshot.ensure_current(&self.layout)?;
+        let existing = self.snapshot.lookup(envelope.object_id());
+        decide_write_outcome(&self.layout, envelope.object_type, envelope, existing).map(|_| ())
+    }
+}
+
 impl ObjectReader for ObjectReadSnapshot {
     fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
         let Some(entry) = self.snapshot.lookup(id) else {

@@ -3,6 +3,8 @@
 //! and this grouping file's `mod` line are new. See the module's own file under
 //! `tests/archive_and_bundle/` for its own doc comment.
 
+#[path = "archive_and_bundle/b_prime_one_decision.rs"]
+mod b_prime_one_decision;
 #[path = "archive_and_bundle/bundle_import_fifo_input.rs"]
 mod bundle_import_fifo_input;
 #[path = "archive_and_bundle/bundle_import_real_kill.rs"]

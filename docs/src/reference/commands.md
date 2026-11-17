@@ -66,7 +66,7 @@ prikk config unset <key>
 prikk config list
 prikk bundle export --ref REF --output <file> [--force]
 prikk bundle import --input <file> [--adopt] [--max-object-bytes N] [--allow-non-fast-forward] [--format json]
-prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]
+prikk bundle preview --input <file> [--ref REF] [--adopt] [--max-object-bytes N] [--allow-non-fast-forward] [--format json]
 prikk bundle verify --input <file> [--max-object-bytes N]
 prikk archive export <file> [--format json]
 prikk archive verify <file> [--format json]
@@ -612,44 +612,35 @@ only, exactly like `"sealed_by"` itself — `bundle import` is still the only th
 The outcomes are for the signatures on the delivered tip, so a `sound` here does not by itself mean
 the import will admit the delivery; the next paragraph is what answers that.
 
-**`bundle preview` lists the refusals for the delivery's class and its maintainer signatures, in the import's own order.** An
-additive `"import_refusals"` array (the schema stays `bundle-preview-v1`) is `[]` when the import,
-run without flags, would admit the delivery. Otherwise each entry is `{"id", "message",
-"object_type", "object_id"}`, in the order the import meets them:
-1. **`forged-publication-signature`, on an object this repository already holds** (a delivery that
-   re-sends a held Block or RefState with an extra MAINTAINER signature by an adopted key that does not
-   verify). The import meets this first, in its signature admission (RFC 156), before the class check;
-2. the **delivery-class refusal** (`id` is `rollback`, `diverged` or `does-not-connect`; `object_type`
-   and `object_id` are `null`, because the sentence names the received pointer);
-3. **`forged-publication-signature`, on a new object** (a Block or RefState the repository does not hold).
+**`bundle preview` lists every refusal `bundle import` of the same delivery would raise, in the import's own order (0.58.0).** The import and the preview run **one decision**: the import takes its locks, runs it, raises the first refusal it lists and
+applies the rest; the preview runs it with no lock and prints them all. So a preview takes the import's decision-changing flags (`--adopt`, `--allow-non-fast-forward`, `--max-object-bytes`; `--ref`
+only chooses which local ref the impact report compares against, and `--format` only the presentation), and answers for exactly the import that
+follows with the same arguments. An additive `"import_refusals"` array (the schema stays `bundle-preview-v1`) is `[]` when the import
+would admit the delivery. Otherwise each entry is `{"id", "message", "object_type", "object_id"}`, in the order the import meets them, and `message` is the sentence the import prints:
+1. an **admission** refusal of an object, found in the import's first pass: `forged-publication-signature` (a held Block or RefState re-sent with an extra MAINTAINER signature by an adopted key that does not
+   verify), or `admission-refused` (the signature-count bound, an AUTHOR signature that does not verify), or `store-refused` (the store would not write the object: the same id with a different envelope, an envelope the repository format rejects);
+   the first of these in the bundle's own order;
+2. **`author-key-conflict`**: a key id the bundle carries that conflicts with one this repository has recorded;
+3. the **delivery-class refusal** (`id` is `rollback`, `diverged` or `does-not-connect`; `object_type` and `object_id` are `null`), lifted by `--allow-non-fast-forward`;
+4. **`forged-publication-signature`, on a new object** (listed once: not again if the same refusal is already at 1);
+5. **`adoption-refused`**, with `--adopt`: the queue owns the branch name, a file is in the way of the tip, the receiver's maintainer key is not adopted here, and the rest of `bundle import --adopt`'s hard refusals.
 
-There is **at most one signature entry** — the first the import would meet — and it names the object.
-It is one condition with one id and one sentence, whether the object is held or new: an adopted key's
-signature on a Block or RefState does not verify. Each entry comes from the import's own function, not a
-restatement, and `message` is the sentence the import prints (it names both possible causes and the route
-out). It is a list because one refusal can hide another: **a class refusal is lifted by
-`--allow-non-fast-forward`, and a signature refusal by nothing**, so a user who passes the flag meets the
-signature entry. The text form prints one `bundle import of this delivery would refuse: <id>` line per
-entry, the sentence indented under it, and nothing when the list is empty. The signature check costs what
-the import's own check costs: one Ed25519 verification per signature of each unique Block and RefState
-the delivery carries (about 26 µs each, measured at 0.56.0); the held-object step adds one stored-envelope
-read per held Block and RefState (measured on a 130-block delivery the destination already holds:
-the preview took about 10 ms against about 9 ms before, and the import of the same delivery about 18 ms).
+The ids `rollback`, `diverged`, `does-not-connect` and `forged-publication-signature` are the ones `bundle import --format json` already prints in its `refusal-v1` document; the other
+four are new, and `bundle import --format json` does not print them (its stderr, exit code and sentences are unchanged). The text form prints one
+`bundle import of this delivery would refuse: <id>` line per entry, the sentence indented under it, and nothing when the list is empty. It is a list because one refusal can hide another:
+a class refusal is lifted by `--allow-non-fast-forward` and a signature refusal by nothing, so a user who passes the flag meets the next entry.
+With `--adopt` the report also carries `"import_adoption"` (`null` without the flag, and when a refusal above stops the adoption): `{"adopted", "landed_as", "reason"}`, where `bundle import --adopt` would land the delivery
+(`heads/<name>` as a local branch, or `remotes/<name>` with the reason it was not adopted); the text form prints it as
+`bundle import --adopt of this delivery would land: <ref>`.
 
-**What the list does not cover.** The preview answers two of the import's decisions, and says nothing
-about the others, so an empty list means "no class refusal and no forged signature on a Block or
-RefState", not "the import will succeed":
-- **Other object types.** The same condition on an object that is not a Block or RefState (a Tag, a
-  RecognitionClaim, …) keeps its own sentence, `invalid signature: … refusing the whole import`, and
-  prints no `refusal-v1` document; the preview does not list it.
-- **An author-key conflict** (a key id the bundle carries that conflicts with one this repository has
-  recorded), **the signature-count bound**, **the store's own write decision** (the same id with a
-  different envelope), and **AUTHOR-signature failures.** The import refuses on each; the preview does not
-  run them.
-- **A structurally invalid delivery** (a malformed bundle, a missing object, an object over a bound)
-  makes the preview itself fail, with the import's own sentence and a non-zero exit, rather than appear
-  as an entry.
-- **Lock and I/O failures** at import time.
+**What the preview does not do.** `bundle preview` reports every refusal the first pass of `bundle import` raises, **against this repository as it reads it now**; it does not run the second pass's per-object checks (a
+frame that changed since, an I/O failure while writing), and a writer that acts between a preview and the import can change the answer (the import holds its locks; the preview takes none and writes nothing).
+- **A structurally invalid delivery** (a malformed bundle, a missing object, an object over a bound, a receiver older than the bundle's declared format) makes the preview itself fail, with the import's own sentence and a non-zero exit,
+  rather than appear as an entry.
+- **`--adopt` on a preview does not read your signing seed.** It takes the maintainer key id you have configured (the key-id file or `PRIKK_MAINTAINER_KEY_ID`) and judges it against the adopted keys; `bundle import`, which signs, is what proves that
+  key id is the seed's. A seed file that is absent is reported with the import's own sentence.
+- **Two walks remain:** the decision (`bundle import` and `bundle preview`) and `bundle verify`'s, which has no repository and nothing to decide.
+- **Cost.** The decision's memory is the import's (flat, about 12 MB); the preview's own peak follows the content, because it replays the delivery to report its impact.
 
 **`bundle preview --ref remotes/<name>` resolves what was actually received at that name.** A
 `remotes/…` name answers against the received pointer held under that exact name; if none is held

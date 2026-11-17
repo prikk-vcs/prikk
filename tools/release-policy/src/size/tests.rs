@@ -424,8 +424,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.58.0 S5 added `foundation/kept_file.rs` (the proof every kept decode shares) and `refs/kept_pointer_index.rs` (the pointer index a hold keeps): 187 -> 189.
     // 0.58.0 S5 added `refs/kept_ref_log.rs` (the ref log a hold keeps): 189 -> 190.
     // 0.58.0 F2 added `refs/in_flight.rs` (is a pointer lead a publication in flight, or an interrupted one): 190 -> 191.
-    // 0.58.0 R2 added `confirmed_history.rs` (the history this repository confirmed by replay and records) and `block_state/confirm_lineage.rs` (the root-checking walk it uses): 191 -> 193. 0.58.0 P3b added `framed_source.rs` (hoisted out of `bundle.rs`): 193 -> 194.
-    assert_eq!(store.production_files, 194);
+    // 0.58.0 R2 added `confirmed_history.rs` (the history this repository confirmed by replay and records) and `block_state/confirm_lineage.rs` (the root-checking walk it uses): 191 -> 193. 0.58.0 P3b added `framed_source.rs` (hoisted out of `bundle.rs`): 193 -> 194. 0.58.0 B′b added `bundle/decision.rs` (the one decision `bundle import` and `bundle preview` share): 194 -> 195.
+    assert_eq!(store.production_files, 195);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

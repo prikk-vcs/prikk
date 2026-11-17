@@ -468,23 +468,35 @@ pub fn verify_signer_trusted(
     signer: &impl MaintainerSigner,
     _operation: GatedOperation,
 ) -> Result<MaintainerTrustPolicy> {
+    verify_key_identity_trusted(layout, signer.key_id(), Some(signer.public_key_bytes()))
+}
+
+/// The standing check of [`verify_signer_trusted`], over an identity instead of a signer: `key_id` must be among the adopted keys, and
+/// -- when `public_key` is given -- must be the adopted one. `None` is for a read-only caller that has not opened the seed (`bundle
+/// preview --adopt`, 0.58.0 B′b): it can know the id and read the adopted public key from the policy, but only the signer, which holds
+/// the seed, can prove the id is its own; so `None` judges membership only, with the same sentence.
+pub(crate) fn verify_key_identity_trusted(
+    layout: &RepositoryLayout,
+    key_id: &str,
+    public_key: Option<[u8; 32]>,
+) -> Result<MaintainerTrustPolicy> {
     let policy = load_maintainer_trust_policy(layout)?;
     // RFC 147 §2d: policy *membership*, tested before any signature is verified -- the exported key
     // id is simply not among the adopted ones. The public-key comparison below is a different
     // question and keeps `InvalidSignature`: there the id matched and the material did not.
-    let Some(matched) = policy.find(signer.key_id()) else {
+    let Some(matched) = policy.find(key_id) else {
         return Err(PrikkError::Precondition(format!(
-            "maintainer signer key id {} is not trusted by policy; run `prikk trust maintainer \
-             add` for it, or export a key id this repository already trusts",
-            signer.key_id()
+            "maintainer signer key id {key_id} is not trusted by policy; run `prikk trust maintainer \
+             add` for it, or export a key id this repository already trusts"
         )));
     };
-    let signer_public_key = signer.public_key_bytes();
-    if signer_public_key != matched.public_key {
-        return Err(PrikkError::InvalidSignature(format!(
-            "maintainer signer public key does not match trusted key {}",
-            matched.key_id
-        )));
+    if let Some(signer_public_key) = public_key {
+        if signer_public_key != matched.public_key {
+            return Err(PrikkError::InvalidSignature(format!(
+                "maintainer signer public key does not match trusted key {}",
+                matched.key_id
+            )));
+        }
     }
     Ok(policy)
 }

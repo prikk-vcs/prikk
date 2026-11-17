@@ -409,6 +409,39 @@ pub(crate) fn status(role: Role) -> std::result::Result<KeyStatus, CliError> {
     status_at(role, source, path)
 }
 
+/// The key id `role` is configured to sign with, and the refusal signing would give if its seed file is **absent** -- found without
+/// opening the seed (0.58.0 B′b): a read-only command that must know *which* key an import would publish under (`bundle preview
+/// --adopt`) reads the key-id file (or the variable), and `stat`s the seed's path; it never reads the secret. Only the importer, which
+/// signs, can prove the id is the seed's.
+pub(crate) fn configured_key_id_without_the_seed(
+    role: Role,
+) -> std::result::Result<(String, Option<CliError>), CliError> {
+    let (source, path) = match non_empty_var(role.seed_file_var()) {
+        Some(path) => (SeedSource::Override, PathBuf::from(path)),
+        None => (
+            SeedSource::KeyDirectory,
+            default_key_dir()?.join(role.seed_file_name()),
+        ),
+    };
+    let (key_id, key_id_source, _) = resolve_key_id(role, &path, &Err(Unusable::Missing))?;
+    let missing = (!path.exists()).then_some(match source {
+        SeedSource::Override => Unusable::OverrideMissing,
+        SeedSource::KeyDirectory => Unusable::Missing,
+    });
+    let refusal = missing.map(|reason| {
+        let status = KeyStatus {
+            role,
+            source,
+            path: path.clone(),
+            key_id: key_id.clone(),
+            key_id_source,
+            seed: Err(reason.clone()),
+        };
+        refusal_for(&status, &reason)
+    });
+    Ok((key_id, refusal))
+}
+
 /// [`status`] for a seed path already resolved.
 fn status_at(
     role: Role,

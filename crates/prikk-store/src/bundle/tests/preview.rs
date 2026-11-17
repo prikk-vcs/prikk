@@ -828,3 +828,65 @@ fn import_class_matches_what_bundle_import_actually_does_for_every_class() {
     let _ = std::fs::remove_dir_all(&g_root);
     let _ = std::fs::remove_dir_all(&unrelated_root);
 }
+
+// ---- 0.58.0 B′b: the preview lists the import's admission refusals, with the import's own sentence. ----
+
+/// A delivery whose patch carries more counted signatures than one object may (`MAX_COUNTED_SIGNATURES_PER_OBJECT`): the import
+/// refuses it in pass 1 (`admit_one`), and now the preview lists it, `admission-refused`, with the same sentence. Neither writes.
+#[test]
+fn an_admission_refusal_is_listed_by_the_preview_and_raised_by_the_import() {
+    let (source_layout, _source_root, _tip, _) = genesis_repo("bprime-admission-source");
+    let (_, bytes) = export_bundle(&source_layout, "heads/main").unwrap();
+    let decoded = crate::bundle::decode_bundle(&bytes, 10_000, usize::MAX).unwrap();
+    let (ref_name, mut objects, author_keys, manifest) = decoded;
+    let manifest = manifest.expect("a PBNDL003 manifest");
+    let patch = objects
+        .iter_mut()
+        .find(|envelope| envelope.object_type == prikk_object::ObjectType::Patch)
+        .expect("the genesis delivery carries a patch");
+    for index in 0..5 {
+        let mut extra = dummy_signature();
+        extra.key_id = format!("bprime-extra-{index}");
+        patch.add_signature(extra).unwrap();
+    }
+    let crowded = crate::bundle::encode_bundle(
+        &ref_name,
+        &objects,
+        &author_keys,
+        &crate::bundle::BundleManifest {
+            repository_format: manifest.repository_format,
+            tool_version: manifest.tool_version,
+            scope: manifest.scope,
+        },
+    )
+    .unwrap();
+
+    let local_root = unique_temp_dir("bprime-admission-local");
+    let local = RepositoryLayout::init(local_root.clone()).unwrap();
+    let before = directory_digest(&local_root);
+    let options = BundleImportOptions::default_limits();
+    let report = preview_bundle_from_bytes(&local, &crowded, &options, "heads/main").unwrap();
+    assert_eq!(
+        directory_digest(&local_root),
+        before,
+        "the preview wrote nothing"
+    );
+    let first = report
+        .import_refusals
+        .first()
+        .expect("the preview lists the admission refusal");
+    assert_eq!(first.id, "admission-refused");
+    assert!(first.message.contains("limit of 4"), "{}", first.message);
+
+    let refused = crate::bundle::import_bundle_from_bytes(&local, &crowded, &options).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        first.message,
+        "the preview says what the import says"
+    );
+    assert_eq!(
+        directory_digest(&local_root),
+        before,
+        "a refused import wrote nothing"
+    );
+}

@@ -75,6 +75,24 @@ pub(crate) fn print_bundle_preview_json(report: &BundlePreviewReport) {
         json.push_str("\n  ");
     }
     json.push(']');
+    // 0.58.0 B′b: additive. Where `bundle import --adopt` of this exact delivery would land it; `null` without `--adopt`, and when a
+    // refusal above stops the adoption.
+    json.push_str(",\n  \"import_adoption\": ");
+    match &report.import_adoption {
+        Some(adoption) => {
+            json.push_str("{\"adopted\": ");
+            json.push_str(if adoption.adopted { "true" } else { "false" });
+            json.push_str(", \"landed_as\": ");
+            json.push_str(&escape_json_string(&adoption.landed_as));
+            json.push_str(", \"reason\": ");
+            match &adoption.reason {
+                Some(reason) => json.push_str(&escape_json_string(reason)),
+                None => json.push_str("null"),
+            }
+            json.push('}');
+        }
+        None => json.push_str("null"),
+    }
 
     json.push_str(",\n  \"conflict\": ");
     match &report.conflict {
@@ -195,6 +213,23 @@ pub(crate) fn print_bundle_preview_plain(report: &BundlePreviewReport) {
             refusal.id
         );
         println!("  {}", refusal.message);
+    }
+    // 0.58.0 B′b: with `--adopt`, where the import would land the delivery.
+    if let Some(adoption) = &report.import_adoption {
+        if adoption.adopted {
+            println!(
+                "bundle import --adopt of this delivery would land: {} (a local branch)",
+                adoption.landed_as
+            );
+        } else {
+            println!(
+                "bundle import --adopt of this delivery would land: {} (not adopted)",
+                adoption.landed_as
+            );
+        }
+        if let Some(reason) = &adoption.reason {
+            println!("  {reason}");
+        }
     }
     match &report.conflict {
         Some(BundlePreviewConflict::AppliesCleanly) => println!("conflict: none, applies cleanly"),

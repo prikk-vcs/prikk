@@ -362,7 +362,8 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk bundle export --ref REF --output <file> [--force]  Write a self-contained history bundle; refuses an existing file unless --force",
             "  prikk bundle import --input <file> [--adopt] [--max-object-bytes N] [--allow-non-fast-forward] [--format json]  Import a bundle as an untrusted received pointer; --adopt lands an absent, adopted-key-signed branch as a real local branch, published under your own maintainer key; refuses a rollback, a divergent rewrite, or an unrelated history against the pointer it would replace unless --allow-non-fast-forward is given",
-            "  prikk bundle preview --input <file> [--ref REF] [--max-object-bytes N] [--format json]  Preview a bundle's impact on a local ref; writes nothing",
+            "  prikk bundle preview --input <file> [--ref REF] [--adopt] [--max-object-bytes N] [--allow-non-fast-forward] [--format json]  Preview a bundle's impact on a local ref, and every refusal `bundle import` with the same flags would raise; writes nothing",
+            "  note: a preview reports what the first pass of `bundle import` raises, against this repository as it reads it now; it does not run the second pass's per-object checks, and a writer between the two can change the answer. `--adopt` does not read your signing seed: `bundle import`, which signs, proves your configured key id is the seed's",
             "  prikk bundle verify --input <file> [--max-object-bytes N]  Check a bundle offline; writes nothing, needs no repository",
             "  note: --max-object-bytes bounds one object's encoded size, its content plus a 69-byte header -- a file of N bytes needs a bound of at least N + 69",
         ],

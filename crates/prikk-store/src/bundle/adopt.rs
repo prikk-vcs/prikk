@@ -33,10 +33,7 @@ use crate::RepositoryLayout;
 use crate::maintainer_signing::{MaintainerSigner, maintainer_signature};
 use crate::object_store::ObjectReader;
 use crate::refs::{RefPublication, RefStore};
-use crate::trust::{
-    GatedOperation, MaintainerTrustPolicy, verify_signer_trusted,
-    verify_trusted_publication_envelope,
-};
+use crate::trust::{MaintainerTrustPolicy, verify_trusted_publication_envelope};
 
 /// The bundle importer's name, for the shared adoption sentences.
 pub(super) const BUNDLE_IMPORTER: Importer = Importer {
@@ -51,6 +48,29 @@ pub struct BundleAdoption<'a> {
     pub signer: &'a dyn MaintainerSigner,
     /// The repository's current branch, if it has one (read by the caller, never by this crate).
     pub current_branch: Option<String>,
+}
+
+/// What the **decision** needs to know about `--adopt` (0.58.0 B′b): the receiver's configured maintainer key id, its public key if
+/// the caller can vouch for it (the import, which holds the signer, can; the preview, which does not open the seed, cannot), and the
+/// current branch. No signer: nothing here can sign.
+pub struct AdoptionRequest {
+    /// The key id the receiver would publish under.
+    pub key_id: String,
+    /// That key's public key as the signer reports it; `None` when the caller has not opened the seed.
+    pub public_key: Option<[u8; 32]>,
+    /// The repository's current branch, if it has one.
+    pub current_branch: Option<String>,
+}
+
+impl BundleAdoption<'_> {
+    /// The decision's view of this adoption: the signer's identity, never the signer.
+    pub(super) fn request(&self) -> AdoptionRequest {
+        AdoptionRequest {
+            key_id: self.signer.key_id().to_string(),
+            public_key: Some(self.signer.public_key_bytes()),
+            current_branch: self.current_branch.clone(),
+        }
+    }
 }
 
 /// A [`MaintainerSigner`] over a `&dyn`, so `maintainer_signature` (which takes `&impl`) can sign with it.
@@ -96,7 +116,7 @@ pub(super) struct AdoptedOutcome {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_adoption(
     layout: &RepositoryLayout,
-    adoption: Option<&BundleAdoption<'_>>,
+    adoption: Option<&AdoptionRequest>,
     origin_ref_name: &str,
     received_ref_name: &str,
     tip_ref_state_id: ObjectId,
@@ -118,12 +138,8 @@ pub(super) fn plan_adoption(
         });
     }
     // The receiver signs the local ref log: its key must be adopted here, like every publisher's, and a refusal is before any write.
-    verify_signer_trusted(
-        layout,
-        &DynSigner(adoption.signer),
-        GatedOperation::BundleAdopt,
-    )
-    .map_err(|err| PrikkError::Precondition(err.to_string()))?;
+    crate::trust::verify_key_identity_trusted(layout, &adoption.key_id, adoption.public_key)
+        .map_err(|err| PrikkError::Precondition(err.to_string()))?;
 
     let ref_store = RefStore::new(layout.clone());
     let start = begin_adoption(

@@ -307,24 +307,52 @@ fn run_preview(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliE
         Some(&layout),
         DEFAULT_BUNDLE_MAX_OBJECT_BYTES,
     )?;
-    let options = bundle_import_options(&object_bound)?;
+    let options = bundle_import_options(&object_bound)?
+        .with_allow_non_fast_forward(parsed.allow_non_fast_forward);
+    // 0.58.0 B′b: `--adopt` answers for `bundle import --adopt`. A read-only command opens no secret: it takes the configured key id
+    // (the key-id file or the variable) and judges its standing from the trust policy; `bundle import`, which signs, is what proves the
+    // id is the seed's. A seed file that is absent is the import's own refusal, in the import's own sentence.
+    let adoption = if parsed.adopt {
+        let (key_id, missing_seed) = crate::key_material::configured_key_id_without_the_seed(
+            crate::key_material::Role::Maintainer,
+        )?;
+        if let Some(err) = missing_seed {
+            return Err(CliError::Failure(format!(
+                "bundle import --adopt publishes the branch under your own maintainer key, and none is usable: {}. Check with \
+                 `prikk key status --role maintainer`, or create one with `prikk setup`",
+                err.message()
+            )));
+        }
+        Some(prikk_store::AdoptionRequest {
+            key_id,
+            public_key: None,
+            current_branch: crate::current_branch::displayed_current_branch(&layout),
+        })
+    } else {
+        None
+    };
     // RFC 151 §2.2: the local branch the preview compares against, not anything the bundle carries.
     let ref_name = crate::current_branch::resolve_ref(&layout, parsed.ref_name)?;
     let format_json = parsed.format_json;
-    let (report, anchor_fallbacks) =
-        prikk_store::preview_bundle_reporting_anchor(&layout, &mut source, &options, &ref_name)
-            .map_err(|err| {
-                // 0.57.0 U4b: `bundle preview --format json` prints a `refusal-v1` document
-                // (`"command": "bundle-preview"`) for the two refusals `bundle import` also names by
-                // variant: a receiver older than the bundle's declared format, and a bundle outside
-                // this version's rules.
-                if format_json {
-                    if let Some(id) = artifact_version_refusal_id(&err) {
-                        print_bundle_refusal_json("bundle-preview", id, &err.to_string());
-                    }
-                }
-                render_incoming_error(err, &object_bound)
-            })?;
+    let (report, anchor_fallbacks) = prikk_store::preview_bundle_adopting(
+        &layout,
+        &mut source,
+        &options,
+        &ref_name,
+        adoption.as_ref(),
+    )
+    .map_err(|err| {
+        // 0.57.0 U4b: `bundle preview --format json` prints a `refusal-v1` document
+        // (`"command": "bundle-preview"`) for the two refusals `bundle import` also names by
+        // variant: a receiver older than the bundle's declared format, and a bundle outside
+        // this version's rules.
+        if format_json {
+            if let Some(id) = artifact_version_refusal_id(&err) {
+                print_bundle_refusal_json("bundle-preview", id, &err.to_string());
+            }
+        }
+        render_incoming_error(err, &object_bound)
+    })?;
     // RFC 136 §10.3b.4: a snapshot the preview could not anchor at is named on stderr.
     crate::warn_anchor_fallbacks(anchor_fallbacks.iter());
     if parsed.format_json {
@@ -340,6 +368,8 @@ struct PreviewArgs {
     ref_name: Option<String>,
     format_json: bool,
     max_object_bytes: Option<u64>,
+    adopt: bool,
+    allow_non_fast_forward: bool,
 }
 
 fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, CliError> {
@@ -347,9 +377,15 @@ fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, Cli
     let mut ref_name = None;
     let mut format_json = false;
     let mut max_object_bytes = None;
+    let mut adopt = false;
+    let mut allow_non_fast_forward = false;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--adopt" => mark_seen(&mut adopt, "--adopt")?,
+            "--allow-non-fast-forward" => {
+                mark_seen(&mut allow_non_fast_forward, "--allow-non-fast-forward")?;
+            }
             "--input" => {
                 let value = flag_value(&mut iter, "bundle preview --input")?;
                 input.set_once("--input", PathBuf::from(value))?;
@@ -387,6 +423,8 @@ fn parse_preview_args(args: Vec<String>) -> std::result::Result<PreviewArgs, Cli
         ref_name,
         format_json,
         max_object_bytes,
+        adopt,
+        allow_non_fast_forward,
     })
 }
 
