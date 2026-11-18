@@ -56,3 +56,20 @@ As in 0.57.0's prep:
 - **the consumer letters** (the owner sends them after the release). Their points are tracked in
   `.git-exclude/scratch/0.58.0-release-letter-points.md`, for planeter, inklkunn and stikk, and each claim is measured on the
   release binary first.
+
+**P1 ACCEPTED 2026-11-18** (`0959a101`; review `release-0.58.0-prep-P1-review-v1`). **P2 item 0, before items 1–3** (one commit, the
+gates on it):
+- **`### Security`: yes, one bullet,** P1's draft:
+  - `sync accept` held the artifact several times over, so a peer's artifact drove its memory to 4–7× its own size (0.57.0
+    measured: 606 MB for one 100 MiB file; 411 MB for 105 MB of one-MiB objects; about 1.5 GB at the default 256 MiB);
+  - **Affected:** 0.57.0 measured, and earlier releases with `sync accept` from reading the code, said as P1 wrote it;
+  - **Action:** upgrade, or lower `PRIKK_EXCHANGE_MAX_BYTES` and `--max-object-bytes`;
+  - **0.58.0's own figure,** re-measured in P2 item 2: memory follows the largest object, about four times its size, so
+    about 1 GB for a 256 MiB object at the default bound. Say that plainly, so the bullet does not read as "fixed" for one
+    large object.
+  - **`unlock --yes` stays out of Security,** as P1 proposed: the operator's own command, not a peer's content.
+- **`#[non_exhaustive]` on `AdoptedHistoryNote`** (a new report type). **`AdoptionRequest` stays plain** (an input built by a
+  struct literal, as `BundleAdoption` is).
+- **`platform-support.md` line 12:** reword "no-clobber-install capabilities". The primitive is retired (DC-98), and its own
+  note says so. The page must not list it as current.
+- **No `### Added`.** Agreed: the preview's flags extend an existing command, and the table is docs.
