@@ -29,6 +29,7 @@ use crate::verified_blocks::record_verified_blocks;
 /// The imported history did not replay cleanly: the first Block whose recomputed state root differs from the root it signs, or that the
 /// walk could not read or accept.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdoptedHistoryNote {
     /// The Block the walk stopped at.
     pub block_id: ObjectId,

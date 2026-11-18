@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Security
+
+- **`sync accept` held the artifact several times over, so a peer's artifact could drive its memory to 4–7× its own size.** Measured on 0.57.0: 606 MB for one 100 MiB file, 411 MB for 105 MB of one-MiB objects, 52 MB for 7.4 MB of 10,000 small patches; the default bound on an artifact is 256 MiB, so at the default a received artifact could take about 1.5 GB. **Affected:** 0.57.0 (measured), and every earlier release that has `sync accept` (from reading the code; not run). **No advisory. Action: upgrade,** or lower `PRIKK_EXCHANGE_MAX_BYTES` and `--max-object-bytes` to what you accept from a peer. **0.58.0 bounds the memory by the largest object, not by the artifact, and does not remove the cost of one large object:** it reads the artifact twice, one object at a time, and peaks at about four times the largest object (the object store's write path, as `bundle import` does) plus about 650 bytes per object carried. A 100 MiB file peaks at 405 MB (was 606 MB); an artifact of many small objects at 12–16 MB (was 52–411 MB); **one object at the default 256 MiB bound still takes about 1 GB.** Lower the bounds if that is too much.
+
 ### Upgrading
 
 - **A script that passes `prikk unlock --lock <path> --yes` from a container, a sandbox or a shared drive now refuses (exit `1`) where it used to clear the lock.** `--yes` and a typed `yes` clear a lock only when its holder "does not appear to be running"; a holder whose liveness is *unknown* (another PID or time namespace, another machine, a body still being written) is refused like one that appears running, naming the reason and `--force`. `--force` is the deliberate form. A lock written by 0.56.0 or earlier is *unknown*, so it needs `--force` too.
@@ -9,7 +13,7 @@
 - **A `commit` refuses a history that does not replay** where it used to author on it, and **a command refuses, with nothing published, when a directory it had open under `.prikk` was moved while it ran** (Linux and macOS): in both cases run `prikk verify` and, for the second, run the command again. See Output changes.
 - **If you call the `prikk-store` library (this changes its public API):**
   - `require_seal_batch_parents_reached` is no longer a root export: open a plan with `plan_seal_batch` (or `SealBatchPlan::open`) and call `SealBatchPlan::require_parents_reached`. `require_nothing_in_the_way_for_seal_batch` takes the `SealBatchPlan` where it took `ref_name` and `ordered_claim_ids`.
-  - `BundlePreviewReport` (`import_adoption`), `BundleImportReport` (`adopted_history_notes`) and `ArchiveImportReport` (`adopted_history_note`) gained fields and already were `#[non_exhaustive]`. `QueueEnumeration` and `BundleImportAdoption` are `#[non_exhaustive]` from the start.
+  - `BundlePreviewReport` (`import_adoption`), `BundleImportReport` (`adopted_history_note`) and `ArchiveImportReport` (`adopted_history_notes`) gained fields and already were `#[non_exhaustive]`. `QueueEnumeration`, `BundleImportAdoption` and `AdoptedHistoryNote` are `#[non_exhaustive]` from the start (read them field by field; do not construct them). `AdoptionRequest` and `SealBatchPlan` are not: the first is an input built by a struct literal, as `BundleAdoption` is, the second has private fields.
   - New: `accept_exchange_artifact_streaming` (`accept_exchange_artifact` keeps its signature and buffers), `preview_bundle_adopting` and `AdoptionRequest`, `plan_seal_batch` and `SealBatchPlan`, `enumerate_queue` and `QueueEnumeration`, `AdoptedHistoryNote`, `BundleImportAdoption` and `report_sync_calls_if_requested`.
 
 ### Output changes

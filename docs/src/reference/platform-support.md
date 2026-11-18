@@ -9,8 +9,8 @@ non-Linux target on every change; see [Non-Linux CI conformance](#non-linux-ci-c
 ## The boundary
 
 **Repository *mutation* requires Linux, macOS, or Windows.** `crates/prikk-store`'s anchored
-filesystem primitives use no-follow, nonblocking, atomic-rename, and no-clobber-install capabilities
-([durability and crash recovery](./durability-recovery.md)) with a reviewed implementation on each of
+filesystem primitives use no-follow, nonblocking and atomic-rename capabilities (the no-clobber install of an
+object file was retired in DC-98: objects are appended to containers) ([durability and crash recovery](./durability-recovery.md)) with a reviewed implementation on each of
 those three platforms — `LinuxDurability`, `MacosDurability` (DC-81/DC-82; G3 uses
 `fcntl_fullfsync` in place of `fsync`, measured ~180x slower on the GitHub macOS runner), and `WindowsDurability` (DC-87 Stage 2) — and no reviewed equivalent on any other
 platform yet
