@@ -118,3 +118,36 @@ not need the file to stay a well-formed zip.
 5. **CHANGELOG:** nothing. This is test tooling.
 
 That commit becomes the candidate for the external review. The release commit `3927f5a4` stays below it, unchanged.
+
+**P3b ACCEPTED and pushed 2026-11-18** (`f912d41a`; CI `44277539253` 17/17; review `release-0.58.0-prep-P3b-review-v1`). It was the
+candidate for the external review.
+
+**External review 053 answered 2026-11-18: nothing blocks the tag** (`.git-exclude/upstream/external-architect/receive/053-review-of-the-0-58-0-candidate-f912d41a/`;
+reading `.git-exclude/reviewed/external-053-reading-v1.md`).
+- **One note:** a writer killed while writing its own lock leaves a 0-byte lock, which `--yes` refuses and `--force` clears.
+  The docs should say so.
+- **The owner, 2026-11-18:** *"1. Yes. 2. Authorized."* **The architect's reading:**
+  1. the sentence ships in 0.58.0, as P4 below;
+  2. the signed tag and crates.io (all 8 crates, in order) are authorized once P4's CI is green.
+
+## Part P4: the 0-byte lock, in the docs (30 min, stop at 60; report `release-0.58.0-prep-P4-report.md`)
+
+1. **`docs/src/reference/concurrency-locking.md`,** where the *unknown* liveness word is defined (around line 327, "its body is
+   incomplete (still being written, or damaged)"). Add one sentence: **a lock whose body is empty or cut short is what a writer
+   leaves when it is killed while creating its lock.** `prikk unlock` lists it as *unknown*, `--yes` refuses it, and `--force`
+   clears it once you have confirmed no prikk process is using the repository.
+2. **`docs/src/guide/troubleshooting.md`:** one entry, or one line in the existing `unlock` entry, for the listing text
+   `unknown: the lock body is incomplete: still being written, or damaged`, with that way out.
+3. **Measure it before you write it** (the rule for every claim):
+   - on the release build, create a 0-byte `active.lock`;
+   - `prikk unlock` lists it as *unknown* with that text;
+   - `unlock --lock <path> --yes` exits 1;
+   - `--force` exits 0 and the lock is gone.
+
+   Quote the outputs in the report.
+4. **CHANGELOG:** nothing new (docs only; 0.58.0's `unlock` entry already states the rule). The date stays `2026-11-18` if the
+   tag is today. If the tag falls on another day, re-date the heading in this same commit, and say so.
+5. **The 15 gates on the final commit,** tree clean. **No product file changes:** the release binary rebuilt from this commit is
+   byte-identical (sha256 `600ab24d…`); say so.
+
+**That commit becomes the commit to tag.** The architect pushes it, reads CI on it job by job, and then tags it.
