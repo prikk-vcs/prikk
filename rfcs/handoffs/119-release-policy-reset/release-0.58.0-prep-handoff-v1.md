@@ -73,3 +73,11 @@ gates on it):
 - **`platform-support.md` line 12:** reword "no-clobber-install capabilities". The primitive is retired (DC-98), and its own
   note says so. The page must not list it as current.
 - **No `### Added`.** Agreed: the preview's flags extend an existing command, and the table is docs.
+
+**P2 ACCEPTED 2026-11-18** (`4b88a9f9`, `bb3e23a9`, `e6f4c7f0`; review `release-0.58.0-prep-P2-review-v1`). **P3 as written, with:**
+- **The candidate binary** is built with `cargo build --release --locked -p prikk` from the version-bump commit, never taken
+  out of `cargo test` (which unifies `test-support` into `prikk`). The smoke and the sha256 are taken on that binary, and the
+  report says so.
+- **No extra `test-support` smoke line.** The in-flight, moved-directory and kill rows are held by the Rust suite through the
+  binary, which the gates run.
+- **The P1 logs overwrite:** the dev round's verdict stands on its report, its review and CI. Nothing more is needed.
