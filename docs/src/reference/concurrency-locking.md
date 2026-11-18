@@ -325,7 +325,9 @@ said only of a lock known to come from this machine.
   process is writing the repository first.
 - **unknown** — the check cannot be made, and the listing says why: the lock was written by an older
   prikk (0.56.0 and earlier record no start time), its body is incomplete (still being written, or
-  damaged: its pid is never read), it was taken in another PID or time namespace, on another operating
+  damaged: its pid is never read; **a body that is empty or cut short is what a writer leaves when it is killed while creating
+  its lock**, and the listing says `unknown: the lock body is incomplete: still being written, or damaged`: `--yes` refuses it, and `--force`
+  clears it once you have confirmed that no prikk process is using the repository), it was taken in another PID or time namespace, on another operating
   system, or **on another machine** (a repository on a shared drive holds other machines' locks, and a
   lock whose machine identity differs from this one's is never read as running or as not running from here), a field of the
   record is missing or cannot be read (including a machine identity that cannot be compared), or the

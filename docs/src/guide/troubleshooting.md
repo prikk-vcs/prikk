@@ -1243,6 +1243,12 @@ to be running` is cleared by `--yes`, and even that is not proof, so confirm it 
 are defined once, with what each platform records, in
 [Concurrency and locking](../reference/concurrency-locking.md#what-the-three-liveness-words-mean).
 
+**A lock whose body is empty or cut short** is what a writer leaves when it is killed while creating its lock. `prikk unlock` lists it
+as `liveness: unknown: the lock body is incomplete: still being written, or damaged; not proof it is safe to clear`, and
+`prikk unlock --lock <path> --yes` refuses it (exit `1`, naming `--force`). Once you have confirmed that no prikk process is using the
+repository, `prikk unlock --lock <path> --force` clears it (exit `0`) and the next command runs. (A lock that is still being written
+by a live writer reads the same for the instant it takes, which is why `--yes` does not clear it.)
+
 ## ``error: precondition not met: bundle import: this delivery classifies as `rollback` against remotes/<name>'s current pointer -- refusing …``
 
 `bundle import` and `archive import` compare what they are given with the received pointer they would
