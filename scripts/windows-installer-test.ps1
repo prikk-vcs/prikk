@@ -373,22 +373,69 @@ try {
 }
 
 # ---------------------------------------------------------------------------
-# Control 1: a corrupted zip must install nothing. Shown red first: a perturbed install.ps1 with
-# the checksum comparison forced to "always matches" is run against the same corrupted zip, and
+# Control 1: a zip whose contents do not match the published checksum must install nothing. Shown red first: a perturbed install.ps1 with
+# the checksum comparison forced to "always matches" is run against the same tampered zip, and
 # must be seen to install anyway -- proving the control can fail -- before the real,
 # unperturbed install.ps1 is run against it and must refuse.
 # ---------------------------------------------------------------------------
-Write-Section "Control 1: corrupted zip (red before green)"
+Write-Section "Control 1: a zip that does not match its checksum (red before green)"
 
 $control1Dir = Join-Path $scratchRoot "control1-server"
 New-Item -ItemType Directory -Force -Path $control1Dir | Out-Null
 Copy-Item -Path $checksumPath -Destination (Join-Path $control1Dir "$assetName.sha256")
-$corruptBytes = [System.IO.File]::ReadAllBytes($assetPath)
-# Flip one byte roughly in the middle of the archive -- enough to break both the hash and the zip
-# central directory, without needing the file to still be a well-formed (but wrong) zip.
-$flipIndex = [int]($corruptBytes.Length / 2)
-$corruptBytes[$flipIndex] = $corruptBytes[$flipIndex] -bxor 0xFF
-[System.IO.File]::WriteAllBytes((Join-Path $control1Dir $assetName), $corruptBytes)
+# The tampered asset is a WELL-FORMED zip whose contents are not the published ones: the real archive, with one
+# byte appended to prikk.exe inside it, so its hash no longer matches the published .sha256 and nothing else about it is
+# wrong. (0.58.0 prep P3b: this control used to flip the byte in the middle of the archive, "without needing the file to
+# still be a well-formed zip". Whether Expand-Archive could still extract such a file depended on where the byte landed,
+# so the RED half below passed or failed with the bytes of the binary: the release commit changed the version string, the
+# flip moved into data the decoder rejects, the perturbed installer installed nothing, and the control failed. A control
+# whose outcome depends on the product's bytes is not a control. A zip that extracts, with a different hash, makes the
+# RED half's outcome depend only on the one thing it perturbs, the checksum comparison.)
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$tamperedZipPath = Join-Path $control1Dir $assetName
+Copy-Item -Path $assetPath -Destination $tamperedZipPath
+$tamperedArchive = [System.IO.Compression.ZipFile]::Open($tamperedZipPath, [System.IO.Compression.ZipArchiveMode]::Update)
+try {
+  $tamperedEntry = $tamperedArchive.GetEntry("prikk.exe")
+  if ($null -eq $tamperedEntry) {
+    throw "control 1's fixture: the asset has no prikk.exe entry -- the packaging changed shape; update this script"
+  }
+  $tamperedEntryStream = $tamperedEntry.Open()
+  try {
+    [void]$tamperedEntryStream.Seek(0, [System.IO.SeekOrigin]::End)
+    $tamperedEntryStream.WriteByte(0)
+  } finally {
+    $tamperedEntryStream.Dispose()
+  }
+} finally {
+  $tamperedArchive.Dispose()
+}
+
+# The input checks, before anything below trusts the fixture: it is still a zip every reader accepts (the same entries,
+# prikk.exe one byte longer than the real one) and its hash is not the published one.
+$originalArchive = [System.IO.Compression.ZipFile]::OpenRead($assetPath)
+try {
+  $originalNames = @($originalArchive.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+  $originalExeLength = $originalArchive.GetEntry("prikk.exe").Length
+} finally {
+  $originalArchive.Dispose()
+}
+$checkedArchive = [System.IO.Compression.ZipFile]::OpenRead($tamperedZipPath)
+try {
+  $tamperedNames = @($checkedArchive.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+  $tamperedExeLength = $checkedArchive.GetEntry("prikk.exe").Length
+} finally {
+  $checkedArchive.Dispose()
+}
+Assert-True (($originalNames -join "|") -eq ($tamperedNames -join "|")) "Control 1 fixture: the tampered zip is well-formed and holds the same entries as the real one ($($originalNames -join ', '))"
+Assert-True ($tamperedExeLength -eq ($originalExeLength + 1)) "Control 1 fixture: its prikk.exe is exactly one byte longer than the real one ($originalExeLength -> $tamperedExeLength)"
+$publishedHash = ((Get-Content -Path $checksumPath -Raw).Trim() -split '\s+')[0].ToLower()
+$tamperedHash = (Get-FileHash -Path $tamperedZipPath -Algorithm SHA256).Hash.ToLower()
+Assert-True ($tamperedHash -ne $publishedHash) "Control 1 fixture: the tampered zip's sha256 is not the published one"
+$extractCheckDir = Join-Path $scratchRoot "control1-fixture-extract"
+Expand-Archive -Path $tamperedZipPath -DestinationPath $extractCheckDir
+Assert-True (Test-Path -Path (Join-Path $extractCheckDir "prikk.exe") -PathType Leaf) "Control 1 fixture: Expand-Archive extracts the tampered zip (so only the checksum can stop an installer)"
 
 $installScriptContent = Get-Content -Path $installScriptPath -Raw
 $perturbedMarkerText = 'if ($actualHash -ne $expectedHash) {'
@@ -406,7 +453,7 @@ $env:PRIKK_INSTALL_BASE_URL = "http://localhost:18081"
 $serverControl1 = Start-StaticFileServer -Directory $control1Dir -Port 18081
 try {
   & $enginePath -NoProfile -ExecutionPolicy Bypass -File $perturbedInstallPath
-  Assert-True (Test-Path -Path (Join-Path $control1DirRed "prikk.exe") -PathType Leaf) "RED: the perturbed install.ps1 (checksum check disabled) installs the corrupted zip's contents anyway -- the control can fail"
+  Assert-True (Test-Path -Path (Join-Path $control1DirRed "prikk.exe") -PathType Leaf) "RED: the perturbed install.ps1 (checksum check disabled) installs the tampered zip's contents anyway -- the control can fail"
 } finally {
   Remove-UserPathEntryIfPresent $control1DirRed
 }
@@ -414,9 +461,20 @@ try {
 $control1DirGreen = Join-Path $scratchRoot "install-control1-green"
 $env:PRIKK_INSTALL_DIR = $control1DirGreen
 try {
-  & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath
-  Assert-True ($LASTEXITCODE -ne 0) "GREEN: the real install.ps1 exits non-zero against the corrupted zip"
-  Assert-True (-not (Test-Path -Path (Join-Path $control1DirGreen "prikk.exe"))) "GREEN: the real install.ps1 installs nothing from the corrupted zip"
+  # The refusal's own message is captured with the same 'Continue' idiom Control 6's Invoke-ArchRow documents: in Windows
+  # PowerShell 5.1 a native command's redirected stderr obeys this file's top-of-script 'Stop' and would end the run here.
+  $previousEapControl1 = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $greenOutputControl1 = & $enginePath -NoProfile -ExecutionPolicy Bypass -File $installScriptPath 2>&1
+  } finally {
+    $ErrorActionPreference = $previousEapControl1
+  }
+  $greenExitControl1 = $LASTEXITCODE
+  $greenTextControl1 = (($greenOutputControl1 | ForEach-Object { "$_" }) -join "`n")
+  Assert-True ($greenExitControl1 -ne 0) "GREEN: the real install.ps1 exits non-zero against the tampered zip"
+  Assert-True ($greenTextControl1 -like "*checksum verification failed*") "GREEN: and it refuses on the CHECKSUM (its message says 'checksum verification failed'), not on a decoder error: $greenTextControl1"
+  Assert-True (-not (Test-Path -Path (Join-Path $control1DirGreen "prikk.exe"))) "GREEN: the real install.ps1 installs nothing from the tampered zip"
 } finally {
   Stop-StaticFileServer $serverControl1
   Remove-Item Env:\PRIKK_INSTALL_DIR -ErrorAction SilentlyContinue
@@ -654,8 +712,8 @@ Write-Output "PRIKK_SENTINEL=reached-after-iex"
   Remove-UserPathEntryIfPresent $installDir4bRed
 }
 
-# --- Control 4b GREEN: the corrupted-zip case, in a child session -- the session must survive ----
-# Reuses Control 1's own corrupted-zip fixture directory ($control1Dir) on a fresh port (the
+# --- Control 4b GREEN: the tampered-zip case, in a child session -- the session must survive ----
+# Reuses Control 1's own tampered-zip fixture directory (a well-formed zip whose hash is not the published one; only the checksum can refuse it) ($control1Dir) on a fresh port (the
 # server that originally served it was already stopped in Control 1's own `finally` block).
 # The child script wraps Invoke-Expression in its own try/catch: `throw` (the fix) is a normal
 # .NET exception and is caught by it, after which the child process keeps running and prints the
