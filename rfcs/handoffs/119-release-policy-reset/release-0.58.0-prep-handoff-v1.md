@@ -81,3 +81,40 @@ gates on it):
 - **No extra `test-support` smoke line.** The in-flight, moved-directory and kill rows are held by the Rust suite through the
   binary, which the gates run.
 - **The P1 logs overwrite:** the dev round's verdict stands on its report, its review and CI. Nothing more is needed.
+
+**P3 ACCEPTED 2026-11-18** (`3927f5a4`; review `release-0.58.0-prep-P3-review-v1`; the architect rebuilt the release binary and got
+the same sha256, `600ab24d…`). **CI on `3927f5a4` is RED** (run `44255128581`): 16 of 17 jobs pass, and
+`Windows installer/uninstaller test` fails one assertion.
+
+## Part P3b, FIRST: the installer test's Control 1 depends on the binary's bytes (45 min, stop at 90; report `release-0.58.0-prep-P3b-report.md`)
+
+**What failed** (read by the architect from the job's log): `scripts/windows-installer-test.ps1`, Control 1's RED half: "the
+perturbed install.ps1 (checksum check disabled) installs the corrupted zip's contents anyway". `Expand-Archive` itself refused
+the corrupted zip ("Found invalid data while decoding"), so the perturbed installer installed nothing. **GREEN passed:** the
+real installer refused on the checksum.
+
+**The cause:** the control flips the byte in the middle of the archive (`$flipIndex = Length / 2`), and its comment says it does
+not need the file to stay a well-formed zip.
+- Whether `Expand-Archive` can still extract it depends on where that byte lands.
+- The release commit changed the binary's bytes (the version string), so the flip moved into compressed data the decoder
+  detects.
+- **It passed by luck on every earlier commit,** `3509f5b7`'s run included. A control whose outcome depends on the product's
+  bytes is not a control.
+
+**The rule:**
+1. **Control 1's corrupted asset is a well-formed zip whose contents do not match the published `.sha256`:** the same
+   archive, repacked with `prikk.exe` changed (one byte appended, or one byte flipped in the uncompressed file before
+   packing).
+   - The perturbed installer (checksum check off) must then install it, which is RED.
+   - The real installer must refuse it **on the checksum,** which is GREEN.
+   - **Assert why GREEN refused:** the message `checksum verification failed`, not merely a non-zero exit. A decoder refusal
+     must not pass for a checksum refusal.
+2. **Check every other control in that script for the same dependence on the product's bytes or sizes.** List each control
+   with what it perturbs, and say why its outcome cannot move with the binary.
+3. **No product change.** The release binary's sha256 stays `600ab24d…`. Rebuild it from the new commit with
+   `cargo build --release --locked -p prikk`, and say that it is identical.
+4. **The 15 gates on the final commit.** The architect pushes, and reads the Windows installer job, and every other job, by
+   name.
+5. **CHANGELOG:** nothing. This is test tooling.
+
+That commit becomes the candidate for the external review. The release commit `3927f5a4` stays below it, unchanged.
