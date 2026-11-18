@@ -63,6 +63,24 @@ refused: no ref, pointer or queue entry was written, exit `1`. Nothing it publis
 which does not exist` for a renamed, emptied or removed one); restore the directory from where it went (a rename can be undone) or from a backup. If nothing moves the
 directory again, the second run succeeds. See [Directories Held While a Lock Is Held](../reference/concurrency-locking.md#directories-held-while-a-lock-is-held).
 
+## `the imported history did not replay cleanly at block <id>; run `prikk verify``
+
+An adopting import (`archive import --adopt`, `bundle import --adopt`) printed this on stderr after its report, and exited `0`. The branch is published and the objects are stored; the import then walked the adopted history once, recomputing each Block's state root, and found a Block whose root is not the one it signs (or that it could not read). The Blocks before it are recorded as confirmed, the named Block and everything after it are not. `--format json` on stdout is unchanged; nothing is printed for a history that replays cleanly.
+
+**The way out is `prikk verify`**: it names the Block and what is wrong with it. Until the history is sound, a `commit` that edits a text file in it refuses the same way (next entry). Re-import from the source if it has a good copy, or restore from a backup ([Backup and Restore](backup-restore.md)).
+
+## `error: integrity error: the history does not replay cleanly at block <id> (<reason>); run `prikk verify``
+
+A `commit` that edits a text file whose baseline text no stored blob holds needs the history behind it, and walked it to anchor the edit. A Block on that walk does not replay to the state root it signs, so the commit refused and recorded nothing: authoring on top of it would build on history `seal` and `verify` refuse too. (Through 0.57.0 the commit was authored.)
+
+**The way out is `prikk verify`**, which names the same Block and the cause. A repository that received this history (`archive import --adopt`, `bundle import --adopt`) was told so by the import's own stderr line (previous entry); re-import from a good copy or restore from a backup ([Backup and Restore](backup-restore.md)). A commit that edits no existing text file is not affected.
+
+## `error: integrity error: patch-exchange accept: object <id> changed between validation and writing -- <done> of <total> objects were already written, …`
+
+`sync accept` reads the artifact file twice: the first pass validates and admits every object and keeps only a digest of each frame, the second writes each object after checking that its frame still has that digest. The file changed between the two reads (a copy still being written, a sync tool, an editor), so the changed object was refused before it was written, exit `1`. The objects written before it were each validated and admitted first, so they are safe to keep.
+
+**The way out is to run the same `sync accept` again once the file is stable**: an object already stored is recognised and skipped, and the rest are written. If the artifact is on a drive that another tool is touching, copy it to a local path first. Through 0.57.0 the file was read once, so this case could not arise.
+
 ## `error: precondition not met: no maintainer key is adopted in this repository yet`
 
 Your maintainer key is configured but not yet trusted by this repository. Run
