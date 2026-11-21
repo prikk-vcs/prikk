@@ -801,6 +801,10 @@ A ref's pointer is written before its log record (`branch create`, `tag create`,
 
 If the holder is gone (killed, or its lock outlived it) the answer is the interrupted-publication one below, and the message now adds what was said about the lock that is still on disk ("the lock it took is still on disk: its holder does not appear to be running: …"). A holder that cannot be judged (a lock taken in another pid namespace, on another machine, by an older prikk, or still being written) is **not** called in flight: only a holder that appears running is.
 
+## `error: precondition not met: the pointer and the log of <ref> disagreed when this command checked and agree now; run this command again`
+
+A command (`seal`, `sync seal`, `branch`, `merge`, `tag create`, `uncommit`) was refused because another command's publication of `<ref>` was between its two writes when this one looked, and the publication had finished by the time the refusal was worded. Nothing is wrong and nothing was written. **Run the command again.** (Through 0.58.0 this moment could surface as `repository mutation is blocked by incomplete ref publication; … use signer-backed seal retry`; that sentence now means what it says.) If the command refuses again with the same words every time and no other prikk command is running, run `prikk verify`.
+
 ## `error: repository has interrupted or divergent ref publication state`
 
 Seen from `verify` after `branch create`, `tag create`, `sync adopt-tag`, `merge`, or `seal` was

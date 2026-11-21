@@ -81,6 +81,25 @@ fn crash_branch_create(
     target: ObjectId,
     signer: &impl MaintainerSigner,
 ) -> ObjectId {
+    branch_create_publishing(layout, ref_name, target, signer, true)
+}
+
+/// The same publication, finished (0.59.0 RS2a's races land a whole publication between two reads).
+fn crash_free_branch_create(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    target: ObjectId,
+) -> ObjectId {
+    branch_create_publishing(layout, ref_name, target, &original_signer(), false)
+}
+
+fn branch_create_publishing(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    target: ObjectId,
+    signer: &impl MaintainerSigner,
+    crash: bool,
+) -> ObjectId {
     use prikk_object::{RefKind, RefStatePayload, RefUpdatePayload};
 
     let log_path = layout.ref_log_container_slot_path(ContainerSlot::A);
@@ -128,11 +147,13 @@ fn crash_branch_create(
         })
         .unwrap();
 
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&log_path)
-        .unwrap();
-    file.set_len(before_len).unwrap();
+    if crash {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&log_path)
+            .unwrap();
+        file.set_len(before_len).unwrap();
+    }
     state_id
 }
 
@@ -408,4 +429,60 @@ fn the_generic_refusal_keeps_its_plain_text_for_an_untrusted_leads_mismatch() {
         text.contains("incomplete ref publication"),
         "the plain text must still say what is wrong: {text}"
     );
+}
+
+/// 0.59.0 RS2a: a lead whose publisher is running is never named "interrupted: run `ref complete`". The same fixture as the test above (a genuine,
+/// completable lead on `heads/other`), with the ref's lock held by a process that appears to be running: the rewrite asks `decide` and answers with the
+/// in-flight sentence the precondition uses, and not with the command that would complete a publication from under its publisher.
+#[test]
+fn the_rewrite_does_not_call_a_running_publisher_interrupted() {
+    let root = unique_temp_dir("rs2a-rewrite-in-flight");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    crash_branch_create(&layout, "heads/other", target, &original_signer());
+    std::fs::write(
+        layout.ref_lock_path("heads/other"),
+        crate::lock_holder::render_body("ref", std::process::id(), crate::lock_holder::own_facts()),
+    )
+    .unwrap();
+
+    let text = super::incomplete_publication_refusal_naming_any_lead(&layout, None)
+        .unwrap()
+        .to_string();
+    assert!(
+        text.contains(&format!(
+            "another command is publishing heads/other (pid {}, from its lock); run this command again when it finishes",
+            std::process::id()
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("ref complete"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 0.59.0 RS2a: the rewrite reads the log, then the pointer index. A first-ever publication that lands between the two reads shows as a pointer with
+/// no log record on the first, and as agreement on the second `decide` reads: the answer says the two agree now and to run the command again -- it is
+/// not the generic "use signer-backed seal retry" for a healthy repository.
+#[test]
+fn a_publication_that_lands_between_the_rewrites_two_reads_is_not_a_generic_refusal() {
+    let root = unique_temp_dir("rs2a-rewrite-lands-between");
+    let layout = setup(&root);
+    let target = root_block(&layout);
+    let publisher = layout.clone();
+    crate::refs::view_hooks::set("candidate-between-log-and-pointer", move || {
+        crash_free_branch_create(&publisher, "heads/other", target);
+    });
+
+    let text = super::incomplete_publication_refusal_naming_any_lead(&layout, None)
+        .unwrap()
+        .to_string();
+    assert!(!crate::refs::view_hooks::pending(
+        "candidate-between-log-and-pointer"
+    ));
+    assert!(
+        text.contains("disagreed when this command checked and agree now; run this command again"),
+        "{text}"
+    );
+    assert!(!text.contains("signer-backed seal retry"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -68,7 +68,7 @@ use prikk_object::{
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::object_store::ObjectReader;
 use crate::received::list_received_pointers;
-use crate::refs::RefStore;
+use crate::refs::{PointerIndexReplay, pointer_summaries_of};
 use crate::wal::{Wal, WalReplay};
 
 /// `default_replay`: the `WalReplay` stage's own already-decoded result for
@@ -83,8 +83,15 @@ pub(super) fn compute_reachable_object_ids(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     default_replay: Option<&WalReplay>,
+    pointers_read: &Result<PointerIndexReplay>,
 ) -> Result<BTreeSet<ObjectId>> {
-    compute_reachable_object_ids_with_pending_roots(layout, object_store, default_replay, true)
+    compute_reachable_object_ids_with_pending_roots(
+        layout,
+        object_store,
+        default_replay,
+        pointers_read,
+        true,
+    )
 }
 
 /// 0.56.0 step 3h test-support seam for a red control: [`compute_reachable_object_ids`] with the
@@ -108,21 +115,29 @@ pub(super) fn compute_reachable_object_ids_excluding_pending_roots_for_test(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     default_replay: Option<&WalReplay>,
+    pointers_read: &Result<PointerIndexReplay>,
 ) -> Result<BTreeSet<ObjectId>> {
-    compute_reachable_object_ids_with_pending_roots(layout, object_store, default_replay, false)
+    compute_reachable_object_ids_with_pending_roots(
+        layout,
+        object_store,
+        default_replay,
+        pointers_read,
+        false,
+    )
 }
 
 fn compute_reachable_object_ids_with_pending_roots(
     layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     default_replay: Option<&WalReplay>,
+    pointers_read: &Result<PointerIndexReplay>,
     include_pending_roots: bool,
 ) -> Result<BTreeSet<ObjectId>> {
     let mut reached: BTreeSet<ObjectId> = BTreeSet::new();
     let mut frontier: Vec<ObjectId> = Vec::new();
 
-    let ref_store = RefStore::new(layout.clone());
-    for pointer in ref_store.list_ref_pointers()? {
+    // 0.59.0 RS2a: the pointers are the caller's one read, made before `object_store` was opened (`verify`'s ref view).
+    for pointer in pointer_summaries_of(pointers_read.as_ref().map_err(Clone::clone))? {
         frontier.push(pointer.ref_state_id);
     }
     for pointer in list_received_pointers(layout)? {

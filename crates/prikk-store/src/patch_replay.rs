@@ -783,11 +783,25 @@ pub(crate) fn resolve_worktree_baseline(
     // Pointer absent: genesis only if the log is readable and empty; otherwise corruption.
     // An absent log is decoded as an empty log by `RefStore::replay_log`; unreadable, malformed, or
     // partial logs remain corruption, not genesis.
+    #[cfg(test)]
+    crate::refs::view_hooks::run("baseline-before-log");
     let log = ref_store.replay_log(&canonical_ref).map_err(|err| {
         PrikkError::Integrity(format!(
             "ref {canonical_ref} log is unreadable; run `prikk doctor` before committing ({err})"
         ))
-    })?;
+    });
+    // 0.59.0 RS2a: the pointer is read again after the log (a publication writes the pointer first): a publication that landed in between is published.
+    if ref_store
+        .read_current_ref_state_id(&canonical_ref)?
+        .is_some()
+    {
+        let (baseline_block, horizon) = resolve_node_lineage_bounds(layout, &canonical_ref)?;
+        return Ok(WorktreeBaseline::Published {
+            baseline_block,
+            horizon,
+        });
+    }
+    let log = log?;
     if log.trailing_partial_bytes != 0 {
         return Err(PrikkError::Integrity(format!(
             "ref {canonical_ref} pointer is missing and its log has trailing partial bytes; \

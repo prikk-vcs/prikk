@@ -25,8 +25,9 @@
 
 use std::sync::Arc;
 
-use prikk_error::Result;
+use prikk_error::{PrikkError, Result};
 
+use super::RefPointerSummary;
 use super::pointer_index::{
     PointerIndexEntry, PointerIndexRecordOutcome, PointerIndexReplay, decode_pointer_index_records,
     empty_pointer_index_replay, live_pointer_index_slot,
@@ -197,3 +198,32 @@ fn refresh(
 // 0.58.0 S5: Linux and macOS only, like the mechanism (its identity is `(device, inode)`).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 pub(in crate::refs) mod tests;
+
+/// The newest pointer per ref, by name, from one read of the pointer index (what [`super::RefStore::list_ref_pointers`] returns). `verify` reads the
+/// pointer index once (0.59.0 RS2a: after the ref log, before its object snapshots) and every stage takes its refs from that one read.
+///
+/// # Errors
+///
+/// The read's own error, or a damaged entry in the index.
+pub(crate) fn pointer_summaries_of(
+    replay: Result<&PointerIndexReplay>,
+) -> Result<Vec<RefPointerSummary>> {
+    let replay = replay?;
+    if replay.has_item_failure() {
+        return Err(PrikkError::Integrity(
+            "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
+             --plan-only`, then `prikk doctor --rebuild-pointer-index`"
+                .to_string(),
+        ));
+    }
+    let latest = latest_per_key(replay);
+    let mut summaries: Vec<RefPointerSummary> = latest
+        .into_values()
+        .map(|entry| RefPointerSummary {
+            ref_name: entry.ref_name,
+            ref_state_id: entry.ref_state_id,
+        })
+        .collect();
+    summaries.sort_by(|left, right| left.ref_name.cmp(&right.ref_name));
+    Ok(summaries)
+}

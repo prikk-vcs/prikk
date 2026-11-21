@@ -50,11 +50,13 @@ pub(crate) use pointer_index::{
 pub use pointer_index::PointerIndexRepair;
 // 0.51.0 step 1 Part B item 4: `verify`'s own retired-slot tail check needs the raw decoder too,
 // so this is no longer test-only.
+pub(crate) use kept_pointer_index::pointer_summaries_of;
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
-    PointerIndexEntry, decode_pointer_index_entries_for_resolver, empty_pointer_index_replay,
-    encode_pointer_index_record, fold_one_pointer_index_entry, pointer_index_interior_damage,
-    reduce_pointer_index_entries, replay_pointer_index, truncate_pointer_index_trailing_partial,
+    PointerIndexEntry, PointerIndexReplay, decode_pointer_index_entries_for_resolver,
+    empty_pointer_index_replay, encode_pointer_index_record, fold_one_pointer_index_entry,
+    pointer_index_interior_damage, reduce_pointer_index_entries, replay_pointer_index,
+    truncate_pointer_index_trailing_partial,
 };
 
 use prikk_error::{PrikkError, Result};
@@ -103,7 +105,7 @@ pub use verify::{
     RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefPublicationIssue,
 };
 pub(crate) use verify::{
-    ensure_ref_target_valid, ensure_required_attestations_present, verify_refs_with,
+    ensure_ref_target_valid, ensure_required_attestations_present, verify_refs_with_pointers,
 };
 
 /// The two-hop ref-tip resolution `bundle.rs`, `patch_set_digest.rs`, and `patch_exchange.rs` each
@@ -275,6 +277,9 @@ pub fn ensure_may_publish(layout: &RepositoryLayout, ref_name: &str) -> Result<(
     ensure_publication_precondition_with_replay(layout, Some(ref_name), true, None)
 }
 
+#[cfg(test)]
+pub(crate) mod view_hooks;
+
 /// The publication precondition. `replay_out`, when `Some`, receives the active-WAL decode this
 /// function takes internally at its own fifth and final check (0.54.0 step 1 round 2: kept exactly
 /// where it was pre-0.54.0 -- after the ref-log-damage, agreement, object-index and candidate-debris
@@ -290,6 +295,14 @@ pub(crate) fn ensure_publication_precondition_with_replay(
 
     let excluded_key = exclude_ref_name.map(crate::foundation::layout::ref_name_key_bytes);
 
+    // 0.59.0 RS2a: **the log, then the pointer index, then (below) the object index** -- the reverse of the order a publication writes them
+    // (RefState object, pointer, log record), so each read is at least as new as the one before it. A log record this function sees therefore
+    // has its pointer entry in the pointer read that follows it; reading the pointer first let a first-ever publication land between the two
+    // reads and read as a log record with no pointer (`in_flight::refusal_for_mismatch`). The two reads are made here and judged below in the
+    // order this function has always judged them (a damaged pointer index first), so every genuine state is refused exactly as before.
+    let loaded_ref_log = kept_ref_log::load_ref_log_shared(layout);
+    #[cfg(test)]
+    view_hooks::run("precondition-between-log-and-pointer");
     let pointer_replay = kept_pointer_index::replay_pointer_index_shared(layout)?;
     if pointer_replay.has_item_failure() {
         return Err(incomplete_publication_refusal());
@@ -302,8 +315,9 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     // RFC 165 R2: this is the one whole-container read this precondition now does, in total (`ref-log-replay`, once per check, not
     // once per ref) -- or, under a hold that kept a decode of the log, its tail (0.58.0 S5: `kept_ref_log.rs`).
     let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
+    let mut log_names: BTreeMap<[u8; 32], String> = BTreeMap::new();
     let mut pending_tail_refusal: Option<(usize, usize)> = None;
-    if let Some(loaded) = kept_ref_log::load_ref_log_shared(layout)? {
+    if let Some(loaded) = loaded_ref_log? {
         let (bytes, discovery) = (&loaded.bytes, &*loaded.replay);
         // RFC 165 R5 (§9.2): `has_damage()` is true for a complete, fully-written record whose later
         // validation failed (damage, wherever it sits) or a `Failed` frame with something sound or
@@ -322,6 +336,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
                 return Err(incomplete_publication_refusal());
             }
             newest_log.insert(record.ref_name_key, update.new_ref_state_id);
+            log_names.insert(record.ref_name_key, update.ref_name);
         }
         // 0.51.0 step 1 Part A (020's 0.51.0 grade): the tail guard below must not run until every
         // check that can name a genuine incomplete publication (the agreement loop, the object-index
@@ -362,7 +377,9 @@ pub(crate) fn ensure_publication_precondition_with_replay(
         }
         if newest_pointer.get(&key) != newest_log.get(&key) {
             // 0.58.0 F2: a lead whose publisher is still running is not an interrupted publication (`in_flight`).
-            if let Some(refusal) = in_flight::refusal_for_mismatch(layout, &pointer_replay, key)? {
+            if let Some(refusal) =
+                in_flight::refusal_for_mismatch(layout, &pointer_replay, &log_names, key)?
+            {
                 return Err(refusal);
             }
         }
@@ -496,7 +513,8 @@ pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     layout: &RepositoryLayout,
 ) -> Result<()> {
     let ref_log = read_and_decode_ref_log(layout, "verify-scan");
-    let verification = verify_refs_with(layout, &ref_log)?;
+    let pointers_read = replay_pointer_index(layout);
+    let verification = verify_refs_with_pointers(layout, &ref_log, &pointers_read)?;
     if verification.publication_issues.is_empty()
         && !verification.has_item_failure()
         && !evidence::has_incomplete_active_cleanup_with_replay(layout, None, None)?
@@ -767,24 +785,8 @@ impl RefStore {
     /// old `by-id/` directory listing, which named the complete set of ref pointers directly; the
     /// index now does.
     pub fn list_ref_pointers(&self) -> Result<Vec<RefPointerSummary>> {
-        let replay = kept_pointer_index::replay_pointer_index_shared(&self.layout)?;
-        if replay.has_item_failure() {
-            return Err(PrikkError::Integrity(
-                "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
-                 --plan-only`, then `prikk doctor --rebuild-pointer-index`"
-                    .to_string(),
-            ));
-        }
-        let latest = kept_pointer_index::latest_per_key(&replay);
-        let mut summaries: Vec<RefPointerSummary> = latest
-            .into_values()
-            .map(|entry| RefPointerSummary {
-                ref_name: entry.ref_name,
-                ref_state_id: entry.ref_state_id,
-            })
-            .collect();
-        summaries.sort_by(|left, right| left.ref_name.cmp(&right.ref_name));
-        Ok(summaries)
+        let replay = kept_pointer_index::replay_pointer_index_shared(&self.layout);
+        pointer_summaries_of(replay.as_deref().map_err(Clone::clone))
     }
 
     /// Return a diagnostic candidate when the pointer is missing but the format-1 log is valid.

@@ -332,10 +332,9 @@ use crate::received::received_index::{
     fold_one_received_index_entry, replay_received_index,
 };
 use crate::refs::{
-    DecodedRefLog, RefItemOutcome, RefItemStatus, RefStore,
-    decode_pointer_index_entries_for_resolver, ensure_ref_target_valid,
-    ensure_required_attestations_present, fold_one_pointer_index_entry, read_and_decode_ref_log,
-    ref_log_tail_status_of, verify_refs_with,
+    DecodedRefLog, RefItemOutcome, RefItemStatus, decode_pointer_index_entries_for_resolver,
+    ensure_ref_target_valid, ensure_required_attestations_present, fold_one_pointer_index_entry,
+    read_and_decode_ref_log, ref_log_tail_status_of, verify_refs_with_pointers,
 };
 use crate::rollback::verify::{verify_rollback_draft_wal_records, verify_rollback_patch_envelope};
 use crate::signature_diagnostics::{
@@ -1900,7 +1899,18 @@ pub fn verify_repository_with_options(
     // RFC 111 §6.1: `verify` is read-only end to end (never calls `write_object` anywhere in its own
     // call graph, confirmed by RFC 111 Q1's inventory), so it takes one decoded index snapshot here,
     // once, instead of the O(N) per-object-read decode `FileObjectStore` used to pay.
+    //
+    // 0.59.0 RS2a -- **one ref view, taken first: the ref log, then the pointer index, then the object snapshots** (the reverse of the order
+    // a publication writes them: RefState object, pointer, log record). Every stage below judges that one moment: a pointer this run reads
+    // names a RefState that was durable when the pointer was written, so an object snapshot opened **after** the pointer read holds it, and
+    // a publication that lands during the run shows as a pointer ahead of the log -- a lead, which F2 judges (in flight, finished,
+    // interrupted) -- never as a pointer naming an object the run cannot see. Before this the snapshot was opened first and the pointer index
+    // was read again by three stages, up to the whole run later.
+    let ref_log = read_and_decode_ref_log(layout, "verify-scan");
+    let pointers_read = crate::refs::replay_pointer_index(layout);
     let object_store = ObjectReadSnapshot::open(layout)?;
+    #[cfg(test)]
+    crate::refs::view_hooks::run("verify-after-snapshot");
     // RFC 108 §D3.4, increment 3b: propagated with `?`, unconditionally, the same footing as
     // `ObjectReadSnapshot::open` immediately above -- a repository whose `active/` root is not
     // enumerable at all is not a case any downstream stage could meaningfully evaluate either, and
@@ -1944,6 +1954,7 @@ pub fn verify_repository_with_options(
             &object_store,
             &mut trust_verifier,
             default_wal_replay.as_ref().ok(),
+            &pointers_read,
         ),
     );
     let objects_evaluated = object_summary.is_some();
@@ -2035,9 +2046,10 @@ pub fn verify_repository_with_options(
     // Stage: Refs. No upstream stage dependency.
     #[cfg(test)]
     crate::test_gates::existence_report::record(layout);
-    let ref_log = read_and_decode_ref_log(layout, "verify-scan");
-    let ref_verification =
-        pipeline.run(VerificationStage::Refs, verify_refs_with(layout, &ref_log));
+    let ref_verification = pipeline.run(
+        VerificationStage::Refs,
+        verify_refs_with_pointers(layout, &ref_log, &pointers_read),
+    );
 
     // Stage: ReceivedRefs (RFC 115 Stage 3 §6). No upstream stage dependency -- reads the received
     // index and the object store directly, the same footing `Refs` has.
@@ -2058,7 +2070,7 @@ pub fn verify_repository_with_options(
     let local_tag_trust_evaluated = pipeline
         .run(
             VerificationStage::LocalTagTrust,
-            verify_local_tag_publication_trust(layout, &object_store, &mut trust_verifier),
+            verify_local_tag_publication_trust(&pointers_read, &object_store, &mut trust_verifier),
         )
         .is_some();
 
@@ -2604,12 +2616,12 @@ pub(crate) fn verify_received_ref_state(
 /// principle (a Tag's trust expectation follows *how it arrived*, not its type) holds structurally,
 /// not by a flag threaded through a shared check.
 fn verify_local_tag_publication_trust(
-    layout: &RepositoryLayout,
+    pointers_read: &Result<crate::refs::PointerIndexReplay>,
     object_store: &impl ObjectReader,
     trust_verifier: &mut PublicationTrustVerifier<'_>,
 ) -> Result<()> {
-    let ref_store = RefStore::new(layout.clone());
-    for summary in ref_store.list_ref_pointers()? {
+    for summary in crate::refs::pointer_summaries_of(pointers_read.as_ref().map_err(Clone::clone))?
+    {
         let ref_state_envelope = object_store
             .read_typed(summary.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {

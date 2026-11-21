@@ -208,6 +208,7 @@ pub(super) fn verify_objects(
     object_store: &impl ObjectReader,
     trust_verifier: &mut PublicationTrustVerifier<'_>,
     default_wal_replay: Option<&WalReplay>,
+    pointers_read: &Result<crate::refs::PointerIndexReplay>,
 ) -> Result<ObjectSummary> {
     // DC-92 §4.2: Phase A (below) collects every CurrentV6 Block's already-decoded payload instead
     // of verifying its state inline, in whatever order the generic scan visits objects. Phase B
@@ -312,6 +313,7 @@ pub(super) fn verify_objects(
         layout,
         object_store,
         default_wal_replay,
+        pointers_read,
     )?;
     for object_type in persisted_object_types() {
         summary.add(verify_object_type_container(

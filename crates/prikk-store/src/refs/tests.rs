@@ -7,6 +7,7 @@ mod object_mismatch;
 mod one_read_per_publication;
 mod publication_recovery;
 mod ref_log_tail_is_not_a_publication;
+mod ref_view_order;
 
 use prikk_object::ObjectType;
 
@@ -369,10 +370,9 @@ fn ref_verification_returns_envelopes_from_retained_anchored_observation() -> pr
     std::fs::create_dir_all(root.join(".prikk/refs/logs"))?;
     std::fs::write(root.join(".prikk/refs/logs/replacement.log"), b"malicious")?;
 
-    let verification = super::verify_refs_with(
-        &layout,
-        &super::read_and_decode_ref_log(&layout, "verify-scan"),
-    )?;
+    let ref_log = super::read_and_decode_ref_log(&layout, "verify-scan");
+    let verification =
+        super::verify_refs_with_pointers(&layout, &ref_log, &super::replay_pointer_index(&layout))?;
     assert_eq!(verification.ref_update_envelopes, vec![ref_update]);
     assert_eq!(verification.log_record_count, 1);
     let _ = std::fs::remove_dir_all(root);
@@ -675,9 +675,10 @@ fn ensure_no_incomplete_publication_refuses_when_a_ref_item_fails() {
         // (item containment), so `ensure_no_incomplete_publication`'s own refusal cannot be coming
         // from that path -- it must be the `has_item_failure()` check.
         assert!(
-            super::verify_refs_with(
+            super::verify_refs_with_pointers(
                 &layout,
-                &super::read_and_decode_ref_log(&layout, "verify-scan")
+                &super::read_and_decode_ref_log(&layout, "verify-scan"),
+                &super::replay_pointer_index(&layout)
             )
             .is_ok()
         );

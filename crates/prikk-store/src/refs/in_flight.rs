@@ -121,10 +121,17 @@ pub(crate) fn in_flight_sentence(ref_name: &str, pid: u32) -> String {
 
 /// The precondition's answer for one ref whose newest pointer and newest log record disagree (`key` names it): `None` when the lead is gone
 /// on the second read (carry on), the in-flight refusal for a publisher that appears to be running, else today's interrupted-publication refusal.
-/// A disagreement with no pointer entry (the log leads) is never a lead and keeps today's refusal.
+///
+/// **A log record with no pointer entry** (0.59.0 RS2a): the caller reads the log, then the pointer index, and a publication writes the pointer
+/// first, so a record the log read saw already has its pointer entry in the pointer read that follows -- unless the pointer index holds none for
+/// it. That is the log leading: damage, or a publication whose pointer write landed after the pointer read. It gets the second read a pointer lead
+/// gets: the pointer is read again; if it is still absent the answer is today's refusal (a log with no pointer is not a lead), and if it has
+/// appeared the ref is judged as any pointer lead is (`decide`: the holder, then the lead again -- gone, in flight, or interrupted).
+/// `log_names` is the name each log record carries, for the key the pointer index has no entry for.
 pub(super) fn refusal_for_mismatch(
     layout: &RepositoryLayout,
     pointer_replay: &super::pointer_index::PointerIndexReplay,
+    log_names: &std::collections::BTreeMap<[u8; 32], String>,
     key: [u8; 32],
 ) -> Result<Option<prikk_error::PrikkError>> {
     let name = pointer_replay
@@ -133,8 +140,18 @@ pub(super) fn refusal_for_mismatch(
         .rev()
         .find(|entry| entry.ref_name_key == key)
         .map(|entry| entry.ref_name.as_str());
-    let Some(name) = name else {
-        return Ok(Some(super::incomplete_publication_refusal()));
+    let name = match name {
+        Some(name) => name,
+        None => {
+            let Some(log_name) = log_names.get(&key) else {
+                return Ok(Some(super::incomplete_publication_refusal()));
+            };
+            let store = super::RefStore::new(layout.clone());
+            if store.read_current_ref_state_id(log_name)?.is_none() {
+                return Ok(Some(super::incomplete_publication_refusal()));
+            }
+            log_name.as_str()
+        }
     };
     Ok(
         match decide(layout, name, || lead_persists(layout, name))? {

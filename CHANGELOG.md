@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Output changes
+
+- **`prikk verify` / `prikk doctor` while another command publishes** (a `sync seal`, a `seal`, a `tag create`): before, exit `1` with `stage local-tag-trust: failed: integrity error: ref heads/main names missing RefState <id>` and `repository verification did not complete every stage` (`doctor`: `PRIKK-DOCTOR-VERIFY-STAGE-INCOMPLETE`) for a repository with nothing wrong; after, the run judges the moment it started at, and its verdict is the repository's (exit `0`, or the existing `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT` finding of 0.58.0). A RefState that is truly missing is reported exactly as before. No stage status, condition id or doctor code is new.
+- **`prikk sync seal` (and `seal`, `commit`, `merge`, `branch`, `tag create`, `sync adopt-tag`, `uncommit`) when another command publishes a ref that has no history yet while this one checks:** before, exit `1` with `repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry`, for a repository with no incomplete publication (a `sync seal` of 301 claims beside a `tag create` loop on tmpfs: 366, 72 and 372 refused rounds of 400, 94 and 400); after, the command proceeds.
+- **The same refusal's rewrite** (the sentence that names `prikk ref complete <ref>`): before, a lead whose publisher was still running was named an interrupted publication; after, it is `another command is publishing <ref> (pid N, from its lock); run this command again when it finishes` (the 0.58.0 sentence), and a lead that has finished by the time the sentence is worded is `the pointer and the log of <ref> disagreed when this command checked and agree now; run this command again`, after the same `error: precondition not met:` prefix. A genuine interrupted publication still reads `… run `prikk ref complete <ref>``.
+- **A `commit` on a branch with no published history, while another command publishes it for the first time:** before, `integrity error: ref <ref> pointer is missing but ref-log history exists; preserve the repository and restore from backup (this is not a genesis repository)`; after, the commit sees a published ref.
+
+### Fixed — a reader or a writer read the ref stores at different moments while another command published
+
+A defect in every release before this one, measured on the released 0.58.0. A publication makes three stores durable in a fixed order (the RefState object, the ref's pointer, its log record). The commands below read two or three of them with no lock, in an order that let a publication land between the reads, and read a healthy repository as damaged or as an incomplete publication. They now read in the reverse of the order a publication writes (the ref log, then the pointer index, then the object index), so each read is at least as new as the one before it. This section is extended as the rest of the sites are fixed.
+
+- **`verify` and `doctor` read the pointer index after their object scan.** `local-tag-trust` (and the reachability walk) read it again, up to the whole run later. They now take one view first (log, pointer index, then the object snapshots), and every stage uses it. Beside a 300-claim `sync seal` (the external reviewer's script): 54, 61 and 120 of 400 `verify` runs failed on disk, and every run (8, 7 and 8) on tmpfs; now 0 of 400 on disk in three runs, and 0 of 7, 7 and 6 on tmpfs.
+- **The write-path precondition read the pointer index, then the log.** A first-ever publication of a ref landing between them was a log record with no pointer, and was refused as incomplete without the second read a pointer lead gets. It reads the log first, and a log record with no pointer entry is read again before it is judged.
+- **The refusal rewrite, `ref complete`'s plan and a `commit`'s baseline** made the same two reads in the same order, and now read in the same new one.
+
 ## 0.58.0 — 2026-11-18
 
 ### Security

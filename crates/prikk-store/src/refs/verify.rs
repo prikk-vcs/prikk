@@ -7,6 +7,7 @@ use prikk_error::{PrikkError, Result};
 use crate::foundation::fsutil::{EntryKind, list_directory_tolerating_absence};
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReadSnapshot;
+use crate::refs::pointer_index::{PointerIndexReplay, replay_pointer_index};
 use crate::signature_diagnostics::{
     SignatureEnvelopeIssue, SignatureEnvelopeSource, classify_signature_envelope,
 };
@@ -145,9 +146,13 @@ impl RefVerification {
 /// what they read.
 /// Takes a ref log `verify` has already read and decoded once (0.49.0 step 5 round 1 addendum F2), so
 /// the same container is not decoded again by this stage or by the tail check.
-pub(crate) fn verify_refs_with(
+///
+/// Takes the pointer index the caller has already read (0.59.0 RS2a): `verify` reads the ref log, then the pointer index, then opens its object
+/// snapshots, once, so every stage judges one moment; this stage opens its own snapshot **after** that pointer read.
+pub(crate) fn verify_refs_with_pointers(
     layout: &RepositoryLayout,
     ref_log: &Result<Option<super::container::DecodedRefLog>>,
+    pointers_read: &Result<PointerIndexReplay>,
 ) -> Result<RefVerification> {
     // RFC 111 §6.1: `verify_refs` is read-only (never calls `write_object`), so it takes its own
     // decoded index snapshot here rather than sharing `verify_repository_with_options`'s -- they are
@@ -157,7 +162,7 @@ pub(crate) fn verify_refs_with(
     // these two snapshots is still exactly one decode regardless of repository size.
     let objects = ObjectReadSnapshot::open(layout)?;
     let (pointers, pointer_failures_by_key, pointer_outcomes, trailing_partial_pointer_index_bytes) =
-        read_pointers(layout, &objects)?;
+        read_pointers(layout, pointers_read, &objects)?;
     let (logs, log_record_count, ref_log_envelopes, log_failures_by_key, log_outcomes) = read_logs(
         &|offset| scan::log_locator(layout, offset),
         &objects,
@@ -305,7 +310,7 @@ fn classify_ref_state(
 
 /// 0.52.0 step 0, Part C1 round 3: the archive's own closure pass shares this exact pointer<->log
 /// tie, not a second copy of it -- `classify_ref_state` itself stays private to this file; this is
-/// the one `pub(crate)` seam through it. Runs the identical per-ref dispatch `verify_refs_with` runs
+/// the one `pub(crate)` seam through it. Runs the identical per-ref dispatch `verify_refs_with_pointers` runs
 /// over a live repository's own `pointers`/`logs` maps (the union of both maps' own keys, `classify_
 /// ref_state` once per name), so the archive's own carried pointer and log state is classified by
 /// exactly the rule a live repository's `verify` would apply to the same state -- never a looser or
@@ -319,7 +324,7 @@ fn classify_ref_state(
 /// non-fatal conditions, not hard errors) -- the caller must fold every `blocking: true` issue into
 /// its own damage, not drop it on the floor as "not an `Err`".
 ///
-/// 0.52.0 step 0, Part C2, N1 (review v3): `verify_refs_with` now calls this too, so there is one
+/// 0.52.0 step 0, Part C2, N1 (review v3): `verify_refs_with_pointers` now calls this too, so there is one
 /// orchestration home, not two copies that happen to agree. Its own loop must skip classifying a
 /// ref whose pointer or log already failed to *read* (reporting that read failure instead of
 /// attempting `classify_ref_state` over an incomplete pair) -- `read_failure` supplies that per-ref
@@ -327,7 +332,7 @@ fn classify_ref_state(
 /// this point (it already folded any read failure into its own `damaged` list before building
 /// `pointers`/`logs`), so it passes `|_| None`, classifying every name in the union, as round 3 did.
 /// The error type is a plain `String`, not [`PrikkError`], so a read failure's own message (never
-/// wrapped in a `PrikkError` in `verify_refs_with`'s own pre-existing behavior) and a
+/// wrapped in a `PrikkError` in `verify_refs_with_pointers`'s own pre-existing behavior) and a
 /// `classify_ref_state` failure's own `Display` text (captured via `.to_string()` once, here) reach
 /// both callers identically to before this function existed -- preserving the store's own `verify`
 /// output byte for byte (confirmed on the matrix after this change).
@@ -363,7 +368,7 @@ pub(crate) fn classify_ref_items(
 /// `archive::export_archive`'s own blocking-publication refusal switched to the full
 /// `crate::verify::verify_repository` -- an O(store) regression (round 2's own review found it:
 /// 12 MiB/0.8s to 2.18 GiB/5.1s at 1 GiB). This narrow path is O(refs), not O(store): the identical
-/// `read_pointers`/`read_logs`/`classify_ref_items` construction `verify_refs_with` itself runs,
+/// `read_pointers`/`read_logs`/`classify_ref_items` construction `verify_refs_with_pointers` itself runs,
 /// read-failure closure included, returning only the issues `classify_ref_items` itself pushes (the
 /// pointer<->log tie) -- not `candidate_issues`' own ref-candidate-debris finding, which this part
 /// does not ask export to refuse on, and **not yet** piped through
@@ -373,13 +378,15 @@ pub(crate) fn classify_live_pointer_log_issues(
     layout: &RepositoryLayout,
     ref_log: &Result<Option<super::container::DecodedRefLog>>,
 ) -> Result<Vec<RefPublicationIssue>> {
+    // The pointer index is read before the object snapshot (0.59.0 RS2a), after the ref log the caller read.
+    let pointers_read = replay_pointer_index(layout);
     let objects = ObjectReadSnapshot::open(layout)?;
     let (
         pointers,
         pointer_failures_by_key,
         _pointer_outcomes,
         _trailing_partial_pointer_index_bytes,
-    ) = read_pointers(layout, &objects)?;
+    ) = read_pointers(layout, &pointers_read, &objects)?;
     let (logs, _log_record_count, _ref_log_envelopes, log_failures_by_key, _log_outcomes) =
         read_logs(
             &|offset| scan::log_locator(layout, offset),

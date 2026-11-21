@@ -16,9 +16,7 @@ use crate::object_store::ObjectReader;
 use crate::refs::container::{
     DecodedRefLog, RefContainerRecordStatus, RefLogRecordStatus, RefLogReplay, ref_subsequence_of,
 };
-use crate::refs::pointer_index::{
-    PointerIndexEntry, PointerIndexRecordStatus, replay_pointer_index,
-};
+use crate::refs::pointer_index::{PointerIndexEntry, PointerIndexRecordStatus, PointerIndexReplay};
 use prikk_object::ObjectType;
 
 /// 0.52.0 step 0, Part C1 round 3: `pub(crate)` at the struct level only (fields stay `pub(super)`)
@@ -109,6 +107,7 @@ pub(super) fn log_locator(layout: &RepositoryLayout, offset: usize) -> PathBuf {
 #[allow(clippy::type_complexity)]
 pub(super) fn read_pointers(
     layout: &RepositoryLayout,
+    pointers_read: &Result<PointerIndexReplay>,
     objects: &impl ObjectReader,
 ) -> Result<(
     BTreeMap<String, PointerState>,
@@ -116,7 +115,9 @@ pub(super) fn read_pointers(
     Vec<RefFileOutcome>,
     usize,
 )> {
-    let replay = replay_pointer_index(layout)?;
+    // 0.59.0 RS2a: the pointer index is read by the caller, once, **before** the object snapshot `objects` is opened (and after the ref log),
+    // so every RefState it names is in `objects` unless it is truly missing.
+    let replay = pointers_read.as_ref().map_err(Clone::clone)?;
     if replay.has_item_failure() {
         return Err(PrikkError::Integrity(
             "ref pointer index has a damaged entry; run `prikk doctor --rebuild-pointer-index \
@@ -132,7 +133,11 @@ pub(super) fn read_pointers(
     // value per `ref_name_key` after the loop is the same one `lookup_ref_pointer`'s reverse scan
     // would find, and each entry also carries the offset it was found at, for the locator.
     let mut latest: BTreeMap<[u8; 32], (usize, PointerIndexEntry)> = BTreeMap::new();
-    for outcome in replay.record_outcomes.iter().zip(replay.entries) {
+    for outcome in replay
+        .record_outcomes
+        .iter()
+        .zip(replay.entries.iter().cloned())
+    {
         let (record_outcome, entry) = outcome;
         if !matches!(record_outcome.status, PointerIndexRecordStatus::Evaluated) {
             continue;

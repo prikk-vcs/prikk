@@ -156,6 +156,11 @@ pub fn plan_ref_completion(
     // is to fix a damaged pointer-index record, so that same damage must never block it from
     // evaluating an unrelated ref's own lead (`pointer_rebuild.rs` calls [`evaluate_known_lead`]
     // directly, with its own damage-tolerant pointer read, bypassing this gate on purpose).
+    // 0.59.0 RS2a: the ref log is read **before** the pointer (the reverse of a publication's write order), so the pointer is at least as new as
+    // the log tip this plan compares it with: a publication that lands between the two reads shows as a lead one transition ahead -- which
+    // `decide` below judges (in flight, finished, interrupted) -- never as a pointer older than the log (`NotALead`). The reads are held and
+    // judged in the order this function has always judged them, so every refusal for a genuine state is unchanged.
+    let log = read_lead_log(layout, ref_name);
     if replay_pointer_index(layout)?.has_item_failure() {
         return Ok(Err(CompletionRefusal::PointerIndexDamaged));
     }
@@ -163,7 +168,7 @@ pub fn plan_ref_completion(
     let Some(leading_id) = store.read_current_ref_state_id(ref_name)? else {
         return Ok(Err(CompletionRefusal::NoPointer));
     };
-    let plan = evaluate_known_lead(layout, ref_name, leading_id)?;
+    let plan = judge_known_lead(layout, ref_name, leading_id, log)?;
     if plan.is_err() {
         return Ok(plan);
     }
@@ -195,6 +200,23 @@ pub fn incomplete_publication_refusal_naming_any_lead(
     else {
         return generic_or_cleanup_pending_refusal(layout);
     };
+    // 0.59.0 RS2a: a lead is a publication in flight, one that has since finished, or an interrupted one -- the same judgement the
+    // precondition makes (`decide`: the holder, then the lead again). A running publisher is never named "interrupted: run `ref complete`".
+    use crate::refs::in_flight::{Lead, decide, in_flight_sentence, lead_persists};
+    match decide(layout, &ref_name, || lead_persists(layout, &ref_name))? {
+        Lead::InFlight { pid } => {
+            return Ok(PrikkError::Precondition(format!(
+                "{}; run this command again when it finishes",
+                in_flight_sentence(&ref_name, pid)
+            )));
+        }
+        Lead::Gone => {
+            return Ok(PrikkError::Precondition(format!(
+                "the pointer and the log of {ref_name} disagreed when this command checked and agree now; run this command again"
+            )));
+        }
+        Lead::Interrupted { .. } => {}
+    }
     match evaluate_known_lead(layout, &ref_name, leading_id)? {
         Ok(_plan) => {
             // 0.58.0 F2: a lock the interrupted publisher left is named, with what the judge said about its holder.
@@ -242,13 +264,36 @@ pub(crate) fn evaluate_known_lead(
     ref_name: &str,
     leading_id: ObjectId,
 ) -> Result<std::result::Result<CompletionPlan, CompletionRefusal>> {
-    let (_, _, ref_log_interior_damage) = ref_log_tail_status(layout)?;
+    let log = read_lead_log(layout, ref_name);
+    judge_known_lead(layout, ref_name, leading_id, log)
+}
+
+/// What [`judge_known_lead`] reads of the ref log: the container's damage status and the ref's own records. Each read keeps its own `Result`, so
+/// a caller can make the read **before** the pointer it compares with and the judgement still meets any failure in the order it always did.
+struct LeadLog {
+    status: Result<(usize, usize, Option<String>)>,
+    replay: Result<crate::refs::RefLogReplay>,
+}
+
+fn read_lead_log(layout: &RepositoryLayout, ref_name: &str) -> LeadLog {
+    LeadLog {
+        status: ref_log_tail_status(layout),
+        replay: RefStore::new(layout.clone()).replay_log(ref_name),
+    }
+}
+
+fn judge_known_lead(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    leading_id: ObjectId,
+    log: LeadLog,
+) -> Result<std::result::Result<CompletionPlan, CompletionRefusal>> {
+    let (_, _, ref_log_interior_damage) = log.status?;
     if let Some(message) = ref_log_interior_damage {
         return Ok(Err(CompletionRefusal::RefLogDamaged(message)));
     }
 
-    let store = RefStore::new(layout.clone());
-    let replay = store.replay_log(ref_name)?;
+    let replay = log.replay?;
     if replay.has_item_failure() {
         return Ok(Err(CompletionRefusal::OwnLogDamaged));
     }

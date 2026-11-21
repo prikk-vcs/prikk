@@ -103,6 +103,18 @@ pub(crate) fn mismatched_lead_candidate(
     let _whole_read_scope = crate::foundation::fsutil::whole_read_guard::declare("ref-log-replay");
 
     let excluded_key = exclude_ref_name.map(crate::foundation::layout::ref_name_key_bytes);
+    // 0.59.0 RS2a: the log's bytes are read **before** the pointer index (the reverse of a publication's write order: pointer, then log), so
+    // a record seen here has its pointer in the read that follows. Both are read first and judged below in the order this function has always
+    // judged them (a damaged pointer index, then the log), so what it answers for a genuine state is unchanged.
+    let relative = layout.repository_relative(
+        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
+    )?;
+    let log_bytes = crate::foundation::fsutil::read_file_if_exists(
+        layout.repository_mutation_root(),
+        &relative,
+    );
+    #[cfg(test)]
+    super::view_hooks::run("candidate-between-log-and-pointer");
     let pointer_replay = super::replay_pointer_index(layout)?;
     if pointer_replay.has_item_failure() {
         return Ok(None);
@@ -113,14 +125,8 @@ pub(crate) fn mismatched_lead_candidate(
         newest_pointer.insert(entry.ref_name_key, entry.ref_state_id);
         names.insert(entry.ref_name_key, entry.ref_name.clone());
     }
-    let relative = layout.repository_relative(
-        &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
-    )?;
     let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
-    if let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
-        layout.repository_mutation_root(),
-        &relative,
-    )? {
+    if let Some(bytes) = log_bytes? {
         let discovery = container::decode_ref_container_records(&bytes)?;
         if discovery.has_damage() {
             return Ok(None);

@@ -555,7 +555,12 @@ fn an_independent_walk_agrees_with_compute_reachable_object_ids_on_every_fixture
     // this test's own fixture queues against the default session, so it must supply one, exactly
     // as `verify_objects` itself does.
     let default_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME).replay()?;
-    let real = compute_reachable_object_ids(&layout, &store, Some(&default_replay))?;
+    let real = compute_reachable_object_ids(
+        &layout,
+        &store,
+        Some(&default_replay),
+        &crate::refs::replay_pointer_index(&layout),
+    )?;
 
     // An independent walk, written fresh: roots are every local ref's and every received ref's
     // own RefState id, plus every queued patch's own referenced blob ids (read directly from the
@@ -803,7 +808,12 @@ fn disabling_the_pending_patch_root_reproduces_the_pre_3h_gap_for_object_1() -> 
     write_claim_direct(&mut store, prospective_block_id, vec![patch_id])?;
 
     // Normal run: both reached, through the new pending-patch root.
-    let reachable = compute_reachable_object_ids(&layout, &store, None)?;
+    let reachable = compute_reachable_object_ids(
+        &layout,
+        &store,
+        None,
+        &crate::refs::replay_pointer_index(&layout),
+    )?;
     assert!(
         reachable.contains(&patch_id),
         "the pending patch must be reached normally"
@@ -814,8 +824,12 @@ fn disabling_the_pending_patch_root_reproduces_the_pre_3h_gap_for_object_1() -> 
     );
 
     // With exactly the pending-patch root disabled: the old, wrong gap -- neither is reached.
-    let without_pending_root =
-        compute_reachable_object_ids_excluding_pending_roots_for_test(&layout, &store, None)?;
+    let without_pending_root = compute_reachable_object_ids_excluding_pending_roots_for_test(
+        &layout,
+        &store,
+        None,
+        &crate::refs::replay_pointer_index(&layout),
+    )?;
     assert!(
         !without_pending_root.contains(&patch_id),
         "disabling the pending-patch root must reproduce the pre-3h gap: the pending patch \
