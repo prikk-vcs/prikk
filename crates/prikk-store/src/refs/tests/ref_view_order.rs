@@ -278,7 +278,152 @@ fn an_exhausted_active_view_is_in_flight_only_beside_a_running_holder() {
         "{issues:?}"
     );
     assert!(!report.has_stage_failure(), "{:?}", report.stage_outcomes);
+    // The two stages stay `evaluated` and say what is true (text only): not classified, and why.
+    for stage in [
+        crate::VerificationStage::ActiveWalMetadata,
+        crate::VerificationStage::CommitWitness,
+    ] {
+        let note = report
+            .stage_notes
+            .iter()
+            .find(|(noted, _)| *noted == stage)
+            .map(|(_, note)| note.as_str())
+            .unwrap_or("");
+        assert_eq!(
+            note,
+            format!(
+                "not classified: the active queue changed on every read while another command (pid {}) held the active lock",
+                child.id()
+            )
+        );
+    }
     child.kill().unwrap();
     child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A Block nothing reaches, written into `layout`'s store: what a `seal` has written and not yet published.
+fn write_unreached_block(layout: &RepositoryLayout, target: ObjectId) -> ObjectId {
+    let block = crate::test_gates::test_support::signed_block(
+        prikk_object::BlockKind::Normal,
+        vec![target],
+        Vec::new(),
+        None,
+    );
+    FileObjectStore::new(layout.clone())
+        .write_object(&block)
+        .unwrap()
+}
+
+/// 0.59.0 RS2e: a Block that nothing reaches, seen while **another running process holds the active lock**, is that writer's, not a leftover:
+/// `unreached_withheld` is set and the existing in-flight finding is reported (`info`), while `unreached_objects` still lists what the read found (the
+/// JSON form's field). With no lock, this process as the holder, or a holder that is gone, nothing is withheld and the object is a leftover as before.
+#[test]
+fn an_unreached_block_beside_a_running_writer_is_withheld_from_the_text_and_reported_in_flight() {
+    let (layout, root, target) = repository("rs2e-unreached");
+    publish_first(&layout, "heads/main", target);
+    let block_id = write_unreached_block(&layout, target);
+    let lock_path = layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+
+    let leftover = crate::verify_repository(&layout).unwrap();
+    assert!(
+        leftover
+            .unreached_objects
+            .iter()
+            .any(|o| o.object_id == block_id)
+    );
+    assert!(
+        !leftover.unreached_withheld,
+        "no lock: a leftover, as before"
+    );
+
+    std::fs::write(
+        &lock_path,
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
+    )
+    .unwrap();
+    assert!(
+        !crate::verify_repository(&layout)
+            .unwrap()
+            .unreached_withheld,
+        "this process is not another writer"
+    );
+
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("active");
+    std::fs::write(&lock_path, body).unwrap();
+    let report = crate::verify_repository(&layout).unwrap();
+    assert!(report.unreached_withheld);
+    assert!(
+        report
+            .unreached_objects
+            .iter()
+            .any(|o| o.object_id == block_id),
+        "the list keeps what the read found"
+    );
+    assert!(
+        report
+            .ref_publication_issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT" && !issue.blocking),
+        "{:?}",
+        report.ref_publication_issues
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The lock file changing between two looks says a writer ran in between, even when no holder was seen at either (a writer that started and finished
+/// inside the stage): `Some(None)`; a holder at either look is `Some(Some(pid))`; an unchanged lock is `None`.
+#[test]
+fn a_lock_that_appears_between_two_looks_is_a_writer_that_ran() {
+    use crate::commit_boundary::active_view::LockWatch;
+    let (layout, root, _target) = repository("rs2e-lock-watch");
+    let before = LockWatch::take(&layout);
+    assert_eq!(before.writer_until(&LockWatch::take(&layout)), None);
+    let lock_path = layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+    std::fs::write(&lock_path, b"").unwrap();
+    std::fs::remove_file(&lock_path).unwrap();
+    let after = LockWatch::take(&layout);
+    // Created and removed: the file is absent at both looks, so nothing says a writer ran -- the stamp of an absent file is the same.
+    assert_eq!(before.writer_until(&after), None);
+    std::fs::write(&lock_path, b"x").unwrap();
+    assert_eq!(before.writer_until(&LockWatch::take(&layout)), Some(None));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.59.0 RS2e: the F2 pattern for what two looks at the lock cannot see. A Block nothing reaches, **no lock held at either look**: a writer that
+/// started after the first and was done before the second leaves nothing. The object is read again against the pointers as they are now; a hook
+/// publishes a ref at the Block between the unreached finding and that second read, so the Block was published while the run read it: withheld.
+/// Without the hook the same Block, with no lock, is a leftover and is not withheld.
+#[test]
+fn an_unreached_block_published_while_the_run_read_it_is_withheld() {
+    let (layout, root, target) = repository("rs2e-published-since");
+    publish_first(&layout, "heads/main", target);
+    let block_id = write_unreached_block(&layout, target);
+    assert!(
+        !crate::verify_repository(&layout)
+            .unwrap()
+            .unreached_withheld,
+        "a leftover"
+    );
+
+    let publisher = layout.clone();
+    view_hooks::set("verify-after-objects", move || {
+        publish_first(&publisher, "heads/other", block_id);
+    });
+    let report = crate::verify_repository(&layout).unwrap();
+    assert!(!view_hooks::pending("verify-after-objects"));
+    assert!(
+        report
+            .unreached_objects
+            .iter()
+            .any(|o| o.object_id == block_id)
+    );
+    assert!(report.unreached_withheld, "published while the run read it");
     let _ = std::fs::remove_dir_all(root);
 }

@@ -1583,11 +1583,11 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                     "nothing to do; the bytes stay until a command that reclaims them exists",
                 ));
             }
-            for unreached in verification
-                .unreached_objects
-                .iter()
-                .filter(|object| !crate::verify::UnreachedContent::counts(object.object_type))
-            {
+            // 0.59.0 RS2e: withheld beside a writer that holds the active lock (the in-flight finding below says so).
+            for unreached in verification.unreached_objects.iter().filter(|object| {
+                !verification.unreached_withheld
+                    && !crate::verify::UnreachedContent::counts(object.object_type)
+            }) {
                 issues.push(DoctorIssue::warning(
                     "PRIKK-DOCTOR-UNREACHED-OBJECT",
                     format!(

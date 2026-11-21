@@ -87,3 +87,32 @@ pub(crate) fn read_active_view(layout: &RepositoryLayout) -> ActiveView {
         attempts_left -= 1;
     }
 }
+
+/// What a reader saw of the **active lock** at one moment: the pid of another running process that holds it, and the lock file's stamp (0.59.0 RS2e).
+/// Two of these, taken either side of a stage, say whether a writer was running during it: a holder at either, or a lock file that appeared, changed or
+/// went away between them (a writer that started and finished inside the stage leaves exactly that).
+pub(crate) struct LockWatch {
+    pid: Option<u32>,
+    stamp: Stamp,
+}
+
+impl LockWatch {
+    /// Look at the default session's active lock now.
+    pub(crate) fn take(layout: &RepositoryLayout) -> Self {
+        Self {
+            pid: crate::refs::in_flight::active_publisher(layout)
+                .ok()
+                .flatten(),
+            stamp: stamp(&layout.active_lock_path(DEFAULT_ACTIVE_NAME)),
+        }
+    }
+
+    /// Whether a writer was running between `self` and `later`: `Some(Some(pid))` when a holder was seen, `Some(None)` when only the lock file's
+    /// change says so, `None` when neither does.
+    pub(crate) fn writer_until(&self, later: &Self) -> Option<Option<u32>> {
+        if let Some(pid) = later.pid.or(self.pid) {
+            return Some(Some(pid));
+        }
+        (self.stamp != later.stamp).then_some(None)
+    }
+}

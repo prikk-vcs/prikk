@@ -122,6 +122,16 @@ pub(super) fn in_flight_issue(ref_name: &str, pid: u32) -> RefPublicationIssue {
     }
 }
 
+/// [`in_flight_issue`] when a holder read may not have named a pid (the lock file changing during a stage is the only sign of the writer).
+pub(super) fn in_flight_issue_for(ref_name: &str, pid: Option<u32>) -> RefPublicationIssue {
+    RefPublicationIssue {
+        code: crate::refs::in_flight::IN_FLIGHT_CODE,
+        ref_name: Some(ref_name.to_string()),
+        message: in_flight_finding(ref_name, pid),
+        blocking: false,
+    }
+}
+
 /// The finding for a publication that is running: the 0.58.0 sentence, with the pid when a holder read named one.
 fn in_flight_finding(ref_name: &str, pid: Option<u32>) -> String {
     match pid {

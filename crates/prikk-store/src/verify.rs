@@ -706,6 +706,13 @@ pub struct RepositoryVerification {
     /// is not checked, so it cannot contribute to `publication_trust_issues`; reported here as a
     /// counted, non-blocking warning instead. Empty when the objects stage did not evaluate.
     pub unreached_objects: Vec<UnreachedObject>,
+    /// 0.59.0 RS2e: `true` when a writer held the active lock while the objects stage ran **and** it found a stored `Block` or `RefState` that nothing
+    /// reaches: the text forms of `verify` and `doctor` print the existing `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT` finding instead of the per-object
+    /// "reached by nothing" warnings and the count. `unreached_objects` itself keeps listing what the read found (a true fact at the read).
+    pub unreached_withheld: bool,
+    /// 0.59.0 RS2e: a note for a stage reported `Evaluated` that did not classify what it reads (the active queue changed on every bounded read while
+    /// another command held the active lock). Text only; the stage's status stays `evaluated`.
+    pub stage_notes: Vec<(VerificationStage, String)>,
     /// 0.57.0 U3: a stored `Patch` that names a non-ASCII path **in a repository whose format does not admit one** (format 6
     /// or 7: the 0.55.0 hole let such a path in from an archive). One entry per patch, naming its first such path. Never a
     /// failure -- the history reads clean, and the repository works -- but format 7's own rule is that it holds none, and
@@ -1910,6 +1917,10 @@ pub fn verify_repository_with_options(
     // drain write the WAL, the ref-name metadata and the witness in different orders, and these stages used to read them at three moments, the whole
     // object scan apart. The ref log, the pointer index and the snapshot that follow are at least as new as the queue they are compared with (a drain
     // follows its publish; a queued patch's object is durable before its WAL record).
+    // 0.59.0 RS2e: the active lock, looked at first and again when the Objects stage ends. An object written after the ref view was read and not yet published
+    // is "reached by nothing" to this run; if a writer held the active lock at either look, or the lock file changed between them, it is that writer's and
+    // not a leftover, and the text form says so instead of "no command removes them yet" (`unreached_withheld` below).
+    let lock_at_start = crate::commit_boundary::active_view::LockWatch::take(layout);
     let active_view = crate::commit_boundary::active_view::read_active_view(layout);
     let ref_log = read_and_decode_ref_log(layout, "verify-scan");
     let pointers_read = crate::refs::replay_pointer_index(layout);
@@ -1974,6 +1985,9 @@ pub fn verify_repository_with_options(
         ),
     );
     let objects_evaluated = object_summary.is_some();
+    let writer_during_objects = lock_at_start.writer_until(
+        &crate::commit_boundary::active_view::LockWatch::take(layout),
+    );
     let object_interrupted_appends = object_summary
         .as_ref()
         .map(|summary| summary.interrupted_appends.clone())
@@ -2001,6 +2015,33 @@ pub fn verify_repository_with_options(
         .as_ref()
         .map(|summary| summary.unreached_objects.clone())
         .unwrap_or_default();
+    // A Block or a RefState (not a Patch or a Blob) that nothing reaches, seen while another process held the active lock: a publication in flight.
+    #[cfg(test)]
+    crate::refs::view_hooks::run("verify-after-objects");
+    let has_unreached_publishable = unreached_objects
+        .iter()
+        .any(|object| !UnreachedContent::counts(object.object_type));
+    // The F2 pattern for what the two looks cannot see (a writer that started after the first look and was done before the second leaves a lock file
+    // at neither): the unreached Block or RefState is read **again** against the pointers as they are now. One that something now reaches was
+    // published while this run read it -- a writer's, not a leftover. Only runs that found such an object pay for it.
+    let published_since = has_unreached_publishable
+        && writer_during_objects.is_none()
+        && crate::refs::replay_pointer_index(layout).is_ok_and(|pointers| {
+            reachability::compute_reachable_object_ids(
+                layout,
+                &fresh_store,
+                default_wal_replay.as_ref().ok(),
+                &Ok(pointers),
+            )
+            .is_ok_and(|reached| {
+                unreached_objects
+                    .iter()
+                    .filter(|object| !UnreachedContent::counts(object.object_type))
+                    .any(|object| reached.contains(&object.object_id))
+            })
+        });
+    let unreached_withheld =
+        has_unreached_publishable && (writer_during_objects.is_some() || published_since);
     let non_ascii_paths_in_old_format = object_summary
         .as_ref()
         .map(|summary| summary.non_ascii_paths_in_old_format.clone())
@@ -2148,7 +2189,14 @@ pub fn verify_repository_with_options(
         ),
     };
 
+    let unreached_issue = (unreached_withheld && queue_in_flight_issue.is_none()).then(|| {
+        ref_publication::in_flight_issue_for(
+            queue_owner.as_deref().unwrap_or("the active queue"),
+            writer_during_objects.flatten(),
+        )
+    });
     ref_publication_issues.extend(queue_in_flight_issue);
+    ref_publication_issues.extend(unreached_issue);
 
     // Stage: WalReplay. No upstream stage dependency. The decode itself already happened, above
     // (RFC 167 D5) -- this only hands the already-computed result to the pipeline at this stage's
@@ -2443,6 +2491,25 @@ pub fn verify_repository_with_options(
         object_container_tails,
         unreferenced_remnants,
         unreached_objects,
+        unreached_withheld,
+        stage_notes: queue_in_flight
+            .map(|pid| {
+                [
+                    VerificationStage::ActiveWalMetadata,
+                    VerificationStage::CommitWitness,
+                ]
+                .into_iter()
+                .map(|stage| {
+                    (
+                        stage,
+                        format!(
+                            "not classified: the active queue changed on every read while another command (pid {pid}) held the active lock"
+                        ),
+                    )
+                })
+                .collect()
+            })
+            .unwrap_or_default(),
         non_ascii_paths_in_old_format,
         sealed_path_collisions,
         // 0.51.0 step 1 Part B item 1 (020's grade): a record the commit witness explains as

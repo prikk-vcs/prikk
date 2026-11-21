@@ -552,7 +552,15 @@ pub(crate) fn print_verify_report(
     for outcome in &report.stage_outcomes {
         match &outcome.status {
             StageStatus::Evaluated => {
-                println!("stage {}: evaluated", outcome.stage);
+                // 0.59.0 RS2e: a stage that is `evaluated` but did not classify what it reads says why (text only; the status stays `evaluated`).
+                match report
+                    .stage_notes
+                    .iter()
+                    .find(|(stage, _)| *stage == outcome.stage)
+                {
+                    Some((_, note)) => println!("stage {}: evaluated ({note})", outcome.stage),
+                    None => println!("stage {}: evaluated", outcome.stage),
+                }
             }
             StageStatus::Failed { message } => {
                 println!("stage {}: failed: {message}", outcome.stage);
@@ -816,14 +824,16 @@ pub(crate) fn print_verify_report(
     for collision in &report.sealed_path_collisions {
         println!("warning: {}", collision.warning());
     }
-    println!("unreached objects: {}", report.unreached_objects.len());
+    // 0.59.0 RS2e: beside a writer that holds the active lock, a Block or a RefState that nothing reaches is that writer's, not a leftover: the count and
+    // the per-object warnings are withheld, and the in-flight finding (printed with the other ref publication findings) says what is happening.
+    if !report.unreached_withheld {
+        println!("unreached objects: {}", report.unreached_objects.len());
+    }
     // A Block or RefState is published under a seal, whose trust was therefore not checked: one warning each. A Patch or a Blob
     // never is (a blob `prikk uncommit` leaves behind is one), so those are one count line, not a warning (0.57.0 S5d).
-    for unreached in report
-        .unreached_objects
-        .iter()
-        .filter(|object| !prikk_store::UnreachedContent::counts(object.object_type))
-    {
+    for unreached in report.unreached_objects.iter().filter(|object| {
+        !report.unreached_withheld && !prikk_store::UnreachedContent::counts(object.object_type)
+    }) {
         println!(
             "warning: {} {} is reached by nothing in this repository -- its publication trust was not checked; the bytes stay, and \
              no command removes them yet",
