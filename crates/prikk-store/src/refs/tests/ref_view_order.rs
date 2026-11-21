@@ -159,3 +159,59 @@ fn a_publication_landing_between_the_baselines_pointer_and_log_reads_is_a_publis
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// 0.59.0 RS2c: the active session's three stores are read **until a read leaves them unchanged**. A writer that changes one of them while the view
+/// is being read (here: the owner of the queue is rewritten after the first read) gives the view of the settled state, not a mixture. With no retry
+/// the view is the first read -- the state no writer ever left whole.
+#[test]
+fn the_active_view_is_read_until_it_is_unchanged() {
+    let (layout, root, _target) = repository("rs2c-active-view");
+    crate::commit_boundary::active::prepare_empty_active_ref_for_append(&layout, "heads/a")
+        .unwrap();
+    let writer = layout.clone();
+    view_hooks::set("active-view-after-read", move || {
+        crate::commit_boundary::active::prepare_empty_active_ref_for_append(&writer, "heads/bb")
+            .unwrap();
+    });
+    let view = crate::commit_boundary::active_view::read_active_view(&layout);
+    assert!(!view_hooks::pending("active-view-after-read"));
+    assert_eq!(
+        view.metadata.unwrap(),
+        crate::commit_boundary::active::ActiveRefMetadata::Valid("heads/bb".to_string())
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// 0.59.0 RS2c: `lead_now` reads the log, **then** the pointer. A publisher that completes a whole publication between the two reads (a `sync seal`
+/// publishes claim after claim) leaves the pointer **ahead** of the tip the reader holds -- a changed lead, which `decide` calls a publication in
+/// flight. Read the other way round (the pointer, then the log) it left the pointer **behind** the log: a lead that was never there, the same one the
+/// first read named, and `decide` answered "interrupted" with no lock held at either holder read (1–5 `tag create` refusals per tag race on tmpfs).
+#[test]
+fn a_publication_completing_between_the_leads_two_reads_is_in_flight_not_interrupted() {
+    let (layout, root, target) = repository("rs2c-lead-order");
+    let first = publish_first(&layout, "heads/main", target);
+    let publisher = layout.clone();
+    view_hooks::set("lead-between-log-and-pointer", move || {
+        let next = signed_ref_state_envelope("heads/main", Some(first), target, 2);
+        let next_id = next.object_id();
+        let update = signed_ref_update_envelope("heads/main", Some(first), next_id, target, 2);
+        RefStore::new(publisher.clone())
+            .publish(&RefPublication {
+                ref_name: "heads/main".to_string(),
+                expected_previous_ref_state_id: Some(first),
+                ref_state: next,
+                ref_update: update,
+            })
+            .unwrap();
+    });
+    let lead = crate::refs::in_flight::decide(&layout, "heads/main", first, || {
+        crate::refs::in_flight::lead_now(&layout, "heads/main")
+    })
+    .unwrap();
+    assert!(!view_hooks::pending("lead-between-log-and-pointer"));
+    assert!(
+        matches!(lead, crate::refs::in_flight::Lead::InFlight { pid: None }),
+        "{lead:?}"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}

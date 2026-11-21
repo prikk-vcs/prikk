@@ -141,6 +141,15 @@ fn resolve_ref_to_tip_block(
             "ref {ref_name} does not exist, nothing to compute a patch-set digest for"
         )));
     };
+    tip_block_of_ref_state(object_store, ref_state_id)
+}
+
+/// The tip Block of the RefState a pointer names (0.59.0 RS2c: the digests take **one** pointer read -- a caller that listed the pointers passes each
+/// RefState id here instead of reading the ref's pointer a second time).
+fn tip_block_of_ref_state(
+    object_store: &impl ObjectReader,
+    ref_state_id: ObjectId,
+) -> Result<ObjectId> {
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {ref_state_id}")))?;
@@ -240,7 +249,7 @@ pub fn resolve_patch_set_digest(
     // (`received_index.rs`), so no explicit exclusion is needed here beyond what both already do.
     let mut candidates: BTreeMap<ObjectId, BlockPayload> = BTreeMap::new();
     for pointer in ref_store.list_ref_pointers()? {
-        let tip_block_id = resolve_ref_to_tip_block(layout, &object_store, &pointer.ref_name)?;
+        let tip_block_id = tip_block_of_ref_state(&object_store, pointer.ref_state_id)?;
         candidates.extend(ancestors_inclusive(&object_store, tip_block_id)?);
     }
 

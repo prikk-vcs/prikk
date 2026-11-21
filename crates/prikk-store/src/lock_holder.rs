@@ -211,6 +211,24 @@ pub fn lock_body_naming_pid_for_test(kind: &str, pid: u32) -> String {
     render_body(kind, pid, own_facts())
 }
 
+/// A process that is **not this one**, running, and a lock body of `kind` that the real judge reads as "appears running" (0.59.0 RS2c's tests of
+/// "another command is publishing"). `sleep` stands in for the publisher; the caller kills it.
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
+pub(crate) fn body_naming_another_running_process(kind: &str) -> (std::process::Child, String) {
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn sleep");
+    let ProcessRead::Alive(start) = SystemProbe.read(child.id()) else {
+        panic!("the child is alive");
+    };
+    let mut facts = own_facts().clone();
+    facts.start = start;
+    let body = render_body(kind, child.id(), &facts);
+    (child, body)
+}
+
 /// What can be known about one process for a holder record. `start` is opaque beyond equality.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HolderFacts {

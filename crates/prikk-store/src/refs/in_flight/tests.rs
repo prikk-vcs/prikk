@@ -6,6 +6,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use prikk_error::Result;
+use prikk_object::ObjectId;
 
 use super::{Lead, decide};
 use crate::RepositoryLayout;
@@ -13,6 +14,15 @@ use crate::lock_holder::{own_facts, render_body};
 use crate::test_gates::test_support::unique_temp_dir;
 
 const REF: &str = "tags/t1";
+
+/// Two scripted leads: the RefState ids a pointer names (the lead's identity).
+fn lead_a() -> ObjectId {
+    ObjectId::from_bytes([0xA1; 32])
+}
+
+fn lead_b() -> ObjectId {
+    ObjectId::from_bytes([0xB2; 32])
+}
 
 fn layout(name: &str) -> (RepositoryLayout, std::path::PathBuf) {
     let root = unique_temp_dir(name);
@@ -35,7 +45,7 @@ fn dead_pid() -> u32 {
 fn no_lock_is_an_interrupted_publication() -> Result<()> {
     let (layout, root) = layout("f2-no-lock");
     assert_eq!(
-        decide(&layout, REF, || Ok(true))?,
+        decide(&layout, REF, lead_a(), || Ok(Some(lead_a())))?,
         Lead::Interrupted { holder_note: None }
     );
     let _ = std::fs::remove_dir_all(root);
@@ -50,9 +60,9 @@ fn a_running_holder_is_a_publication_in_flight() -> Result<()> {
         &render_body("ref", std::process::id(), own_facts()),
     );
     assert_eq!(
-        decide(&layout, REF, || Ok(true))?,
+        decide(&layout, REF, lead_a(), || Ok(Some(lead_a())))?,
         Lead::InFlight {
-            pid: std::process::id()
+            pid: Some(std::process::id())
         }
     );
     let _ = std::fs::remove_dir_all(root);
@@ -68,9 +78,9 @@ fn a_publication_that_finishes_between_the_two_reads_is_no_lead() -> Result<()> 
         &layout,
         &render_body("ref", std::process::id(), own_facts()),
     );
-    assert_eq!(decide(&layout, REF, || Ok(false))?, Lead::Gone);
+    assert_eq!(decide(&layout, REF, lead_a(), || Ok(None))?, Lead::Gone);
     std::fs::remove_file(layout.ref_lock_path(REF))?;
-    assert_eq!(decide(&layout, REF, || Ok(false))?, Lead::Gone);
+    assert_eq!(decide(&layout, REF, lead_a(), || Ok(None))?, Lead::Gone);
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
@@ -81,7 +91,7 @@ fn a_holder_that_does_not_appear_to_be_running_is_interrupted_and_says_so() -> R
     lock(&layout, &render_body("ref", dead_pid(), own_facts()));
     let Lead::Interrupted {
         holder_note: Some(note),
-    } = decide(&layout, REF, || Ok(true))?
+    } = decide(&layout, REF, lead_a(), || Ok(Some(lead_a())))?
     else {
         panic!("a dead holder is an interrupted publication");
     };
@@ -121,12 +131,61 @@ fn an_unknown_holder_is_interrupted_and_says_why() -> Result<()> {
         lock(&layout, &body);
         let Lead::Interrupted {
             holder_note: Some(note),
-        } = decide(&layout, REF, || Ok(true))?
+        } = decide(&layout, REF, lead_a(), || Ok(Some(lead_a())))?
         else {
             panic!("an unknown holder ({words}) is not in flight");
         };
         assert!(note.contains("unknown"), "{words}: {note}");
     }
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// RS2c: **a lead is identified by its RefState id.** The same lead twice with no holder at either read is interrupted; a lead that is a different one on
+/// the second read is in flight (a `sync seal` publishes one claim per publication, back to back, and a holder read can land in the gap between two);
+/// the same lead whose holder appears only at the later holder read is in flight. Each arm was made red by reverting it (`perturb.sh`).
+#[test]
+fn a_lead_is_judged_by_its_identity() -> Result<()> {
+    let (layout, root, _) = {
+        let (layout, root) = layout("rs2c-identity");
+        (layout, root, ())
+    };
+    // A, A, no holder at either read: interrupted (a lead that existed at two moments with no lock between them is not a running publication).
+    assert_eq!(
+        decide(&layout, REF, lead_a(), || Ok(Some(lead_a())))?,
+        Lead::Interrupted { holder_note: None }
+    );
+    // A, then B, no holder at the first read: in flight, no pid (the holder read made before B existed cannot speak for it).
+    assert_eq!(
+        decide(&layout, REF, lead_a(), || Ok(Some(lead_b())))?,
+        Lead::InFlight { pid: None }
+    );
+    // A, then B, a running holder at the first read: in flight with its pid.
+    lock(
+        &layout,
+        &render_body("ref", std::process::id(), own_facts()),
+    );
+    assert_eq!(
+        decide(&layout, REF, lead_a(), || Ok(Some(lead_b())))?,
+        Lead::InFlight {
+            pid: Some(std::process::id())
+        }
+    );
+    std::fs::remove_file(layout.ref_lock_path(REF))?;
+    // A, A, and the holder appears **between the second lead read and the second holder read**: in flight.
+    let appearing = layout.clone();
+    assert_eq!(
+        decide(&layout, REF, lead_a(), || {
+            lock(
+                &appearing,
+                &render_body("ref", std::process::id(), own_facts()),
+            );
+            Ok(Some(lead_a()))
+        })?,
+        Lead::InFlight {
+            pid: Some(std::process::id())
+        }
+    );
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

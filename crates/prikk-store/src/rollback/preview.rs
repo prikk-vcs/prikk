@@ -11,8 +11,9 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::ObjectId;
 
 use crate::foundation::layout::RepositoryLayout;
-use crate::patch_inverse::prepare_patch_inverse_plan;
-use crate::patch_replay::{ReplayManifest, replay_supported_patch_chain};
+use crate::patch_inverse::prepare_patch_inverse_plan_at;
+use crate::patch_replay::anchor::Anchoring;
+use crate::patch_replay::{ReplayManifest, replay_block_chain};
 
 /// Read-only preview of applying the supported inverse plan back to the empty state before the chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,8 +95,17 @@ pub fn prepare_rollback_preview(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<RollbackPreviewPlan> {
-    let inverse = prepare_patch_inverse_plan(layout, ref_name)?;
-    let replay = replay_supported_patch_chain(layout, ref_name)?;
+    // 0.59.0 RS2c: **one pointer read** serves both plans (the inverse and the replay used to read it once each, and a publication between the two
+    // reads made them name different tips). The existence check is the inverse plan's own, then the tip, then both plans over it.
+    crate::ref_resolution::require_existing_ref(
+        layout,
+        ref_name,
+        crate::ref_resolution::ReceivedRefs::Refused,
+    )?;
+    let (object_store, tip) = crate::refs::open_at_ref_tip(layout, ref_name)?;
+    let inverse = prepare_patch_inverse_plan_at(ref_name, &object_store, tip)?;
+    let replay = replay_block_chain(&object_store, ref_name, tip, Anchoring::Never)?.0;
+    // Both plans read the same tip now; this stays as a check that the replay and the inverse walked the same history.
     if inverse.target_block_id != replay.target_block_id {
         return Err(PrikkError::Integrity(format!(
             "inverse target {} does not match replay target {}",

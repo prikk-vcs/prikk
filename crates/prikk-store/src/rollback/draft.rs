@@ -105,18 +105,22 @@ pub fn append_rollback_draft(
             "rollback draft has no supported inverse operations to append".to_string(),
         ));
     }
+    // 0.59.0 RS2c: the tip was read three times (here, for the inverse plan, for the preview). A difference is the ref moving while this command
+    // planned: a refusal, as before, but one that says so and says what works -- not "integrity error", and not `prikk doctor`.
     if inverse.target_block_id != planned_tip.target_block_id {
-        return Err(PrikkError::Integrity(format!(
-            "rollback inverse target {} does not match current ref target {}",
-            inverse.target_block_id, planned_tip.target_block_id
-        )));
+        return Err(ref_moved_while_planning(
+            &canonical_ref,
+            planned_tip.target_block_id,
+            inverse.target_block_id,
+        ));
     }
     let preview = prepare_rollback_preview(layout, &canonical_ref)?;
     if preview.target_block_id != inverse.target_block_id {
-        return Err(PrikkError::Integrity(format!(
-            "rollback preview target {} does not match inverse target {}",
-            preview.target_block_id, inverse.target_block_id
-        )));
+        return Err(ref_moved_while_planning(
+            &canonical_ref,
+            inverse.target_block_id,
+            preview.target_block_id,
+        ));
     }
 
     inverse.inverse_payload.purpose = PatchPurpose::RollbackDraft;
@@ -255,6 +259,13 @@ pub fn append_rollback_draft(
         operations: inverse.operations,
         preview_changes: preview.changes,
     })
+}
+
+/// The refusal for a ref whose tip is not the one this command planned over (0.59.0 RS2c).
+fn ref_moved_while_planning(ref_name: &str, planned: ObjectId, now: ObjectId) -> PrikkError {
+    PrikkError::Precondition(format!(
+        "{ref_name} moved while this command planned: its tip was {planned} when it was read and {now} when it was read again; run this command again"
+    ))
 }
 
 fn read_target_tip(layout: &RepositoryLayout, ref_name: &str) -> Result<RollbackTargetTip> {

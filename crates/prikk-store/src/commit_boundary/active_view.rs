@@ -1,0 +1,75 @@
+//! 0.59.0 RS2c: **one coherent read of an active session's three stores** -- the queue WAL, the ref-name metadata and the commit witness.
+//!
+//! A `commit` writes them in one order (the metadata, the WAL record, the witness) and a `seal`'s drain in another (the WAL emptied, the witness
+//! cleared, the metadata removed). A reader that reads the three at three moments -- `verify` read the WAL at its top, the metadata and the witness
+//! stages later, after the whole object scan -- can see a mixture no writer ever left, and RFC 166's classification reads that mixture as damage
+//! (`a queued commit you were told had succeeded … is no longer present at all`, `active WAL metadata: missing for non-empty WAL`). **No reading
+//! order is right for both writers,** so the three are read **until they are unchanged across one read** (a stat of each before and after, retried a
+//! bounded number of times): a view of one moment. Every state a correct writer passes through is one RFC 166 classifies as benign; only a read
+//! across moments produces the others. A genuine state that is not changing is read once and reported exactly as before.
+//!
+//! This takes no lock and writes nothing: three stats, the reads, three stats.
+
+use prikk_error::Result;
+
+use super::active::{ActiveRefMetadata, read_active_ref_metadata_for};
+use super::witness::{WitnessState, read_witness};
+use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
+use crate::wal::{Wal, WalReplay};
+
+/// The reads are repeated at most this many times (after the first) while the stores change under them. A writer that changes them every time the
+/// reader looks is a writer running; the last read is then used, as it was before this view existed.
+const ATTEMPTS: usize = 24;
+
+/// The default session's WAL, ref-name metadata and witness, read as one moment (see the module doc).
+pub(crate) struct ActiveView {
+    pub(crate) replay: Result<WalReplay>,
+    pub(crate) metadata: Result<ActiveRefMetadata>,
+    pub(crate) witness: Result<WitnessState>,
+}
+
+/// What a stat says about one file: its length, modification time and (where the platform has one) identity; `None` when it does not exist.
+type Stamp = Option<(u64, Option<std::time::SystemTime>, Option<u64>)>;
+
+fn stamp(path: &std::path::Path) -> Stamp {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        Some(metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = None;
+    Some((metadata.len(), metadata.modified().ok(), identity))
+}
+
+fn stamps(layout: &RepositoryLayout) -> [Stamp; 3] {
+    [
+        stamp(&layout.active_queue_wal_path(DEFAULT_ACTIVE_NAME)),
+        stamp(&layout.active_ref_name_path(DEFAULT_ACTIVE_NAME)),
+        stamp(
+            &layout
+                .active_session_dir(DEFAULT_ACTIVE_NAME)
+                .join("witness"),
+        ),
+    ]
+}
+
+/// Read the default session's three stores until a read leaves them unchanged (or the attempts run out).
+pub(crate) fn read_active_view(layout: &RepositoryLayout) -> ActiveView {
+    let mut attempts_left = ATTEMPTS;
+    loop {
+        let before = stamps(layout);
+        let view = ActiveView {
+            replay: Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay(),
+            metadata: read_active_ref_metadata_for(layout, DEFAULT_ACTIVE_NAME),
+            witness: read_witness(layout, DEFAULT_ACTIVE_NAME),
+        };
+        #[cfg(test)]
+        crate::refs::view_hooks::run("active-view-after-read");
+        if attempts_left == 0 || stamps(layout) == before {
+            return view;
+        }
+        attempts_left -= 1;
+    }
+}

@@ -366,8 +366,26 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     if !verify::candidate_issues(layout)?.is_empty() {
         return Err(incomplete_publication_refusal());
     }
-    if evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay_out)? {
-        return Err(incomplete_publication_refusal());
+    if let Some(owner) =
+        evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay_out)?
+    {
+        // 0.59.0 RS2c: a settled publication whose queue is not yet drained is also what a `seal` that is **running** looks like between its publish
+        // and its drain. The active lock is asked (the holder, then the queue again): a queue that has drained by then is no finding; a holder that
+        // appears running is in flight; anything else is today's refusal.
+        let publisher = in_flight::active_publisher(layout)?;
+        let still_pending =
+            evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, None)?
+                .is_some();
+        match (still_pending, publisher) {
+            (false, _) => {}
+            (true, Some(pid)) => {
+                return Err(prikk_error::PrikkError::Precondition(format!(
+                    "{}; run this command again when it finishes",
+                    in_flight::in_flight_sentence(&owner, Some(pid))
+                )));
+            }
+            (true, None) => return Err(incomplete_publication_refusal()),
+        }
     }
 
     // Every check above that could have named a genuine incomplete publication (and so `ref
@@ -483,7 +501,7 @@ pub(crate) fn ensure_no_incomplete_publication_via_verify_refs_for_test(
     let verification = verify_refs_with_pointers(layout, &ref_log, &pointers_read)?;
     if verification.publication_issues.is_empty()
         && !verification.has_item_failure()
-        && !evidence::has_incomplete_active_cleanup_with_replay(layout, None, None)?
+        && evidence::has_incomplete_active_cleanup_with_replay(layout, None, None)?.is_none()
     {
         return Ok(());
     }

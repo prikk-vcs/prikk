@@ -454,6 +454,7 @@ pub(crate) fn apply_operation_sequence(
 
 /// Replay the supported operation subset into a validated in-memory manifest, from genesis. Rollback
 /// preview uses this: a snapshot never anchors it (RFC 136 §10.3a ruling 3).
+#[cfg(test)]
 pub(crate) fn replay_supported_patch_chain(
     layout: &RepositoryLayout,
     ref_name: &str,
@@ -670,7 +671,7 @@ fn replay_ref_chain(
 /// by the single-parent walk from it and the same anchoring every caller uses (RFC 136). The ref-addressed
 /// [`replay_ref_chain`] reads its ref's tip and calls this; a bare block id comes here directly.
 /// `point_name` is carried into the result as given.
-fn replay_block_chain(
+pub(crate) fn replay_block_chain(
     object_store: &impl ObjectReader,
     point_name: &str,
     target_block_id: ObjectId,

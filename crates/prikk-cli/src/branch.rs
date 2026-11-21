@@ -253,7 +253,10 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
                 .into());
             }
             // 0.58.0 F2: the publisher is running; this is neither "already create" nor an interrupted publication.
-            Err(refusal @ prikk_store::CompletionRefusal::PublicationInFlight(_)) => {
+            Err(
+                refusal @ (prikk_store::CompletionRefusal::PublicationInFlight(_)
+                | prikk_store::CompletionRefusal::PublicationChanging),
+            ) => {
                 return Err(format!("{canonical} {refusal}").into());
             }
             Err(_) => {}
@@ -587,7 +590,10 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
                 .into());
             }
             // 0.58.0 F2: the publisher is running; this is neither "already close" nor an interrupted publication.
-            Err(refusal @ prikk_store::CompletionRefusal::PublicationInFlight(_)) => {
+            Err(
+                refusal @ (prikk_store::CompletionRefusal::PublicationInFlight(_)
+                | prikk_store::CompletionRefusal::PublicationChanging),
+            ) => {
                 return Err(format!("{canonical} {refusal}").into());
             }
             Err(_) => {}

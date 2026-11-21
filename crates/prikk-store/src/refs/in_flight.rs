@@ -19,7 +19,7 @@
 //! must not be called in flight because a publication of `heads/x` holds them. The `RefLock` is per ref.
 
 use prikk_error::Result;
-use prikk_object::RefUpdatePayload;
+use prikk_object::{ObjectId, RefUpdatePayload};
 
 use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::RepositoryLayout;
@@ -30,10 +30,11 @@ use crate::lock_holder::{self, PidLiveness, SystemProbe};
 pub(crate) enum Lead {
     /// The lead is gone on the second read: the publication finished between the two.
     Gone,
-    /// Another command holds the ref's lock and appears to be running: a publication in flight.
+    /// Another command is publishing the ref: its lock is held by a process that appears to be running, **or the lead changed between the two reads** (a
+    /// pointer that moves is proof something is writing it; a crash cannot do that).
     InFlight {
-        /// The holder's pid, from its lock body.
-        pid: u32,
+        /// The holder's pid, from its lock body, when a holder read found a running one; `None` when the lead changed and no holder read named one.
+        pid: Option<u32>,
     },
     /// Interrupted (today's answer): no lock, or a lock whose holder does not appear to be running or cannot be judged.
     Interrupted {
@@ -42,7 +43,16 @@ pub(crate) enum Lead {
     },
 }
 
-/// Decide what `ref_name`'s lead is. The caller has read a lead; `still_leads` reads it again (after the holder is read here).
+/// Decide what `ref_name`'s lead is. **A lead is identified by its RefState id.** The caller has read lead `first`; `lead_now` reads it again
+/// (after the holder is read here) and answers with the pointer's RefState id while the pointer leads the log, `None` when it does not.
+///
+/// - **No lead now:** [`Lead::Gone`] -- the publication finished.
+/// - **A different lead now:** in flight. A pointer that changed between two reads is a publisher running; the holder read made before it cannot
+///   speak for a lead that did not yet exist (a `sync seal` publishes one claim per publication, back to back, each under its own lock, so a holder
+///   read can land in the gap between two). The pid is the first holder read's, if it named a running one.
+/// - **The same lead, a holder that appeared running:** in flight.
+/// - **The same lead, a holder that did not:** the holder is read **once more, after** that second lead read. A lead that existed at two moments with
+///   no running holder at either cannot be a running publication: interrupted, with what the later read said. **No loop.**
 ///
 /// # Errors
 ///
@@ -50,14 +60,26 @@ pub(crate) enum Lead {
 pub(crate) fn decide(
     layout: &RepositoryLayout,
     ref_name: &str,
-    still_leads: impl FnOnce() -> Result<bool>,
+    first: ObjectId,
+    lead_now: impl FnOnce() -> Result<Option<ObjectId>>,
 ) -> Result<Lead> {
     let holder = holder_of(layout, ref_name)?;
-    if !still_leads()? {
+    let Some(second) = lead_now()? else {
         return Ok(Lead::Gone);
+    };
+    if second != first {
+        return Ok(Lead::InFlight {
+            pid: match holder {
+                Holder::Running { pid } => Some(pid),
+                _ => None,
+            },
+        });
     }
-    Ok(match holder {
-        Holder::Running { pid } => Lead::InFlight { pid },
+    if let Holder::Running { pid } = holder {
+        return Ok(Lead::InFlight { pid: Some(pid) });
+    }
+    Ok(match holder_of(layout, ref_name)? {
+        Holder::Running { pid } => Lead::InFlight { pid: Some(pid) },
         Holder::NotRunning(note) => Lead::Interrupted {
             holder_note: Some(note),
         },
@@ -65,12 +87,13 @@ pub(crate) fn decide(
     })
 }
 
-/// Whether the ref's pointer still leads its log (the caller's second read). A missing pointer, or a pointer equal to the log's tip, does not.
-pub(crate) fn lead_persists(layout: &RepositoryLayout, ref_name: &str) -> Result<bool> {
+/// The ref's lead as of now: the RefState id the pointer names while it differs from the log's tip, `None` when the pointer is missing or equals the
+/// log's tip (no lead).
+pub(crate) fn lead_now(layout: &RepositoryLayout, ref_name: &str) -> Result<Option<ObjectId>> {
     let store = super::RefStore::new(layout.clone());
-    let Some(pointer) = store.read_current_ref_state_id(ref_name)? else {
-        return Ok(false);
-    };
+    // **The log first, then the pointer** (the reverse of a publication's write order, 0.59.0 RS2a): the pointer is then at least as new as the tip it
+    // is compared with, so a difference is the pointer ahead -- a lead. Read the other way round, a publication that completes between the two reads
+    // (a `sync seal` publishes claim after claim) leaves a pointer **behind** the log: a lead that was never there, which `decide` then called interrupted.
     let replay = store.replay_log(ref_name)?;
     let tip = match replay.records.last() {
         Some(record) => Some(
@@ -79,7 +102,12 @@ pub(crate) fn lead_persists(layout: &RepositoryLayout, ref_name: &str) -> Result
         ),
         None => None,
     };
-    Ok(tip != Some(pointer))
+    #[cfg(test)]
+    super::view_hooks::run("lead-between-log-and-pointer");
+    let Some(pointer) = store.read_current_ref_state_id(ref_name)? else {
+        return Ok(None);
+    };
+    Ok((tip != Some(pointer)).then_some(pointer))
 }
 
 /// The note an interrupted answer adds about a lock that is still on disk (`None` when there is no lock, or the holder appears running).
@@ -101,7 +129,37 @@ enum Holder {
 }
 
 fn holder_of(layout: &RepositoryLayout, ref_name: &str) -> Result<Holder> {
-    let relative = layout.repository_relative(&layout.ref_lock_path(ref_name))?;
+    holder_at(layout, &layout.ref_lock_path(ref_name))
+}
+
+/// The pid of the process that holds the **active** lock of the default session and appears to be running, if any (0.59.0 RS2c). A `seal`, a `commit` and
+/// a `sync seal` take it for the whole of their work, so a reader that finds the queue between a publish and its drain, or in the middle of a commit's
+/// three writes, asks it: only "appears running" is in flight; no lock, a holder that is gone, and one that cannot be judged are today's answer.
+pub(crate) fn active_publisher(layout: &RepositoryLayout) -> Result<Option<u32>> {
+    Ok(
+        match holder_at(
+            layout,
+            &layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME),
+        )? {
+            // Never this process: a command that holds the active lock itself (`commit`, `seal`, `branch create`) asks the same question about
+            // the queue it is about to write, and the queue's state is then not "another command publishing" but what it finds.
+            Holder::Running { pid } if pid != std::process::id() => Some(pid),
+            Holder::Running { .. } | Holder::NoLock | Holder::NotRunning(_) => None,
+        },
+    )
+}
+
+/// Whether the lock of `ref_name` is held by **another** process that appears to be running: a command is publishing the ref right now (0.59.0 RS2c,
+/// for a conclusion of the form "an object is held and no ref targets it": the object is written before its pointer, under the ref's lock).
+pub(crate) fn ref_publisher_running(layout: &RepositoryLayout, ref_name: &str) -> Result<bool> {
+    Ok(matches!(
+        holder_of(layout, ref_name)?,
+        Holder::Running { pid } if pid != std::process::id()
+    ))
+}
+
+fn holder_at(layout: &RepositoryLayout, lock_path: &std::path::Path) -> Result<Holder> {
+    let relative = layout.repository_relative(lock_path)?;
     let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
         return Ok(Holder::NoLock);
     };
@@ -115,8 +173,11 @@ fn holder_of(layout: &RepositoryLayout, ref_name: &str) -> Result<Holder> {
 
 /// The words of the in-flight refusal, shared by the precondition, `ref complete` and the readers' finding.
 #[must_use]
-pub(crate) fn in_flight_sentence(ref_name: &str, pid: u32) -> String {
-    format!("another command is publishing {ref_name} (pid {pid}, from its lock)")
+pub(crate) fn in_flight_sentence(ref_name: &str, pid: Option<u32>) -> String {
+    match pid {
+        Some(pid) => format!("another command is publishing {ref_name} (pid {pid}, from its lock)"),
+        None => format!("another command is publishing {ref_name}"),
+    }
 }
 
 /// The precondition's answer for one ref whose newest pointer and newest log record disagree (`key` names it): `None` when the lead is gone
@@ -134,27 +195,28 @@ pub(super) fn refusal_for_mismatch(
     log_names: &std::collections::BTreeMap<[u8; 32], String>,
     key: [u8; 32],
 ) -> Result<Option<prikk_error::PrikkError>> {
-    let name = pointer_replay
+    let entry = pointer_replay
         .entries
         .iter()
         .rev()
-        .find(|entry| entry.ref_name_key == key)
-        .map(|entry| entry.ref_name.as_str());
-    let name = match name {
-        Some(name) => name,
+        .find(|entry| entry.ref_name_key == key);
+    // The name and the first lead: the pointer's RefState id **as the caller's read saw it**. A log record with no pointer entry gets the second
+    // read here, and that read is its first lead.
+    let (name, first) = match entry {
+        Some(entry) => (entry.ref_name.as_str(), entry.ref_state_id),
         None => {
             let Some(log_name) = log_names.get(&key) else {
                 return Ok(Some(super::incomplete_publication_refusal()));
             };
             let store = super::RefStore::new(layout.clone());
-            if store.read_current_ref_state_id(log_name)?.is_none() {
+            let Some(pointer) = store.read_current_ref_state_id(log_name)? else {
                 return Ok(Some(super::incomplete_publication_refusal()));
-            }
-            log_name.as_str()
+            };
+            (log_name.as_str(), pointer)
         }
     };
     Ok(
-        match decide(layout, name, || lead_persists(layout, name))? {
+        match decide(layout, name, first, || lead_now(layout, name))? {
             Lead::Gone => None,
             Lead::InFlight { pid } => Some(prikk_error::PrikkError::Precondition(format!(
                 "{}; run this command again when it finishes",

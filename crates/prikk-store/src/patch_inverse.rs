@@ -15,7 +15,7 @@ use prikk_object::{
 };
 
 use crate::foundation::layout::RepositoryLayout;
-use crate::object_store::ObjectReader;
+use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
@@ -103,7 +103,17 @@ pub fn prepare_patch_inverse_plan(
         crate::ref_resolution::ReceivedRefs::Refused,
     )?;
     let (object_store, target_block_id) = crate::refs::open_at_ref_tip(layout, ref_name)?;
-    let block_ids = single_parent_chain(&object_store, target_block_id)?;
+    prepare_patch_inverse_plan_at(ref_name, &object_store, target_block_id)
+}
+
+/// [`prepare_patch_inverse_plan`] at a tip the caller has already read, over a handle opened after that read (0.59.0 RS2c: `rollback-preview` plans
+/// the inverse and the replay from **one** pointer read, so the two cannot name different tips).
+pub(crate) fn prepare_patch_inverse_plan_at(
+    ref_name: &str,
+    object_store: &ObjectReadSnapshot,
+    target_block_id: ObjectId,
+) -> Result<PatchInversePlan> {
+    let block_ids = single_parent_chain(object_store, target_block_id)?;
     let mut files = BTreeMap::new();
     let mut live_nodes = BTreeMap::new();
     let mut inverse_operations = Vec::new();
@@ -113,18 +123,14 @@ pub fn prepare_patch_inverse_plan(
     for block_id in &block_ids {
         // RFC 136 §10.3a ruling 3: inverse planning never anchors. Its output is the history it
         // inverts, which a snapshot does not carry, so every block from genesis is inverted.
-        let block = read_block(&object_store, *block_id)?;
+        let block = read_block(object_store, *block_id)?;
         for patch_id in block.patch_ids {
-            let patch = read_patch(&object_store, patch_id)?;
+            let patch = read_patch(object_store, patch_id)?;
             let operations =
                 decode_patch_operations(&patch.canonical_payload, patch.schema_version)?;
             for operation in operations {
-                let inverse = derive_inverse_operation(
-                    &object_store,
-                    &mut files,
-                    &mut live_nodes,
-                    operation,
-                )?;
+                let inverse =
+                    derive_inverse_operation(object_store, &mut files, &mut live_nodes, operation)?;
                 inverse_operations.push(inverse);
                 original_operation_count += 1;
             }

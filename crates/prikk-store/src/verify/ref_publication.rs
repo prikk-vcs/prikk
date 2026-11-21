@@ -28,16 +28,19 @@ pub(crate) fn require_retained_evidence(
         let Some(ref_name) = issue.ref_name.clone() else {
             continue;
         };
-        match crate::refs::in_flight::decide(layout, &ref_name, || {
-            crate::refs::in_flight::lead_persists(layout, &ref_name)
+        // The first lead is read here (this stage's own first read, by identity); `decide` reads the holder, then the lead again.
+        let Some(first) = crate::refs::in_flight::lead_now(layout, &ref_name)? else {
+            gone.push(position);
+            continue;
+        };
+        match crate::refs::in_flight::decide(layout, &ref_name, first, || {
+            crate::refs::in_flight::lead_now(layout, &ref_name)
         })? {
             crate::refs::in_flight::Lead::Gone => gone.push(position),
             crate::refs::in_flight::Lead::InFlight { pid } => {
                 issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
                 issue.blocking = false;
-                issue.message = format!(
-                    "a publication of {ref_name} is in flight (pid {pid}, from its lock); nothing to complete, run verify again when it finishes"
-                );
+                issue.message = in_flight_finding(&ref_name, pid);
             }
             crate::refs::in_flight::Lead::Interrupted {
                 holder_note: Some(note),
@@ -94,15 +97,31 @@ pub(crate) fn require_retained_evidence(
             Err(crate::ref_completion::CompletionRefusal::PublicationInFlight(pid)) => {
                 issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
                 issue.blocking = false;
-                issue.message = format!(
-                    "a publication of {ref_name} is in flight (pid {pid}, from its lock); nothing to complete, run verify again when it finishes"
-                );
+                issue.message = in_flight_finding(ref_name, Some(pid));
+            }
+            // 0.59.0 RS2c: the lead changed between the plan's two reads -- a publisher is running; never a divergence.
+            Err(crate::ref_completion::CompletionRefusal::PublicationChanging) => {
+                issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
+                issue.blocking = false;
+                issue.message = in_flight_finding(ref_name, None);
             }
             Err(_refusal) => mark_unproved(issue),
         }
     }
     add_incomplete_cleanup_issue(layout, records, metadata, issues)?;
     Ok(())
+}
+
+/// The finding for a publication that is running: the 0.58.0 sentence, with the pid when a holder read named one.
+fn in_flight_finding(ref_name: &str, pid: Option<u32>) -> String {
+    match pid {
+        Some(pid) => format!(
+            "a publication of {ref_name} is in flight (pid {pid}, from its lock); nothing to complete, run verify again when it finishes"
+        ),
+        None => format!(
+            "a publication of {ref_name} is in flight; nothing to complete, run verify again when it finishes"
+        ),
+    }
 }
 
 fn add_incomplete_cleanup_issue(
@@ -121,6 +140,27 @@ fn add_incomplete_cleanup_issue(
         return Ok(());
     }
     if crate::refs::publication::queue_already_sealed(layout, ref_name, records)?.is_some() {
+        // 0.59.0 RS2c: a queue that still holds a settled publication is also a `seal` that is **running**, between its publish and its drain. The
+        // active lock is asked (the holder, then the queue again, fresh): a queue that has drained is no finding; a holder that appears running is
+        // in flight (the existing finding, `info`); anything else is today's finding.
+        let publisher = crate::refs::in_flight::active_publisher(layout)?;
+        let fresh =
+            crate::wal::Wal::for_layout(layout, crate::foundation::layout::DEFAULT_ACTIVE_NAME)
+                .replay()?;
+        if crate::refs::publication::queue_already_sealed(layout, ref_name, &fresh.records)?
+            .is_none()
+        {
+            return Ok(());
+        }
+        if let Some(pid) = publisher {
+            issues.push(RefPublicationIssue {
+                code: crate::refs::in_flight::IN_FLIGHT_CODE,
+                ref_name: Some(ref_name.clone()),
+                message: in_flight_finding(ref_name, Some(pid)),
+                blocking: false,
+            });
+            return Ok(());
+        }
         issues.push(RefPublicationIssue {
             code: "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING",
             ref_name: Some(ref_name.clone()),

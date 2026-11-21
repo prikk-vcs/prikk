@@ -568,3 +568,41 @@ fn create_local_tag_names_ref_complete_for_another_refs_genuine_lead() -> Result
     )?;
     Ok(())
 }
+
+/// 0.59.0 RS2c: "a Tag is held and no ref targets it" is also a tag **being created here** (its object is written before its pointer). With the
+/// candidate ref's lock held by another running process the tag is a local one in flight, not a received one; with no lock, or a holder that is gone,
+/// it is listed as it always was.
+#[test]
+fn a_tag_whose_ref_is_being_published_is_not_received() -> Result<()> {
+    let (layout, _digest, _count, _bytes) =
+        sender_with_one_tag("rs2c-received-in-flight", "tags/v1")?;
+    crate::refs::remove_pointer_entries_for_test(
+        &layout,
+        crate::foundation::layout::ref_name_key_bytes("tags/v1"),
+    )?;
+    assert_eq!(
+        received_tag_ids(&layout)?.len(),
+        1,
+        "no lock: received, as before"
+    );
+    let lock_path = layout.ref_lock_path("tags/v1");
+    std::fs::write(
+        &lock_path,
+        crate::lock_holder::render_body("ref", std::process::id(), crate::lock_holder::own_facts()),
+    )?;
+    assert_eq!(
+        received_tag_ids(&layout)?.len(),
+        1,
+        "this process holds it: not another command"
+    );
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("ref");
+    std::fs::write(&lock_path, body)?;
+    assert!(
+        received_tag_ids(&layout)?.is_empty(),
+        "another running command is publishing it"
+    );
+    child.kill()?;
+    child.wait()?;
+    let _ = std::fs::remove_dir_all(layout.root());
+    Ok(())
+}

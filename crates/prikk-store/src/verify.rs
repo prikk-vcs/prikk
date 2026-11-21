@@ -1906,11 +1906,20 @@ pub fn verify_repository_with_options(
     // a publication that lands during the run shows as a pointer ahead of the log -- a lead, which F2 judges (in flight, finished,
     // interrupted) -- never as a pointer naming an object the run cannot see. Before this the snapshot was opened first and the pointer index
     // was read again by three stages, up to the whole run later.
+    // 0.59.0 RS2c: **the active session's three stores come first, as one moment** (`active_view`), then the ref view below: a `commit` and a `seal`'s
+    // drain write the WAL, the ref-name metadata and the witness in different orders, and these stages used to read them at three moments, the whole
+    // object scan apart. The ref log, the pointer index and the snapshot that follow are at least as new as the queue they are compared with (a drain
+    // follows its publish; a queued patch's object is durable before its WAL record).
+    let active_view = crate::commit_boundary::active_view::read_active_view(layout);
     let ref_log = read_and_decode_ref_log(layout, "verify-scan");
     let pointers_read = crate::refs::replay_pointer_index(layout);
     let object_store = ObjectReadSnapshot::open(layout)?;
     #[cfg(test)]
     crate::refs::view_hooks::run("verify-after-snapshot");
+    // 0.59.0 RS2c: the stages that compare the snapshot with a store read **after** it (the Block containers the object scan reads live, the queue's
+    // patches, the lifecycle cache a commit derives, another session's queue) look an id up through the fresh-on-miss reader: an id named by newer state
+    // that the snapshot lacks is looked up once in the live index before it is called missing. A hit costs nothing.
+    let fresh_store = crate::refs::PointerFreshReader::over(layout, &object_store);
     // RFC 108 §D3.4, increment 3b: propagated with `?`, unconditionally, the same footing as
     // `ObjectReadSnapshot::open` immediately above -- a repository whose `active/` root is not
     // enumerable at all is not a case any downstream stage could meaningfully evaluate either, and
@@ -1929,8 +1938,8 @@ pub fn verify_repository_with_options(
     // decode still paid the bound twice. `WalReplay`'s own stage position, dependency bookkeeping and
     // reported outcome are unchanged -- only *when* the bytes are read moved, not what either stage
     // reports.
-    let default_wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
-    let default_wal_replay = default_wal.replay();
+    // (0.59.0 RS2c: read at the top of this function, with the active session's other two stores, as one moment: `active_view`.)
+    let default_wal_replay = active_view.replay;
     // 0.49.0 step 5, D11/U3: a test-only, env-gated control for the command-level row
     // (`verify_hashes_a_hostile_wal_within_k_times_its_size`'s own control, kept as code this round
     // rather than only verified by hand): setting this variable re-decodes the default WAL a second
@@ -1939,7 +1948,7 @@ pub fn verify_repository_with_options(
     // compiled into no shipped binary.
     #[cfg(test)]
     if std::env::var_os("PRIKK_VERIFY_TEST_FORCE_SECOND_WAL_DECODE").is_some() {
-        let _ = default_wal.replay();
+        let _ = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay();
     }
 
     // Stage: Objects. No upstream stage dependency. `trust_verifier` is mutated by reference and its
@@ -1951,7 +1960,7 @@ pub fn verify_repository_with_options(
         VerificationStage::Objects,
         verify_objects(
             layout,
-            &object_store,
+            &fresh_store,
             &mut trust_verifier,
             default_wal_replay.as_ref().ok(),
             &pointers_read,
@@ -2138,7 +2147,7 @@ pub fn verify_repository_with_options(
     let persisted_wal_patches = if let Some(replay) = &replay {
         pipeline.run(
             VerificationStage::WalPersistence,
-            verify_wal_persistence(&object_store, &replay.records),
+            verify_wal_persistence(&fresh_store, &replay.records),
         )
     } else {
         pipeline.not_evaluated(
@@ -2196,7 +2205,9 @@ pub fn verify_repository_with_options(
     let active_wal_metadata_status = if let Some(replay) = &replay {
         pipeline.run(
             VerificationStage::ActiveWalMetadata,
-            classify_active_wal_metadata(layout, DEFAULT_ACTIVE_NAME, replay.records.is_empty()),
+            active_view
+                .metadata
+                .map(|metadata| active_wal_metadata_status_of(metadata, replay.records.is_empty())),
         )
     } else {
         pipeline.not_evaluated(
@@ -2219,8 +2230,7 @@ pub fn verify_repository_with_options(
                 Option<bool>,
             )> {
                 let owning_ref = active_ref_metadata_from_wal_metadata_status(wal_metadata_status);
-                let witness =
-                    crate::commit_boundary::witness::read_witness(layout, DEFAULT_ACTIVE_NAME)?;
+                let witness = active_view.witness?;
                 let verdict = crate::commit_boundary::classification::classify(
                     layout,
                     replay,
@@ -2305,7 +2315,7 @@ pub fn verify_repository_with_options(
     // 12). Still subject to an earlier halt under `--stop-on-first-error`.
     let lifecycle_cache_divergences = if pipeline.run_infallible(VerificationStage::LifecycleCache)
     {
-        verify_lifecycle_cache_divergence(&object_store, layout)
+        verify_lifecycle_cache_divergence(&fresh_store, layout)
     } else {
         Vec::new()
     };
@@ -2331,7 +2341,7 @@ pub fn verify_repository_with_options(
     let connectivity_issues = pipeline
         .run(
             VerificationStage::ObjectConnectivity,
-            verify_queued_patch_connectivity(layout, &object_store, replay.as_ref()),
+            verify_queued_patch_connectivity(layout, &fresh_store, replay.as_ref()),
         )
         .unwrap_or_default();
 
@@ -2685,23 +2695,31 @@ pub(crate) fn classify_active_wal_metadata(
     name: impl AsRef<std::path::Path>,
     wal_is_empty: bool,
 ) -> Result<ActiveWalMetadataStatus> {
-    match (
-        wal_is_empty,
+    Ok(active_wal_metadata_status_of(
         crate::commit_boundary::active::read_active_ref_metadata_for(layout, name)?,
-    ) {
-        (true, ActiveRefMetadata::Missing) => Ok(ActiveWalMetadataStatus::MissingForEmptyWal),
+        wal_is_empty,
+    ))
+}
+
+/// [`classify_active_wal_metadata`] over a metadata read the caller already made (`verify`'s one view of the active session, 0.59.0 RS2c).
+pub(crate) fn active_wal_metadata_status_of(
+    metadata: ActiveRefMetadata,
+    wal_is_empty: bool,
+) -> ActiveWalMetadataStatus {
+    match (wal_is_empty, metadata) {
+        (true, ActiveRefMetadata::Missing) => ActiveWalMetadataStatus::MissingForEmptyWal,
         (true, ActiveRefMetadata::Valid(ref_name)) => {
-            Ok(ActiveWalMetadataStatus::ValidForEmptyWal { ref_name })
+            ActiveWalMetadataStatus::ValidForEmptyWal { ref_name }
         }
         (true, ActiveRefMetadata::Invalid(reason)) => {
-            Ok(ActiveWalMetadataStatus::InvalidForEmptyWal { reason })
+            ActiveWalMetadataStatus::InvalidForEmptyWal { reason }
         }
-        (false, ActiveRefMetadata::Missing) => Ok(ActiveWalMetadataStatus::MissingForNonEmptyWal),
+        (false, ActiveRefMetadata::Missing) => ActiveWalMetadataStatus::MissingForNonEmptyWal,
         (false, ActiveRefMetadata::Valid(ref_name)) => {
-            Ok(ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name })
+            ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name }
         }
         (false, ActiveRefMetadata::Invalid(reason)) => {
-            Ok(ActiveWalMetadataStatus::InvalidForNonEmptyWal { reason })
+            ActiveWalMetadataStatus::InvalidForNonEmptyWal { reason }
         }
     }
 }

@@ -167,8 +167,8 @@ fn removing_a_declaration_names_its_file() {
         // a trust skipped, 2,867 -> 2,877. 0.57.0 U1 (format 8): the format-6/7 matches accept format 8 too (a longer
         // pattern each, re-wrapped by `cargo fmt`), 2,877 -> 2,884. 0.57.0 U3: `NonAsciiPathInOldFormat`, its warning sentence, and
         // the report field that carries it, 2,884 -> 2,929. 0.57.0 U3b: `SealedPathCollision`, its warning sentence, and the report
-        // field that carries it, 2,929 -> 2,972. 0.57.0 S5d: `mod unreached_content;` and its re-export, 2,972 -> 2,974. 0.57.0 prep P1: `#[non_exhaustive]` on `BlockSealers`, 2,974 -> 2,975. 0.57.0 prep P2: `#[non_exhaustive]` on `ObjectVerification`, 2,975 -> 2,976. 0.59.0 RS2a: the ref view `verify` reads once at its top (the ref log, the pointer index, then the object snapshot), 2,976 -> 2,988.
-        detail.contains("2988"),
+        // field that carries it, 2,929 -> 2,972. 0.57.0 S5d: `mod unreached_content;` and its re-export, 2,972 -> 2,974. 0.57.0 prep P1: `#[non_exhaustive]` on `BlockSealers`, 2,974 -> 2,975. 0.57.0 prep P2: `#[non_exhaustive]` on `ObjectVerification`, 2,975 -> 2,976. 0.59.0 RS2a: the ref view `verify` reads once at its top (the ref log, the pointer index, then the object snapshot), 2,976 -> 2,988. 0.59.0 RS2c: the active session read as one moment at the top, the fresh-on-miss reader for the stages that compare the snapshot with newer state, 2,988 -> 3,006.
+        detail.contains("3006"),
         "the line count is in the message: {detail}"
     );
     assert!(
@@ -424,8 +424,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.58.0 S5 added `foundation/kept_file.rs` (the proof every kept decode shares) and `refs/kept_pointer_index.rs` (the pointer index a hold keeps): 187 -> 189.
     // 0.58.0 S5 added `refs/kept_ref_log.rs` (the ref log a hold keeps): 189 -> 190.
     // 0.58.0 F2 added `refs/in_flight.rs` (is a pointer lead a publication in flight, or an interrupted one): 190 -> 191.
-    // 0.58.0 R2 added `confirmed_history.rs` (the history this repository confirmed by replay and records) and `block_state/confirm_lineage.rs` (the root-checking walk it uses): 191 -> 193. 0.58.0 P3b added `framed_source.rs` (hoisted out of `bundle.rs`): 193 -> 194. 0.58.0 B′b added `bundle/decision.rs` (the one decision `bundle import` and `bundle preview` share): 194 -> 195. 0.59.0 RS2b added `refs/pointer_fresh.rs` (an id a pointer named is looked up again before it is called missing): 195 -> 196.
-    assert_eq!(store.production_files, 196);
+    // 0.58.0 R2 added `confirmed_history.rs` (the history this repository confirmed by replay and records) and `block_state/confirm_lineage.rs` (the root-checking walk it uses): 191 -> 193. 0.58.0 P3b added `framed_source.rs` (hoisted out of `bundle.rs`): 193 -> 194. 0.58.0 B′b added `bundle/decision.rs` (the one decision `bundle import` and `bundle preview` share): 194 -> 195. 0.59.0 RS2b added `refs/pointer_fresh.rs` (an id a pointer named is looked up again before it is called missing): 195 -> 196. 0.59.0 RS2c added `commit_boundary/active_view.rs` (the active session's three stores, read as one moment): 196 -> 197.
+    assert_eq!(store.production_files, 197);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

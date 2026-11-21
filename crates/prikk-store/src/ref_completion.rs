@@ -99,6 +99,8 @@ pub enum CompletionRefusal {
     WalEvidenceMismatch(String),
     /// 0.58.0 F2: the lead is a publication in flight -- another command holds the ref's lock and appears to be running (its pid).
     PublicationInFlight(u32),
+    /// 0.59.0 RS2c: the lead **changed** between two reads -- another command is publishing the ref right now, and no holder read named it.
+    PublicationChanging,
 }
 
 impl std::fmt::Display for CompletionRefusal {
@@ -122,6 +124,10 @@ impl std::fmt::Display for CompletionRefusal {
             Self::PublicationInFlight(pid) => write!(
                 formatter,
                 "is being published by another command right now (pid {pid}, from its lock); run this command again when it finishes"
+            ),
+            Self::PublicationChanging => write!(
+                formatter,
+                "is being published by another command right now; run this command again when it finishes"
             ),
             Self::UntrustedSigner(message) => write!(
                 formatter,
@@ -169,14 +175,18 @@ pub fn plan_ref_completion(
         return Ok(Err(CompletionRefusal::NoPointer));
     };
     let plan = judge_known_lead(layout, ref_name, leading_id, log)?;
-    if plan.is_err() {
+    // Only a completable lead, or one that is "not exactly one transition ahead", can be a publication that is running or has finished: every other
+    // refusal (damage, an untrusted signer, an invalid target, WAL evidence) is today's answer whatever a holder says.
+    if !matches!(&plan, Ok(_) | Err(CompletionRefusal::NotALead)) {
         return Ok(plan);
     }
-    // 0.58.0 F2: the lead, then the holder, then the lead again. A publication still running is not completed from under its publisher.
-    use crate::refs::in_flight::{Lead, decide, lead_persists};
+    // 0.58.0 F2, 0.59.0 RS2c: the lead, then the holder, then the lead again -- **by identity** (`decide`): the one judgement the precondition, the
+    // rewrite and `verify` use. A publication still running is not completed from under its publisher, and a lead that changed is a publisher running.
+    use crate::refs::in_flight::{Lead, decide, lead_now};
     Ok(
-        match decide(layout, ref_name, || lead_persists(layout, ref_name))? {
-            Lead::InFlight { pid } => Err(CompletionRefusal::PublicationInFlight(pid)),
+        match decide(layout, ref_name, leading_id, || lead_now(layout, ref_name))? {
+            Lead::InFlight { pid: Some(pid) } => Err(CompletionRefusal::PublicationInFlight(pid)),
+            Lead::InFlight { pid: None } => Err(CompletionRefusal::PublicationChanging),
             Lead::Gone => Err(CompletionRefusal::NotALead),
             Lead::Interrupted { .. } => plan,
         },
@@ -201,9 +211,11 @@ pub fn incomplete_publication_refusal_naming_any_lead(
         return generic_or_cleanup_pending_refusal(layout);
     };
     // 0.59.0 RS2a: a lead is a publication in flight, one that has since finished, or an interrupted one -- the same judgement the
-    // precondition makes (`decide`: the holder, then the lead again). A running publisher is never named "interrupted: run `ref complete`".
-    use crate::refs::in_flight::{Lead, decide, in_flight_sentence, lead_persists};
-    match decide(layout, &ref_name, || lead_persists(layout, &ref_name))? {
+    // precondition makes (`decide`, by lead identity: RS2c). A running publisher is never named "interrupted: run `ref complete`".
+    use crate::refs::in_flight::{Lead, decide, in_flight_sentence, lead_now};
+    match decide(layout, &ref_name, leading_id, || {
+        lead_now(layout, &ref_name)
+    })? {
         Lead::InFlight { pid } => {
             return Ok(PrikkError::Precondition(format!(
                 "{}; run this command again when it finishes",
@@ -245,6 +257,14 @@ fn generic_or_cleanup_pending_refusal(layout: &RepositoryLayout) -> Result<Prikk
         if let Some(sealed) =
             crate::refs::publication::queue_already_sealed(layout, &owner, &replay.records)?
         {
+            // 0.59.0 RS2c: a queue that still holds a settled publication is also a `seal` that is running between its publish and its drain: the
+            // active lock is asked first, and a holder that appears running is in flight, not "stopped".
+            if let Some(pid) = crate::refs::in_flight::active_publisher(layout)? {
+                return Ok(PrikkError::Precondition(format!(
+                    "{}; run this command again when it finishes",
+                    crate::refs::in_flight::in_flight_sentence(&owner, Some(pid))
+                )));
+            }
             return Ok(PrikkError::IncompletePublication(format!(
                 "repository mutation is blocked by incomplete ref publication: a seal stopped after it published, before it \
                  cleaned the queue (the queued patches are already sealed in block {}); run `prikk seal --allow-no-audit`",

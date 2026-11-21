@@ -173,7 +173,44 @@ pub fn received_tag_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
         }
     }
 
-    Ok(all_tag_ids.difference(&locally_targeted).copied().collect())
+    // 0.59.0 RS2c: "held and no ref targets it" is also a tag **being created here**: its Tag object is written before its pointer. The candidate ref
+    // is the tag's own name (`create_local_tag` and `adopt_tag` publish `tags/<name>`). The pattern is F2's: the answer so far (no ref targets it), then
+    // the candidate's lock (a holder that is another running process: a local tag in flight), then the pointers **again** -- a publication that finished
+    // between the first read and the lock check has released its lock and written its pointer, and is a local tag, not a received one.
+    let mut candidates = Vec::new();
+    for tag_id in all_tag_ids.difference(&locally_targeted).copied() {
+        let in_flight = match object_store.read_typed(tag_id, ObjectType::Tag)? {
+            Some(envelope) => TagPayload::decode_canonical(&envelope.canonical_payload)
+                .ok()
+                .and_then(|payload| validate_local_tag_ref(&payload.name).ok())
+                .map(|candidate| crate::refs::in_flight::ref_publisher_running(layout, &candidate))
+                .transpose()?
+                .unwrap_or(false),
+            None => false,
+        };
+        if !in_flight {
+            candidates.push(tag_id);
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+    let live = crate::object_store::FileObjectStore::new(layout.clone());
+    let mut targeted_now: BTreeSet<ObjectId> = BTreeSet::new();
+    for pointer in RefStore::new(layout.clone()).list_ref_pointers()? {
+        let Some(envelope) = live.read_typed(pointer.ref_state_id, ObjectType::RefState)? else {
+            continue;
+        };
+        let payload = RefStatePayload::decode_canonical(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )?;
+        if payload.kind == RefKind::Tag {
+            targeted_now.insert(payload.target_object_id);
+        }
+    }
+    candidates.retain(|tag_id| !targeted_now.contains(tag_id));
+    Ok(candidates)
 }
 
 /// One received tag's own name, signature outcome, and resolution state (`prikk sync tags`).
@@ -304,7 +341,10 @@ pub fn create_local_tag(
                 )));
             }
             // 0.58.0 F2: the publisher is running; this is neither "already exists" nor an interrupted publication.
-            Err(refusal @ crate::ref_completion::CompletionRefusal::PublicationInFlight(_)) => {
+            Err(
+                refusal @ (crate::ref_completion::CompletionRefusal::PublicationInFlight(_)
+                | crate::ref_completion::CompletionRefusal::PublicationChanging),
+            ) => {
                 return Err(PrikkError::Precondition(format!("{canonical} {refusal}")));
             }
             Err(_) => {}

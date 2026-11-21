@@ -136,7 +136,10 @@ pub fn execute_merge(
             )));
         }
         // 0.58.0 F2: the publisher is running; neither interrupted nor a ref to merge into yet.
-        Err(refusal @ crate::ref_completion::CompletionRefusal::PublicationInFlight(_)) => {
+        Err(
+            refusal @ (crate::ref_completion::CompletionRefusal::PublicationInFlight(_)
+            | crate::ref_completion::CompletionRefusal::PublicationChanging),
+        ) => {
             return Err(PrikkError::Precondition(format!("{into_ref} {refusal}")));
         }
         Err(_) => {}

@@ -27,7 +27,7 @@ pub(super) fn has_incomplete_active_cleanup_with_replay(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
     replay_out: Option<&mut Option<crate::wal::WalReplay>>,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
     let result = has_incomplete_active_cleanup_from(layout, exclude_ref_name, &replay);
     if let Some(slot) = replay_out {
@@ -36,13 +36,14 @@ pub(super) fn has_incomplete_active_cleanup_with_replay(
     result
 }
 
+/// The ref whose settled publication the active queue still holds (`Some`), or `None`.
 fn has_incomplete_active_cleanup_from(
     layout: &RepositoryLayout,
     exclude_ref_name: Option<&str>,
     replay: &crate::wal::WalReplay,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let ActiveRefMetadata::Valid(ref_name) = read_active_ref_metadata(layout)? else {
-        return Ok(false);
+        return Ok(None);
     };
     // RFC 102 Stage 2: a damaged record silently missing from `replay.records` could make the
     // `patch_ids` comparison below pass or fail for the wrong reason -- fail closed instead of
@@ -59,14 +60,14 @@ fn has_incomplete_active_cleanup_from(
         )));
     }
     if Some(ref_name.as_str()) == exclude_ref_name {
-        return Ok(false);
+        return Ok(None);
     }
     if replay.records.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let store = RefStore::new(layout.clone());
     let Some(state_id) = store.read_current_ref_state_id(&ref_name)? else {
-        return Ok(false);
+        return Ok(None);
     };
     let objects = FileObjectStore::new(layout.clone());
     let state = objects
@@ -78,12 +79,13 @@ fn has_incomplete_active_cleanup_from(
         .read_typed(target, ObjectType::Block)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing Block object: {target}")))?;
     let payload = BlockPayload::decode_canonical(&block.canonical_payload)?;
-    Ok(payload.patch_ids
+    let pending = payload.patch_ids
         == replay
             .records
             .iter()
             .map(|record| record.envelope.object_id())
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+    Ok(pending.then_some(ref_name))
 }
 
 pub(super) fn validate_signer_backed_recovery(

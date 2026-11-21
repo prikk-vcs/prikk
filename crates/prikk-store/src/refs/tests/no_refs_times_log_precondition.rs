@@ -603,3 +603,78 @@ fn a_pending_active_cleanup_refuses() {
     assert!(ensure_no_incomplete_publication(&layout).is_err());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A queue that still holds a settled publication is also a `seal` that is running between its publish and its drain. With the active lock held by
+/// **another running process**, the precondition says so (the 0.58.0 sentence), `verify` reports the existing in-flight finding at `info`, and neither
+/// calls it an incomplete publication or a cleanup pending. With no lock, a dead holder, or **this process** as the holder (a command that holds the
+/// lock itself and asks about its own queue), the answer is today's, exactly.
+#[test]
+fn a_pending_cleanup_beside_a_running_publisher_is_in_flight() {
+    let root = unique_temp_dir("rs2c-pending-in-flight");
+    let layout = setup(&root);
+    let signer = maintainer();
+    queue_one_patch(&layout, "heads/main", "p");
+    crate::simulate_one_seal_for_test_support(&layout, "heads/main", &signer).unwrap();
+    queue_one_patch(&layout, "heads/main", "p");
+    let lock_path = layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+
+    // Today's answers: no lock; this process as the holder; a holder that is gone.
+    let today = ensure_no_incomplete_publication(&layout).unwrap_err();
+    assert!(
+        matches!(today, prikk_error::PrikkError::IncompletePublication(_)),
+        "{today:?}"
+    );
+    std::fs::write(
+        &lock_path,
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        ensure_no_incomplete_publication(&layout).unwrap_err(),
+        prikk_error::PrikkError::IncompletePublication(_)
+    ));
+    let report = crate::verify_repository(&layout).unwrap();
+    assert!(
+        report
+            .ref_publication_issues
+            .iter()
+            .any(|issue| issue.code == "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" && issue.blocking)
+    );
+
+    // Another running process holds the active lock: in flight.
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("active");
+    std::fs::write(&lock_path, body).unwrap();
+    let refusal = ensure_no_incomplete_publication(&layout)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains(&format!(
+            "another command is publishing heads/main (pid {}, from its lock); run this command again when it finishes",
+            child.id()
+        )),
+        "{refusal}"
+    );
+    let report = crate::verify_repository(&layout).unwrap();
+    let issues: Vec<(&str, bool)> = report
+        .ref_publication_issues
+        .iter()
+        .map(|issue| (issue.code, issue.blocking))
+        .collect();
+    assert!(
+        issues.contains(&("PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT", false)),
+        "{issues:?}"
+    );
+    assert!(
+        !issues
+            .iter()
+            .any(|(code, _)| *code == "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING"),
+        "{issues:?}"
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
