@@ -36,6 +36,25 @@ pub(super) fn finish_interrupted(
     publish_locked(store, object_store, publication, true)
 }
 
+/// As [`publish`], for a caller that **already holds the ref's `RefLock`** and has written an object this publication names under it (0.59.0 RS2d:
+/// `create_local_tag` takes the lock before it writes the Tag, so a reader that finds a Tag no ref targets can ask the lock whether it is being
+/// published). The lock is consumed and released when the publication ends, exactly as [`publish`]'s own is. The lock order is the one
+/// [`publish_locked`] already has: the ref's lock, then the object store and the containers.
+pub(super) fn publish_under_ref_lock(
+    store: &RefStore,
+    object_store: &mut impl ObjectWriter,
+    publication: &RefPublication,
+    ref_lock: RefLock,
+) -> Result<ObjectId> {
+    if ref_lock.path() != store.layout.ref_lock_path(&publication.ref_name) {
+        return Err(PrikkError::LockConflict(format!(
+            "publish_under_ref_lock was called with the lock of another ref than {} -- refusing rather than publishing unsynchronized",
+            publication.ref_name
+        )));
+    }
+    publish_locked_with(store, object_store, publication, false, ref_lock)
+}
+
 fn publish_locked(
     store: &RefStore,
     object_store: &mut impl ObjectWriter,
@@ -43,6 +62,22 @@ fn publish_locked(
     allow_partial_tail_repair: bool,
 ) -> Result<ObjectId> {
     let ref_lock = RefLock::acquire(&store.layout, &publication.ref_name)?;
+    publish_locked_with(
+        store,
+        object_store,
+        publication,
+        allow_partial_tail_repair,
+        ref_lock,
+    )
+}
+
+fn publish_locked_with(
+    store: &RefStore,
+    object_store: &mut impl ObjectWriter,
+    publication: &RefPublication,
+    allow_partial_tail_repair: bool,
+    ref_lock: RefLock,
+) -> Result<ObjectId> {
     // RFC 102 Stage 6 Step 2, design-v1.md §15.8 (ruled wide): both containers this function writes
     // -- the pointer index and the ref log -- are locked together, for the whole critical section
     // below, before either is read or written. Acquired here, not per-write, so `classify_state`'s

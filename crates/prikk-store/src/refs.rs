@@ -655,6 +655,20 @@ impl RefStore {
         publication::publish(self, object_store, publication)
     }
 
+    /// As [`Self::publish_with_object_store`], but for a caller that already holds **this ref's `RefLock`** (0.59.0 RS2d: `create_local_tag`, which
+    /// takes it before writing the Tag object). The lock is consumed and released when the publication ends.
+    pub(crate) fn publish_with_object_store_under_held_ref_lock(
+        &self,
+        object_store: &mut impl ObjectWriter,
+        publication: &RefPublication,
+        ref_lock: crate::lock::RefLock,
+    ) -> Result<ObjectId> {
+        self.layout.require_current_format()?;
+        crate::format::validate_object_envelope(self.layout.format(), &publication.ref_state)?;
+        crate::format::validate_object_envelope(self.layout.format(), &publication.ref_update)?;
+        publication::publish_under_ref_lock(self, object_store, publication, ref_lock)
+    }
+
     /// As [`Self::publish_with_object_store`], but for a caller that already holds
     /// `RefPointerIndex` and `RefLog` itself (RFC 155 Part I-B2, review `rfc155-impl-IB-review-v1`
     /// finding IB1(a)): `archive::import`'s stage 3 landing, which holds every container lock from

@@ -112,6 +112,16 @@ pub(crate) fn require_retained_evidence(
     Ok(())
 }
 
+/// The in-flight finding for a queue that was still changing while it was read (0.59.0 RS2d): the existing id, `info`, the existing sentence.
+pub(super) fn in_flight_issue(ref_name: &str, pid: u32) -> RefPublicationIssue {
+    RefPublicationIssue {
+        code: crate::refs::in_flight::IN_FLIGHT_CODE,
+        ref_name: Some(ref_name.to_string()),
+        message: in_flight_finding(ref_name, Some(pid)),
+        blocking: false,
+    }
+}
+
 /// The finding for a publication that is running: the 0.58.0 sentence, with the pid when a holder read named one.
 fn in_flight_finding(ref_name: &str, pid: Option<u32>) -> String {
     match pid {

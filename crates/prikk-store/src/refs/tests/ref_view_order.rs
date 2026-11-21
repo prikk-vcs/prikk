@@ -215,3 +215,70 @@ fn a_publication_completing_between_the_leads_two_reads_is_in_flight_not_interru
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// A writer that never lets the queue settle: after every read the view makes, the owner of the queue is rewritten (a name of a different length, so the
+/// change is a length change and not only a timestamp). The hook re-arms itself, so every one of the bounded reads sees a change.
+fn churn_the_queue(layout: RepositoryLayout, round: usize) {
+    view_hooks::set("active-view-after-read", move || {
+        let name = format!("heads/c{}", "x".repeat(round % 40));
+        crate::commit_boundary::active::prepare_empty_active_ref_for_append(&layout, &name)
+            .unwrap();
+        churn_the_queue(layout, round + 1);
+    });
+}
+
+/// 0.59.0 RS2d: the active view's **exhausted case**. The bounded rereads run out while the queue is still changing. If the active lock's holder
+/// appears to be running and is not this process, the view says so (`unsettled: Some(pid)`) and a caller reports the publication in flight; with no lock,
+/// a holder that is gone, or this process as the holder, it is the last read, as before the field existed.
+#[test]
+fn an_exhausted_active_view_is_in_flight_only_beside_a_running_holder() {
+    let (layout, root, _target) = repository("rs2d-active-view-exhausted");
+    crate::commit_boundary::active::prepare_empty_active_ref_for_append(&layout, "heads/a")
+        .unwrap();
+    let lock_path = layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME);
+
+    // No lock: the last read.
+    churn_the_queue(layout.clone(), 1);
+    assert_eq!(
+        crate::commit_boundary::active_view::read_active_view(&layout).unsettled,
+        None
+    );
+    // This process holds the lock: not another command.
+    std::fs::write(
+        &lock_path,
+        crate::lock_holder::render_body(
+            "active",
+            std::process::id(),
+            crate::lock_holder::own_facts(),
+        ),
+    )
+    .unwrap();
+    churn_the_queue(layout.clone(), 1);
+    assert_eq!(
+        crate::commit_boundary::active_view::read_active_view(&layout).unsettled,
+        None
+    );
+    // Another running process holds it: in flight, with its pid; and `verify` reports the existing finding instead of classifying the mixture.
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("active");
+    std::fs::write(&lock_path, body).unwrap();
+    churn_the_queue(layout.clone(), 1);
+    assert_eq!(
+        crate::commit_boundary::active_view::read_active_view(&layout).unsettled,
+        Some(child.id())
+    );
+    churn_the_queue(layout.clone(), 1);
+    let report = crate::verify_repository(&layout).unwrap();
+    let issues: Vec<(&str, bool)> = report
+        .ref_publication_issues
+        .iter()
+        .map(|issue| (issue.code, issue.blocking))
+        .collect();
+    assert!(
+        issues.contains(&("PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT", false)),
+        "{issues:?}"
+    );
+    assert!(!report.has_stage_failure(), "{:?}", report.stage_outcomes);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

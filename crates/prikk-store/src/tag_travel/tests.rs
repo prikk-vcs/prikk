@@ -606,3 +606,49 @@ fn a_tag_whose_ref_is_being_published_is_not_received() -> Result<()> {
     let _ = std::fs::remove_dir_all(layout.root());
     Ok(())
 }
+
+/// 0.59.0 RS2d: **the ref's lock is held from before the Tag object is written.** At the moment the Tag is in the store and its pointer is not (the
+/// interval a reader's "held, and no ref targets it" falls in), the lock file of the ref exists -- so a reader in another process can ask it. Taken
+/// after the write (publish's own acquire, 0.58.0) the file is not there yet. The hook records whether it is, at that moment.
+#[test]
+fn the_tags_lock_is_held_when_its_object_is_written() -> Result<()> {
+    let root = unique_temp_dir("rs2d-tag-lock-order");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let mut store = FileObjectStore::new(layout.clone());
+    let block = write_block(&mut store, BlockKind::Root, Vec::new(), Vec::new())?;
+    publish_branch(&RefStore::new(layout.clone()), "heads/main", block, 1)?;
+    let (digest, count) = compute_patch_set_digest_and_count_from_block(&store, block)?;
+    let held = std::rc::Rc::new(std::cell::Cell::new(None));
+    let seen = held.clone();
+    let probe = layout.clone();
+    crate::refs::view_hooks::set("tag-written", move || {
+        seen.set(Some(probe.ref_lock_path("tags/v1").exists()));
+    });
+    let mut session = ObjectWriteSession::open(&layout)?;
+    super::create_local_tag(
+        &layout,
+        &mut session,
+        "tags/v1",
+        block,
+        None,
+        digest,
+        count,
+        &signer(0x51)?,
+    )?;
+    assert_eq!(
+        held.get(),
+        Some(true),
+        "the ref's lock was not held when the Tag object was written"
+    );
+    assert!(
+        !layout.ref_lock_path("tags/v1").exists(),
+        "and it is released when the publication ends"
+    );
+    assert!(
+        RefStore::new(layout.clone())
+            .read_current_ref_state_id("tags/v1")?
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

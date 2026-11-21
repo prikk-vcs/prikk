@@ -1940,6 +1940,13 @@ pub fn verify_repository_with_options(
     // reports.
     // (0.59.0 RS2c: read at the top of this function, with the active session's other two stores, as one moment: `active_view`.)
     let default_wal_replay = active_view.replay;
+    // 0.59.0 RS2d: the active view's exhausted case -- the queue was still changing on the last bounded read and another running process holds the
+    // active lock. The queue stages then classify nothing (they would classify a mixture), and the run reports the publication in flight.
+    let queue_in_flight = active_view.unsettled;
+    let queue_owner = match &active_view.metadata {
+        Ok(ActiveRefMetadata::Valid(owner)) => Some(owner.clone()),
+        _ => None,
+    };
     // 0.49.0 step 5, D11/U3: a test-only, env-gated control for the command-level row
     // (`verify_hashes_a_hostile_wal_within_k_times_its_size`'s own control, kept as code this round
     // rather than only verified by hand): setting this variable re-decodes the default WAL a second
@@ -2106,6 +2113,9 @@ pub fn verify_repository_with_options(
     };
 
     let refs_evaluated = ref_verification.is_some();
+    let queue_in_flight_issue = queue_in_flight.map(|pid| {
+        ref_publication::in_flight_issue(queue_owner.as_deref().unwrap_or("the active queue"), pid)
+    });
     let (
         checked_refs,
         checked_ref_log_records,
@@ -2137,6 +2147,8 @@ pub fn verify_repository_with_options(
             None,
         ),
     };
+
+    ref_publication_issues.extend(queue_in_flight_issue);
 
     // Stage: WalReplay. No upstream stage dependency. The decode itself already happened, above
     // (RFC 167 D5) -- this only hands the already-computed result to the pipeline at this stage's
@@ -2205,9 +2217,13 @@ pub fn verify_repository_with_options(
     let active_wal_metadata_status = if let Some(replay) = &replay {
         pipeline.run(
             VerificationStage::ActiveWalMetadata,
-            active_view
-                .metadata
-                .map(|metadata| active_wal_metadata_status_of(metadata, replay.records.is_empty())),
+            if queue_in_flight.is_some() {
+                Ok(ActiveWalMetadataStatus::MissingForEmptyWal)
+            } else {
+                active_view.metadata.map(|metadata| {
+                    active_wal_metadata_status_of(metadata, replay.records.is_empty())
+                })
+            },
         )
     } else {
         pipeline.not_evaluated(
@@ -2229,6 +2245,15 @@ pub fn verify_repository_with_options(
                 crate::commit_boundary::classification::Verdict,
                 Option<bool>,
             )> {
+                if queue_in_flight.is_some() {
+                    return Ok((
+                        crate::commit_boundary::classification::Verdict::NoWitness {
+                            wal_otherwise_sound: true,
+                            stale: false,
+                        },
+                        None,
+                    ));
+                }
                 let owning_ref = active_ref_metadata_from_wal_metadata_status(wal_metadata_status);
                 let witness = active_view.witness?;
                 let verdict = crate::commit_boundary::classification::classify(

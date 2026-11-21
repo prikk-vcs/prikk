@@ -167,8 +167,8 @@ fn removing_a_declaration_names_its_file() {
         // a trust skipped, 2,867 -> 2,877. 0.57.0 U1 (format 8): the format-6/7 matches accept format 8 too (a longer
         // pattern each, re-wrapped by `cargo fmt`), 2,877 -> 2,884. 0.57.0 U3: `NonAsciiPathInOldFormat`, its warning sentence, and
         // the report field that carries it, 2,884 -> 2,929. 0.57.0 U3b: `SealedPathCollision`, its warning sentence, and the report
-        // field that carries it, 2,929 -> 2,972. 0.57.0 S5d: `mod unreached_content;` and its re-export, 2,972 -> 2,974. 0.57.0 prep P1: `#[non_exhaustive]` on `BlockSealers`, 2,974 -> 2,975. 0.57.0 prep P2: `#[non_exhaustive]` on `ObjectVerification`, 2,975 -> 2,976. 0.59.0 RS2a: the ref view `verify` reads once at its top (the ref log, the pointer index, then the object snapshot), 2,976 -> 2,988. 0.59.0 RS2c: the active session read as one moment at the top, the fresh-on-miss reader for the stages that compare the snapshot with newer state, 2,988 -> 3,006.
-        detail.contains("3006"),
+        // field that carries it, 2,929 -> 2,972. 0.57.0 S5d: `mod unreached_content;` and its re-export, 2,972 -> 2,974. 0.57.0 prep P1: `#[non_exhaustive]` on `BlockSealers`, 2,974 -> 2,975. 0.57.0 prep P2: `#[non_exhaustive]` on `ObjectVerification`, 2,975 -> 2,976. 0.59.0 RS2a: the ref view `verify` reads once at its top (the ref log, the pointer index, then the object snapshot), 2,976 -> 2,988. 0.59.0 RS2c: the active session read as one moment at the top, the fresh-on-miss reader for the stages that compare the snapshot with newer state, 2,988 -> 3,006. 0.59.0 RS2d: the exhausted active view reports the publication in flight, 3,006 -> 3,031.
+        detail.contains("3031"),
         "the line count is in the message: {detail}"
     );
     assert!(

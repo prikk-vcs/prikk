@@ -26,6 +26,11 @@ pub(crate) struct ActiveView {
     pub(crate) replay: Result<WalReplay>,
     pub(crate) metadata: Result<ActiveRefMetadata>,
     pub(crate) witness: Result<WitnessState>,
+    /// **The exhausted case** (0.59.0 RS2d): the stores still changed on the last of the bounded reads, and the active lock's holder appears to be
+    /// running and is not this process -- its pid. The three reads are then not one moment and say nothing a caller may conclude damage from: the
+    /// caller reports the publication in flight (the existing finding) instead of classifying them. `None` whenever the read settled, and when it did
+    /// not and no other running process holds the active lock (the last read is then used, as it was before this field existed).
+    pub(crate) unsettled: Option<u32>,
 }
 
 /// What a stat says about one file: its length, modification time and (where the platform has one) identity; `None` when it does not exist.
@@ -60,14 +65,23 @@ pub(crate) fn read_active_view(layout: &RepositoryLayout) -> ActiveView {
     let mut attempts_left = ATTEMPTS;
     loop {
         let before = stamps(layout);
-        let view = ActiveView {
+        let mut view = ActiveView {
             replay: Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay(),
             metadata: read_active_ref_metadata_for(layout, DEFAULT_ACTIVE_NAME),
             witness: read_witness(layout, DEFAULT_ACTIVE_NAME),
+            unsettled: None,
         };
         #[cfg(test)]
         crate::refs::view_hooks::run("active-view-after-read");
-        if attempts_left == 0 || stamps(layout) == before {
+        if stamps(layout) == before {
+            return view;
+        }
+        if attempts_left == 0 {
+            // Exhausted: the stores are still changing. A holder of the active lock that appears to be running (and is not this process) is the
+            // writer doing it: in flight. Otherwise this is the last read, as before.
+            view.unsettled = crate::refs::in_flight::active_publisher(layout)
+                .ok()
+                .flatten();
             return view;
         }
         attempts_left -= 1;

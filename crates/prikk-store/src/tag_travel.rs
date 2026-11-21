@@ -143,10 +143,16 @@ pub fn received_tag_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
     let container_path = layout.container_slot_path(ObjectType::Tag, ContainerSlot::A);
     let relative = layout.repository_relative(&container_path)?;
     let mut all_tag_ids: BTreeSet<ObjectId> = BTreeSet::new();
+    // The Tag each container record holds, as the scan read it: a Tag whose record is written and whose index entry is not yet is in this scan and
+    // not in the snapshot opened below (a write makes the record durable, then the index entry), and the candidate check below reads its name here.
+    let mut scanned: std::collections::BTreeMap<ObjectId, prikk_object::ObjectEnvelope> =
+        std::collections::BTreeMap::new();
     if let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? {
         let replay = decode_container_records(ObjectType::Tag, &bytes)?;
         for record in replay.records {
-            all_tag_ids.insert(record.envelope.object_id());
+            let id = record.envelope.object_id();
+            all_tag_ids.insert(id);
+            scanned.insert(id, record.envelope);
         }
     }
 
@@ -179,7 +185,7 @@ pub fn received_tag_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
     // between the first read and the lock check has released its lock and written its pointer, and is a local tag, not a received one.
     let mut candidates = Vec::new();
     for tag_id in all_tag_ids.difference(&locally_targeted).copied() {
-        let in_flight = match object_store.read_typed(tag_id, ObjectType::Tag)? {
+        let in_flight = match scanned.get(&tag_id) {
             Some(envelope) => TagPayload::decode_canonical(&envelope.canonical_payload)
                 .ok()
                 .and_then(|payload| validate_local_tag_ref(&payload.name).ok())
@@ -362,6 +368,12 @@ pub fn create_local_tag(
     // `has_item_failure()`); this call adds the tail half.
     ref_store.ensure_pointer_index_has_no_tail(&canonical)?;
 
+    // 0.59.0 RS2d: **the ref's lock is taken before the Tag object is written** and the publication runs under it. The Tag is visible to a reader
+    // (`received_tag_ids`: "held, and no ref targets it") from the moment its container record is written; with the lock held from before that
+    // write, a reader that finds such a Tag can ask the ref's lock whether it is being published here -- it used to be held only from `publish`,
+    // after the write. The order is the one `publish_locked` already has: the ref's lock, then the object store and the containers. The checks above
+    // read the ref's own lock (`plan_ref_completion`), so they run before this one.
+    let ref_lock = crate::lock::RefLock::acquire(layout, &canonical)?;
     let tag_payload = TagPayload {
         name: canonical.clone(),
         target_block_id,
@@ -378,6 +390,8 @@ pub fn create_local_tag(
         signer,
     )?;
     let tag_object_id = object_store.write_object(&tag_envelope)?;
+    #[cfg(test)]
+    crate::refs::view_hooks::run("tag-written");
 
     let ref_state_payload = RefStatePayload {
         ref_name: canonical.clone(),
@@ -416,7 +430,11 @@ pub fn create_local_tag(
         ref_state: ref_state_envelope,
         ref_update: ref_update_envelope,
     };
-    let published_ref_state_id = ref_store.publish_with_object_store(object_store, &publication)?;
+    let published_ref_state_id = ref_store.publish_with_object_store_under_held_ref_lock(
+        object_store,
+        &publication,
+        ref_lock,
+    )?;
 
     Ok(LocalTagCreation {
         tag_object_id,
