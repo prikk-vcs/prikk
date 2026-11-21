@@ -191,8 +191,10 @@ pub fn prepare_checkout_plan_at_point(
 /// Prepare a checkout plan for a ref without modifying the worktree.
 pub fn prepare_checkout_plan(layout: &RepositoryLayout, ref_name: &str) -> Result<CheckoutPlan> {
     let ref_store = RefStore::new(layout.clone());
+    // 0.59.0 RS2b: the pointer is read first and the snapshot opened after it.
+    let pointer = ref_store.read_current_ref_state_id(ref_name)?;
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let Some(ref_state_id) = ref_store.read_current_ref_state_id(ref_name)? else {
+    let Some(ref_state_id) = pointer else {
         return Ok(CheckoutPlan {
             ref_name: ref_name.to_string(),
             ref_state_id: None,

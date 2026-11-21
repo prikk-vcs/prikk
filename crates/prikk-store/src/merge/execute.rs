@@ -245,11 +245,14 @@ pub fn execute_merge(
     let into_ref_state_id = ref_store
         .read_current_ref_state_id(&into_ref)?
         .ok_or_else(|| PrikkError::Integrity(format!("ref {into_ref} is not published")))?;
-    let into_ref_state_envelope = object_store
-        .read_typed(into_ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!("ref {into_ref} points to missing RefState"))
-        })?;
+    // 0.59.0 RS2b: the pointer was read after the write session opened: the RefState it names is looked up in the session brought up to date if
+    // it misses, so the parent Block read below is in the session too.
+    let into_ref_state_envelope = crate::refs::read_pointer_named(
+        &mut object_store,
+        into_ref_state_id,
+        ObjectType::RefState,
+    )?
+    .ok_or_else(|| PrikkError::Integrity(format!("ref {into_ref} points to missing RefState")))?;
     let into_ref_state = RefStatePayload::decode_canonical(
         &into_ref_state_envelope.canonical_payload,
         into_ref_state_envelope.schema_version,

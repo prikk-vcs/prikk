@@ -15,7 +15,7 @@ use prikk_object::{
 };
 
 use crate::foundation::layout::RepositoryLayout;
-use crate::object_store::{ObjectReadSnapshot, ObjectReader};
+use crate::object_store::ObjectReader;
 use crate::patch_replay::decode::{
     DecodedDeletePreimage, DecodedOperationKind, DecodedPatchOperation, decode_patch_operations,
 };
@@ -102,8 +102,7 @@ pub fn prepare_patch_inverse_plan(
         ref_name,
         crate::ref_resolution::ReceivedRefs::Refused,
     )?;
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
+    let (object_store, target_block_id) = crate::refs::open_at_ref_tip(layout, ref_name)?;
     let block_ids = single_parent_chain(&object_store, target_block_id)?;
     let mut files = BTreeMap::new();
     let mut live_nodes = BTreeMap::new();

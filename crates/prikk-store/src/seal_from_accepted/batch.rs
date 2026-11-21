@@ -168,7 +168,9 @@ impl SealBatchPlan {
     /// cannot be decoded.
     pub fn open(layout: &RepositoryLayout, ref_name: &str) -> Result<Self> {
         let canonical_ref = validate_local_branch_ref(ref_name)?;
-        let object_store = ObjectReadSnapshot::open(layout)?;
+        let snapshot = ObjectReadSnapshot::open(layout)?;
+        // 0.59.0 RS2b: the pointer is read after the snapshot opened: the ids it names are looked up through the fresh-on-miss reader.
+        let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
         let ref_store = RefStore::new(layout.clone());
         let tip = read_current_tip(&object_store, &ref_store, &canonical_ref)?
             .map(|tip| tip.target_block_id);

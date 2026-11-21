@@ -138,7 +138,9 @@ pub fn build_sync_artifact(
     // above explains why tag-travel cannot be gated on a non-empty delta). The same walk
     // `patch_ids_reachable_from_block` and bundle export already use. No second traversal, no
     // patch->block index.
-    let read_snapshot = ObjectReadSnapshot::open(layout)?;
+    let snapshot = ObjectReadSnapshot::open(layout)?;
+    // 0.59.0 RS2b: the pointers are read after the snapshot opened, so the ids they name are looked up through the fresh-on-miss reader.
+    let read_snapshot = crate::refs::PointerFreshReader::over(layout, &snapshot);
     let ref_store = RefStore::new(layout.clone());
     let tip_block_id = resolve_branch_ref_tip(&read_snapshot, &ref_store, &canonical_ref)?;
     if !delta_patch_ids.is_empty() && tip_block_id.is_none() {

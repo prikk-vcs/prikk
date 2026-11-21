@@ -209,6 +209,9 @@ fn seal_from_accepted_claim_impl(
 
     // §3 item 1: the named claim must exist and decode.
     let read_snapshot = ObjectReadSnapshot::open(layout)?;
+    // 0.59.0 RS2b: the ref's pointer is read after this snapshot opened (here, and again under the lock below): the RefState, the Blocks and the
+    // history it names are looked up through the fresh-on-miss reader. A hit costs nothing.
+    let fresh = crate::refs::PointerFreshReader::over(layout, &read_snapshot);
     let claim_envelope = read_snapshot
         .read_typed(claim_id, ObjectType::RecognitionClaim)?
         .ok_or_else(|| {
@@ -241,15 +244,15 @@ fn seal_from_accepted_claim_impl(
     // there.
     {
         let ref_store = RefStore::new(layout.clone());
-        let tip = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?
-            .map(|tip| tip.target_block_id);
+        let tip =
+            read_current_tip(&fresh, &ref_store, &canonical_ref)?.map(|tip| tip.target_block_id);
         // 0.58.0 S3: a batch holds the ref's history already, ending at the tip it expects; a different tip (something moved the ref)
         // is walked here, as every claim used to be.
         let walked;
         let history = match plan.as_deref().and_then(|plan| plan.history_at(tip)) {
             Some(history) => history,
             None => {
-                walked = ref_history(&read_snapshot, tip)?;
+                walked = ref_history(&fresh, tip)?;
                 &walked
             }
         };
@@ -365,7 +368,7 @@ fn seal_from_accepted_claim_impl(
     // the pointer index too (and so already refuses on damage via `has_item_failure()`); this call
     // adds the tail half.
     ref_store.ensure_pointer_index_has_no_tail(&canonical_ref)?;
-    let current = read_current_tip(&read_snapshot, &ref_store, &canonical_ref)?;
+    let current = read_current_tip(&fresh, &ref_store, &canonical_ref)?;
     let parent = current.as_ref().map(|tip| tip.target_block_id);
     // 0.58.0 S3: the batch's history, when it ends at the tip just read; the claims, refreshed if the container changed.
     if !claim.parent_block_ids.is_empty() {
@@ -378,7 +381,7 @@ fn seal_from_accepted_claim_impl(
         let history = match plan.as_deref().and_then(|plan| plan.history_at(parent)) {
             Some(history) => history,
             None => {
-                walked = ref_history(&read_snapshot, parent)?;
+                walked = ref_history(&fresh, parent)?;
                 &walked
             }
         };
@@ -407,10 +410,10 @@ fn seal_from_accepted_claim_impl(
                 }
             };
             for &parent_id in &claim.parent_block_ids {
-                if !parent_reached(&read_snapshot, &by_block, history, parent_id)? {
+                if !parent_reached(&fresh, &by_block, history, parent_id)? {
                     return Err(parent_not_reached_refusal(
                         layout,
-                        &read_snapshot,
+                        &fresh,
                         &ref_store,
                         &by_block,
                         &canonical_ref,

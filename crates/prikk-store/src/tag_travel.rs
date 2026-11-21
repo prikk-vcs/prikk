@@ -150,10 +150,12 @@ pub fn received_tag_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
         }
     }
 
+    // 0.59.0 RS2b: the pointers are read before the snapshot opens (the Tag container scan above stays first: "held and no ref targets it" reads
+    // the later-written store, the pointers, last).
+    let pointers = RefStore::new(layout.clone()).list_ref_pointers()?;
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
     let mut locally_targeted: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in ref_store.list_ref_pointers()? {
+    for pointer in pointers {
         let ref_state_envelope = object_store
             .read_typed(pointer.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {
@@ -211,10 +213,12 @@ pub enum ReceivedTagResolution {
 /// List every received tag (`received_tag_ids`) with its name, live signature outcome, and current
 /// resolution state -- the read side of `prikk sync tags`.
 pub fn list_received_tags(layout: &RepositoryLayout) -> Result<Vec<ReceivedTagSummary>> {
+    // 0.59.0 RS2b: the Tag ids are enumerated first and the snapshot opened after, so it holds every Tag that was listed.
+    let tag_ids = received_tag_ids(layout)?;
     let object_store = ObjectReadSnapshot::open(layout)?;
     let trust_policy = crate::trust::load_maintainer_trust_policy_or_empty(layout)?;
     let mut summaries = Vec::new();
-    for tag_id in received_tag_ids(layout)? {
+    for tag_id in tag_ids {
         let envelope = object_store
             .read_typed(tag_id, ObjectType::Tag)?
             .ok_or_else(|| PrikkError::Integrity(format!("missing Tag object: {tag_id}")))?;
@@ -419,10 +423,11 @@ pub fn adopt_tag(
     signer: &impl MaintainerSigner,
 ) -> Result<LocalTagCreation> {
     let canonical = validate_local_tag_ref(requested_name)?;
+    let tag_ids = received_tag_ids(layout)?;
     let object_store = ObjectReadSnapshot::open(layout)?;
 
     let mut matching: Vec<(ObjectId, TagPayload)> = Vec::new();
-    for tag_id in received_tag_ids(layout)? {
+    for tag_id in tag_ids {
         let envelope = object_store
             .read_typed(tag_id, ObjectType::Tag)?
             .ok_or_else(|| PrikkError::Integrity(format!("missing Tag object: {tag_id}")))?;

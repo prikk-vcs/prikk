@@ -453,6 +453,9 @@ pub(super) fn decide(
     let (connectivity_class, ref_state_chain) = match &received_pointer {
         None => (BundleConnectivityClass::NoLocalHistory, None),
         Some(pointer) => {
+            // 0.59.0 RS2b: the received pointer was read after the snapshot opened (a preview takes no lock). A RefState it names that the
+            // snapshot lacks is looked up once more in the snapshot brought up to date, before the classification calls it missing.
+            crate::refs::read_pointer_named(store, pointer.ref_state_id, ObjectType::RefState)?;
             let (class, chain) = classify_import_connectivity(
                 &*store,
                 &closure_by_id,

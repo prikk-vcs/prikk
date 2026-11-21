@@ -48,7 +48,10 @@ pub fn prepare_merge_evidence(
     // infrastructure by `execute_merge`, which writes separately, afterward, through its own store --
     // see `merge_execute.rs`), so it takes one decoded index snapshot here instead of paying a fresh
     // decode per object read.
-    let object_store = ObjectReadSnapshot::open(layout)?;
+    let snapshot = ObjectReadSnapshot::open(layout)?;
+    // 0.59.0 RS2b: the targets' pointers are read after the snapshot opened (`resolve_point` below), so the Blocks they name are looked up through
+    // the fresh-on-miss reader.
+    let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
     // Addendum 2: the baseline id the caller gave goes through the resolver's block check; blocks the walk
     // below reaches by following parents keep `lineage_horizon`'s own `Integrity` reading.
     crate::ref_resolution::require_block_given(&object_store, baseline_block_id)?;

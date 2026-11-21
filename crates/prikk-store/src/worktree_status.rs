@@ -706,7 +706,9 @@ pub fn enumerate_queue(layout: &RepositoryLayout) -> Result<QueueEnumeration> {
     let mut already_sealed_in = None;
     let resolved_state = match read_active_ref_metadata(layout)? {
         ActiveRefMetadata::Valid(owner) => {
-            let object_store = ObjectReadSnapshot::open(layout)?;
+            let snapshot = ObjectReadSnapshot::open(layout)?;
+            // 0.59.0 RS2b: the sealed Block is found from the pointer, read after the snapshot opened: fresh-on-miss reader.
+            let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
             let mut text_cache = TextCache::new();
             let sealed = crate::refs::publication::queue_already_sealed(
                 layout,

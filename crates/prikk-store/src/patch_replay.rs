@@ -662,8 +662,7 @@ fn replay_ref_chain(
     // (`patch_checkout.rs`, `rollback_preview.rs`) only reads -- neither ever writes an object.
     // If a future caller reaches this from a writing operation, confirm its own write happens
     // after this function returns (Stage 1 review v1 §4) before assuming this stays safe.
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let target_block_id = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
+    let (object_store, target_block_id) = crate::refs::open_at_ref_tip(layout, ref_name)?;
     replay_block_chain(&object_store, ref_name, target_block_id, anchoring)
 }
 
@@ -713,8 +712,7 @@ pub(crate) fn resolve_node_lineage_bounds(
     // ever hoisted to live across that caller's writes, or a new caller writes before calling
     // this, that guarantee breaks silently -- check this comment still describes reality before
     // assuming it's still safe.
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let baseline = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
+    let (object_store, baseline) = crate::refs::open_at_ref_tip(layout, ref_name)?;
     let chain = single_parent_chain(&object_store, baseline)?;
     let horizon = *chain
         .first()
@@ -735,8 +733,7 @@ pub(crate) fn lineage_for_cache_rebuild(
     {
         return Ok(None);
     }
-    let object_store = ObjectReadSnapshot::open(layout)?;
-    let baseline = crate::refs::read_current_ref_tip_block(layout, &object_store, ref_name)?;
+    let (object_store, baseline) = crate::refs::open_at_ref_tip(layout, ref_name)?;
     let chain = single_parent_chain(&object_store, baseline)?;
     let horizon = *chain
         .first()
@@ -1135,6 +1132,8 @@ fn resolve_folded_worktree_baseline_with(
     text_cache: &mut crate::lifecycle_cache::replay::TextCache,
     cache_write: crate::lifecycle_cache::incremental::CacheWrite,
 ) -> Result<FoldedWorktreeBaseline> {
+    // 0.59.0 RS2b: the baseline's pointer is read here, after the caller opened `object_store`: its Blocks are looked up through the fresh-on-miss reader.
+    let object_store = &crate::refs::PointerFreshReader::over(layout, object_store);
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     let baseline = resolve_worktree_baseline(layout, &canonical_ref)?;
     let lineage = match &baseline {

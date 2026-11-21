@@ -159,7 +159,11 @@ pub fn compute_patch_set_digest_for_ref(
     layout: &RepositoryLayout,
     ref_name: &str,
 ) -> Result<PatchSetDigest> {
-    let object_store = ObjectReadSnapshot::open(layout)?;
+    let snapshot = ObjectReadSnapshot::open(layout)?;
+    #[cfg(test)]
+    crate::refs::view_hooks::run("digest-after-snapshot");
+    // 0.59.0 RS2b: the pointer is read after the snapshot opened, so the ids it names are looked up through the fresh-on-miss reader.
+    let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
     let tip_block_id = resolve_ref_to_tip_block(layout, &object_store, ref_name)?;
     compute_patch_set_digest_from_block(&object_store, tip_block_id)
 }
@@ -224,7 +228,9 @@ pub fn resolve_patch_set_digest(
     digest: PatchSetDigest,
     patch_count: u64,
 ) -> Result<PatchSetResolution> {
-    let object_store = ObjectReadSnapshot::open(layout)?;
+    let snapshot = ObjectReadSnapshot::open(layout)?;
+    // 0.59.0 RS2b: the pointers are read after the snapshot opened, so the ids they name are looked up through the fresh-on-miss reader.
+    let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
     let ref_store = RefStore::new(layout.clone());
 
     // §2's candidate set: every block reachable from any local heads/*-or-tags/* ref. Reuses this
@@ -406,10 +412,12 @@ fn take_parent_closure(
 pub fn accepted_but_unsealed_patch_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
     let all_patch_ids = all_held_patch_ids(layout)?;
 
+    // 0.59.0 RS2b: the pointers are read first and the snapshot opened after them (the Patch container scan above stays first: "held and not
+    // reachable from any ref" reads the later-written store, the pointers, last).
+    let pointers = RefStore::new(layout.clone()).list_ref_pointers()?;
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
     let mut reachable: BTreeSet<ObjectId> = BTreeSet::new();
-    for pointer in ref_store.list_ref_pointers()? {
+    for pointer in pointers {
         reachable.extend(reachable_patch_ids_from_ref_state(
             &object_store,
             &pointer.ref_name,

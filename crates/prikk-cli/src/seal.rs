@@ -178,8 +178,15 @@ fn seal_active_no_audit(
     ref_store
         .ensure_pointer_index_has_no_tail(&ref_name)
         .map_err(|err| err.to_string())?;
+    // 0.59.0 RS2b: the ref's RefState is read through a `FileObjectStore` (it checks the object index on every read) and the write session opens
+    // after the pointer was read, so its snapshot holds the RefState and the Block it names.
+    let current = current_ref_state(
+        &layout,
+        &prikk_store::FileObjectStore::new(layout.clone()),
+        &ref_store,
+        &ref_name,
+    )?;
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
-    let current = current_ref_state(&layout, &object_store, &ref_store, &ref_name)?;
     // 0.56.0 step W2e: read once, here -- after `current_ref_state` above has already confirmed
     // the ref's own pointer/log state is sound (not before: this predicate's own
     // `resolve_worktree_baseline` call resolves the same ref, and reading it any earlier than

@@ -83,7 +83,11 @@ pub fn compute_sync_delta(
     have_list: &HaveList,
 ) -> Result<Vec<ObjectId>> {
     let canonical_ref = validate_local_branch_ref(&have_list.ref_name)?;
-    let object_store = ObjectReadSnapshot::open(layout)?;
+    let snapshot = ObjectReadSnapshot::open(layout)?;
+    #[cfg(test)]
+    crate::refs::view_hooks::run("delta-after-snapshot");
+    // 0.59.0 RS2b: the pointer is read after the snapshot opened, so an id it names is looked up through the fresh-on-miss reader.
+    let object_store = crate::refs::PointerFreshReader::over(layout, &snapshot);
     let ref_store = RefStore::new(layout.clone());
     let sender_patch_ids = match resolve_branch_ref_tip(&object_store, &ref_store, &canonical_ref)?
     {

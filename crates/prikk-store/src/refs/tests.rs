@@ -3,6 +3,7 @@
 mod every_publication_refuses_first;
 mod hostile_lengths;
 mod no_refs_times_log_precondition;
+mod object_handle_order;
 mod object_mismatch;
 mod one_read_per_publication;
 mod publication_recovery;

@@ -50,7 +50,13 @@ pub(crate) use pointer_index::{
 pub use pointer_index::PointerIndexRepair;
 // 0.51.0 step 1 Part B item 4: `verify`'s own retired-slot tail check needs the raw decoder too,
 // so this is no longer test-only.
+mod pointer_fresh;
 pub(crate) use kept_pointer_index::pointer_summaries_of;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use pointer_fresh::read_current_ref_tip_block;
+pub(crate) use pointer_fresh::{
+    PointerFreshReader, open_at_ref_tip, read_pointer_named, ref_tip_block_of,
+};
 pub(crate) use pointer_index::decode_pointer_index_records;
 pub(crate) use pointer_index::{
     PointerIndexEntry, PointerIndexReplay, decode_pointer_index_entries_for_resolver,
@@ -147,46 +153,6 @@ pub fn resolve_ref_tip_block(
 
 /// Read a published ref by name and resolve it to the Block its tip names.
 ///
-/// RFC 147 §3d: `patch_replay/read.rs` and `patch_inverse/read.rs` each carried a `pub(super) fn
-/// current_target_block` with the same signature and a byte-identical body. That duplication is
-/// exactly how §3b's fix reached one and not the other, leaving `inverse-plan`, `rollback-preview`
-/// and `rollback-draft-verify` refusing a valid tag ref while `log` and `checkout` accepted it --
-/// and a comment in one of them asserted, wrongly, that they were shared. One function now, here,
-/// because both callers already depend on this module and neither depends on the other: putting it
-/// in either of them would invent a lateral `patch_replay <-> patch_inverse` edge for nothing.
-///
-/// This is [`resolve_ref_tip_block`] plus the read that gets you a [`RefStatePayload`] in the first
-/// place; that function stays separate because several callers already hold a decoded payload and
-/// must not re-read it. Like it, this **resolves and never validates** -- the returned Block id is
-/// not checked to exist, which is each caller's own job (see `ensure_ref_target_valid`).
-pub(crate) fn read_current_ref_tip_block(
-    layout: &RepositoryLayout,
-    object_store: &impl ObjectReader,
-    ref_name: &str,
-) -> Result<ObjectId> {
-    let ref_store = RefStore::new(layout.clone());
-    let ref_state_id = ref_store
-        .read_current_ref_state_id(ref_name)?
-        .ok_or_else(|| PrikkError::Integrity(format!("ref {ref_name} is not published")))?;
-    let envelope = object_store
-        .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {ref_name} points to missing RefState {ref_state_id}"
-            ))
-        })?;
-    let ref_state =
-        RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
-    if ref_state.ref_name != ref_name {
-        return Err(PrikkError::Integrity(format!(
-            "RefState name mismatch: expected {ref_name}, got {}",
-            ref_state.ref_name
-        )));
-    }
-    let (block_id, _tag_envelope) = resolve_ref_tip_block(object_store, &ref_state)?;
-    Ok(block_id)
-}
-
 /// Refuse to proceed while any ref is mid-publication or fails its own verification.
 ///
 /// The precondition every write path checks before touching refs: a publication interrupted between

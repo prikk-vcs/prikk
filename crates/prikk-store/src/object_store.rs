@@ -527,6 +527,13 @@ impl ObjectReadSnapshot {
 }
 
 impl ObjectReadSnapshot {
+    /// Bring the snapshot up to the object index as it is now: a stat, the last record, and a decode of only what was appended (the same
+    /// refresh `check_write` makes). 0.59.0 RS2b: for a caller that read a pointer **after** the snapshot opened and found the RefState it names
+    /// missing -- every object that RefState needs was durable before it, so the refreshed snapshot holds them all. Reads and takes no lock.
+    pub(crate) fn refresh(&mut self) -> Result<()> {
+        self.snapshot.ensure_current(&self.layout)
+    }
+
     /// Every refusal [`ObjectWriteSession::check_write`] can return for `envelope`, decided without any write capability: an unsupported
     /// type, an envelope the repository format rejects, or an id already stored under different bytes. The decision half of a write,
     /// for a caller that must know what the store would refuse (`bundle import`'s and `bundle preview`'s one decision, 0.58.0 B′b).
@@ -577,6 +584,12 @@ impl ObjectWriteSession {
             layout: layout.clone(),
             snapshot: IndexSnapshot::open(layout)?,
         })
+    }
+
+    /// Bring the session's snapshot up to the object index as it is now (the refresh every write makes first). 0.59.0 RS2b: for a caller that
+    /// read a pointer after the session opened and found the RefState it names missing. Reads and takes no lock.
+    pub(crate) fn refresh(&mut self) -> Result<()> {
+        self.snapshot.ensure_current(&self.layout)
     }
 
     /// Return true if an object with this id and type is indexed, refreshing the snapshot first if

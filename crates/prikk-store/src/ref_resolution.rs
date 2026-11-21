@@ -175,8 +175,8 @@ pub fn resolve_point(
     name: &str,
     received_refs: ReceivedRefs,
 ) -> Result<Point> {
-    let object_store = ObjectReadSnapshot::open(layout)?;
     if is_bare_block_id(name) {
+        let object_store = ObjectReadSnapshot::open(layout)?;
         let block_id: ObjectId = name.parse()?;
         require_block_given(&object_store, block_id)?;
         return Ok(Point {
@@ -194,10 +194,11 @@ pub fn resolve_point(
             )));
         }
     };
+    // 0.59.0 RS2b: the pointer is read, then the snapshot is opened (a local ref); a received ref's pointer is looked up through a fresh-on-miss reader.
     let block_id = if kind == PointKind::ReceivedRef {
-        received_tip_block(layout, &object_store, name)?
+        received_tip_block(layout, &ObjectReadSnapshot::open(layout)?, name)?
     } else {
-        crate::refs::read_current_ref_tip_block(layout, &object_store, name)?
+        crate::refs::open_at_ref_tip(layout, name)?.1
     };
     Ok(Point {
         name: name.to_string(),
@@ -271,19 +272,14 @@ const STANDING_NAMES_LISTED: usize = 3;
 /// Any read error, including `Integrity` for a block in an ancestry the store cannot read: a damaged
 /// history is reported, not read as "unreached".
 pub fn block_standing(layout: &RepositoryLayout, block_id: ObjectId) -> Result<BlockStanding> {
+    // 0.59.0 RS2b: the pointer index is read first and the snapshot after it, so the snapshot holds every tip the pointers name; the names are
+    // not read from the pointer index a second time (a tip was read twice before, and the two could disagree).
+    let tips = pointer_tips(layout)?;
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let ref_store = RefStore::new(layout.clone());
     let mut local = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut names: Vec<String> = ref_store
-        .list_ref_pointers()?
-        .into_iter()
-        .map(|pointer| pointer.ref_name)
-        .filter(|name| name.starts_with("heads/") || name.starts_with("tags/"))
-        .collect();
-    names.sort();
-    for name in names {
-        let tip = crate::refs::read_current_ref_tip_block(layout, &object_store, &name)?;
+    for (name, ref_state_id) in tips {
+        let tip = crate::refs::ref_tip_block_of(layout, &object_store, &name, ref_state_id)?;
         if reaches(&object_store, tip, block_id, &mut seen)? {
             local.push(name);
             if local.len() == STANDING_NAMES_LISTED {
@@ -295,9 +291,11 @@ pub fn block_standing(layout: &RepositoryLayout, block_id: ObjectId) -> Result<B
         return Ok(BlockStanding::ReachedLocally(local));
     }
     let mut received = Vec::new();
+    // A received pointer is read after the snapshot: its tip's Blocks are looked up through the fresh-on-miss reader.
+    let fresh = crate::refs::PointerFreshReader::over(layout, &object_store);
     for pointer in crate::received::list_received_pointers(layout)? {
-        let tip = received_tip_block(layout, &object_store, &pointer.ref_name)?;
-        if reaches(&object_store, tip, block_id, &mut BTreeSet::new())? {
+        let tip = received_tip_block(layout, &fresh, &pointer.ref_name)?;
+        if reaches(&fresh, tip, block_id, &mut BTreeSet::new())? {
             received.push(pointer.ref_name);
             if received.len() == STANDING_NAMES_LISTED {
                 break;
@@ -400,6 +398,18 @@ fn reaches(
     Ok(false)
 }
 
+/// The local branches and tags in the pointer index, by name, with the RefState each names -- one read of the pointer index.
+fn pointer_tips(layout: &RepositoryLayout) -> Result<Vec<(String, ObjectId)>> {
+    let mut tips: Vec<(String, ObjectId)> = RefStore::new(layout.clone())
+        .list_ref_pointers()?
+        .into_iter()
+        .map(|pointer| (pointer.ref_name, pointer.ref_state_id))
+        .filter(|(name, _)| name.starts_with("heads/") || name.starts_with("tags/"))
+        .collect();
+    tips.sort();
+    Ok(tips)
+}
+
 /// The Block a received ref's tip names. A received RefState carries the origin's own name, so there is
 /// no name check here (DC-85 §3A), unlike a local ref's.
 fn received_tip_block(
@@ -410,6 +420,8 @@ fn received_tip_block(
     let pointer = crate::received::read_received_pointer(layout, name)?.ok_or_else(|| {
         PrikkError::Precondition(format!("ref {name} does not exist in this repository"))
     })?;
+    // 0.59.0 RS2b: an id the pointer named is declared missing only after a lookup at least as new as the pointer read.
+    let object_store = &crate::refs::PointerFreshReader::over(layout, object_store);
     let envelope = object_store
         .read_typed(pointer.ref_state_id, ObjectType::RefState)?
         .ok_or_else(|| {

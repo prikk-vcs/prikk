@@ -91,8 +91,11 @@ pub fn load_ref_history(
     limit: usize,
 ) -> Result<RefHistory> {
     let ref_store = RefStore::new(layout.clone());
-    let object_store = ObjectReadSnapshot::open(layout)?;
+    // 0.59.0 RS2b: the pointer is read first and the snapshot opened after it, so the snapshot holds every RefState and Block the pointer names.
     let mut current = ref_store.read_current_ref_state_id(ref_name)?;
+    #[cfg(test)]
+    crate::refs::view_hooks::run("history-between-pointer-and-snapshot");
+    let object_store = ObjectReadSnapshot::open(layout)?;
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
 

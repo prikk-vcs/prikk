@@ -127,9 +127,15 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     let parsed = parse_create_args(args)?;
     let layout = crate::open_repository(root)?;
     let ref_store = RefStore::new(layout.clone());
+    // 0.59.0 RS2b: the target is resolved through a `FileObjectStore` (it checks the object index on every read) **before** the write session
+    // opens, so the session's snapshot is taken after the target's pointer was read and holds the RefState, the Block and its ancestors. Opened
+    // first, a publication landing in between made the pointer name a RefState the session could not see: `--target ref … RefState … is missing`.
+    let target_block_id = resolve_target_block(
+        &ref_store,
+        &prikk_store::FileObjectStore::new(layout.clone()),
+        &parsed.target,
+    )?;
     let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
-
-    let target_block_id = resolve_target_block(&ref_store, &object_store, &parsed.target)?;
     // RFC 117 T1 §3 / T7 §9.2: the tag's global identity is the digest of the target block's own
     // patch closure, computed at creation -- "two repositories holding the same patches produce the
     // same value" is the whole reason the field exists. `patch_count` travels alongside it (one

@@ -53,9 +53,11 @@ pub struct SyncSummaryRefEntry {
 /// as a summary declaring zero refs.
 pub fn build_sync_summary(layout: &RepositoryLayout) -> Result<Vec<u8>> {
     let ref_store = RefStore::new(layout.clone());
+    // 0.59.0 RS2b: the pointers are read first and the snapshot opened after them.
+    let pointers = ref_store.list_ref_pointers()?;
     let object_store = ObjectReadSnapshot::open(layout)?;
     let mut entries: Vec<(String, PatchSetDigest, u64)> = Vec::new();
-    for pointer in ref_store.list_ref_pointers()? {
+    for pointer in pointers {
         if !pointer.ref_name.starts_with("heads/") {
             continue;
         }

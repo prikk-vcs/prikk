@@ -806,13 +806,18 @@ pub fn preview_bundle_adopting(
             None,
         ),
         Some(local_ref_state_id) => {
-            let local_ref_state_envelope = read_snapshot
-                .read_typed(local_ref_state_id, ObjectType::RefState)?
-                .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "ref {ref_name} points to missing RefState {local_ref_state_id}"
-                    ))
-                })?;
+            // 0.59.0 RS2b: the pointer was read after the snapshot opened; the RefState it names is looked up in the snapshot brought up to date
+            // if it misses, then called missing.
+            let local_ref_state = crate::refs::read_pointer_named(
+                &mut read_snapshot,
+                local_ref_state_id,
+                ObjectType::RefState,
+            )?;
+            let local_ref_state_envelope = local_ref_state.ok_or_else(|| {
+                PrikkError::Integrity(format!(
+                    "ref {ref_name} points to missing RefState {local_ref_state_id}"
+                ))
+            })?;
             let local_ref_state_payload = RefStatePayload::decode_canonical(
                 &local_ref_state_envelope.canonical_payload,
                 local_ref_state_envelope.schema_version,
@@ -1004,10 +1009,6 @@ pub fn export_bundle(
     ref_name: &str,
 ) -> Result<(BundleExportReport, Vec<u8>)> {
     let ref_store = RefStore::new(layout.clone());
-    // RFC 111 §6.1: export is read-only end to end (never calls `write_object`), so it takes one
-    // decoded index snapshot here instead of paying a fresh decode per `read_required` call below --
-    // and there can be many, one per object in the whole exported closure.
-    let object_store = ObjectReadSnapshot::open(layout)?;
     crate::ref_resolution::require_existing_ref(
         layout,
         ref_name,
@@ -1018,6 +1019,11 @@ pub fn export_bundle(
             "ref {ref_name} does not exist, nothing to export"
         )));
     };
+    // RFC 111 §6.1: export is read-only end to end (never calls `write_object`), so it takes one
+    // decoded index snapshot here instead of paying a fresh decode per `read_required` call below --
+    // and there can be many, one per object in the whole exported closure. 0.59.0 RS2b: opened **after**
+    // the pointer was read, so it holds the RefState and every Block the pointer names.
+    let object_store = ObjectReadSnapshot::open(layout)?;
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
         .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {ref_state_id}")))?;

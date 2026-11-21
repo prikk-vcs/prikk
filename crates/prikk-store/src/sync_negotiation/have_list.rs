@@ -52,8 +52,10 @@ pub struct HaveList {
 pub fn build_have_list(layout: &RepositoryLayout, ref_name: &str) -> Result<Vec<u8>> {
     let canonical_ref = validate_local_branch_ref(ref_name)?;
     let ref_store = RefStore::new(layout.clone());
+    // 0.59.0 RS2b: the pointer is read first and the snapshot opened after it.
+    let pointer = ref_store.read_current_ref_state_id(&canonical_ref)?;
     let object_store = ObjectReadSnapshot::open(layout)?;
-    let patch_ids = match ref_store.read_current_ref_state_id(&canonical_ref)? {
+    let patch_ids = match pointer {
         Some(ref_state_id) => {
             let envelope = object_store
                 .read_typed(ref_state_id, ObjectType::RefState)?

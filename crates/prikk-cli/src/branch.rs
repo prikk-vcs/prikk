@@ -233,7 +233,6 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         }
     })?;
     let ref_store = RefStore::new(layout.clone());
-    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
 
     if ref_store
         .read_current_ref_state_id(&canonical)
@@ -296,7 +295,12 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
     };
     let target_object_id = match &source {
         CreateSource::Ref(from_ref) => {
-            resolve_published_target(&ref_store, &object_store, from_ref)?
+            // 0.59.0 RS2b: through a `FileObjectStore` (it checks the object index on every read); the write session opens after this read.
+            resolve_published_target(
+                &ref_store,
+                &prikk_store::FileObjectStore::new(layout.clone()),
+                from_ref,
+            )?
         }
         CreateSource::Block(block_id) => *block_id,
     };
@@ -405,6 +409,7 @@ fn run_create(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliEr
         mark_current_branch_switch_pending(&layout, pending).map_err(|err| err.to_string())?;
     }
 
+    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     let published_ref_state_id = ref_store
         .publish_with_object_store(&mut object_store, &publication)
         .map_err(|err| err.to_string())?;
@@ -541,7 +546,6 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
         }
     })?;
     let ref_store = RefStore::new(layout.clone());
-    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     // RFC 132 refusal sweep, rule 1.
     prikk_store::require_existing_ref(
         &layout,
@@ -556,7 +560,9 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
     else {
         return Err(format!("branch {canonical} does not exist").into());
     };
-    let current_envelope = object_store
+    // 0.59.0 RS2b: the RefState the pointer names is read through a `FileObjectStore` (it checks the object index on every read); the write session
+    // opens after it, just before the publish. `branch close` takes no active lock, so a publication can land at any point before this.
+    let current_envelope = prikk_store::FileObjectStore::new(layout.clone())
         .read_typed(current_ref_state_id, ObjectType::RefState)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("branch {canonical} RefState {current_ref_state_id} is missing"))?;
@@ -674,6 +680,7 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
         ref_state: ref_state_envelope,
         ref_update: ref_update_envelope,
     };
+    let mut object_store = ObjectWriteSession::open(&layout).map_err(|err| err.to_string())?;
     let published_ref_state_id = ref_store
         .publish_with_object_store(&mut object_store, &publication)
         .map_err(|err| err.to_string())?;

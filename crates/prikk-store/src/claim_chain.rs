@@ -110,6 +110,9 @@ pub(crate) fn block_is_sealed_or_received(
     object_store: &impl ObjectReader,
     block_id: ObjectId,
 ) -> Result<bool> {
+    // 0.59.0 RS2b: the pointers are read here, after the caller opened `object_store` (`show`, `extract --claim`): the ids they name are looked up
+    // through the fresh-on-miss reader.
+    let object_store = &crate::refs::PointerFreshReader::over(layout, object_store);
     let ref_store = RefStore::new(layout.clone());
     for pointer in ref_store.list_ref_pointers()? {
         let tip = resolve_tip_block_id(object_store, &pointer.ref_name, pointer.ref_state_id)?;
