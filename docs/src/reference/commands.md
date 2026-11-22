@@ -396,6 +396,13 @@ and is not reported.
     (five paths, then `and <n> more`). A queue that holds no path the switch changes, or that belongs
     to another branch (refusal 2, unchanged), is not this refusal. While a switch or checkout is marked
     interrupted `uncommit` refuses too, so the sentence names `seal` alone.
+  - **The same rule holds for every command that writes the worktree (0.59.0).** `merge --into <the current branch>`, `archive
+    import --adopt`, `bundle import --adopt` and `branch create <the current branch> --from …` refuse, before the first write and
+    before publishing, when an active queue **of any branch** — theirs is not the one being moved, which they already refuse —
+    holds a path they would change on disk, ``precondition not met: refusing: <owner>'s queue holds <n> commit(s) that change
+    <paths>, which merging <a> into <b> would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit
+    --ref <owner>` publishes them to <owner>, or `prikk uncommit <id>` takes the newest commit back and leaves your files``
+    (`adopting <ref>`, `creating <ref>` for the others). `bundle preview --adopt` reports it as `adoption-refused`.
   - **The self-switch also resyncs when the current branch has never been published** (no `RefState`
     exists for it yet) and the record reads behind it — the `worktree-patch.md` walkthrough's shape:
     `commit --ref heads/topic` on a genuinely unborn ref, then `seal`. It materializes the branch's

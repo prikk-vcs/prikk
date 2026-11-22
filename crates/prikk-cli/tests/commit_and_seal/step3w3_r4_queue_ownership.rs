@@ -178,6 +178,10 @@ fn merge_into_refuses_while_the_queue_owns_the_target_ref() {
 
 /// The selective half of the same predicate: a queue that targets a *different* ref does not
 /// block a merge into `heads/main` -- R4 is "owned by the exact ref," not "any non-empty queue."
+///
+/// 0.59.0 step W3: the queue here **holds no path the merge changes** (a file created and deleted again). Until 0.58.0 this
+/// fixture queued one file and the merge deleted it from disk without anyone looking; a queue that holds a path the merge
+/// would change is refused now (`step0_59_w3_every_producer_holds_the_queue.rs`).
 #[test]
 fn merge_into_proceeds_when_the_queue_owns_a_different_ref() {
     let repo = support::unique_repo("w3-r4-merge-other-ref");
@@ -194,6 +198,11 @@ fn merge_into_proceeds_when_the_queue_owns_a_different_ref() {
             "queued edit to a different ref",
         ),
         "queue a patch onto heads/unrelated",
+    );
+    std::fs::remove_file(repo.join("pending.txt")).unwrap();
+    ok(
+        &support::commit(&repo, "heads/unrelated", "and take it back out again"),
+        "queue the deletion onto heads/unrelated",
     );
 
     let merged = merge(&repo, baseline, "heads/main", "heads/feature");

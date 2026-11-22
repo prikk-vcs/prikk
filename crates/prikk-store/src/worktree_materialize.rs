@@ -319,6 +319,9 @@ pub struct PendingCurrentBranchMaterialization {
     /// The worktree carried this branch's interrupted-materialization marker when it was captured: an earlier run published and was
     /// stopped before it wrote the worktree (0.58.0 S2b, crash row 5).
     interrupted_before: bool,
+    /// The active queue as the capture saw it (0.59.0 step W3), whichever ref owns it: what [`require_nothing_in_the_way`] checks
+    /// the plan against, so no command that moves the current branch changes a path the queue holds.
+    queue: Option<crate::queue_held::QueueFacts>,
 }
 
 impl PendingCurrentBranchMaterialization {
@@ -354,6 +357,7 @@ pub fn require_worktree_clean_and_capture(
         current_branch: current_branch.to_string(),
         old_files,
         interrupted_before,
+        queue: crate::queue_held::QueueFacts::of(active_replay),
     })
 }
 
@@ -386,18 +390,59 @@ pub(crate) fn require_nothing_in_the_way(
     action: &str,
     already_written: Option<&str>,
 ) -> Result<()> {
+    require_nothing_in_the_way_or_queued(
+        layout,
+        pending,
+        target_manifest,
+        action,
+        already_written,
+        true,
+    )
+}
+
+/// [`require_nothing_in_the_way`]'s two halves, the second optional: a file in the way, and (0.59.0 step W3) a path the active
+/// queue holds. `sync seal`'s batch passes `false` for the second: it refuses any non-empty queue itself, in its own sentence
+/// (`requires an empty active WAL`), which this check must not pre-empt.
+pub(crate) fn require_nothing_in_the_way_or_queued(
+    layout: &RepositoryLayout,
+    pending: &PendingCurrentBranchMaterialization,
+    target_manifest: &ReplayManifest,
+    action: &str,
+    already_written: Option<&str>,
+    queue_held: bool,
+) -> Result<()> {
     let root = layout.worktree_mutation_root();
     let plan = plan_materialization(root, target_manifest, &pending.old_files)?;
-    if plan.in_the_way.is_empty() {
-        return Ok(());
+    if !plan.in_the_way.is_empty() {
+        return Err(PrikkError::Precondition(format!(
+            "{} file(s) are in the way of {}'s files: {}; move them aside before {action} ({})",
+            plan.in_the_way.len(),
+            pending.current_branch,
+            plan.in_the_way.join(", "),
+            already_written.unwrap_or("nothing was written"),
+        )));
     }
-    Err(PrikkError::Precondition(format!(
-        "{} file(s) are in the way of {}'s files: {}; move them aside before {action} ({})",
-        plan.in_the_way.len(),
-        pending.current_branch,
-        plan.in_the_way.join(", "),
-        already_written.unwrap_or("nothing was written"),
-    )))
+    // 0.59.0 step W3: and nothing the active queue holds is changed on disk, whichever ref owns the queue.
+    if let Some(queue) = pending.queue.as_ref().filter(|_| queue_held) {
+        crate::queue_held::refuse_when_the_queue_holds_a_changed_path(
+            layout,
+            queue,
+            &crate::queue_held::Who::Producer {
+                action,
+                already_written,
+            },
+            &crate::queue_held::PlannedChanges {
+                written: plan
+                    .writes
+                    .iter()
+                    .map(|entry| entry.path.as_str())
+                    .collect(),
+                deleted: plan.deletes.iter().map(String::as_str).collect(),
+                unchanged: &plan.unchanged,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// `require_nothing_in_the_way` (above; not linked by name -- it is `pub(crate)`, and

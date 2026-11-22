@@ -48,6 +48,8 @@ mod seal_recovery;
 mod seal_trust_gate;
 #[path = "commit_and_seal/step0_59_w2_switch_never_changes_a_queued_path.rs"]
 mod step0_59_w2_switch_never_changes_a_queued_path;
+#[path = "commit_and_seal/step0_59_w3_every_producer_holds_the_queue.rs"]
+mod step0_59_w3_every_producer_holds_the_queue;
 #[path = "commit_and_seal/step0b_interrupted_seal_readings.rs"]
 mod step0b_interrupted_seal_readings;
 #[path = "commit_and_seal/step3_s5b_uncommit.rs"]

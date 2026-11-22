@@ -12,7 +12,7 @@
 /// These are the twenty families RFC 149's move order would have moved, plus `branch_switch` (RFC 151
 /// increment 2), which is built on `patch_replay`, `worktree_status` and `refs` and reached by nothing
 /// below them.
-pub(super) const UPPER_LAYER: [&str; 33] = [
+pub(super) const UPPER_LAYER: [&str; 34] = [
     // RFC 155 implementation Part E: `prikk archive export`, built on `object_store`, `refs`,
     // `received`, `trust_index`, `lock` and `foundation` (all lower). Reached only by the CLI;
     // nothing lower reaches it, and it reaches nothing that reaches back into it.
@@ -51,6 +51,10 @@ pub(super) const UPPER_LAYER: [&str; 33] = [
     // R4 rule a completable lead must be evaluated against. Reached only by the CLI; nothing lower
     // reaches it, and it reaches nothing that reaches back into it.
     "pointer_rebuild",
+    // 0.59.0 steps W2/W3: the one rule "no command that writes the worktree changes, on disk, a path an active queue holds" --
+    // built on `worktree_status` (upper, for the queue's operations and their paths), `worktree_marker` and `commit_boundary`
+    // (lower); reached only by `branch_switch` and `worktree_materialize`, both upper.
+    "queue_held",
     "received",
     "recognition_claim",
     "way_out", // 0.57.0 step 1e: doctor and verify print each finding's way out from here

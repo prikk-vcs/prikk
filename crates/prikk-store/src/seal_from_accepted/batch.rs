@@ -18,7 +18,7 @@ use crate::merge::execute::candidate_replay_manifest_wanting;
 use crate::object_store::{ObjectReadSnapshot, ObjectReader};
 use crate::refs::{RefStore, validate_local_branch_ref};
 use crate::worktree_materialize::{
-    PendingCurrentBranchMaterialization, require_nothing_in_the_way,
+    PendingCurrentBranchMaterialization, require_nothing_in_the_way_or_queued,
 };
 
 /// The batch, read and folded once (0.58.0 S2b and S3; RFC 159's mechanism with the batch's running state as an in-memory anchor).
@@ -503,5 +503,6 @@ pub fn require_nothing_in_the_way_for_seal_batch(
     else {
         return Ok(());
     };
-    require_nothing_in_the_way(layout, pending, &target_manifest, action, None)
+    // The batch refuses any non-empty active queue itself (`requires an empty active WAL`), so the queue rule is not asked here.
+    require_nothing_in_the_way_or_queued(layout, pending, &target_manifest, action, None, false)
 }

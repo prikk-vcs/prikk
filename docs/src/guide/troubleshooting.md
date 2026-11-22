@@ -1213,6 +1213,10 @@ You committed work onto `heads/<name>` from another branch (`prikk commit --ref 
 
 Two ways out, each typeable as written. `prikk seal --allow-no-audit --ref heads/<name>` publishes the work to `heads/<name>` and keeps your files; run the switch again and it writes nothing it should not. `prikk uncommit <id>` takes the newest queued commit back (the sentence names the id) and leaves your files; the switch after it then asks, as it always does, for a worktree clean against the branch you are on. When a switch or checkout was interrupted, `uncommit` refuses too and the sentence names `seal` alone.
 
+## `error: precondition not met: refusing: <ref>'s queue holds <n> commit(s) that change <paths>, which <merging … | adopting … | creating …> would overwrite or delete on disk …` (0.59.0)
+
+The same refusal as the switch's above, for `merge --into` the current branch, `archive import --adopt` and `bundle import --adopt` of the current branch, and `branch create` of the current branch. You committed work onto `<ref>` from another branch (`prikk commit --ref <ref>`) and have not sealed it; the command writes sealed files over your worktree, which would overwrite or delete the files you committed. It refuses before it writes or publishes anything (the repository is byte-identical), naming the paths. `prikk seal --allow-no-audit --ref <ref>` publishes the work to `<ref>`, and the command then goes through (it replaces the worktree with the branch it moves, as it always does, and the work is on `<ref>`); `prikk uncommit <id>` takes the newest queued commit back (the sentence names the id) and leaves your files. Releases 0.56.0 to 0.58.0 wrote over the files and exited `0`; the commits stayed queued (`prikk status`).
+
 ## `error: precondition not met: refusing to commit: heads/<name> is now at <state>, and this worktree was last written from <state>; …`
 
 The branch moved without this worktree being told: another command moved it (an `archive import`

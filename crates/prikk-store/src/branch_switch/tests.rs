@@ -640,19 +640,52 @@ mod queue_held {
 
     #[test]
     fn the_sentence_names_five_paths_and_counts_the_rest_and_the_unnameable_variant_says_so() {
-        use super::super::queue_held::refusal_sentence_for_test;
+        use crate::queue_held::{Who, refusal_sentence_for_test};
         let id = prikk_object::ObjectId::from_bytes([7; 32]);
+        let sw = Who::Switch { target: "heads/x" };
         let many = ["a", "b", "c", "d", "e", "f", "g"];
-        let sentence = refusal_sentence_for_test("heads/x", 3, id, &many, false, false);
+        let sentence = refusal_sentence_for_test(&sw, "heads/x", 3, id, &many, false, false);
         assert!(sentence.contains("change a, b, c, d, e and 2 more, which the switch would overwrite or delete on disk"), "{sentence}");
         assert!(sentence.contains("holds 3 commit(s)"), "{sentence}");
-        let unnameable = refusal_sentence_for_test("heads/x", 1, id, &["a"], true, false);
-        let marked = refusal_sentence_for_test("heads/x", 1, id, &["a"], false, true);
+        let unnameable = refusal_sentence_for_test(&sw, "heads/x", 1, id, &["a"], true, false);
+        let marked = refusal_sentence_for_test(&sw, "heads/x", 1, id, &["a"], false, true);
         assert!(
             marked.contains("publishes them and keeps your files; run the switch again after it")
                 && !marked.contains("uncommit"),
             "an interrupted worktree: `uncommit` refuses, so it is not named: {marked}"
         );
         assert!(unnameable.contains("with changes to paths it cannot name, and the switch would overwrite or delete a on disk"), "{unnameable}");
+    }
+
+    #[test]
+    fn a_producers_sentence_names_the_queues_owner_and_its_own_action() {
+        use crate::queue_held::{Who, refusal_sentence_for_test};
+        let id = prikk_object::ObjectId::from_bytes([7; 32]);
+        let producer = Who::Producer {
+            action: "merging heads/topic into heads/main",
+            already_written: None,
+        };
+        let sentence =
+            refusal_sentence_for_test(&producer, "heads/feature", 2, id, &["a.txt"], false, false);
+        assert!(
+        sentence.starts_with("refusing: heads/feature's queue holds 2 commit(s) that change a.txt, which merging heads/topic into heads/main would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit --ref heads/feature` publishes them to heads/feature, or `prikk uncommit "),
+        "{sentence}"
+    );
+        assert!(
+            sentence.ends_with("takes the newest commit back and leaves your files"),
+            "{sentence}"
+        );
+        let backstop = Who::Producer {
+            action: "adopting heads/main",
+            already_written: Some("the archive's objects are already stored"),
+        };
+        let sentence =
+            refusal_sentence_for_test(&backstop, "heads/feature", 1, id, &["a.txt"], false, true);
+        assert!(
+            sentence.contains("(the archive's objects are already stored)")
+                && sentence
+                    .ends_with("publishes them to heads/feature; run this command again after it"),
+            "{sentence}"
+        );
     }
 }
