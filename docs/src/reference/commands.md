@@ -281,7 +281,10 @@ and is not reported.
   ref the record itself names.** The refusal comes before anything is authored and names every such
   path: ``precondition not met: refusing to commit: <ref> is now at <state>, and this worktree was
   last written from <state>; …; run `prikk branch switch <ref>` to bring the worktree up to date,
-  then commit again``. Every command the refusal names, run as written, is followed by the same
+  then commit again``. (0.59.0: when only the branch's queue differs from the record, the live side
+  counts its queue — `<ref> is now at <state> with <n> queued patch(es) folded on top` — the sentence
+  begins `<ref>'s queue holds <n> commit(s) this worktree was not written with`, and the first way out is
+  `prikk seal --allow-no-audit --ref <ref>`, then the switch.) Every command the refusal names, run as written, is followed by the same
   `commit` going through (or by a refusal of its own that says why). When the commit is onto the
   current branch, the way out is `prikk branch switch <the record's own ref>`, with the ref the
   record actually names substituted literally (the record is an accurate description of what the
@@ -383,6 +386,16 @@ and is not reported.
   resync, both succeed after a `commit --ref <other>` left the record naming a different ref than
   the current-branch pointer. Switching to a *different* branch materializes only that branch's
   sealed tip, never its queued fold.
+  - **A switch never changes, on disk, a path the target's own queue holds (0.59.0).** When the
+    active queue is the target's and holds a path the switch would overwrite, create, delete or give
+    a new mode — a queued new file, edit, deletion or rename, which the sealed files the switch writes
+    do not contain — the switch refuses before any write, ``precondition not met: refusing to switch
+    to <ref>: its queue holds <n> commit(s) that change <paths>, which the switch would overwrite or
+    delete on disk (nothing was written); `prikk seal --allow-no-audit --ref <ref>` publishes them and
+    keeps your files, or `prikk uncommit <id>` takes the newest commit back and leaves your files``
+    (five paths, then `and <n> more`). A queue that holds no path the switch changes, or that belongs
+    to another branch (refusal 2, unchanged), is not this refusal. While a switch or checkout is marked
+    interrupted `uncommit` refuses too, so the sentence names `seal` alone.
   - **The self-switch also resyncs when the current branch has never been published** (no `RefState`
     exists for it yet) and the record reads behind it — the `worktree-patch.md` walkthrough's shape:
     `commit --ref heads/topic` on a genuinely unborn ref, then `seal`. It materializes the branch's
@@ -401,7 +414,10 @@ and is not reported.
   its sealed block, its queued fold, or both — (not when a file was genuinely deleted, which still
   reports as `missing`). The text form prints ``worktree: behind <ref> (<n> file(s) it added since
   this worktree was last written from it are not here yet; not a deletion); run `prikk branch switch
-  <the current branch>` … to catch up``. `--format json` carries this as an additive `"behind_ref"`
+  <the current branch>` … to catch up`` — and, when only the ref's queue differs (the sealed block is
+  the one the record names) and it adds at least one file the worktree lacks, ``worktree: behind <ref> (its queue holds <n> commit(s) this worktree
+  was not written with, adding <m> file(s) not here yet; not a deletion); run `prikk seal
+  --allow-no-audit --ref <ref>`, then `prikk branch switch <ref>`, to catch up`` (0.59.0). `--format json` carries this as an additive `"behind_ref"`
   field beside `"queued_elsewhere"`, `null` when the worktree is current or no record exists; its
   `changes` list is unchanged.
 - **`merge --into`, `archive import --adopt` and `branch create --from` refuse to move a ref the

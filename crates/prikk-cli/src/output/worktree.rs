@@ -75,12 +75,24 @@ pub(crate) fn print_worktree_status(
             );
         }
     }
-    if let Some(behind_ref) = &report.behind_ref {
+    // Only when the queue added a file this worktree lacks: a queue that adds none (a file created and deleted again) leaves
+    // the sentence it always had, so "adding 0 file(s)" is never printed.
+    let missing = report.count_kind(WorktreeChangeKind::Missing);
+    if let (Some(behind_ref), Some(queued), true) =
+        (&report.behind_ref, report.behind_queue, missing > 0)
+    {
+        // 0.59.0 step W2: behind the queue of commits, not behind a sealed block: the files here are the queue's, and the
+        // sealed tip does not hold them. `seal` publishes the queue; the switch then writes what the record lacks.
         println!(
-            "worktree: behind {behind_ref} ({} file(s) it added since this worktree was last \
+            "worktree: behind {behind_ref} (its queue holds {queued} commit(s) this worktree was not written with, adding {missing} \
+             file(s) not here yet; not a deletion); run `prikk seal --allow-no-audit --ref {behind_ref}`, then \
+             `prikk branch switch {behind_ref}`, to catch up"
+        );
+    } else if let Some(behind_ref) = &report.behind_ref {
+        println!(
+            "worktree: behind {behind_ref} ({missing} file(s) it added since this worktree was last \
              written from it are not here yet; not a deletion); run `prikk branch switch <the \
-             current branch>` (`prikk status` names the current branch) to catch up",
-            report.count_kind(WorktreeChangeKind::Missing)
+             current branch>` (`prikk status` names the current branch) to catch up"
         );
     }
     // RFC 144 §4o.3: a declaration made and forgotten becomes permanent history at the next

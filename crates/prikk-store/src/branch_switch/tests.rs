@@ -402,3 +402,257 @@ fn a_switch_to_a_history_with_two_names_for_one_file_is_refused_before_any_write
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---- 0.59.0 step W2: a switch never changes, on disk, a path the target's queue holds ---------------------------------------
+
+mod queue_held {
+    use std::collections::BTreeSet;
+
+    use super::*;
+    use crate::commit_boundary::worktree_patch::{
+        WorktreePatchCommitOptions, commit_worktree_changes_signed,
+    };
+    use crate::object_store::ObjectReader;
+    use crate::{Ed25519AuthorSigner, active_ref_ownership};
+
+    fn author() -> Ed25519AuthorSigner {
+        Ed25519AuthorSigner::from_seed("w2-author", &[0x71; 32]).expect("signer")
+    }
+
+    /// `heads/main` and `heads/feature` published with the same files, `heads/main` materialized, the worktree's record naming main.
+    fn main_and_feature(name: &str) -> (std::path::PathBuf, RepositoryLayout) {
+        let root = unique_temp_dir(name);
+        let layout = RepositoryLayout::init(root.clone()).expect("init");
+        let files: Files<'_> = &[("a.txt", b"base\n"), ("k.txt", b"keep\n")];
+        publish_branch(&layout, "heads/main", 0x51, files).expect("publish main");
+        // `branch create heads/feature --from heads/main`: the same Block, so the worktree's record is current for both.
+        let main_state = RefStore::new(layout.clone())
+            .read_current_ref_state_id("heads/main")
+            .expect("read")
+            .expect("main published");
+        let envelope = crate::ObjectReadSnapshot::open(&layout)
+            .expect("snapshot")
+            .read_typed(main_state, ObjectType::RefState)
+            .expect("read")
+            .expect("main's RefState");
+        let tip = prikk_object::RefStatePayload::decode_canonical(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )
+        .expect("decode")
+        .target_object_id;
+        let ref_state = signed_ref_state_envelope("heads/feature", None, tip, 1);
+        let ref_state_id = ref_state.object_id();
+        let ref_update = signed_ref_update_envelope("heads/feature", None, ref_state_id, tip, 1);
+        RefStore::new(layout.clone())
+            .publish(&RefPublication {
+                ref_name: "heads/feature".to_string(),
+                expected_previous_ref_state_id: None,
+                ref_state,
+                ref_update,
+            })
+            .expect("publish feature");
+        materialize_patch_checkout(&layout, "heads/main").expect("materialize main");
+        (root, layout)
+    }
+
+    fn commit_onto_feature(layout: &RepositoryLayout, message: &str) {
+        commit_worktree_changes_signed(
+            layout,
+            "heads/feature",
+            message,
+            WorktreePatchCommitOptions::default(),
+            &author(),
+        )
+        .expect("commit onto feature");
+    }
+
+    /// Every path the switch's two derivations disagree on: the record-folded map the switch judges against, and `main`'s plain
+    /// sealed baseline. Exactly the paths the queue added, changed or removed.
+    fn record_folded_diff(layout: &RepositoryLayout) -> BTreeSet<String> {
+        let replay = Wal::for_layout(layout, crate::DEFAULT_ACTIVE_NAME)
+            .replay()
+            .expect("replay");
+        let folded = crate::worktree_materialize::baseline_files_against_record_or_live(
+            layout,
+            "heads/main",
+            &replay,
+        )
+        .expect("record-folded");
+        let sealed = crate::worktree_materialize::baseline_files(layout, "heads/main", &replay)
+            .expect("sealed");
+        folded
+            .keys()
+            .chain(sealed.keys())
+            .filter(|path| folded.get(*path) != sealed.get(*path))
+            .cloned()
+            .collect()
+    }
+
+    fn queue_paths(layout: &RepositoryLayout) -> BTreeSet<String> {
+        crate::enumerate_queued_patches(layout)
+            .expect("queue")
+            .iter()
+            .flat_map(|patch| &patch.operations)
+            .flat_map(|operation| &operation.paths)
+            .filter_map(|path| match path {
+                crate::QueuedPathResolution::Path(path) => Some(path.clone()),
+                crate::QueuedPathResolution::Unresolved { .. } => None,
+            })
+            .collect()
+    }
+
+    /// One defect case: queue the work for `feature`, then `switch_branch(main -> feature)` must refuse before any write, the
+    /// two derivations of "the queue's paths" must agree, and nothing on disk or in the pointer may have moved.
+    fn assert_refused(
+        name: &str,
+        work: impl FnOnce(&std::path::Path),
+        expected_paths: &[&str],
+        disk: &[(&str, Option<&[u8]>)],
+    ) {
+        let (root, layout) = main_and_feature(name);
+        work(&root);
+        commit_onto_feature(&layout, "queued");
+        assert_eq!(
+            record_folded_diff(&layout),
+            queue_paths(&layout),
+            "the record-folded diff and the queue's own paths agree"
+        );
+        let record_before = std::fs::read(root.join(".prikk/worktree.baseline")).unwrap();
+        let result = switch_branch(&layout, Some("heads/main"), "heads/feature");
+        match &result {
+            Err(prikk_error::PrikkError::Precondition(message)) => {
+                assert!(
+                    message.starts_with("refusing to switch to heads/feature: its queue holds 1 commit(s) that change "),
+                    "{message}"
+                );
+                for path in expected_paths {
+                    assert!(message.contains(path), "{path} not in {message}");
+                }
+                assert!(
+                    message.contains("(nothing was written)")
+                        && message.contains("`prikk seal --allow-no-audit --ref heads/feature` publishes them and keeps your files")
+                        && message.contains("`prikk uncommit ")
+                        && message.contains("takes the newest commit back and leaves your files"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected the queue-held refusal, got {other:?}"),
+        }
+        for (path, expected) in disk {
+            assert_eq!(read(&root, path).as_deref(), *expected, "{path} on disk");
+        }
+        assert_eq!(pointer(&root), "heads/main\n");
+        assert!(
+            !worktree_is_dirty(&layout).unwrap(),
+            "no marker: nothing was written"
+        );
+        assert_eq!(
+            std::fs::read(root.join(".prikk/worktree.baseline")).unwrap(),
+            record_before,
+            "the record is untouched"
+        );
+        assert!(matches!(
+            active_ref_ownership(&layout, "heads/feature").unwrap(),
+            crate::ActiveRefOwnership::Owned
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_queued_new_file_is_never_deleted_by_the_switch() {
+        assert_refused(
+            "w2-new",
+            |root| std::fs::write(root.join("queued.txt"), b"q\n").unwrap(),
+            &["queued.txt"],
+            &[("queued.txt", Some(b"q\n")), ("a.txt", Some(b"base\n"))],
+        );
+    }
+
+    #[test]
+    fn a_queued_edit_is_never_reverted_by_the_switch() {
+        assert_refused(
+            "w2-edit",
+            |root| std::fs::write(root.join("a.txt"), b"base\nedit\n").unwrap(),
+            &["a.txt"],
+            &[("a.txt", Some(b"base\nedit\n"))],
+        );
+    }
+
+    #[test]
+    fn a_queued_deletion_is_never_written_back_by_the_switch() {
+        assert_refused(
+            "w2-delete",
+            |root| std::fs::remove_file(root.join("k.txt")).unwrap(),
+            &["k.txt"],
+            &[("k.txt", None), ("a.txt", Some(b"base\n"))],
+        );
+    }
+
+    #[test]
+    fn a_queued_rename_is_never_undone_by_the_switch() {
+        assert_refused(
+            "w2-rename",
+            |root| {
+                std::fs::rename(root.join("a.txt"), root.join("r.txt")).unwrap();
+            },
+            &["a.txt", "r.txt"],
+            &[("a.txt", None), ("r.txt", Some(b"base\n"))],
+        );
+    }
+
+    /// The clean row: the queue creates a file and deletes it again, so the switch changes nothing the queue holds.
+    #[test]
+    fn a_queue_that_changes_nothing_the_switch_touches_switches_as_before() {
+        let (root, layout) = main_and_feature("w2-clean");
+        std::fs::write(root.join("queued.txt"), b"q\n").unwrap();
+        commit_onto_feature(&layout, "add");
+        std::fs::remove_file(root.join("queued.txt")).unwrap();
+        commit_onto_feature(&layout, "remove");
+        let report = switch_branch(&layout, Some("heads/main"), "heads/feature").unwrap();
+        assert_eq!((report.written_files, report.deleted_files), (0, 0));
+        assert_eq!(pointer(&root), "heads/feature\n");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The third-branch row: a queue owned by another ref is refusal 2's, with its own sentence.
+    #[test]
+    fn a_queue_for_another_branch_is_still_refusal_two() {
+        let (root, layout) = main_and_feature("w2-third");
+        std::fs::write(root.join("queued.txt"), b"q\n").unwrap();
+        commit_onto_feature(&layout, "queued");
+        publish_branch(
+            &layout,
+            "heads/third",
+            0x53,
+            &[("a.txt", b"base\n"), ("k.txt", b"keep\n")],
+        )
+        .unwrap();
+        assert_precondition(
+            switch_branch(&layout, Some("heads/main"), "heads/third"),
+            &[
+                "the active WAL holds unsealed work for heads/feature",
+                "prikk seal --allow-no-audit --ref heads/feature",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_sentence_names_five_paths_and_counts_the_rest_and_the_unnameable_variant_says_so() {
+        use super::super::queue_held::refusal_sentence_for_test;
+        let id = prikk_object::ObjectId::from_bytes([7; 32]);
+        let many = ["a", "b", "c", "d", "e", "f", "g"];
+        let sentence = refusal_sentence_for_test("heads/x", 3, id, &many, false, false);
+        assert!(sentence.contains("change a, b, c, d, e and 2 more, which the switch would overwrite or delete on disk"), "{sentence}");
+        assert!(sentence.contains("holds 3 commit(s)"), "{sentence}");
+        let unnameable = refusal_sentence_for_test("heads/x", 1, id, &["a"], true, false);
+        let marked = refusal_sentence_for_test("heads/x", 1, id, &["a"], false, true);
+        assert!(
+            marked.contains("publishes them and keeps your files; run the switch again after it")
+                && !marked.contains("uncommit"),
+            "an interrupted worktree: `uncommit` refuses, so it is not named: {marked}"
+        );
+        assert!(unnameable.contains("with changes to paths it cannot name, and the switch would overwrite or delete a on disk"), "{unnameable}");
+    }
+}

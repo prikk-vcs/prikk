@@ -78,6 +78,10 @@ pub struct WorktreeStatusReport {
     /// exactly as a live replay against the ref's current tip would report it either way, so a
     /// `--format json` consumer that wants the raw per-path facts still has them.
     pub behind_ref: Option<String>,
+    /// 0.59.0 step W2: `Some(n)` when [`Self::behind_ref`] is set, the recorded and the live **baseline block are the same**,
+    /// and the ref's queue holds `n` commit(s) the record was not written with -- the worktree is behind the *queue*, not behind
+    /// a block someone sealed, so the prose says that and names `seal` first. `None` otherwise. Prose only: no JSON field.
+    pub behind_queue: Option<usize>,
 }
 
 impl WorktreeStatusReport {
@@ -281,13 +285,17 @@ fn worktree_status_over_sound_replay_with(
         queued_fold,
     };
     let mut report = worktree_status_from_resolved(layout, ref_name, resolved)?;
-    if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. } =
+    if let crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, live } =
         crate::worktree_baseline::compare_worktree_baseline_with_live(layout, live)?
     {
         // Only when the record genuinely names `ref_name` itself -- a record naming some other ref
         // entirely is an odd case this report does not try to characterize as "behind".
         if recorded.ref_name == report.ref_name {
             report.behind_ref = Some(report.ref_name.clone());
+            // 0.59.0 step W2: the same block with a different queue is behind the queue, not behind a sealed block.
+            if recorded.baseline == live.baseline && live.wal_sequence > 0 {
+                report.behind_queue = Some(active_replay.records.len());
+            }
         }
     }
     Ok(report)
@@ -453,6 +461,7 @@ fn worktree_status_from_resolved(
         queued_elsewhere: resolved.queued_on_other_ref,
         declarations,
         behind_ref: None,
+        behind_queue: None,
     })
 }
 

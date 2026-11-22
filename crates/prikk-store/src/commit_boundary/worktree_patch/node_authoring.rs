@@ -1272,10 +1272,37 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                 }
                 _ => ways_out_for_the_current_branch,
             };
+        // 0.59.0 step W2: the live side is the tip **and its queue**, as the record's side is, so the two never read alike
+        // when only the queue differs (0.58.0 printed the live side with no queue and said "now at Block X, and this
+        // worktree was last written from Block X"). When only the queue differs, the sentence says so; and a queue is
+        // published before the switch can bring the worktree up to it (a self-switch refuses a moved queued fold).
+        let live_queue = active_replay.records.last().map_or(0, |record| record.seq);
+        let live_desc =
+            crate::worktree_baseline::describe_identity(lineage_baseline_block_id, live_queue);
+        let queue_only = recorded_identity
+            .as_ref()
+            .is_some_and(|recorded| recorded.baseline == lineage_baseline_block_id);
+        let lead = match (&recorded_identity, queue_only, active_replay.records.len()) {
+            (Some(_), true, queued) if queued > 0 => format!(
+                "{canonical_ref}'s queue holds {queued} commit(s) this worktree was not written with: it is now at {live_desc}, \
+                 and {recorded_desc}"
+            ),
+            (Some(recorded), true, _) => format!(
+                "{canonical_ref}'s queue no longer holds the {} commit(s) this worktree was last written with: it is now at \
+                 {live_desc}, and {recorded_desc}",
+                recorded.wal_sequence
+            ),
+            _ => format!("{canonical_ref} is now at {live_desc}, and {recorded_desc}"),
+        };
+        let ways_out = if active_replay.records.is_empty() {
+            ways_out
+        } else {
+            format!(
+                "run `prikk seal --allow-no-audit --ref {canonical_ref}` to publish the queue, then {ways_out}"
+            )
+        };
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
-            "refusing to commit: {canonical_ref} is now at {}, and {recorded_desc}; {}; {ways_out} \
-             to bring the worktree up to date, then commit again",
-            crate::worktree_baseline::describe_identity(lineage_baseline_block_id, 0),
+            "refusing to commit: {lead}; {}; {ways_out} to bring the worktree up to date, then commit again",
             clauses.join("; ")
         ))));
     }

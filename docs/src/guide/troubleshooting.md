@@ -1207,6 +1207,12 @@ message reads `heads/<name> was published, but <n> file(s) are in the way of mat
 worktree: …; move them aside, then run prikk branch switch heads/<name> to finish`. The branch is
 published; the switch writes the files.
 
+## `error: precondition not met: refusing to switch to heads/<name>: its queue holds <n> commit(s) that change <paths>, …` (0.59.0)
+
+You committed work onto `heads/<name>` from another branch (`prikk commit --ref heads/<name>`) and have not sealed it. It is queued, and its files are on your disk; the switch writes `heads/<name>`'s **sealed** files, which do not contain them, so it would have overwritten or deleted exactly the files you committed. The switch refuses before it writes anything, naming the paths. Releases 0.56.0 to 0.58.0 did the overwrite and exited `0`; if that happened to you, the commits are still queued (`prikk status`), and `prikk doctor --recovery-list` holds a commit you took back.
+
+Two ways out, each typeable as written. `prikk seal --allow-no-audit --ref heads/<name>` publishes the work to `heads/<name>` and keeps your files; run the switch again and it writes nothing it should not. `prikk uncommit <id>` takes the newest queued commit back (the sentence names the id) and leaves your files; the switch after it then asks, as it always does, for a worktree clean against the branch you are on. When a switch or checkout was interrupted, `uncommit` refuses too and the sentence names `seal` alone.
+
 ## `error: precondition not met: refusing to commit: heads/<name> is now at <state>, and this worktree was last written from <state>; …`
 
 The branch moved without this worktree being told: another command moved it (an `archive import`
@@ -1216,7 +1222,7 @@ silently undo what moved the branch. The message lists every path and ends with 
 the worktree up to date, `prikk branch switch <branch>`, with the branch named literally. Run it, then
 commit again. When you committed with `--ref <x>` onto a branch you are not on, the command is the
 switch to `<x>` itself. `prikk worktree-status` reports the same state as `behind heads/<name>` instead of
-listing every new file as `missing`.
+listing every new file as `missing`. When the branch's **queue** is what moved (the message begins `heads/<name>'s queue holds <n> commit(s) this worktree was not written with`, and `worktree-status` says `its queue holds <n> commit(s) this worktree was not written with`), the switch alone refuses, so the sentence names `prikk seal --allow-no-audit --ref heads/<name>` first and the switch after it.
 
 ## `error: precondition not met: sync seal <ref>: claim <id> builds on block <id>, which <ref> does not reach …`
 

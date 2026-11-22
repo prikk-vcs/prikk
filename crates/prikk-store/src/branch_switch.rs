@@ -10,7 +10,10 @@
 //! 3. the worktree is not clean against the branch being left (`worktree_status`'s own report --
 //!    untracked files are not a difference this refuses on; they are never touched);
 //! 4. a file the target needs is in the way: an untracked file, or a non-file, at a path the
-//!    target writes. Checked for every path before the first write, so a refusal writes nothing.
+//!    target writes. Checked for every path before the first write, so a refusal writes nothing;
+//! 5. (0.59.0 step W2) the target's own queue holds a path the switch would overwrite, create, delete or give a new mode: the
+//!    queue is not in the sealed files the switch writes, so those files would be put over the user's committed-but-unsealed
+//!    work. See [`queue_held`]. Also before the first write.
 //!
 //! **The transition.** Create or replace every file of the target's replay baseline (the one
 //! `checkout --patch-plan` derives), then delete each file of the old baseline the target lacks --
@@ -61,6 +64,8 @@ use crate::worktree_marker::{
 };
 use crate::worktree_status::{WorktreeChangeKind, worktree_status};
 use crate::{ActiveRefOwnership, active_ref_ownership};
+
+mod queue_held;
 
 /// What a completed `branch switch` did.
 #[non_exhaustive]
@@ -341,6 +346,19 @@ pub fn switch_branch(
             in_the_way.join(", ")
         )));
     }
+
+    // Refusal 5 (0.59.0 step W2): a path the target's queue holds is never changed on disk. After refusal 4 and before the
+    // first write, like it.
+    queue_held::refuse_when_the_queue_holds_a_changed_path(
+        layout,
+        &target,
+        &active_replay,
+        &queue_held::PlannedChanges {
+            written: writes.iter().map(|entry| entry.path.as_str()).collect(),
+            deleted: deletes.iter().map(String::as_str).collect(),
+            unchanged: &unchanged,
+        },
+    )?;
 
     // The transition: writes, then deletions, then the pointer, and only then the marker -- so an
     // interruption anywhere, the pointer write included, leaves a switch that running it again

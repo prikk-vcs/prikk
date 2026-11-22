@@ -173,7 +173,9 @@ pub(crate) fn baseline_files_against_record_or_live(
     baseline_files(layout, ref_name, active_replay)
 }
 
-fn baseline_files(
+/// `ref_name`'s own baseline: its sealed tip, with the active queue folded in **only when the queue is its own**. (`pub(crate)`
+/// for the 0.59.0 W2 cross-check test; the switch itself goes through [`baseline_files_against_record_or_live`].)
+pub(crate) fn baseline_files(
     layout: &RepositoryLayout,
     ref_name: &str,
     active_replay: &WalReplay,
