@@ -401,7 +401,7 @@ and is not reported.
     before publishing, when an active queue **of any branch** — theirs is not the one being moved, which they already refuse —
     holds a path they would change on disk, ``precondition not met: refusing: <owner>'s queue holds <n> commit(s) that change
     <paths>, which merging <a> into <b> would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit
-    --ref <owner>` publishes them to <owner>, or `prikk uncommit <id>` takes the newest commit back and leaves your files``
+    --ref <owner>` publishes them to <owner>, where they stay; this command then writes <branch> without them, or `prikk uncommit <id>` takes the newest commit back and leaves your files``
     (`adopting <ref>`, `creating <ref>` for the others). `bundle preview --adopt` reports it as `adoption-refused`.
   - **The self-switch also resyncs when the current branch has never been published** (no `RefState`
     exists for it yet) and the record reads behind it — the `worktree-patch.md` walkthrough's shape:

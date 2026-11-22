@@ -662,13 +662,14 @@ mod queue_held {
         use crate::queue_held::{Who, refusal_sentence_for_test};
         let id = prikk_object::ObjectId::from_bytes([7; 32]);
         let producer = Who::Producer {
+            branch: "heads/main",
             action: "merging heads/topic into heads/main",
             already_written: None,
         };
         let sentence =
             refusal_sentence_for_test(&producer, "heads/feature", 2, id, &["a.txt"], false, false);
         assert!(
-        sentence.starts_with("refusing: heads/feature's queue holds 2 commit(s) that change a.txt, which merging heads/topic into heads/main would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit --ref heads/feature` publishes them to heads/feature, or `prikk uncommit "),
+        sentence.starts_with("refusing: heads/feature's queue holds 2 commit(s) that change a.txt, which merging heads/topic into heads/main would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit --ref heads/feature` publishes them to heads/feature, where they stay; this command then writes heads/main without them, or `prikk uncommit "),
         "{sentence}"
     );
         assert!(
@@ -676,6 +677,7 @@ mod queue_held {
             "{sentence}"
         );
         let backstop = Who::Producer {
+            branch: "heads/main",
             action: "adopting heads/main",
             already_written: Some("the archive's objects are already stored"),
         };
@@ -683,8 +685,9 @@ mod queue_held {
             refusal_sentence_for_test(&backstop, "heads/feature", 1, id, &["a.txt"], false, true);
         assert!(
             sentence.contains("(the archive's objects are already stored)")
-                && sentence
-                    .ends_with("publishes them to heads/feature; run this command again after it"),
+                && sentence.ends_with(
+                    "publishes them to heads/feature, where they stay; run this command again after it, and it writes heads/main without them"
+                ),
             "{sentence}"
         );
     }

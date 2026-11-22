@@ -405,7 +405,7 @@ fn every_producer_refuses_before_any_write_when_a_queue_holds_a_path_it_would_ch
             let held = shape.held(producer.names());
             assert!(
                 message.contains(&format!(
-                    "refusing: heads/feature's queue holds 1 commit(s) that change {held}, which {} would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit --ref heads/feature` publishes them to heads/feature, or `prikk uncommit ",
+                    "refusing: heads/feature's queue holds 1 commit(s) that change {held}, which {} would overwrite or delete on disk (nothing was written); `prikk seal --allow-no-audit --ref heads/feature` publishes them to heads/feature, where they stay; this command then writes heads/main without them, or `prikk uncommit ",
                     producer.action()
                 )) && message.contains("takes the newest commit back and leaves your files"),
                 "{producer:?}/{shape:?}: {message}"
@@ -485,6 +485,22 @@ fn seal_then_the_producer_goes_through() {
             &format!("{producer:?} after the seal"),
         );
         assert_eq!(queue_count(&world.repo), 0, "{producer:?}");
+        // What the sentence says: the work stays on `heads/feature` (it reads there), and the command wrote `heads/main` without it.
+        let cat = prikk(
+            &world.repo,
+            &["cat", "--path", "queued.txt", "--ref", "heads/feature"],
+        );
+        assert_eq!(
+            cat.stdout,
+            b"q\n",
+            "{producer:?}: the file is on heads/feature: {}",
+            stderr(&cat)
+        );
+        assert_eq!(
+            read(&world.repo, "queued.txt"),
+            None,
+            "{producer:?}: and the command wrote heads/main without it"
+        );
         world.remove();
     }
 }

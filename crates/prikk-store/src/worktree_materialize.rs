@@ -428,6 +428,7 @@ pub(crate) fn require_nothing_in_the_way_or_queued(
             layout,
             queue,
             &crate::queue_held::Who::Producer {
+                branch: &pending.current_branch,
                 action,
                 already_written,
             },

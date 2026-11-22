@@ -63,6 +63,8 @@ pub(crate) enum Who<'a> {
         target: &'a str,
     },
     Producer {
+        /// The branch the producer writes the worktree to (the current branch).
+        branch: &'a str,
         /// The participle phrase the producer's own refusals already use (`merging heads/a into heads/b`).
         action: &'a str,
         /// What is true of the repository at this point, when it is not "nothing was written" (`archive import --adopt`'s backstop).
@@ -208,12 +210,14 @@ fn refusal_sentence(
             "`prikk seal --allow-no-audit --ref {owner}` publishes them and keeps your files, \
              or `prikk uncommit {newest}` takes the newest commit back and leaves your files"
         ),
-        (Who::Producer { .. }, true) => format!(
-            "`prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}; run this command again after it"
+        // After the seal the work is on `owner`; the producer writes the branch it moves, which does not have it.
+        (Who::Producer { branch, .. }, true) => format!(
+            "`prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}, where they stay; run this command again \
+             after it, and it writes {branch} without them"
         ),
-        (Who::Producer { .. }, false) => format!(
-            "`prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}, \
-             or `prikk uncommit {newest}` takes the newest commit back and leaves your files"
+        (Who::Producer { branch, .. }, false) => format!(
+            "`prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}, where they stay; this command then writes \
+             {branch} without them, or `prikk uncommit {newest}` takes the newest commit back and leaves your files"
         ),
     };
     match who {
