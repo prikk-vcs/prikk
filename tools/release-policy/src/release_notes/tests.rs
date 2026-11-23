@@ -400,6 +400,57 @@ fn the_reproduce_sentence_says_exactly_what_matches() {
     );
 }
 
+/// 0.59.0 RH2: **the page's claim is no wider than the measurement.** Equality is said for `x86_64-unknown-linux-gnu` (measured) and for no other
+/// architecture; `aarch64-unknown-linux-gnu` is said to be built with the same flags and not yet measured, with the command to check it. No page that
+/// carries `aarch64` and no `x86_64` says the values are equal. **Perturb:** add `aarch64` to `MEASURED_LINUX_ARCHITECTURES` and this fails.
+#[test]
+fn the_page_claims_equality_for_x86_64_only() {
+    const EQUAL: &str = "the two SHA-256 values are equal";
+    let page = |targets: &[&str]| {
+        let temporary = tempfile::tempdir().unwrap();
+        for target in targets {
+            write_target(temporary.path(), target);
+        }
+        platform_paragraph(temporary.path()).unwrap()
+    };
+    let x86 = page(&["x86_64-unknown-linux-gnu"]);
+    assert!(
+        x86.contains("**For `x86_64-unknown-linux-gnu` the two SHA-256 values are equal**"),
+        "{x86}"
+    );
+    assert!(!x86.contains("has not been measured"), "{x86}");
+
+    let arm = page(&["aarch64-unknown-linux-gnu"]);
+    assert!(!arm.contains(EQUAL), "{arm}");
+    assert!(
+        arm.contains(
+            "**`aarch64-unknown-linux-gnu` is built with the same flags, but a rebuild of it has not been measured**"
+        ),
+        "{arm}"
+    );
+    assert!(
+        arm.contains("Run the same commands with `<triple>` set to `aarch64-unknown-linux-gnu`"),
+        "{arm}"
+    );
+    // The command is still given: it is how the claim gets checked.
+    assert!(
+        arm.contains("RUSTFLAGS=\"$(python3 scripts/reproducible_rustflags.py)\""),
+        "{arm}"
+    );
+
+    let both = page(&["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]);
+    assert_eq!(both.matches(EQUAL).count(), 1, "{both}");
+    assert!(
+        both.contains("**For `x86_64-unknown-linux-gnu` the two SHA-256 values are equal**"),
+        "{both}"
+    );
+    assert!(
+        !both.contains("`aarch64-unknown-linux-gnu` the two SHA-256 values are equal"),
+        "{both}"
+    );
+    assert!(both.contains("has not been measured"), "{both}");
+}
+
 /// 0.59.0 RH1: `scripts/reproducible_rustflags.py`, the one thing the appendix's command and `release.yml` both run. Its output names the three
 /// prefixes, each remapped to a fixed name; and it refuses a path RUSTFLAGS cannot carry rather than print flags that split in the wrong place.
 #[cfg(unix)]

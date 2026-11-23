@@ -246,7 +246,7 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
    checked is the bytes users get, not the tree they came from. **Rebuild the Linux binary by the Release page's own sentence**
    (`RUSTFLAGS="$(python3 scripts/reproducible_rustflags.py)" cargo build -p prikk --release --target <triple> --locked`, with the
    `rustc` the build-info names) and compare `sha256sum` of the rebuilt `target/<triple>/release/prikk` with `tar -xzOf prikk-<triple>.tar.gz prikk | sha256sum`
-   (the archive's own bytes carry file times, so the archive's checksum is not the comparison). They are equal; if they are not, the sentence on the page is false, and
+   (the archive's own bytes carry file times, so the archive's checksum is not the comparison). They are equal for `x86_64-unknown-linux-gnu`; **do the same for the `aarch64-unknown-linux-gnu` asset, whose equality the page does not yet claim**: when it holds at a release, the page's aarch64 paragraph becomes the x86_64 one (`MEASURED_LINUX_ARCHITECTURES` in `release_notes.rs`). If a claimed pair is not equal, the sentence on the page is false, and
    the release's notes are not corrected in place: the next patch release says so.
 6. **Publish on the owner's word, per release.** The eight crates in dependency order from a detached
    worktree at the tag, each confirmed on the registry index; then `cargo install prikk --version X`

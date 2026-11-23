@@ -149,8 +149,8 @@ fn platform_paragraph(dist_dir: &Path) -> Result<String> {
         ""
     };
     let reproduce = reproduce_paragraph(
-        by_os.contains_key("Linux"),
-        by_os.len() > 1 || !by_os.contains_key("Linux"),
+        by_os.get("Linux").map_or(&[][..], Vec::as_slice),
+        by_os.keys().any(|os| *os != "Linux"),
     );
     Ok(format!(
         "## Prebuilt binaries\n\
@@ -164,15 +164,20 @@ fn platform_paragraph(dist_dir: &Path) -> Result<String> {
     ))
 }
 
-/// What a reader can reproduce, said exactly (0.59.0 RH1). **A Linux binary is built with `scripts/reproducible_rustflags.py`'s `RUSTFLAGS`**, which
-/// remap the three absolute paths a build embeds (the registry, the toolchain's source, the checkout), so its hash depends on the source, the toolchain
-/// and the flags, and on no directory (measured: builds at three checkout paths and three `CARGO_HOME`s, with and without `rust-src`, gave one hash). The
-/// macOS and Windows binaries are built with the plain command and embed the runner's paths, so the sentence says that a rebuild gives the same source
-/// and toolchain, not the same bytes. `.sha256` is the checksum of the *archive*, whose own bytes carry file times, so the comparison is of the
-/// `prikk` file inside it.
-fn reproduce_paragraph(linux: bool, other: bool) -> String {
+/// The Linux architectures whose rebuilt binary has been **measured** to hash equal to the archive's by the sentence below (0.59.0 RH1: three checkout
+/// paths, three `CARGO_HOME`s, with and without `rust-src`, one hash). The page claims equality for these and for no other architecture; `aarch64` is
+/// built with the same flags and not yet measured (RH2), and moves here only when a release's two assets have been compared and found equal.
+const MEASURED_LINUX_ARCHITECTURES: &[&str] = &["x86_64"];
+
+/// What a reader can reproduce, said exactly (0.59.0 RH1, RH2). **A Linux binary is built with `scripts/reproducible_rustflags.py`'s `RUSTFLAGS`**,
+/// which remap the three absolute paths a build embeds (the registry, the toolchain's source, the checkout). **The page says the hashes are equal only
+/// for the architectures in [`MEASURED_LINUX_ARCHITECTURES`]**; for any other Linux architecture it says it is built the same way and that its rebuild
+/// is not yet measured, so the page's claim is never wider than the measurement. The macOS and Windows binaries are built with the plain command and
+/// embed the runner's paths, so the sentence says that a rebuild gives the same source and toolchain, not the same bytes. `.sha256` is the checksum of
+/// the *archive*, whose own bytes carry file times, so the comparison is of the `prikk` file inside it.
+fn reproduce_paragraph(linux_architectures: &[String], other: bool) -> String {
     let mut out = String::new();
-    if linux {
+    if !linux_architectures.is_empty() {
         out.push_str(
             "\n\
              \n\
@@ -185,10 +190,34 @@ fn reproduce_paragraph(linux: bool, other: bool) -> String {
              sha256sum target/<triple>/release/prikk\n\
              ```\n\
              \n\
-             The two SHA-256 values are equal. The flags remap the three absolute paths a build embeds (the registry under `CARGO_HOME`, the toolchain's source, the \
-             checkout) to fixed names, so the hash does not depend on the directory the checkout is in, on `CARGO_HOME`, or on whether `rust-src` is installed; it does \
-             depend on the `rustc` and on those flags, which `.build-info.txt` records. A different `rustc` gives a different binary.",
+             The flags remap the three absolute paths a build embeds (the registry under `CARGO_HOME`, the toolchain's source, the checkout) to fixed names, so the \
+             hash does not depend on the directory the checkout is in, on `CARGO_HOME`, or on whether `rust-src` is installed; it does depend on the `rustc` and on \
+             those flags, which `.build-info.txt` records. A different `rustc` gives a different binary.",
         );
+        let measured: Vec<&String> = linux_architectures
+            .iter()
+            .filter(|architecture| MEASURED_LINUX_ARCHITECTURES.contains(&architecture.as_str()))
+            .collect();
+        let unmeasured: Vec<&String> = linux_architectures
+            .iter()
+            .filter(|architecture| !MEASURED_LINUX_ARCHITECTURES.contains(&architecture.as_str()))
+            .collect();
+        for architecture in measured {
+            out.push_str(&format!(
+                "\n\
+                 \n\
+                 **For `{architecture}-unknown-linux-gnu` the two SHA-256 values are equal** (measured: rebuilds at three checkout paths and three `CARGO_HOME`s, with and \
+                 without `rust-src`, gave one hash)."
+            ));
+        }
+        for architecture in unmeasured {
+            out.push_str(&format!(
+                "\n\
+                 \n\
+                 **`{architecture}-unknown-linux-gnu` is built with the same flags, but a rebuild of it has not been measured**: the two values are expected to be equal and are \
+                 not yet known to be. Run the same commands with `<triple>` set to `{architecture}-unknown-linux-gnu`; a difference is a defect worth reporting."
+            ));
+        }
     }
     if other {
         out.push_str(
