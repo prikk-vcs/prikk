@@ -208,7 +208,7 @@ pub fn incomplete_publication_refusal_naming_any_lead(
     let Some((ref_name, leading_id)) =
         crate::refs::mismatched_lead_candidate(layout, exclude_ref_name)?
     else {
-        return generic_or_cleanup_pending_refusal(layout);
+        return state_refusal(layout);
     };
     // 0.59.0 RS2a: a lead is a publication in flight, one that has since finished, or an interrupted one -- the same judgement the
     // precondition makes (`decide`, by lead identity: RS2c). A running publisher is never named "interrupted: run `ref complete`".
@@ -240,11 +240,71 @@ pub fn incomplete_publication_refusal_naming_any_lead(
                  pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`{lock_note}"
             )))
         }
-        Err(_) => generic_or_cleanup_pending_refusal(layout),
+        Err(_) => state_refusal(layout),
     }
 }
 
-/// The generic refusal, except when the active queue is exactly the patches of the Block its ref already points at: a `seal` that
+/// **The refusal for a state that is not a completable lead** (0.59.0 step G2a): the precondition answered `IncompletePublication` for several
+/// genuine states, and each now says which one it is and names the command that clears it, or says plainly that none does. The classification
+/// is [`crate::refs::classify_publication_block`] (a damaged pointer index, a legacy timestamp, a missing RefState, candidate debris), then the
+/// settled queue (a `seal` that stopped after it published). **The last arm** -- a state none of those names -- says `run \`prikk verify\``,
+/// which reads the state and prints its way out (a test builds each state that reaches it and asserts `verify` does).
+///
+/// The `ref complete` arm is above, for a completable lead. **Not named here:** a log that leads the pointer (step G2a holds that arm: the
+/// rebuild accepts a fork, which it must not -- the architect's ruling is pending), so it reaches the last arm.
+fn state_refusal(layout: &RepositoryLayout) -> Result<PrikkError> {
+    use crate::refs::PublicationBlock;
+    match crate::refs::classify_publication_block(layout)? {
+        Some(PublicationBlock::PointerIndexDamaged) => {
+            return Ok(PrikkError::IncompletePublication(
+                "repository mutation is blocked by incomplete ref publication: the ref pointer index has a damaged record; run \
+                 `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`"
+                    .to_string(),
+            ));
+        }
+        Some(PublicationBlock::LegacyTimestamp) => {
+            return Ok(PrikkError::IncompletePublication(
+                "repository mutation is blocked by incomplete ref publication: a ref-log record carries a time this version never \
+                 writes (legacy data, reported by `prikk verify` as PRIKK-VERIFY-REF-LEGACY-TIMESTAMP); no command edits signed \
+                 bytes in place, and `prikk verify` names the way out"
+                    .to_string(),
+            ));
+        }
+        Some(PublicationBlock::MissingRefState {
+            ref_name,
+            ref_state_id,
+        }) => {
+            return Ok(PrikkError::IncompletePublication(format!(
+                "repository mutation is blocked by incomplete ref publication: {ref_name} names RefState {ref_state_id}, which \
+                 this repository does not hold; no command repairs a missing RefState in place: {}",
+                crate::refs::SOUND_COPY
+            )));
+        }
+        Some(PublicationBlock::CandidateDebris) => {
+            return Ok(crate::refs::candidate_debris_refusal());
+        }
+        None => {}
+    }
+    generic_or_cleanup_pending_refusal(layout)
+}
+
+/// Every caller whose precondition error is an `IncompletePublication` and that has no refinement of its own routes it here (0.59.0 step G2a):
+/// the refusal becomes the state's own sentence ([`incomplete_publication_refusal_naming_any_lead`]); any other error, and a refinement that
+/// itself fails, are returned as they were.
+#[must_use]
+pub fn refine_incomplete_publication(
+    layout: &RepositoryLayout,
+    error: PrikkError,
+    exclude_ref_name: Option<&str>,
+) -> PrikkError {
+    if matches!(error, PrikkError::IncompletePublication(_)) {
+        incomplete_publication_refusal_naming_any_lead(layout, exclude_ref_name).unwrap_or(error)
+    } else {
+        error
+    }
+}
+
+/// The settled-queue refusal, or the last arm. A queue that is exactly the patches of the Block its ref already points at: a `seal` that
 /// published and was stopped before it cleaned the queue (0.58.0 step 0b; the recognition `verify` uses for
 /// `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING`). Then the refusal says so and names `prikk seal --allow-no-audit`, the command that
 /// finishes it, instead of "use signer-backed seal retry". The error stays `IncompletePublication`, so nothing that matches the

@@ -5,8 +5,12 @@
 //! and RefUpdate entries are stored inline in an append-only log. The module does not yet perform
 //! publication-policy evaluation or patch/block sealing.
 
+mod blocked;
 mod container;
 mod evidence;
+pub(crate) use blocked::{
+    PublicationBlock, SOUND_COPY, candidate_debris_refusal, classify_publication_block,
+};
 pub(crate) mod in_flight;
 mod kept_pointer_index;
 mod kept_ref_log;
@@ -364,7 +368,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     }
 
     if !verify::candidate_issues(layout)?.is_empty() {
-        return Err(incomplete_publication_refusal());
+        return Err(candidate_debris_refusal());
     }
     if let Some(owner) =
         evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay_out)?
@@ -446,7 +450,9 @@ pub(crate) fn incomplete_publication_refusal() -> PrikkError {
     // that needs to tell this one condition apart -- to decide whether `prikk ref complete <ref>`
     // is the way out -- matches the variant, never the message's own words.
     PrikkError::IncompletePublication(
-        "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
+        // 0.59.0 step G2a: the last arm, for a state nothing above could name. "use signer-backed seal retry" was not a command;
+        // `prikk verify` reads the state and names its way out (a test builds every state that reaches here and asserts it does).
+        "repository mutation is blocked by incomplete ref publication; run `prikk verify`, which names the way out of this state"
             .to_string(),
     )
 }

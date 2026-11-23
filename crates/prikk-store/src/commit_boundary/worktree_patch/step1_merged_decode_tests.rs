@@ -223,7 +223,7 @@ fn the_case_table_today() {
             "pending cleanup alone" => {
                 assert_eq!(
                     outcome,
-                    Err("precondition not met: repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry".to_string())
+                    Err("precondition not met: repository mutation is blocked by incomplete ref publication; run `prikk verify`, which names the way out of this state".to_string())
                 );
             }
             "pending cleanup and a damaged record" => {

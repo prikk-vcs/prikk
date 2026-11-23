@@ -416,7 +416,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         run: crate::run_trust,
         help_lines: &[
             "  prikk trust maintainer add --key-id ID --public-key HEX [--format json]  Trust one MAINTAINER key",
-            "  prikk trust maintainer remove --key-id ID Revoke one MAINTAINER key",
+            "  prikk trust maintainer remove --key-id ID Revoke one MAINTAINER key: everything it signed stops verifying until it is added back with its original public key",
             "  prikk trust maintainer list [--format json]  List every currently adopted key",
             "  prikk trust maintainer check --key-id ID [--format json]  Whether that id is adopted",
         ],

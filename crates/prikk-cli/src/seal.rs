@@ -154,8 +154,10 @@ fn seal_active_no_audit(
     match owning_ref_now {
         ActiveRefMetadata::Valid(actual) if actual == ref_name => {}
         ActiveRefMetadata::Valid(actual) => {
+            // 0.59.0 step G2a: a queue seals onto the branch it belongs to; naming it is the command that works from here (measured).
             return Err(format!(
-                "active WAL is owned by {actual}; requested seal ref is {ref_name}"
+                "active WAL is owned by {actual}; requested seal ref is {ref_name}: `prikk seal --allow-no-audit --ref {actual}` seals \
+                 that queue onto {actual}"
             ));
         }
         ActiveRefMetadata::Missing => {

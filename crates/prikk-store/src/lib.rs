@@ -345,6 +345,7 @@ pub use recovery_log::{
 pub use ref_completion::{
     CompletionPlan, CompletionRefusal, complete_ref_publication,
     incomplete_publication_refusal_naming_any_lead, plan_ref_completion,
+    refine_incomplete_publication,
 };
 pub use ref_resolution::{
     BlockStanding, ReceivedRefs, block_standing, is_unpublished_local_branch,

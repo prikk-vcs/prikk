@@ -565,7 +565,8 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
                     {
                         print_trust_add_refusal_json(*currently_adopted, &err.to_string());
                     }
-                    err.to_string()
+                    // 0.59.0 step G2a: an incomplete publication names its state's way out, as every other writer's refusal does.
+                    prikk_store::refine_incomplete_publication(&layout, err, None).to_string()
                 })?;
             // RFC 138 §4.2 carried-defects B: a derived count, not the `policy: required=1`
             // literal that used to print here -- `MaintainerTrustPolicy` holds a `Vec` and nothing
@@ -605,10 +606,15 @@ fn run_trust(args: Vec<String>) -> std::result::Result<(), CliError> {
             })?;
             let root = current_dir()?;
             let layout = open_repository(root)?;
-            let removed =
-                remove_trusted_maintainer(&layout, &key_id).map_err(|err| err.to_string())?;
+            let removed = remove_trusted_maintainer(&layout, &key_id)
+                .map_err(|err| prikk_store::refine_incomplete_publication(&layout, err, None).to_string())?;
             if removed {
                 println!("revoked maintainer key: {key_id}");
+                // 0.59.0 step G2a: what a revocation does to history, said where it happens. No count: the command does not read the history.
+                println!(
+                    "everything it signed stops verifying (`prikk verify` lists it); `prikk trust maintainer add --key-id {key_id} \
+                     --public-key <hex>` with its original public key restores it"
+                );
             } else {
                 println!("maintainer key was not trusted: {key_id}");
             }

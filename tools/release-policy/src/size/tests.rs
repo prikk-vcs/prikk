@@ -429,7 +429,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.58.0 F2 added `refs/in_flight.rs` (is a pointer lead a publication in flight, or an interrupted one): 190 -> 191.
     // 0.58.0 R2 added `confirmed_history.rs` (the history this repository confirmed by replay and records) and `block_state/confirm_lineage.rs` (the root-checking walk it uses): 191 -> 193. 0.58.0 P3b added `framed_source.rs` (hoisted out of `bundle.rs`): 193 -> 194. 0.58.0 B′b added `bundle/decision.rs` (the one decision `bundle import` and `bundle preview` share): 194 -> 195. 0.59.0 RS2b added `refs/pointer_fresh.rs` (an id a pointer named is looked up again before it is called missing): 195 -> 196. 0.59.0 RS2c added `commit_boundary/active_view.rs` (the active session's three stores, read as one moment): 196 -> 197.
     // 0.59.0 step W2 added `branch_switch/queue_held.rs` (the switch's refusal of a path the target's own queue holds): 197 -> 198.
-    assert_eq!(store.production_files, 198);
+    // 0.59.0 step G2a added `refs/blocked.rs`: 198 -> 199.
+    assert_eq!(store.production_files, 199);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

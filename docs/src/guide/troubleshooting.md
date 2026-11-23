@@ -1207,6 +1207,20 @@ message reads `heads/<name> was published, but <n> file(s) are in the way of mat
 worktree: …; move them aside, then run prikk branch switch heads/<name> to finish`. The branch is
 published; the switch writes the files.
 
+## `error: precondition not met: repository mutation is blocked by incomplete ref publication: …` (0.59.0)
+
+A command that publishes (or `trust maintainer add`/`remove`, `rollback-draft`, a `doctor` repair) found the ref stores in a state it will not write over. Through 0.58.0 one sentence covered every such state and ended `use signer-backed seal retry`, which is not a command. Each state now says what it is and the command that clears it:
+
+| the sentence says | what it is | the command |
+|---|---|---|
+| `run \`prikk ref complete <ref>\`` | an interrupted publication: the pointer leads the ref log by one sound transition | `prikk ref complete <ref>` |
+| `the ref pointer index has a damaged record; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then …` | a pointer-index record failed | `prikk doctor --rebuild-pointer-index --plan-only`, then without `--plan-only` |
+| `a seal stopped after it published … run \`prikk seal --allow-no-audit\`` | the queue is exactly the patches of a block its ref already points at | `prikk seal --allow-no-audit` |
+| `<ref> names RefState <id>, which this repository does not hold; no command repairs a missing RefState in place: restore a sound copy …` | the object is in no container | none: the sound-copy sequence (`prikk setup <new-dir>`, `archive verify`, `archive import --adopt`) |
+| `run \`prikk verify\`, which names the way out of this state` | a state the sentence cannot name (a log that leads the pointer, a lead the completion rule refuses) | `prikk verify` (and `prikk doctor`) print the way out |
+
+A leftover candidate in `.prikk/refs/tmp` keeps its older sentence for now.
+
 ## `error: precondition not met: refusing to switch to heads/<name>: its queue holds <n> commit(s) that change <paths>, …` (0.59.0)
 
 You committed work onto `heads/<name>` from another branch (`prikk commit --ref heads/<name>`) and have not sealed it. It is queued, and its files are on your disk; the switch writes `heads/<name>`'s **sealed** files, which do not contain them, so it would have overwritten or deleted exactly the files you committed. The switch refuses before it writes anything, naming the paths. Releases 0.56.0 to 0.58.0 did the overwrite and exited `0`; if that happened to you, the commits are still queued (`prikk status`), and `prikk doctor --recovery-list` holds a commit you took back.

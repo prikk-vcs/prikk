@@ -41,7 +41,9 @@ paths, see [repository layout and authority](../reference/repository-layout.md).
   a different key, and says nothing about whether that identity is *trusted*. `verify` reports
   `unverifiable author signatures: 0` when every author signature checks out against the material
   recorded for its key id.
-- MAINTAINER key revocation exists (`prikk trust maintainer remove`); there is no key rotation, hardware
+- MAINTAINER key revocation exists (`prikk trust maintainer remove`); **it is judged against all history**: everything the removed key signed
+  stops verifying (`prikk verify` fails, naming it) until the key is added back with its original public key (`prikk trust maintainer add`),
+  which restores it. There is no key rotation, hardware
   signing, remote trust, sync trust, hosted identity, multi-maintainer threshold policy, or stable
   migration policy yet.
 
@@ -130,7 +132,7 @@ The current commands for repository-local MAINTAINER trust are:
 
 ```text
 prikk trust maintainer add --key-id ID --public-key HEX
-prikk trust maintainer remove --key-id ID
+prikk trust maintainer remove --key-id ID   # everything the key signed stops verifying until it is added back
 ```
 
 `ID` must be the key id the MAINTAINER signer signs under, which `prikk key status --role maintainer`

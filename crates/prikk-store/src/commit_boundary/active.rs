@@ -344,9 +344,37 @@ pub fn require_active_ref_for_non_empty_wal(
         // RFC 132's Precondition variant: this is an ownership mismatch, not a lock -- nothing is
         // held and no other process is racing this one, so `LockConflict`'s "another writer may be
         // active" was never true here.
-        ActiveRefOwnership::OwnedByOther(actual) => Err(PrikkError::Precondition(format!(
-            "active WAL is owned by {actual}; requested ref {ref_name}"
-        ))),
+        ActiveRefOwnership::OwnedByOther(actual) => Err(PrikkError::Precondition(
+            owner_mismatch_sentence(layout, &actual, ref_name),
+        )),
+    }
+}
+
+/// `active WAL is owned by <owner>; requested ref <ref>` and the two ways out, measured (0.59.0 step G2a): **`prikk uncommit <newest id>`
+/// first** -- it takes the newest commit back and leaves the files, and the next commit onto `<ref>` then authors them (exit 0 from this
+/// state) -- and **`prikk seal --allow-no-audit --ref <owner>`**, which publishes the queue to `<owner>` (exit 0; the worktree then reads
+/// as `<owner>`'s, so a commit onto `<ref>` needs the worktree brought to `<ref>` first, which it says itself). While a switch or checkout is
+/// marked interrupted `uncommit` refuses, so only the seal is named. The opening words are what they always were.
+fn owner_mismatch_sentence(layout: &RepositoryLayout, owner: &str, ref_name: &str) -> String {
+    let opening = format!("active WAL is owned by {owner}; requested ref {ref_name}");
+    let newest = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME)
+        .replay()
+        .ok()
+        .and_then(|replay| {
+            replay
+                .records
+                .last()
+                .map(|record| record.envelope.object_id())
+        });
+    let marked = crate::worktree_marker::worktree_is_dirty(layout).unwrap_or(true);
+    match (newest, marked) {
+        (Some(newest), false) => format!(
+            "{opening}: `prikk uncommit {newest}` takes the newest commit back and leaves your files (the next commit onto \
+             {ref_name} then authors them), or `prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}"
+        ),
+        _ => format!(
+            "{opening}: `prikk seal --allow-no-audit --ref {owner}` publishes them to {owner}"
+        ),
     }
 }
 

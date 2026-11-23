@@ -1307,6 +1307,9 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                         "first resolve {code} (above), then re-run verification; doctor will not \
                          auto-trust keys or repair signatures"
                     ),
+                    None if issue.code == "PRIKK-TRUST-PUBLICATION-UNTRUSTED" => {
+                        crate::way_out::WayOut::PublicationKeyNotAdopted.sentence()
+                    }
                     None => crate::way_out::WayOut::PublicationTrust.sentence(),
                 };
                 issues.push(DoctorIssue::error(
@@ -1775,7 +1778,9 @@ pub fn repair_repository(
                 .to_string(),
         ));
     }
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        crate::ref_completion::refine_incomplete_publication(layout, error, None)
+    })?;
     let before = doctor_repository(layout);
     if before
         .issues

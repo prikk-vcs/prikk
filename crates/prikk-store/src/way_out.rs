@@ -23,11 +23,7 @@ use crate::verify::{ActiveWalMetadataStatus, ObjectItemStatus, RepositoryVerific
 /// reports whether its sealing key is adopted; `archive import --adopt` lands the branch as a local branch
 /// and writes its files. Only sealed history travels in a backup, so a commit still waiting for a `seal` is
 /// made again in the new directory.
-pub const SOUND_COPY: &str = "restore a sound copy of the sealed history: `prikk setup <new-dir>`, then, in \
-<new-dir>, `prikk archive verify <backup>` and `prikk archive import <backup> --adopt` (or `prikk bundle \
-import --input <bundle>` for one branch); the key that sealed the history must be adopted in <new-dir> \
-(`archive verify` reports it). Only sealed history travels in a backup: a commit still waiting for a \
-`prikk seal` is made again there";
+pub const SOUND_COPY: &str = crate::refs::SOUND_COPY;
 
 /// One kind of finding and the way out of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +63,9 @@ pub enum WayOut {
     LifecycleCache,
     /// An adopted key's signature on a publication object does not verify, or no trusted key signed.
     PublicationTrust,
+    /// 0.59.0 step G2a: the signature verifies, but its key is not adopted here (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`): a key never adopted, or
+    /// one `trust maintainer remove` revoked. Adding it back with its original public key restores everything it signed (measured).
+    PublicationKeyNotAdopted,
     /// A ref's pointer and log disagree, by the code `verify` gives that state.
     RefPublication {
         /// The `PRIKK-VERIFY-REF-*` code.
@@ -176,6 +175,12 @@ impl WayOut {
                 ),
                 _ => "the candidate is kept for inspection; doctor does not infer ownership or remove it".to_string(),
             },
+            Self::PublicationKeyNotAdopted => {
+                "adopt the key that signed it with `prikk trust maintainer add --key-id <id> --public-key <hex>` and run `prikk verify` \
+                 again: a key that was removed stops counting for everything it signed, and adding it back with its original public \
+                 key restores it; doctor will not auto-trust keys or repair signatures"
+                    .to_string()
+            }
             Self::PublicationTrust => {
                 "configure trusted MAINTAINER keys with `prikk trust maintainer add --key-id <id> --public-key \
                  <hex>` and run `prikk verify` again; doctor will not auto-trust keys or repair signatures"
@@ -301,7 +306,23 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
             out.push((label, kind));
         }
     }
-    if report.has_publication_trust_issues() {
+    // 0.59.0 step G2a: two findings, two headings. A signature that verifies under a key this repository does not (or no longer) adopt is not
+    // "a signature that did not verify"; one that truly fails keeps its heading.
+    if report
+        .publication_trust_issues
+        .iter()
+        .any(|issue| issue.code == "PRIKK-TRUST-PUBLICATION-UNTRUSTED")
+    {
+        out.push((
+            "a publication's signing key is not adopted",
+            WayOut::PublicationKeyNotAdopted,
+        ));
+    }
+    if report
+        .publication_trust_issues
+        .iter()
+        .any(|issue| issue.code != "PRIKK-TRUST-PUBLICATION-UNTRUSTED")
+    {
         out.push((
             "a publication signature did not verify",
             WayOut::PublicationTrust,

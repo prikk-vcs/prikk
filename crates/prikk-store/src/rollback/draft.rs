@@ -88,7 +88,9 @@ pub fn append_rollback_draft(
     signer: &impl AuthorSigner,
 ) -> Result<RollbackDraftReport> {
     layout.require_current_format()?;
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        crate::ref_completion::refine_incomplete_publication(layout, error, None)
+    })?;
     // RFC 136 §10.3b.3: the derivation gate, before any write.
     crate::worktree_marker::ensure_worktree_replay_verified(layout)?;
     let canonical_ref = validate_local_branch_ref(ref_name)?;
@@ -140,7 +142,9 @@ pub fn append_rollback_draft(
 
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let active_lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
-    crate::refs::ensure_no_incomplete_publication(layout)?;
+    crate::refs::ensure_no_incomplete_publication(layout).map_err(|error| {
+        crate::ref_completion::refine_incomplete_publication(layout, error, None)
+    })?;
     let replay = wal.replay()?;
     // RFC 166 round 2 §0: the commit-witness classification speaks first, before the older
     // tail/damage checks below -- see `node_authoring.rs::author_inner`'s identical fix. `owning_ref`

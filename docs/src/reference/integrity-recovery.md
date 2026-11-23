@@ -16,7 +16,8 @@ setup, see the [security and signing setup](../guide/security-setup.md) guide.
 - `verify` checks structural integrity and current repository-local publication trust for publication
   objects; it is not a global trust proof.
 - There is no repository-wide AUTHOR trust enforcement.
-- MAINTAINER key revocation exists (`prikk trust maintainer remove`), but there is no historical PKI
+- MAINTAINER key revocation exists (`prikk trust maintainer remove`) and is judged against all history (everything the key signed stops
+  verifying until it is added back with its original public key), but there is no historical PKI
   (temporal/point-in-time revocation semantics), key rotation, hardware signing, remote trust, sync
   trust, or stable migration policy yet.
 - `prikk doctor` repairs are opt-in and narrow.

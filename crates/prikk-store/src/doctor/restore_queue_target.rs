@@ -128,7 +128,9 @@ fn run(
         // RFC 168 F6: a plan-only run creates nothing; the execute path is a writer (RFC 168 §3.1, §3.3).
         layout.ensure_write_state()?;
     }
-    ensure_no_incomplete_publication(layout)?;
+    ensure_no_incomplete_publication(layout).map_err(|error| {
+        crate::ref_completion::refine_incomplete_publication(layout, error, None)
+    })?;
     let wal = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME);
     let replay = wal.replay()?;
     let owning_ref = read_active_ref_metadata(layout)?;
