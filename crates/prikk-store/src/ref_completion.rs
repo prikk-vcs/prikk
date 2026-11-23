@@ -285,9 +285,6 @@ fn state_refusal(layout: &RepositoryLayout) -> Result<PrikkError> {
                  `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`"
             )));
         }
-        Some(PublicationBlock::CandidateDebris) => {
-            return Ok(crate::refs::candidate_debris_refusal());
-        }
         None => {}
     }
     generic_or_cleanup_pending_refusal(layout)

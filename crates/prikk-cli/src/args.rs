@@ -109,6 +109,8 @@ pub(crate) struct DoctorArgs {
     /// 0.57.0 step 0c: rebuild the commit-index cache from the worktree. A cache, so no recovery-log
     /// entry; mutually exclusive with every other repair and recovery flag.
     pub(crate) rebuild_caches: bool,
+    /// 0.59.0 step G2d: remove the files left in `refs/tmp` (saving each first). Mutually exclusive with every other repair and recovery flag.
+    pub(crate) remove_ref_candidates: bool,
     /// RFC 166 D5, §13 item 14: remove acknowledged damage or declare an acknowledged loss (RFC
     /// 166 §5 rows 4, 5 and 7). Mutually exclusive with every other repair flag -- its own write
     /// touches the active WAL and the commit witness, not the ref-pointer index or the Rule-A files.
@@ -488,6 +490,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     let mut repair_tails = false;
     let mut rebuild_pointer_index = false;
     let mut rebuild_caches = false;
+    let mut remove_ref_candidates = false;
     let mut discard_damaged_commits = false;
     let mut restore_queue_target = false;
     let mut restore_queue_target_ref: Option<String> = None;
@@ -516,6 +519,9 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
             }
             "--rebuild-caches" => {
                 mark_seen(&mut rebuild_caches, "--rebuild-caches")?;
+            }
+            "--remove-ref-candidates" => {
+                mark_seen(&mut remove_ref_candidates, "--remove-ref-candidates")?;
             }
             "--discard-damaged-commits" => {
                 mark_seen(&mut discard_damaged_commits, "--discard-damaged-commits")?;
@@ -556,6 +562,28 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
                 path = Some(arg);
             }
         }
+    }
+    if remove_ref_candidates
+        && (repair_wal_tail
+            || repair_main_ref
+            || repair_index
+            || repair_pointer_index_tail
+            || repair_tails
+            || rebuild_pointer_index
+            || rebuild_caches
+            || discard_damaged_commits
+            || restore_queue_target
+            || not_current_branch
+            || restore_queue_target_ref.is_some()
+            || recovery_list
+            || recovery_clear
+            || recovery_restore.is_some()
+            || cancel_import.is_some())
+    {
+        return Err(CliError::Usage(
+            "--remove-ref-candidates cannot be combined with another repair or recovery flag -- run it alone (only --plan-only goes with it)"
+                .to_string(),
+        ));
     }
     if rebuild_caches
         && (repair_wal_tail
@@ -696,6 +724,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     if plan_only
         && !rebuild_pointer_index
         && !rebuild_caches
+        && !remove_ref_candidates
         && !discard_damaged_commits
         && !restore_queue_target
         && !repair_tails
@@ -705,8 +734,8 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
     {
         return Err(CliError::Usage(
             "--plan-only is only accepted alongside --rebuild-pointer-index, \
-             --rebuild-caches, --discard-damaged-commits, --restore-queue-target, --repair-tails, \
-             --recovery-restore, --recovery-clear or --cancel-import"
+             --rebuild-caches, --remove-ref-candidates, --discard-damaged-commits, --restore-queue-target, \
+             --repair-tails, --recovery-restore, --recovery-clear or --cancel-import"
                 .to_string(),
         ));
     }
@@ -728,6 +757,7 @@ pub(crate) fn parse_doctor_args(args: Vec<String>) -> std::result::Result<Doctor
         repair_tails,
         rebuild_pointer_index,
         rebuild_caches,
+        remove_ref_candidates,
         discard_damaged_commits,
         restore_queue_target_ref,
         not_current_branch,

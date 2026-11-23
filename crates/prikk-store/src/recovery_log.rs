@@ -15,8 +15,13 @@
 
 use std::path::{Path, PathBuf};
 
+mod remove;
 mod restore;
+mod run;
+pub(crate) use remove::{is_ref_candidate_source, save_remove};
 pub(crate) use restore::{UNCOMMIT_RUN_KIND, begin_run_as, restore};
+use run::run_for_append;
+pub(crate) use run::{RunScope, begin_run, current_run_id_hex};
 
 use prikk_error::{PrikkError, Result};
 
@@ -32,6 +37,10 @@ use crate::foundation::layout::{ContainerSlot, DEFAULT_ACTIVE_NAME, RepositoryLa
 
 const MAGIC: &[u8; 8] = b"PRECLOG1";
 const VERSION: u16 = 1;
+/// The frame version of a [`Kind::Remove`] entry (0.59.0 step G2d). **A different version, not a new kind under version 1:** a prikk that does not know
+/// the kind (0.58.0) counts a complete frame of a version it does not know as "written by a newer prikk, which this version cannot read" (RFC 168 F12),
+/// which is not damage, and lists and restores every other entry as before. A kind byte it did not know under version 1 would be damage.
+const VERSION_REMOVE: u16 = 2;
 /// Magic (8), version (2), body length (8), checksum (32).
 const HEADER_LEN: usize = 8 + 2 + 8 + 32;
 /// The log's path under `.prikk/`.
@@ -54,6 +63,9 @@ pub(crate) enum Kind {
     Cut,
     /// The previous bytes of a file a repair rewrote in place; `new_hash` identifies what the repair wrote.
     Replace,
+    /// A whole file a repair removed (0.59.0 step G2d, `--remove-ref-candidates`): `removed` is its bytes, `prefix_hash` their SHA-256. Framed as
+    /// [`VERSION_REMOVE`]. A restore recreates the file, and only when it is absent.
+    Remove,
 }
 
 /// One saved step of a repair (RFC 168 §3.1, A1). Entries of one repair share a `run` (A1 item 2).
@@ -141,6 +153,7 @@ fn encode_body(entry: &Entry) -> Vec<u8> {
     out.push(match entry.kind {
         Kind::Cut => 0,
         Kind::Replace => 1,
+        Kind::Remove => 2,
     });
     out.extend_from_slice(&entry.run);
     put_str(&mut out, &entry.source);
@@ -180,83 +193,19 @@ fn checksum_with_version(version: u16, body: &[u8]) -> [u8; 32] {
 /// The framed bytes of one entry.
 fn frame(entry: &Entry) -> Vec<u8> {
     let body = encode_body(entry);
-    let checksum = checksum_with_version(VERSION, &body);
+    let version = if entry.kind == Kind::Remove {
+        VERSION_REMOVE
+    } else {
+        VERSION
+    };
+    let checksum = checksum_with_version(version, &body);
     let mut out = Vec::with_capacity(HEADER_LEN + body.len());
     out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_be_bytes());
+    out.extend_from_slice(&version.to_be_bytes());
     out.extend_from_slice(&(body.len() as u64).to_be_bytes());
     out.extend_from_slice(&checksum);
     out.extend_from_slice(&body);
     out
-}
-
-thread_local! {
-    /// The run the repair on this thread is writing (A1 item 2): every entry it appends shares this id.
-    static CURRENT_RUN: std::cell::Cell<Option<[u8; 8]>> = const { std::cell::Cell::new(None) };
-}
-
-/// Counts runs begun by this process, so two runs begun in the same instant still differ.
-static RUN_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// A fresh run id: 8 bytes from a digest of the time, the process and a counter.
-fn new_run_id() -> [u8; 8] {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let count = RUN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let digest = sha(&[
-        nanos.to_be_bytes().as_slice(),
-        &std::process::id().to_be_bytes(),
-        &count.to_be_bytes(),
-    ]
-    .concat());
-    let mut id = [0_u8; 8];
-    id.copy_from_slice(&digest[..8]);
-    id
-}
-
-/// Begin a run: every entry appended on this thread until the returned scope ends shares one run id (A1 item 2). A nested call
-/// joins the run that is already open, so a repair that calls another repair writes one run.
-pub(crate) fn begin_run() -> RunScope {
-    let owned = CURRENT_RUN.with(|current| {
-        if current.get().is_none() {
-            current.set(Some(new_run_id()));
-            true
-        } else {
-            false
-        }
-    });
-    RunScope { owned }
-}
-
-/// Ends the run it began, when it was the outermost (see [`begin_run`]).
-pub(crate) struct RunScope {
-    owned: bool,
-}
-
-/// 0.51.0 step 1 Part C2 (C2, the review): the open run's own id, hex-encoded the same way
-/// [`RecoveryEntryView::id`] is -- so a caller that just saved something under [`begin_run`] can
-/// name the run id in its own report, rather than making the user find it in `--recovery-list`.
-/// `None` when no run is open (a `--plan-only` preview never calls `begin_run` at all).
-pub(crate) fn current_run_id_hex() -> Option<String> {
-    CURRENT_RUN.with(|current| current.get().map(|run| prikk_hash::to_hex(&run)))
-}
-
-impl Drop for RunScope {
-    fn drop(&mut self) {
-        if self.owned {
-            CURRENT_RUN.with(|current| current.set(None));
-            restore::clear_run_kind();
-        }
-    }
-}
-
-/// The run an entry appended now belongs to: the open run, or a run of its own for a save outside any repair.
-fn run_for_append() -> [u8; 8] {
-    CURRENT_RUN.with(|current| match current.get() {
-        Some(run) => run,
-        None => new_run_id(),
-    })
 }
 
 struct Reader<'a> {
@@ -290,6 +239,7 @@ fn decode_body(body: &[u8]) -> Option<Entry> {
     let kind = match r.take(1)?.first().copied()? {
         0 => Kind::Cut,
         1 => Kind::Replace,
+        2 => Kind::Remove,
         _ => return None,
     };
     let run: [u8; 8] = r.take(8)?.try_into().ok()?;
@@ -493,13 +443,16 @@ fn classify_at(bytes: &[u8], at: usize) -> Candidate {
     if checksum_with_version(version, body) != stored {
         return Candidate::Damage;
     }
-    if version > VERSION {
+    if version > VERSION_REMOVE {
         return Candidate::Newer(body_end);
     }
-    if version != VERSION {
+    if version != VERSION && version != VERSION_REMOVE {
         return Candidate::Damage;
     }
-    match decode_body(body) {
+    // A `Remove` entry is a version-2 frame and only that (see `VERSION_REMOVE`); the other kinds are version 1.
+    match decode_body(body)
+        .filter(|entry| (entry.kind == Kind::Remove) == (version == VERSION_REMOVE))
+    {
         Some(entry) => Candidate::Entry(
             Box::new(Listed {
                 id: prikk_hash::to_hex(&entry.run),
@@ -1173,6 +1126,8 @@ pub enum RecoveryEntryKind {
     Cut,
     /// The whole file's own previous bytes, before a repair rewrote it in place.
     Replace,
+    /// A whole file a repair removed (0.59.0 step G2d: a ref pointer candidate).
+    Remove,
 }
 
 /// What `--recovery-list` prints: the sound entries, the damaged regions, and the older files listed by hand.
@@ -1321,6 +1276,7 @@ pub fn recovery_list(layout: &RepositoryLayout) -> Result<RecoveryListing> {
                 kind: match listed.entry.kind {
                     Kind::Cut => RecoveryEntryKind::Cut,
                     Kind::Replace => RecoveryEntryKind::Replace,
+                    Kind::Remove => RecoveryEntryKind::Remove,
                 },
             })
             .collect(),
@@ -1351,6 +1307,7 @@ pub fn recovery_restore(
                 kind: match step.kind {
                     Kind::Cut => "cut".to_string(),
                     Kind::Replace => "rewrite".to_string(),
+                    Kind::Remove => "remove".to_string(),
                 },
                 done: step.done,
                 conditions: step
@@ -1585,7 +1542,7 @@ mod review_fixes {
         append(layout.repository_mutation_root(), &entry("FORMAT", b"old")).expect("append");
         let body = encode_body(&entry("FORMAT", b"newer"));
         let len = (body.len() as u64).to_be_bytes();
-        let version: u16 = VERSION + 1;
+        let version: u16 = VERSION_REMOVE + 1;
         let checksum = crate::foundation::frame_resync::tallied_sha256_parts(&[
             MAGIC,
             &version.to_be_bytes(),

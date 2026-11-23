@@ -72,6 +72,8 @@ pub enum WayOut {
     RefLogLeadsPointer,
     /// 0.59.0 step G2c: a ref's pointer names a RefState the repository does not hold: no command repairs it in place.
     RefStateMissing,
+    /// 0.59.0 step G2d: a lead of one transition that retained evidence does not prove: `ref complete` refuses it and the rebuild drops it.
+    RefLeadUnproved,
     /// A ref's pointer and log disagree, by the code `verify` gives that state.
     RefPublication {
         /// The `PRIKK-VERIFY-REF-*` code.
@@ -176,11 +178,21 @@ impl WayOut {
                         .to_string()
                 }
                 "PRIKK-VERIFY-REF-DIVERGENCE" => format!(
-                    "no command resolves a pointer/log divergence in place (a pointer rebuild would only reproduce \
-                     it), and a signer-backed retry is not authorized without exact retained evidence: {SOUND_COPY}"
+                    "no command resolves this pointer/log divergence in place, and a signer-backed retry is not authorized without exact \
+                     retained evidence: {SOUND_COPY}"
                 ),
+                "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS" => "run `prikk doctor --remove-ref-candidates --plan-only`, then `prikk doctor --remove-ref-candidates`: no command \
+                     writes these files any more (RFC 102 Stage 4); each file's bytes are saved in the recovery log first, and `prikk doctor \
+                     --recovery-restore <run>` puts one back"
+                    .to_string(),
                 _ => "the candidate is kept for inspection; doctor does not infer ownership or remove it".to_string(),
             },
+            Self::RefLeadUnproved => format!(
+                "`prikk ref complete` refuses it (the retained evidence does not prove the lead). Run `prikk doctor --rebuild-pointer-index \
+                 --plan-only`: it names the lead it would drop, a publication the ref log never confirmed; without `--plan-only` it drops that \
+                 lead and re-derives the pointer index from the log (the publication's objects stay, unreached). When the plan refuses, no \
+                 command repairs it in place: {SOUND_COPY}"
+            ),
             Self::RefStateMissing => format!(
                 "no command repairs a missing RefState in place (`prikk doctor --repair-index` and `--rebuild-pointer-index` do not restore an \
                  object that is in no container): {SOUND_COPY}"
@@ -209,6 +221,8 @@ impl WayOut {
 pub(crate) fn for_ref_issue(issue: &crate::refs::RefPublicationIssue) -> WayOut {
     if issue.log_leads {
         WayOut::RefLogLeadsPointer
+    } else if issue.unproved_lead {
+        WayOut::RefLeadUnproved
     } else {
         WayOut::RefPublication {
             code: issue.code.to_string(),
@@ -325,13 +339,15 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
     for issue in report
         .ref_publication_issues
         .iter()
-        .filter(|issue| issue.blocking)
+        .filter(|issue| issue.blocking || issue.code == "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS")
     {
         let kind = for_ref_issue(issue);
         if !out.iter().any(|(_, existing)| *existing == kind) {
             // 0.58.0 step 0b: a seal stopped after it published is not a disagreement (pointer and log agree); name the state.
             let label = if issue.code == "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" {
                 "a seal stopped after it published, before it cleaned the queue"
+            } else if issue.code == "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS" {
+                "a ref pointer candidate remains in refs/tmp"
             } else {
                 "a ref's pointer and log disagree"
             };

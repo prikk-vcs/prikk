@@ -64,12 +64,12 @@ use commands::CliError;
 use output::{
     QueueTarget, QueueThresholdStatus, print_active_session_repairs, print_command_help,
     print_doctor_report, print_help, print_history, print_history_json, print_merge_evidence,
-    print_merge_plan, print_patch_inverse_plan, print_repair_tails_report,
-    print_rollback_draft_report, print_rollback_draft_verification, print_rollback_preview_plan,
-    print_show, print_show_json, print_status_json, print_trust_add_json,
-    print_trust_add_refusal_json, print_trust_check, print_trust_check_json, print_trust_list,
-    print_trust_list_json, print_verify_report, print_verify_report_json, print_worktree_status,
-    print_worktree_status_json,
+    print_merge_plan, print_patch_inverse_plan, print_remove_ref_candidates_report,
+    print_repair_tails_report, print_rollback_draft_report, print_rollback_draft_verification,
+    print_rollback_preview_plan, print_show, print_show_json, print_status_json,
+    print_trust_add_json, print_trust_add_refusal_json, print_trust_check, print_trust_check_json,
+    print_trust_list, print_trust_list_json, print_verify_report, print_verify_report_json,
+    print_worktree_status, print_worktree_status_json,
 };
 use prikk_object::Signature;
 use prikk_store::{
@@ -1715,6 +1715,21 @@ fn run_doctor(args: Vec<String>) -> std::result::Result<(), CliError> {
             println!("plan only -- nothing written");
         } else {
             println!("import cancelled; the repository is untouched");
+        }
+        return Ok(());
+    }
+    // 0.59.0 step G2d: `--remove-ref-candidates [--plan-only]`: its own verb, run alone (args.rs refuses every combination).
+    if doctor_args.remove_ref_candidates {
+        let report = if doctor_args.plan_only {
+            prikk_store::plan_remove_ref_candidates(&layout)
+        } else {
+            prikk_store::remove_ref_candidates(&layout)
+        }
+        .map_err(|err| err.to_string())?;
+        println!("doctor repository: {}", layout.prikk_dir().display());
+        print_remove_ref_candidates_report(&report);
+        if doctor_args.plan_only {
+            println!("plan only -- nothing written");
         }
         return Ok(());
     }

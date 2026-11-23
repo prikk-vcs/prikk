@@ -229,7 +229,7 @@ Current doctor severities are `info`, `warning`, and `error`.
 Publication-trust issues can also appear in doctor output as error-severity diagnostics using the
 trust issue code and message from publication-trust verification. Ref-publication diagnostics use
 their verification codes: pointer lead, retained active cleanup, and unproved divergence are errors;
-candidate debris is a warning.
+candidate debris is a warning, and its recommendation names `prikk doctor --remove-ref-candidates`.
 
 `MissingForEmptyWal` and `ValidForNonEmptyWal` are healthy metadata states and do not produce doctor
 issues by themselves.
@@ -265,6 +265,13 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
 - `--recovery-list`, `--recovery-restore <id>`, and `--recovery-clear`: work with the recovery log. A restore writes only files on its
   repair list, which since 0.57.0 includes the worktree's record (`worktree.baseline`) and the rename declarations, because
   [`prikk uncommit`](commands.md) rewrites them along with the queue.
+- `--remove-ref-candidates [--plan-only]` (0.59.0): removes every file in `.prikk/refs/tmp` (the legacy ref pointer candidates RFC 102 Stage 4
+  retired, and any stray file), clearing `PRIKK-VERIFY-REF-CANDIDATE-DEBRIS`. It takes the active lock and the lock of each ref a decodable
+  candidate names, in sorted order, and refuses at a running holder without waiting; reads again under the locks; **saves each file's bytes in
+  the recovery log (a `remove` entry), then removes it, then syncs the directory**, so a crash leaves the file and a saved copy, and a run
+  again finishes. `--plan-only` lists the files and writes nothing. A directory or other non-file in `refs/tmp` refuses before anything is
+  touched, and no command removes it. `--recovery-restore <id>` recreates a removed file, byte for byte, only where nothing is. A `remove`
+  entry is a version-2 frame: 0.58.0 lists it as written by a newer prikk and handles every other entry as before.
 - `--repair-main-ref`: a recognized input that performs no repair and is always refused
   (`doctor.rs:1263-1269`).
 

@@ -10,8 +10,8 @@ mod container;
 mod evidence;
 pub use blocked::missing_ref_state_sentence;
 pub(crate) use blocked::{
-    PublicationBlock, SOUND_COPY, candidate_debris_refusal, classify_publication_block,
-    missing_received_ref_state, missing_ref_state,
+    PublicationBlock, SOUND_COPY, candidate_in_flight, classify_publication_block,
+    decode_legacy_pointer_candidate, missing_received_ref_state, missing_ref_state,
 };
 pub(crate) mod in_flight;
 mod kept_pointer_index;
@@ -369,8 +369,9 @@ pub(crate) fn ensure_publication_precondition_with_replay(
         }
     }
 
-    if !verify::candidate_issues(layout)?.is_empty() {
-        return Err(candidate_debris_refusal());
+    // 0.59.0 step G2d: a leftover candidate no longer refuses (nothing writes one); only one a running publisher could still be using does.
+    if let Some(refusal) = candidate_in_flight(layout)? {
+        return Err(refusal);
     }
     if let Some(owner) =
         evidence::has_incomplete_active_cleanup_with_replay(layout, exclude_ref_name, replay_out)?

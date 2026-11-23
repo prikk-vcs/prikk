@@ -79,14 +79,9 @@ fn candidate_failure_warns_and_retry_publishes_once() -> prikk_error::Result<()>
     let layout = RepositoryLayout::init(root.clone())?;
     let publication = root_publication(&layout, "heads/main")?;
     let store = RefStore::new(layout.clone());
-    // RFC 102 Stage 4, design-v1.md §13.11: no real publish failure can leave `refs/tmp/` debris
-    // anymore (the candidate-write mechanism `MutableParentSync` instrumented is gone) -- plant it
-    // directly, matching `state_matrix::PersistedState::Candidate`'s own technique. This test's own
-    // claim never depended on *how* the debris got there, only that it blocks every mutation entry
-    // point below and that a normal publish still completes once it stops mattering to the ref
-    // itself (`state_matrix`'s own coverage is per-state, not per-entry-point -- this is what
-    // proves the wedge reaches `append_patch`, `add_trusted_maintainer`, and `repair_repository`,
-    // not just ref publication).
+    // RFC 102 Stage 4, design-v1.md §13.11: no real publish failure can leave `refs/tmp/` debris anymore -- plant it directly. 0.59.0 step G2d:
+    // a leftover candidate no running publisher could be using no longer refuses a writer (it was a test-suite tie, RFC 165 R2); `verify` keeps its
+    // warning, and `prikk doctor --remove-ref-candidates` clears it. The mutation entry points the wedge used to reach go on.
     std::fs::write(layout.ref_tmp_path("heads/main"), b"candidate")?;
     let report = verify_repository(&layout)?;
     assert!(!report.has_blocking_ref_publication_issues());
@@ -96,20 +91,14 @@ fn candidate_failure_warns_and_retry_publishes_once() -> prikk_error::Result<()>
             .iter()
             .any(|issue| issue.code == "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS")
     );
-    assert!(
-        ActiveSession::new(layout.clone())
-            .append_patch(&signed_patch_envelope(), DEFAULT_ACTIVE_PATCH_LIMIT)
-            .is_err()
-    );
-    assert!(
-        add_trusted_maintainer(
-            &layout,
-            "blocked-maintainer",
-            "1111111111111111111111111111111111111111111111111111111111111111"
-        )
-        .is_err()
-    );
-    assert!(repair_repository(&layout, DoctorRepairOptions::truncate_wal_tail()).is_err());
+    ActiveSession::new(layout.clone())
+        .append_patch(&signed_patch_envelope(), DEFAULT_ACTIVE_PATCH_LIMIT)?;
+    add_trusted_maintainer(
+        &layout,
+        "blocked-maintainer",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+    )?;
+    repair_repository(&layout, DoctorRepairOptions::truncate_wal_tail())?;
     assert_eq!(
         store.finish_interrupted_publication_for_test(&publication)?,
         publication.ref_state.object_id()

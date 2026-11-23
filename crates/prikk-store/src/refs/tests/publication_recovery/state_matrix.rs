@@ -55,9 +55,10 @@ const CASES: &[StateCase] = &[
         },
         doctor_code: "PRIKK-VERIFY-REF-CANDIDATE-DEBRIS",
         doctor_severity: DoctorSeverity::Warning,
-        recommendation: "the candidate is kept for inspection",
+        recommendation: "prikk doctor --remove-ref-candidates",
         retry: RetryExpectation::Completes { log_records: 1 },
-        mutation_succeeds: false,
+        // 0.59.0 step G2d: a leftover candidate no running publisher could be using no longer refuses a writer.
+        mutation_succeeds: true,
     },
     StateCase {
         state: PersistedState::PointerLeading,

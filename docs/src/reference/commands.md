@@ -91,6 +91,7 @@ prikk doctor [path] --repair-tails [--plan-only]
 prikk doctor [path] --repair-main-ref
 prikk doctor [path] --rebuild-pointer-index [--plan-only]
 prikk doctor [path] --rebuild-caches [--plan-only]
+prikk doctor [path] --remove-ref-candidates [--plan-only]
 prikk doctor [path] --discard-damaged-commits [--plan-only]
 prikk doctor [path] --restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]
 prikk doctor [path] --recovery-list
@@ -146,6 +147,12 @@ sealed, and nothing is wrong when you run it: it is not a repair, and it shares 
   was published under a blob.
 - **Output.** Text only, with the other repairs' exit codes: 0 done, 1 refused, 2 usage. No `--format json`: the JSON tier of
   the whole CLI is decided once, not command by command.
+
+**`doctor --remove-ref-candidates` removes the files left in `.prikk/refs/tmp`, saving each in the recovery log first.** They are ref pointer
+candidates from the publication path RFC 102 Stage 4 retired; no version writes one and no code reads one. It refuses at a running publisher of a
+ref a candidate names (it never waits), and at a non-file in the directory. `--plan-only` prints each file, what it is and its size, and writes
+nothing; a repeat prints `no ref pointer candidate remains`. It runs alone. `prikk doctor --recovery-restore <run>` recreates a removed file where
+nothing is.
 
 **`doctor --rebuild-caches` rebuilds every derived cache that has a divergence check.** There are two,
 `.prikk/cache/commit-index.v1` and `.prikk/cache/lifecycle-state.v1`; both only save `commit` work and hold

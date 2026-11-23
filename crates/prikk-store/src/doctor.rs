@@ -22,10 +22,15 @@ use crate::verify::{
 use crate::wal::{Wal, WalRecordStatus, WalRepair};
 
 mod discard_damaged_commits;
+mod remove_ref_candidates;
 mod repair_tails;
 mod restore_queue_target;
 pub use discard_damaged_commits::{
     DiscardDamagedCommitsPlan, discard_damaged_commits, plan_discard_damaged_commits,
+};
+pub use remove_ref_candidates::{
+    RefCandidateAction, RefCandidateKind, RefCandidateOutcome, RemoveRefCandidatesReport,
+    plan_remove_ref_candidates, remove_ref_candidates,
 };
 pub use repair_tails::{
     RepairTailsFileOutcome, RepairTailsReport, plan_repair_tails, repair_tails,

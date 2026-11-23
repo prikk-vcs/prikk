@@ -88,7 +88,6 @@ enum State {
     DamagedPointer,
     RefStateMissing,
     SealStoppedAfterPublish,
-    Debris,
     LogLeads,
     /// The pointer is two transitions ahead of the log (G2c: the rebuild refuses it; the last arm names `verify`).
     TwoAhead,
@@ -137,10 +136,6 @@ fn build(state: State) -> PathBuf {
                     ] {
                         std::fs::copy(g1.join(part), repo.join(".prikk").join(part)).unwrap();
                     }
-                }
-                State::Debris => {
-                    std::fs::create_dir_all(repo.join(".prikk/refs/tmp")).unwrap();
-                    std::fs::write(repo.join(".prikk/refs/tmp/candidate.tmp"), b"x").unwrap();
                 }
                 State::SealStoppedAfterPublish => unreachable!(),
             }
@@ -223,7 +218,6 @@ fn names(state: State) -> &'static [&'static str] {
             "the ref log is ahead of the pointer index for heads/main; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`",
         ],
         State::TwoAhead => &["run `prikk verify`, which names the way out of this state"],
-        State::Debris => &[OLD_GENERIC],
     }
 }
 
@@ -243,7 +237,7 @@ fn used_to_print_the_generic(state: State, label: &str) -> bool {
             ["branch create", "branch close", "uncommit"].contains(&label)
                 || always.contains(&label) && label != "rollback-draft"
         }
-        State::LogLeads | State::Debris | State::TwoAhead => true,
+        State::LogLeads | State::TwoAhead => true,
     }
 }
 
@@ -254,7 +248,6 @@ fn every_writer_that_printed_the_generic_names_its_states_way_out() {
         State::DamagedPointer,
         State::RefStateMissing,
         State::SealStoppedAfterPublish,
-        State::Debris,
         State::LogLeads,
         State::TwoAhead,
     ] {
@@ -267,12 +260,10 @@ fn every_writer_that_printed_the_generic_names_its_states_way_out() {
             let out = prikk(&repo, &args);
             let said = text(&out);
             assert_eq!(out.status.code(), Some(1), "{state:?}/{label}: {said}");
-            if state != State::Debris {
-                assert!(
-                    !said.contains(OLD_GENERIC),
-                    "{state:?}/{label} still prints the generic: {said}"
-                );
-            }
+            assert!(
+                !said.contains(OLD_GENERIC),
+                "{state:?}/{label} still prints the generic: {said}"
+            );
             assert!(
                 names(state).iter().any(|phrase| said.contains(phrase)),
                 "{state:?}/{label}: expected one of {:?} in: {said}",
@@ -816,6 +807,196 @@ fn a_path_with_a_space_is_quoted_in_the_printed_command_and_the_command_runs() {
     ok(
         &prikk(&repo, &["branch", "switch", "heads/main"]),
         "the switch after the restore",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ---- 0.59.0 step G2d: candidate debris and the unproved lead -------------------------------------------------------------------------------
+
+fn sealed_repo(tag: &str) -> PathBuf {
+    let repo = support::unique_repo(tag);
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "a.txt", b"one\n", "one");
+    repo
+}
+
+fn plant(repo: &Path, name: &str, bytes: &[u8]) {
+    std::fs::create_dir_all(repo.join(".prikk/refs/tmp")).unwrap();
+    std::fs::write(repo.join(".prikk/refs/tmp").join(name), bytes).unwrap();
+}
+
+fn tmp_names(repo: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(repo.join(".prikk/refs/tmp"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// **A leftover candidate no longer refuses a writer; `verify` keeps its warning and names the verb; the verb's plan, run and repeat do what
+/// they say; the restore puts the files back byte for byte.** Every writer that printed the generic for it (G1 §1) goes through now.
+#[test]
+fn debris_does_not_refuse_a_writer_and_the_verb_clears_the_warning_and_is_undone_by_the_restore() {
+    let repo = sealed_repo("g2d-debris");
+    plant(&repo, "0.tmp", b"");
+    plant(&repo, "1.tmp", b"PREFPTR1 and then garbage");
+    for (label, args) in writers() {
+        if label == "commit" || label == "rollback-draft" {
+            continue;
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let said = text(&prikk(&repo, &args));
+        assert!(
+            !said.contains(OLD_GENERIC) && !said.contains("incomplete ref publication"),
+            "{label}: {said}"
+        );
+    }
+    ok(
+        &prikk(
+            &repo,
+            &["tag", "create", "tags/after", "--target", "heads/main"],
+        ),
+        "tag create beside the debris",
+    );
+    let verify = prikk(&repo, &["verify"]);
+    ok(&verify, "verify (a warning only)");
+    let said = text(&verify);
+    assert!(said.contains("PRIKK-VERIFY-REF-CANDIDATE-DEBRIS"), "{said}");
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("way out [a ref pointer candidate remains in refs/tmp]"))
+        .unwrap_or_else(|| panic!("no way-out line: {said}"));
+    assert!(
+        line.contains("`prikk doctor --remove-ref-candidates --plan-only`"),
+        "{line}"
+    );
+
+    // The plan: names each file, writes nothing.
+    let plan = prikk(&repo, &["doctor", "--remove-ref-candidates", "--plan-only"]);
+    ok(&plan, "the plan");
+    let said = text(&plan);
+    assert!(said.contains("refs/tmp/0.tmp: would be removed"), "{said}");
+    assert!(said.contains("refs/tmp/1.tmp: would be removed"), "{said}");
+    assert!(said.contains("plan only -- nothing written"), "{said}");
+    assert_eq!(tmp_names(&repo), ["0.tmp", "1.tmp"]);
+    // The run, then the repeat.
+    let run = prikk(&repo, &["doctor", "--remove-ref-candidates"]);
+    ok(&run, "the run");
+    let said = text(&run);
+    assert!(said.contains("saved first: recovery/log, run "), "{said}");
+    assert!(tmp_names(&repo).is_empty());
+    let said = text(&prikk(&repo, &["verify"]));
+    assert!(!said.contains("CANDIDATE-DEBRIS"), "{said}");
+    let repeat = prikk(&repo, &["doctor", "--remove-ref-candidates"]);
+    ok(&repeat, "the repeat");
+    assert!(text(&repeat).contains("no ref pointer candidate remains"));
+    // The way back.
+    let listing = text(&prikk(&repo, &["doctor", "--recovery-list"]));
+    let run_id = listing
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("run ")
+                .and_then(|rest| rest.split(':').next())
+        })
+        .unwrap_or_else(|| panic!("no run: {listing}"))
+        .to_string();
+    assert!(
+        listing.contains("refs/tmp/1.tmp") && listing.contains("remove-ref-candidates"),
+        "{listing}"
+    );
+    ok(
+        &prikk(&repo, &["doctor", "--recovery-restore", &run_id]),
+        "the restore",
+    );
+    assert_eq!(tmp_names(&repo), ["0.tmp", "1.tmp"]);
+    assert_eq!(
+        std::fs::read(repo.join(".prikk/refs/tmp/1.tmp")).unwrap(),
+        b"PREFPTR1 and then garbage"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn the_verb_runs_alone_and_refuses_a_directory_in_refs_tmp_without_touching_anything() {
+    let repo = sealed_repo("g2d-damage");
+    plant(&repo, "a.tmp", b"x");
+    let usage = prikk(
+        &repo,
+        &["doctor", "--remove-ref-candidates", "--repair-tails"],
+    );
+    assert_eq!(usage.status.code(), Some(2), "{}", text(&usage));
+    assert!(
+        text(&usage).contains("--remove-ref-candidates cannot be combined"),
+        "{}",
+        text(&usage)
+    );
+    std::fs::create_dir_all(repo.join(".prikk/refs/tmp/d")).unwrap();
+    for args in [
+        &["doctor", "--remove-ref-candidates", "--plan-only"][..],
+        &["doctor", "--remove-ref-candidates"][..],
+    ] {
+        let out = prikk(&repo, args);
+        assert_eq!(out.status.code(), Some(1), "{}", text(&out));
+        assert!(
+            text(&out).contains("unexpected non-file in ref candidate directory: refs/tmp/d")
+                && text(&out).contains("no command removes it"),
+            "{}",
+            text(&out)
+        );
+    }
+    assert_eq!(tmp_names(&repo), ["a.tmp", "d"]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **The unproved lead (item 0):** the sentence's first command is run and clears the state: `ref complete` refuses, the rebuild's plan names the
+/// lead it drops, the rebuild runs, and `verify` and the next writer go through.
+#[test]
+fn an_unproved_lead_names_the_rebuild_and_the_rebuild_clears_it() {
+    let (repo, g1) = two_generations("g2d-unproved");
+    // A queued commit owned by heads/main that is not the leading Block's patches, then the log one transition behind the pointer.
+    std::fs::write(repo.join("c.txt"), b"three\n").unwrap();
+    ok(
+        &support::commit(&repo, "heads/main", "three"),
+        "a queued commit",
+    );
+    std::fs::copy(g1.join("refs/containers/log-a.container"), repo.join(LOG)).unwrap();
+    let verify = prikk(&repo, &["verify"]);
+    assert_eq!(verify.status.code(), Some(1), "{}", text(&verify));
+    let said = text(&verify);
+    assert!(said.contains("PRIKK-VERIFY-REF-DIVERGENCE"), "{said}");
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("way out [a ref's pointer and log disagree]"))
+        .unwrap_or_else(|| panic!("no way-out line: {said}"));
+    assert!(
+        line.contains("`prikk ref complete` refuses it")
+            && line.contains("`prikk doctor --rebuild-pointer-index --plan-only`")
+            && line.contains("drops that lead"),
+        "{line}"
+    );
+    // The sentence's claims, run: ref complete refuses; the plan names the drop; the rebuild runs; the repository is whole again.
+    let complete = prikk(&repo, &["ref", "complete", "heads/main", "--plan-only"]);
+    assert_eq!(complete.status.code(), Some(1), "{}", text(&complete));
+    let plan = prikk(&repo, &["doctor", "--rebuild-pointer-index", "--plan-only"]);
+    ok(&plan, "the rebuild's plan");
+    assert!(
+        text(&plan).contains("dropped lead: heads/main"),
+        "{}",
+        text(&plan)
+    );
+    ok(
+        &prikk(&repo, &["doctor", "--rebuild-pointer-index"]),
+        "the rebuild",
+    );
+    ok(&prikk(&repo, &["verify"]), "verify after the rebuild");
+    ok(
+        &prikk(
+            &repo,
+            &["tag", "create", "tags/ok", "--target", "heads/main"],
+        ),
+        "the next writer",
     );
     let _ = std::fs::remove_dir_all(&repo);
 }

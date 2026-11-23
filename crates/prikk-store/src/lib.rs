@@ -223,9 +223,11 @@ pub use diff::{
 pub use doctor::{
     ActiveSessionRepairOutcome, ActiveSessionRepairStatus, CommitSummary,
     DiscardDamagedCommitsPlan, DoctorIssue, DoctorRepairOptions, DoctorRepairReport, DoctorReport,
-    DoctorSeverity, RepairTailsFileOutcome, RepairTailsReport, RestoreQueueTargetPlan,
-    discard_damaged_commits, doctor_repository, plan_discard_damaged_commits, plan_repair_tails,
-    plan_restore_queue_target, repair_object_index, repair_pointer_index_tail, repair_repository,
+    DoctorSeverity, RefCandidateAction, RefCandidateKind, RefCandidateOutcome,
+    RemoveRefCandidatesReport, RepairTailsFileOutcome, RepairTailsReport, RestoreQueueTargetPlan,
+    discard_damaged_commits, doctor_repository, plan_discard_damaged_commits,
+    plan_remove_ref_candidates, plan_repair_tails, plan_restore_queue_target,
+    remove_ref_candidates, repair_object_index, repair_pointer_index_tail, repair_repository,
     repair_tails, restore_queue_target,
 };
 pub use extract::{

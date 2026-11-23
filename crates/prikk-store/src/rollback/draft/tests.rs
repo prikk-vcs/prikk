@@ -147,8 +147,10 @@ fn rollback_draft_appends_inverse_patch_to_empty_active_wal() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// 0.59.0 step G2d: a leftover candidate no running publisher could be using is not what refuses a rollback draft any more (the refusal that is
+/// left is another command publishing the ref the candidate names, and it comes before planning and before any WAL write).
 #[test]
-fn rollback_draft_refuses_candidate_debris_before_planning_or_wal_mutation()
+fn rollback_draft_refuses_a_candidate_a_running_publisher_could_use_before_planning_or_wal_mutation()
 -> prikk_error::Result<()> {
     let root = unique_temp_dir("rollback-draft-candidate-guard");
     let layout = RepositoryLayout::init(root.clone())?;
@@ -157,7 +159,19 @@ fn rollback_draft_refuses_candidate_debris_before_planning_or_wal_mutation()
         .parent()
         .ok_or_else(|| prikk_error::PrikkError::Integrity("candidate has no parent".to_string()))?;
     std::fs::create_dir_all(parent)?;
-    std::fs::write(&candidate, b"candidate")?;
+    let mut bytes = b"PREFPTR1".to_vec();
+    bytes.extend_from_slice(&("heads/main".len() as u64).to_be_bytes());
+    bytes.extend_from_slice(b"heads/main");
+    bytes.extend_from_slice(&[7; 32]);
+    std::fs::write(&candidate, &bytes)?;
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("ref");
+    std::fs::create_dir_all(
+        layout
+            .ref_lock_path("heads/main")
+            .parent()
+            .ok_or_else(|| prikk_error::PrikkError::Integrity("lock has no parent".to_string()))?,
+    )?;
+    std::fs::write(layout.ref_lock_path("heads/main"), body)?;
 
     let error = append_rollback_draft(&layout, "heads/main", "blocked", &test_signer())
         .err()
@@ -167,15 +181,17 @@ fn rollback_draft_refuses_candidate_debris_before_planning_or_wal_mutation()
     assert!(
         error
             .to_string()
-            .contains("repository mutation is blocked by incomplete ref publication")
+            .contains("another command is publishing heads/main"),
+        "{error}"
     );
-    assert_eq!(std::fs::read(&candidate)?, b"candidate");
+    assert_eq!(std::fs::read(&candidate)?, bytes);
     assert!(
         Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
             .replay()?
             .records
             .is_empty()
     );
+    child.kill()?;
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

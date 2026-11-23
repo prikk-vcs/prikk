@@ -36,6 +36,9 @@ pub struct RefPublicationIssue {
     /// 0.59.0 step G2c: the ref log is **ahead** of the pointer index for this ref (the pointer is an earlier record of the log, or absent while the
     /// log has records): the one divergence `prikk doctor --rebuild-pointer-index` re-derives and accepts. Typed, so a way out never reads the message.
     pub(crate) log_leads: bool,
+    /// 0.59.0 step G2d: the pointer leads the log by one transition, and the retained evidence (the active queue, the trust of the signer) does not prove
+    /// it: `ref complete` refuses, and `doctor --rebuild-pointer-index` drops the lead (measured). Typed; never read from the message.
+    pub(crate) unproved_lead: bool,
 }
 
 impl RefPublicationIssue {
@@ -453,6 +456,7 @@ pub(in crate::refs) fn candidate_issues(
                 message: "non-authoritative ref pointer candidate remains".to_string(),
                 blocking: false,
                 log_leads: false,
+                unproved_lead: false,
             });
         } else {
             return Err(PrikkError::Integrity(
@@ -470,5 +474,6 @@ fn blocking_issue(code: &'static str, ref_name: &str, message: String) -> RefPub
         message,
         blocking: true,
         log_leads: false,
+        unproved_lead: false,
     }
 }

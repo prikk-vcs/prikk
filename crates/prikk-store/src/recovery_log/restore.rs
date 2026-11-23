@@ -174,7 +174,9 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
             continue;
         };
         let entry = &listed.entry;
-        if !repair_sources.contains(&entry.source) {
+        let candidate_remove =
+            entry.kind == Kind::Remove && super::is_ref_candidate_source(&entry.source);
+        if !candidate_remove && !repair_sources.contains(&entry.source) {
             let mut plan = refused_plan(
                 &run,
                 format!(
@@ -239,6 +241,13 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                     .is_some_and(|bytes| sha(bytes) == entry.prefix_hash),
                 entry.removed.clone(),
             ),
+            // The file is back as the repair found it.
+            Kind::Remove => (
+                current
+                    .as_deref()
+                    .is_some_and(|bytes| sha(bytes) == entry.prefix_hash),
+                entry.removed.clone(),
+            ),
         };
         if done {
             plan.steps.push(Step {
@@ -294,6 +303,22 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                     after.extend_from_slice(&entry.removed);
                 }
                 Some(after)
+            }
+            Kind::Remove => {
+                // Recreated only where nothing is: a file now at the path is not the repair's to overwrite.
+                let holds = current.is_none();
+                conditions.push(Condition {
+                    text: if holds {
+                        format!("{} is absent, as the repair left it", entry.source)
+                    } else {
+                        format!(
+                            "{} exists again, with other bytes than the repair removed",
+                            entry.source
+                        )
+                    },
+                    holds,
+                });
+                Some(entry.removed.clone())
             }
             Kind::Replace => {
                 let holds = current
@@ -365,6 +390,16 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
             }
             match kind {
                 Kind::Cut => append_file_required(root, Path::new(source), bytes)?,
+                Kind::Remove => {
+                    let relative = Path::new(source);
+                    ensure_directory_required(
+                        root,
+                        relative.parent().unwrap_or_else(|| Path::new("")),
+                    )?;
+                    create_new_file_required(root, relative, bytes).map_err(|error| {
+                        PrikkError::MalformedData(format!("recreating {source}: {error}"))
+                    })?;
+                }
                 Kind::Replace => {
                     overwrite_in_place_required(root, Path::new(source), 0, bytes)?;
                     truncate_existing_file_required(root, Path::new(source), bytes.len() as u64)?;

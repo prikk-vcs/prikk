@@ -41,8 +41,6 @@ pub(crate) enum PublicationBlock {
         /// The RefState it names.
         ref_state_id: ObjectId,
     },
-    /// A ref-pointer candidate is left in `refs/tmp`.
-    CandidateDebris,
 }
 
 /// Classify the block, `None` when it is none of the four. Read-only; whole reads of the pointer index, the ref log and the object index
@@ -120,18 +118,7 @@ pub(crate) fn classify_publication_block(
             }));
         }
     }
-    if !super::verify::candidate_issues(layout)?.is_empty() {
-        return Ok(Some(PublicationBlock::CandidateDebris));
-    }
     Ok(None)
-}
-
-/// Candidate debris keeps the text it had until step G2b decides what clears it (0.59.0 G2a: "candidate debris keeps today's text").
-pub(crate) fn candidate_debris_refusal() -> PrikkError {
-    PrikkError::IncompletePublication(
-        "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
-            .to_string(),
-    )
 }
 
 /// **The one sentence for a RefState the repository does not hold** (0.59.0 step G2c): every reader that follows a ref to its RefState and finds
@@ -163,4 +150,67 @@ pub(crate) fn missing_received_ref_state(ref_name: &str, ref_state_id: ObjectId)
         "received ref {ref_name} names RefState {ref_state_id}, which this repository does not hold; run `prikk received remove {ref_name} \
          --plan-only`, then `prikk received remove {ref_name}`, and receive it again if you still have it"
     ))
+}
+
+/// `PREFPTR1`, a big-endian u64 length, the ref name, the 32-byte RefState id: the file RFC 102 Stage 4 retired (a ref pointer candidate in
+/// `refs/tmp`). `None` for any other bytes.
+#[must_use]
+pub(crate) fn decode_legacy_pointer_candidate(bytes: &[u8]) -> Option<(String, ObjectId)> {
+    let rest = bytes.strip_prefix(b"PREFPTR1".as_slice())?;
+    let len = usize::try_from(u64::from_be_bytes(rest.get(..8)?.try_into().ok()?)).ok()?;
+    let name_end = 8_usize.checked_add(len)?;
+    let name = String::from_utf8(rest.get(8..name_end)?.to_vec()).ok()?;
+    let id: [u8; 32] = rest
+        .get(name_end..name_end.checked_add(32)?)?
+        .try_into()
+        .ok()?;
+    if rest.len() != name_end + 32 {
+        return None;
+    }
+    Some((name, ObjectId::from_bytes(id)))
+}
+
+/// **A candidate a publisher could still be using** (0.59.0 step G2d): the only reason the write-path precondition has left to refuse on a file in
+/// `refs/tmp`. No writer of this version makes a candidate, so a file there is debris -- unless it decodes as a legacy pointer candidate for a ref
+/// whose `RefLock` another running process holds, which is in flight. `None` for everything else (the writers go on; `verify` keeps its warning, and
+/// `prikk doctor --remove-ref-candidates` clears it). A non-file entry is damage and refuses, as it always did.
+///
+/// # Errors
+///
+/// A non-file entry in `refs/tmp`; an unreadable directory or file.
+pub(crate) fn candidate_in_flight(layout: &RepositoryLayout) -> Result<Option<PrikkError>> {
+    let dir = layout.refs_dir().join("tmp");
+    let relative = layout.repository_relative(&dir)?;
+    let root = layout.repository_mutation_root();
+    let Some(entries) = crate::foundation::fsutil::list_directory_tolerating_absence(
+        root,
+        &dir,
+        &relative,
+        "the ref candidate directory",
+    )?
+    else {
+        return Ok(None);
+    };
+    for entry in entries {
+        if entry.kind != crate::foundation::fsutil::EntryKind::Regular {
+            return Err(PrikkError::Integrity(format!(
+                "unexpected non-file in ref candidate directory: refs/tmp/{}; no command removes it",
+                entry.name.to_string_lossy()
+            )));
+        }
+        let Some(bytes) =
+            crate::foundation::fsutil::read_file_if_exists(root, &relative.join(&entry.name))?
+        else {
+            continue;
+        };
+        if let Some((ref_name, _)) = decode_legacy_pointer_candidate(&bytes) {
+            if super::in_flight::ref_publisher_running(layout, &ref_name)? {
+                return Ok(Some(PrikkError::Precondition(format!(
+                    "{}; run this command again when it finishes",
+                    super::in_flight::in_flight_sentence(&ref_name, None)
+                ))));
+            }
+        }
+    }
+    Ok(None)
 }

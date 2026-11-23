@@ -120,6 +120,7 @@ pub(super) fn in_flight_issue(ref_name: &str, pid: u32) -> RefPublicationIssue {
         message: in_flight_finding(ref_name, Some(pid)),
         blocking: false,
         log_leads: false,
+        unproved_lead: false,
     }
 }
 
@@ -131,6 +132,7 @@ pub(super) fn in_flight_issue_for(ref_name: &str, pid: Option<u32>) -> RefPublic
         message: in_flight_finding(ref_name, pid),
         blocking: false,
         log_leads: false,
+        unproved_lead: false,
     }
 }
 
@@ -181,6 +183,7 @@ fn add_incomplete_cleanup_issue(
                 message: in_flight_finding(ref_name, Some(pid)),
                 blocking: false,
                 log_leads: false,
+                unproved_lead: false,
             });
             return Ok(());
         }
@@ -191,6 +194,7 @@ fn add_incomplete_cleanup_issue(
                 .to_string(),
             blocking: true,
             log_leads: false,
+            unproved_lead: false,
         });
     }
     Ok(())
@@ -202,4 +206,5 @@ fn mark_unproved(issue: &mut RefPublicationIssue) {
         "pointer/log divergence is not proved by matching retained active state and trust"
             .to_string();
     issue.blocking = true;
+    issue.unproved_lead = true;
 }

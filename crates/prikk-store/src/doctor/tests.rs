@@ -739,7 +739,20 @@ fn doctor_rechecks_publication_guard_after_acquiring_active_lock() -> prikk_erro
         .parent()
         .ok_or_else(|| prikk_error::PrikkError::Integrity("candidate has no parent".to_string()))?;
     std::fs::create_dir_all(parent)?;
-    std::fs::write(&candidate, b"candidate")?;
+    // 0.59.0 step G2d: the guard left for a candidate is a legacy pointer candidate whose ref another running process is publishing.
+    let mut bytes = b"PREFPTR1".to_vec();
+    bytes.extend_from_slice(&("heads/main".len() as u64).to_be_bytes());
+    bytes.extend_from_slice(b"heads/main");
+    bytes.extend_from_slice(&[7; 32]);
+    std::fs::write(&candidate, &bytes)?;
+    let (mut child, body) = crate::lock_holder::body_naming_another_running_process("ref");
+    std::fs::create_dir_all(
+        layout
+            .ref_lock_path("heads/main")
+            .parent()
+            .ok_or_else(|| prikk_error::PrikkError::Integrity("lock has no parent".to_string()))?,
+    )?;
+    std::fs::write(layout.ref_lock_path("heads/main"), body)?;
 
     assert!(repair_repository(&layout, DoctorRepairOptions::truncate_wal_tail()).is_err());
     drop(active_lock);
@@ -749,16 +762,17 @@ fn doctor_rechecks_publication_guard_after_acquiring_active_lock() -> prikk_erro
     assert!(
         error
             .to_string()
-            .contains("repository mutation is blocked by incomplete ref publication")
+            .contains("another command is publishing heads/main"),
+        "{error}"
     );
-    // RFC 132 part 2: an incomplete publication is a caller precondition, not a lock -- nothing is
-    // held and no other writer is racing this one.
+    // RFC 132 part 2: a publication in flight is a caller precondition, not a lock -- nothing is held and this one does not wait.
     assert!(
         error.to_string().starts_with("precondition not met:"),
         "unexpected error: {error}"
     );
     assert_eq!(std::fs::read(layout.default_queue_wal_path())?, before);
-    assert_eq!(std::fs::read(&candidate)?, b"candidate");
+    assert_eq!(std::fs::read(&candidate)?, bytes);
+    child.kill()?;
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
