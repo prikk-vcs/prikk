@@ -388,28 +388,31 @@ fn removing_the_sealing_key_says_what_it_does_and_re_adding_it_restores_the_hist
     support::init(&repo);
     support::generation(&repo, "heads/main", "a.txt", b"one\n", "one");
     support::generation(&repo, "heads/main", "b.txt", b"two\n", "two");
-    // A second key, so the first can be removed (the last cannot).
-    let seed = repo.join("second.seed");
+    // A second key, so the first can be removed (the last cannot). Made by `prikk setup` in a second repository, whose config home is its own
+    // (`isolated_config_home` is keyed by repository): `prikk key generate --out <file>` writes a seed file at inherited permissions, which
+    // prikk refuses on Windows by design, and this test must run there.
+    let other = support::unique_repo("g2a-key-removal-second");
     ok(
-        &support::prikk(&repo)
-            .args(["key", "generate", "--out"])
-            .arg(&seed)
+        &support::prikk(&other)
+            .args(["setup"])
+            .arg(&other)
             .output()
             .unwrap(),
-        "key generate",
+        "setup in a second repository",
     );
-    let public = text(
-        &support::prikk(&repo)
-            .args(["key", "public", "--seed-file"])
-            .arg(&seed)
+    let status = text(
+        &support::prikk(&other)
+            .args(["key", "status", "--role", "maintainer"])
             .output()
             .unwrap(),
     );
-    let second_public: String = public
-        .split_whitespace()
-        .find(|word| word.len() == 64 && word.chars().all(|c| c.is_ascii_hexdigit()))
-        .unwrap()
+    let second_public: String = status
+        .lines()
+        .find_map(|line| line.strip_prefix("public key: "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("key status prints the public key")
         .to_string();
+    let _ = std::fs::remove_dir_all(&other);
     ok(
         &plain(
             &repo,
