@@ -243,7 +243,11 @@ CI. The procedure ([RFC 152 §3](https://github.com/prikk-vcs/prikk/blob/main/rf
 5. **Verify the artifact.** Download the Linux asset, check its sha256 against the published file, read
    its build-info (commit and tag), run its `--version`, compare the Release page's notes with the
    tagged CHANGELOG section, and run the smoke script against it: what is
-   checked is the bytes users get, not the tree they came from.
+   checked is the bytes users get, not the tree they came from. **Rebuild the Linux binary by the Release page's own sentence**
+   (`RUSTFLAGS="$(python3 scripts/reproducible_rustflags.py)" cargo build -p prikk --release --target <triple> --locked`, with the
+   `rustc` the build-info names) and compare `sha256sum` of the rebuilt `target/<triple>/release/prikk` with `tar -xzOf prikk-<triple>.tar.gz prikk | sha256sum`
+   (the archive's own bytes carry file times, so the archive's checksum is not the comparison). They are equal; if they are not, the sentence on the page is false, and
+   the release's notes are not corrected in place: the next patch release says so.
 6. **Publish on the owner's word, per release.** The eight crates in dependency order from a detached
    worktree at the tag, each confirmed on the registry index; then `cargo install prikk --version X`
    and the smoke script once more against what crates.io serves.

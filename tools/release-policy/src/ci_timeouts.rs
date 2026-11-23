@@ -79,7 +79,13 @@ pub(crate) fn parse_jobs(text: &str) -> Vec<JobEntry> {
                 continue;
             }
         }
-        if line.trim_start().starts_with("timeout-minutes:") {
+        // The job's own limit: exactly four spaces. **A step's `timeout-minutes` (eight spaces, 0.59.0 RH1 gave several steps one) bounds that
+        // step and says nothing about the job**, so it must not satisfy this gate: before RH1 the check read the line at any indent, and a step-level
+        // limit would have hidden a job with none.
+        if line
+            .strip_prefix("    ")
+            .is_some_and(|rest| rest.starts_with("timeout-minutes:"))
+        {
             if let Some(last) = jobs.last_mut() {
                 last.has_timeout = true;
             }

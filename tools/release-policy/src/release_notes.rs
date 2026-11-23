@@ -148,20 +148,57 @@ fn platform_paragraph(dist_dir: &Path) -> Result<String> {
     } else {
         ""
     };
+    let reproduce = reproduce_paragraph(
+        by_os.contains_key("Linux"),
+        by_os.len() > 1 || !by_os.contains_key("Linux"),
+    );
     Ok(format!(
         "## Prebuilt binaries\n\
          \n\
          {summary}. Each archive contains the `prikk` binary, `LICENSE`, `THIRD-PARTY-NOTICES` (the licences of the crates linked into the binary), and a sibling `.sha256`\n\
          checksum plus `.build-info.txt` recording the exact toolchain and command used to build\n\
-         it — reproduce with:\n\
-         \n\
-         ```sh\n\
-         git checkout <tag> && cargo build -p prikk --release --target <triple> --locked\n\
-         ```\n\
+         it.{reproduce}\n\
          \n\
          `cargo install prikk` remains the toolchain-based install path; these binaries are an\n\
          additional option, not a replacement.{macos_note}"
     ))
+}
+
+/// What a reader can reproduce, said exactly (0.59.0 RH1). **A Linux binary is built with `scripts/reproducible_rustflags.py`'s `RUSTFLAGS`**, which
+/// remap the three absolute paths a build embeds (the registry, the toolchain's source, the checkout), so its hash depends on the source, the toolchain
+/// and the flags, and on no directory (measured: builds at three checkout paths and three `CARGO_HOME`s, with and without `rust-src`, gave one hash). The
+/// macOS and Windows binaries are built with the plain command and embed the runner's paths, so the sentence says that a rebuild gives the same source
+/// and toolchain, not the same bytes. `.sha256` is the checksum of the *archive*, whose own bytes carry file times, so the comparison is of the
+/// `prikk` file inside it.
+fn reproduce_paragraph(linux: bool, other: bool) -> String {
+    let mut out = String::new();
+    if linux {
+        out.push_str(
+            "\n\
+             \n\
+             **Reproducing a Linux binary.** `.sha256` is the checksum of the archive, whose own bytes carry file times, so compare the `prikk` file inside it. \
+             With the `rustc` that `.build-info.txt` names, in a POSIX shell, at the root of a checkout of the tag (`<triple>` is the archive's target):\n\
+             \n\
+             ```sh\n\
+             git checkout <tag> && RUSTFLAGS=\"$(python3 scripts/reproducible_rustflags.py)\" cargo build -p prikk --release --target <triple> --locked\n\
+             tar -xzOf prikk-<triple>.tar.gz prikk | sha256sum\n\
+             sha256sum target/<triple>/release/prikk\n\
+             ```\n\
+             \n\
+             The two SHA-256 values are equal. The flags remap the three absolute paths a build embeds (the registry under `CARGO_HOME`, the toolchain's source, the \
+             checkout) to fixed names, so the hash does not depend on the directory the checkout is in, on `CARGO_HOME`, or on whether `rust-src` is installed; it does \
+             depend on the `rustc` and on those flags, which `.build-info.txt` records. A different `rustc` gives a different binary.",
+        );
+    }
+    if other {
+        out.push_str(
+            "\n\
+             \n\
+             **The macOS and Windows binaries** are built with `cargo build -p prikk --release --target <triple> --locked` at the runner's own directories and embed \
+             them. The same source and toolchain rebuild the same program, but not the same bytes, so a hash will not match.",
+        );
+    }
+    out
 }
 
 /// Every target this function is asked about came from a `.build-info.txt` file that already

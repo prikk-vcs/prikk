@@ -236,3 +236,33 @@ jobs:
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// **0.59.0 RH1: a step's `timeout-minutes` does not stand in for the job's.** RH1 put step-level limits on the work a job exists to bound; the gate
+/// read `timeout-minutes` at any indent, so a job with only a step-level one would have passed. Perturb: read at any indent again and this fails.
+#[test]
+fn a_step_level_timeout_does_not_satisfy_the_job_level_gate() {
+    let text = r#"
+name: example
+jobs:
+  only-a-step-limit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test
+        timeout-minutes: 15
+        run: cargo test
+  has-both:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Test
+        timeout-minutes: 15
+        run: cargo test
+"#;
+    assert_eq!(
+        parse_jobs(text),
+        vec![
+            job("only-a-step-limit", false, None),
+            job("has-both", true, None),
+        ]
+    );
+}

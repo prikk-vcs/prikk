@@ -57,6 +57,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Test
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (551 s). A hung test is cut here, not at the job's limit; the build before it is the part whose time varies (2.4x on Windows), so it is not bounded by a step.
+        timeout-minutes: 15
         run: cargo test --workspace --locked
       # RFC 126 §4: documentation was never gated -- `cargo doc` never ran in CI at all, so a public
       # doc item linking to a private one (rustdoc renders the link as literal `[`Name`]` text for a
@@ -115,7 +117,8 @@ jobs:
   msrv-1-85-0:
     name: msrv-1.85.0
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # RH1 (0.59.0): was 20. Slowest run 856 s (the `Test` step 654 s): 1.4x. 2 x the unbounded 202 s + the `Test` step's 20 min. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 30
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment above) applies identically here.
       - uses: actions/checkout@v7
@@ -145,6 +148,8 @@ jobs:
       - name: Check
         run: cargo check --workspace --all-targets --locked
       - name: Test
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (654 s).
+        timeout-minutes: 20
         run: cargo test --workspace --locked
       - name: Build
         run: cargo build --workspace --locked
@@ -160,7 +165,8 @@ jobs:
         os: [windows-latest, macos-latest]
     name: non-linux build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # RH1 (0.59.0): was 10. Slowest run 486 s on Windows (440 s on macOS): 1.2x, one limit for the matrix. 2 x 486 s. The build is not cached (only the registry is), so its time is the runner's, not the cache's. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -243,6 +249,8 @@ jobs:
       # each surfaced exactly one new layer instead of the whole set. `--no-fail-fast` trades a single
       # green/red signal for the complete inventory in one run.
       - name: Test
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (1,486 s; its median is 1,046 s).
+        timeout-minutes: 40
         run: cargo test --workspace --locked --no-fail-fast
       # DC-81 addendum-1 §3: Q3's measurement is follow-through, not optional. `#[ignore]`d so it
       # never affects the gate above; run by name so only this one data-collection test executes,
@@ -270,7 +278,8 @@ jobs:
     runs-on: windows-latest
     # 0.54.0 Part G1c item 2: about 2.5x the new, permanent TMP/TEMP-redirect Test step runtime
     # (~14.5 min), plus this job's own checkout/toolchain/cache overhead -- was 90.
-    timeout-minutes: 40
+    # RH1 (0.59.0): was 40. Slowest run 2,051 s (the `Test` step 1,996 s): 1.2x. 2 x the unbounded 151 s + the `Test` step's 50 min. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 60
     steps:
       # RFC 127's tag-fetch finding (see `stable`'s own comment near the top of this file) applies
       # identically here.
@@ -302,6 +311,8 @@ jobs:
       # 0.54.0 Part G1c item 2: TMP/TEMP redirected to runner.temp permanently (variant (b) above,
       # measured 52.8 -> 14.5 minutes for this step).
       - name: Test
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (1,996 s).
+        timeout-minutes: 50
         env:
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
@@ -327,7 +338,8 @@ jobs:
     # minutes, not the 22 minutes of estimated work the 45-minute figure was built from. 20 minutes
     # keeps roughly 2.65x headroom over the slowest of these five real runs, the same margin
     # discipline the macOS/Windows mutation jobs' own timeout history in this file already follows.
-    timeout-minutes: 20
+    # RH1 (0.59.0): was 20. Slowest run 614 s: 1.95x. 2 x the unbounded 390 s + the two test steps' 5 min each. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -367,11 +379,15 @@ jobs:
       - name: Generate installer scripts
         run: cargo run -p prikk-release-policy --locked -- generate-installer dist
       - name: Test install.ps1/uninstall.ps1 (Windows PowerShell 5.1)
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (162 s), rounded up to 5 minutes.
+        timeout-minutes: 5
         env:
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-installer-test.ps1 -DistDir dist
       - name: Test install.ps1/uninstall.ps1 (PowerShell 7)
+        # RH1 (0.59.0): 1.5 x the slowest observed run of this step (102 s), rounded up to 5 minutes.
+        timeout-minutes: 5
         env:
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
@@ -524,7 +540,8 @@ jobs:
         os: [windows-latest, macos-latest]
     name: non-linux read-only conformance (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    # RH1 (0.59.0): was 5. Run `44547805441` attempt 1 was cancelled by the old limit in its `Build` step at 258 s (the same step takes 69-141 s in the other 80 runs: 2.4x, cache hit or miss alike); the job had run 306 s. 2 x 306 s + the conformance step's 2 min. The step below bounds the work the limit is for.
+    timeout-minutes: 15
     needs: fixture
     steps:
       - uses: actions/checkout@v7
@@ -564,6 +581,8 @@ jobs:
       # so a failure names the exact command that failed, not just "something in this sequence" —
       # the ambiguity that made the first B2 report unable to isolate which of these three failed.
       - name: Run the read-only command set against the fixture
+        # RH1 (0.59.0): the conformance run this job exists for: 0-1 s in 80 runs. The job's limit covers the build; this bounds the run.
+        timeout-minutes: 2
         shell: bash
         env:
           TMP: ${{ runner.temp }}
@@ -620,7 +639,8 @@ jobs:
   windows-mutate:
     name: mutate the fixture on Windows
     runs-on: windows-latest
-    timeout-minutes: 5
+    # RH1 (0.59.0): was 5. Slowest run 177 s: 1.7x. 2 x 177 s + the mutation step's 2 min. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 10
     needs: fixture
     env:
       PRIKK_AUTHOR_KEY_ID: dev-author
@@ -680,6 +700,8 @@ jobs:
       # (`refusing to commit: heads/main is now at Block ..., and this worktree was last written
       # from Block ...`), which is exactly how CI went red at `304644bd`.
       - name: Mutate the fixture on Windows
+        # RH1 (0.59.0): the work this job exists for: 0-1 s in 80 runs.
+        timeout-minutes: 2
         shell: bash
         env:
           TMP: ${{ runner.temp }}
@@ -763,6 +785,8 @@ jobs:
       # reasoning, identical two commands, before the identical append, so both platforms take the
       # same path and the cross-platform identity comparison below still compares like with like.
       - name: Mutate the fixture identically on Linux
+        # RH1 (0.59.0): the work this job exists for: 0-2 s in 80 runs.
+        timeout-minutes: 2
         run: |
           cd fixture-repo
           ../target/debug/prikk branch switch heads/main
@@ -842,6 +866,8 @@ jobs:
           mkdir -p windows-repo
           tar -xzf windows-mutated-repo.tar.gz -C windows-repo
       - name: Verify the Windows-mutated repository on Linux
+        # RH1 (0.59.0): the work this job exists for: 0-1 s in 80 runs.
+        timeout-minutes: 2
         run: |
           cd windows-repo
           ../target/debug/prikk verify
@@ -874,7 +900,8 @@ jobs:
   receiver-prepare:
     name: cross-host sync -- prepare receiver (Windows)
     runs-on: windows-latest
-    timeout-minutes: 5
+    # RH1 (0.59.0): was 5. Slowest run 170 s: 1.8x. 2 x 170 s. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 10
     needs: fixture
     steps:
       - uses: actions/checkout@v7
@@ -976,6 +1003,8 @@ jobs:
       # refresh: an unsealed sender reads as empty on its own side too, and sync build then reports
       # "already in sync" for the wrong reason (both sides empty, not both sides equal).
       - name: Build the exchange artifact closing the receiver's gap
+        # RH1 (0.59.0): the work this job exists for: 0-1 s in 80 runs.
+        timeout-minutes: 2
         run: |
           cd fixture-repo
           ../target/debug/prikk sync build heads/main --have ../receiver-have.psynchv1 --output ../exchange.pexch002
@@ -988,7 +1017,8 @@ jobs:
   receiver-accept:
     name: cross-host sync -- accept and seal (Windows)
     runs-on: windows-latest
-    timeout-minutes: 5
+    # RH1 (0.59.0): was 5. Slowest run 195 s: 1.5x. 2 x 195 s. Observed over the last 80 CI runs (and the first attempt of the two that were re-run); the rule is limit >= 2x the slowest run, which is what this file's other limits already say they keep.
+    timeout-minutes: 10
     needs: [receiver-prepare, sender-build]
     env:
       PRIKK_MAINTAINER_KEY_ID: dev-maintainer

@@ -337,3 +337,133 @@ fn the_fingerprint_agrees_with_the_docs() {
         );
     }
 }
+
+/// 0.59.0 RH1: the reproduce sentence is exact for what it covers. A Linux target gets the command with the path-remapping `RUSTFLAGS` and the
+/// comparison of the binary inside the archive (not of the archive, whose bytes carry file times); a macOS or Windows target gets the plain
+/// statement that a rebuild is not the same bytes; neither gets the other's sentence.
+#[test]
+fn the_reproduce_sentence_says_exactly_what_matches() {
+    let linux_only = {
+        let temporary = tempfile::tempdir().unwrap();
+        write_target(temporary.path(), "x86_64-unknown-linux-gnu");
+        platform_paragraph(temporary.path()).unwrap()
+    };
+    assert!(
+        linux_only.contains("**Reproducing a Linux binary.**"),
+        "{linux_only}"
+    );
+    assert!(
+        linux_only.contains(
+            "RUSTFLAGS=\"$(python3 scripts/reproducible_rustflags.py)\" cargo build -p prikk --release --target <triple> --locked"
+        ),
+        "{linux_only}"
+    );
+    assert!(
+        linux_only.contains("tar -xzOf prikk-<triple>.tar.gz prikk | sha256sum"),
+        "{linux_only}"
+    );
+    assert!(
+        linux_only.contains("sha256sum target/<triple>/release/prikk"),
+        "{linux_only}"
+    );
+    assert!(
+        !linux_only.contains("macOS and Windows binaries"),
+        "{linux_only}"
+    );
+    assert!(!linux_only.contains("reproduce with:"), "{linux_only}");
+
+    let macos_only = {
+        let temporary = tempfile::tempdir().unwrap();
+        write_target(temporary.path(), "aarch64-apple-darwin");
+        platform_paragraph(temporary.path()).unwrap()
+    };
+    assert!(
+        macos_only.contains("**The macOS and Windows binaries**"),
+        "{macos_only}"
+    );
+    assert!(macos_only.contains("not the same bytes"), "{macos_only}");
+    assert!(
+        !macos_only.contains("reproducible_rustflags"),
+        "{macos_only}"
+    );
+
+    let mixed = {
+        let temporary = tempfile::tempdir().unwrap();
+        write_target(temporary.path(), "x86_64-unknown-linux-gnu");
+        write_target(temporary.path(), "x86_64-pc-windows-msvc");
+        platform_paragraph(temporary.path()).unwrap()
+    };
+    assert!(mixed.contains("**Reproducing a Linux binary.**"), "{mixed}");
+    assert!(
+        mixed.contains("**The macOS and Windows binaries**"),
+        "{mixed}"
+    );
+}
+
+/// 0.59.0 RH1: `scripts/reproducible_rustflags.py`, the one thing the appendix's command and `release.yml` both run. Its output names the three
+/// prefixes, each remapped to a fixed name; and it refuses a path RUSTFLAGS cannot carry rather than print flags that split in the wrong place.
+#[cfg(unix)]
+#[test]
+fn the_flags_script_remaps_three_prefixes_and_refuses_a_path_with_a_space() {
+    use std::process::Command;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap()
+        .to_path_buf();
+    let script = root.join("scripts/reproducible_rustflags.py");
+    let run = |dir: &std::path::Path| {
+        Command::new("python3")
+            .arg(&script)
+            .current_dir(dir)
+            .output()
+    };
+    let Ok(output) = run(&root) else {
+        return; // no python3 on this machine: nothing to measure
+    };
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let flags = String::from_utf8(output.stdout).unwrap();
+    let parts: Vec<&str> = flags.split(' ').collect();
+    let [registry, toolchain, checkout] = parts.as_slice() else {
+        panic!("three flags expected: {flags}");
+    };
+    assert!(
+        parts
+            .iter()
+            .all(|part| part.starts_with("--remap-path-prefix=")),
+        "{flags}"
+    );
+    assert!(registry.ends_with("=/cargo"), "{flags}");
+    let commit = toolchain
+        .rsplit_once("=/rustc/")
+        .map(|(_, commit)| commit)
+        .unwrap_or("");
+    assert!(
+        commit.len() == 40 && commit.chars().all(|c| c.is_ascii_hexdigit()),
+        "{flags}"
+    );
+    assert!(toolchain.contains("/lib/rustlib/src/rust="), "{flags}");
+    assert_eq!(
+        *checkout,
+        format!("--remap-path-prefix={}=/src", root.display()),
+        "{flags}"
+    );
+
+    let spaced = tempfile::tempdir().unwrap().path().join("a b");
+    std::fs::create_dir_all(&spaced).unwrap();
+    let refused = run(&spaced).unwrap();
+    assert!(!refused.status.success());
+    assert!(
+        refused.stdout.is_empty(),
+        "no flags are printed for a path that cannot carry them"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("contains whitespace"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+}

@@ -47,7 +47,9 @@ jobs:
             os: windows-latest
     name: build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    # RH1 (0.59.0): was 5. Slowest of the last 10 release runs 181 s (Windows; its `Build` step 138 s, the toolchain step 35 s): 1.7x. 2 x 181 s. The build
+    # is not cached, so its time is the runner's. The Linux jobs (54 s at most) and macOS (98 s) are inside it by a wide margin.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -58,6 +60,15 @@ jobs:
       # matrix.target, so `tools/release-policy`'s publication-boundary scanner can verify each
       # by exact match (procedure.rs) instead of trusting a template — required for cargo, tar,
       # and rustc, which are not in the scanner's dynamic-argument-tolerant inert set.
+      # RH1 (0.59.0): a Linux binary embeds the absolute paths of the registry the dependencies were read from, of the toolchain's source (when
+      # `rust-src` is installed) and, through `rustc`'s own `/rustc/<commit>/` form, of the standard library. Without this the same source on the same
+      # `rustc` gave a different hash at a different `CARGO_HOME` or checkout path, and the runner's home directory was in the shipped bytes. The three
+      # prefixes `scripts/reproducible_rustflags.py` prints are remapped to fixed names, so the hash depends on the source, the toolchain and the flags, and on nothing else (measured:
+      # three builds at three checkout paths, three `CARGO_HOME`s, with and without `rust-src`, one hash). The release notes' appendix gives the same
+      # command, and `.build-info.txt` records the flags used. Linux only: the macOS and Windows builds are not remapped (not measured there).
+      - name: Remap build paths (Linux)
+        if: runner.os == 'Linux'
+        run: echo "RUSTFLAGS=$(python3 scripts/reproducible_rustflags.py)" >> "$GITHUB_ENV"
       - name: Build (x86_64-unknown-linux-gnu)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo build -p prikk --release --target x86_64-unknown-linux-gnu --locked
@@ -89,6 +100,7 @@ jobs:
           echo "commit: ${GITHUB_SHA}" >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
           echo "tag: ${GITHUB_REF_NAME}" >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
           echo "build: cargo build -p prikk --release --target x86_64-unknown-linux-gnu --locked" >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
+          echo "rustflags: ${RUSTFLAGS}" >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
           rustc -vV >> dist/prikk-x86_64-unknown-linux-gnu.build-info.txt
       - name: Package (aarch64-unknown-linux-gnu)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -103,6 +115,7 @@ jobs:
           echo "commit: ${GITHUB_SHA}" >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
           echo "tag: ${GITHUB_REF_NAME}" >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
           echo "build: cargo build -p prikk --release --target aarch64-unknown-linux-gnu --locked" >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
+          echo "rustflags: ${RUSTFLAGS}" >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
           rustc -vV >> dist/prikk-aarch64-unknown-linux-gnu.build-info.txt
 
       # RFC 107 Stage 2: identical shape to the Linux packaging steps above -- macOS ships GNU
