@@ -189,6 +189,30 @@ pub(crate) struct WorktreeBaselineIdentity {
     pub(crate) queued_fold: [u8; 32],
 }
 
+/// **The way past a stale record when the worktree holds a change of the user's** (0.59.0 step G2b). After `commit --ref <x>` and a `seal` the record names
+/// `<x>`'s sealed state; a commit onto the current branch then refuses as stale and names the switch, and the switch refuses as dirty and says
+/// "commit it, or restore those files" -- "commit it" being what refused. Two ways out exist, both measured end to end (`circle.sh`): **restore the file
+/// the record holds** (`prikk cat --path <p> --ref <the record's block> --output <p> --force`, after the user keeps a copy of their change), switch, put
+/// the change back, commit; or **commit it where the worktree was last written** (`prikk commit --ref <x>`, then `seal --ref <x>`), after which the switch
+/// goes through (the change then lives on `<x>`). `None` when the record holds a queued fold or no block: the block `cat` reads would not be what the
+/// worktree was written from.
+pub(crate) fn past_a_stale_record(
+    recorded: &WorktreeBaselineIdentity,
+    path: &str,
+) -> Option<String> {
+    let block = recorded.baseline?;
+    if recorded.wal_sequence != 0 {
+        return None;
+    }
+    let ref_name = &recorded.ref_name;
+    Some(format!(
+        "this worktree was last written from {ref_name}, so a commit onto this branch refuses until it is brought up to date, and for your change to {path} \
+         that needs a clean file: keep a copy of your change, restore the file with `prikk cat --path {path} --ref {block} --output {path} --force`, run \
+         the switch, then put your change back; or commit it where the worktree was last written, `prikk commit --ref {ref_name}`, then `prikk seal \
+         --allow-no-audit --ref {ref_name}`"
+    ))
+}
+
 /// Replace the worktree's recorded baseline (R1). Called last by every command that makes the
 /// worktree match a state, or moves a ref to a state the worktree already matches: `setup`/`init`,
 /// `branch switch`, the `checkout` writes, `commit` (the queued fold just advanced), and `seal` (the

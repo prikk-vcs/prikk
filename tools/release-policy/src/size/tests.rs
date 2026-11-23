@@ -311,9 +311,9 @@ fn an_inline_test_module_is_not_production() {
         // `format` parameter and the non-ASCII format gate (`non_ascii_path_needs_upgrade`, with its doc comment), 1933 -> 1955. 0.57.0 U2: the NFC authoring
         // rule (`non_nfc_path_refusal`, with its doc comment) joins the classifier and the upgrade gate learns to stay silent for a
         // character the decode table refuses, 1955 -> 1983. 0.59.0 step W2: `commit`'s stale-worktree refusal counts the live
-        // queue on its own side of the sentence, says when only the queue differs, and names `seal` before the switch, 1983 -> 2010.
+        // queue on its own side of the sentence, says when only the queue differs, and names `seal` before the switch, 1983 -> 2010. 0.59.0 step G2b: the same refusal names the two ways past a stale record when the user holds a change of their own, 2010 -> 2035.
         physical,
-        2010,
+        2035,
         "the fixture moved; re-read it before trusting this"
     );
 
@@ -324,8 +324,8 @@ fn an_inline_test_module_is_not_production() {
         .find(|file| file.path.ends_with("node_authoring.rs"))
         .expect("node_authoring.rs is over the line");
     // 0.59.0 step W2: the stale-worktree refusal counts the live queue and names `seal` first, 1934 -> 1961 (production lines; the 49
-    // lines of the inline test module stay excluded).
-    assert_eq!(counted.production_lines, 1961);
+    // lines of the inline test module stay excluded); 0.59.0 step G2b: 1961 -> 1986.
+    assert_eq!(counted.production_lines, 1986);
     assert_eq!(
         physical - counted.production_lines,
         49,

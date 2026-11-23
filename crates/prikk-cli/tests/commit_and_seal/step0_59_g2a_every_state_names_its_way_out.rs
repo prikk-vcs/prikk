@@ -481,3 +481,108 @@ fn removing_the_sealing_key_says_what_it_does_and_re_adding_it_restores_the_hist
     );
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// The `prikk …` command a sentence names between backticks, starting at `prefix`, as an argument list.
+fn named(message: &str, prefix: &str) -> Vec<String> {
+    let start = message
+        .find(&format!("`{prefix}"))
+        .unwrap_or_else(|| panic!("no `{prefix}…` in {message}"))
+        + 1;
+    let end = message[start..].find('`').unwrap() + start;
+    message[start..end]
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_string)
+        .collect()
+}
+
+/// **The stale-record circle (G2b):** after `commit --ref heads/other` and a `seal`, the record names `heads/other`; a commit of the user's own edit
+/// onto `heads/main` refuses naming the switch, the switch refuses as dirty and says "commit it", which is what refused. Both sentences now name
+/// the two ways that work, and **both are run from the sentence**: restore the recorded file with `prikk cat`, switch, put the change back,
+/// commit (exit 0, clean); or commit the change where the worktree was last written, seal that, switch.
+#[test]
+fn the_stale_record_circle_names_two_ways_out_and_each_works() {
+    fn world(tag: &str) -> PathBuf {
+        let repo = support::unique_repo(tag);
+        support::init(&repo);
+        support::generation(&repo, "heads/main", "a.txt", b"base\n", "base");
+        ok(
+            &support::branch_create(&repo, "heads/other", "heads/main"),
+            "branch create other",
+        );
+        std::fs::write(repo.join("queued.txt"), b"q\n").unwrap();
+        ok(
+            &support::commit(&repo, "heads/other", "q"),
+            "commit --ref heads/other",
+        );
+        ok(
+            &support::seal(&repo, "heads/other"),
+            "seal --ref heads/other",
+        );
+        std::fs::write(repo.join("a.txt"), b"base\nmy edit\n").unwrap();
+        repo
+    }
+
+    // Way B, from the commit's refusal: keep a copy, restore with `cat`, switch, put the change back, commit.
+    let repo = world("g2a-circle-b");
+    let commit = text(&prikk(&repo, &["commit", "-m", "mine"]));
+    assert!(
+        commit.contains(
+            "keep a copy of your change, restore the file with `prikk cat --path a.txt --ref "
+        ) && commit.contains(
+            "`prikk commit --ref heads/other`, then `prikk seal --allow-no-audit --ref heads/other`"
+        ),
+        "{commit}"
+    );
+    let switch = text(&prikk(&repo, &["branch", "switch", "heads/main"]));
+    assert!(
+        switch.contains("commit it, or restore those files, before switching")
+            && switch.contains(
+                "keep a copy of your change, restore the file with `prikk cat --path a.txt --ref "
+            ),
+        "{switch}"
+    );
+    std::fs::copy(repo.join("a.txt"), repo.join("a.mine")).unwrap();
+    let restore = named(&switch, "prikk cat ");
+    let restore: Vec<&str> = restore.iter().map(String::as_str).collect();
+    ok(&prikk(&repo, &restore), "the cat the sentence names");
+    assert_eq!(std::fs::read(repo.join("a.txt")).unwrap(), b"base\n");
+    ok(
+        &prikk(&repo, &["branch", "switch", "heads/main"]),
+        "the switch after the restore",
+    );
+    std::fs::copy(repo.join("a.mine"), repo.join("a.txt")).unwrap();
+    std::fs::remove_file(repo.join("a.mine")).unwrap();
+    ok(
+        &prikk(&repo, &["commit", "-m", "mine"]),
+        "the commit after it",
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+
+    // Way A, from the switch's refusal: commit it where the worktree was last written, seal that, switch.
+    let repo = world("g2a-circle-a");
+    let switch = text(&prikk(&repo, &["branch", "switch", "heads/main"]));
+    let commit_there = named(&switch, "prikk commit --ref heads/other");
+    let commit_there: Vec<&str> = commit_there
+        .iter()
+        .map(String::as_str)
+        .chain(["-m", "mine"])
+        .collect();
+    ok(
+        &prikk(&repo, &commit_there),
+        "the commit the sentence names",
+    );
+    let seal_there = named(&switch, "prikk seal ");
+    let seal_there: Vec<&str> = seal_there.iter().map(String::as_str).collect();
+    ok(&prikk(&repo, &seal_there), "the seal the sentence names");
+    ok(
+        &prikk(&repo, &["branch", "switch", "heads/main"]),
+        "the switch after both",
+    );
+    assert_eq!(
+        std::fs::read(repo.join("a.txt")).unwrap(),
+        b"base\n",
+        "the change now lives on heads/other"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}

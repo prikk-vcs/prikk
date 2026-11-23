@@ -1301,8 +1301,33 @@ fn author_inner<S: NodeIdEntropySource, A: AuthorSigner>(
                 "run `prikk seal --allow-no-audit --ref {canonical_ref}` to publish the queue, then {ways_out}"
             )
         };
+        // 0.59.0 step G2b: when the worktree holds a change of the user's over a stale path, the switch named above refuses as dirty, and its own
+        // sentence says "commit it" (this refusal). The two ways that work are said here, where the circle starts.
+        // The path is the user's own change **against the record** (what the switch will refuse on), found from the two maps already in scope; the
+        // stale paths above are what the *new state* holds, and are not the user's.
+        let way_past = recorded_identity
+            .as_ref()
+            .zip(recorded_baseline.as_ref())
+            .and_then(|(recorded, (recorded_files, _))| {
+                let path = recorded_files.iter().find_map(|(path, file)| {
+                    let kind = match file.kind {
+                        NodeKind::TextFile => BlobKind::Text,
+                        NodeKind::BinaryFile => BlobKind::Binary,
+                        NodeKind::Symlink => return None,
+                    };
+                    if !worktree.contains_key(path) {
+                        return Some(path.clone());
+                    }
+                    let bytes = read_existing_file_bytes(layout, path, kind).ok()?;
+                    let hash = commit_index::content_hash(kind, &bytes).ok()?;
+                    (hash != file.blob_id).then(|| path.clone())
+                })?;
+                crate::worktree_baseline::past_a_stale_record(recorded, &path)
+            })
+            .map(|text| format!("; {text}"))
+            .unwrap_or_default();
         return Err(AuthorError::Store(PrikkError::Precondition(format!(
-            "refusing to commit: {lead}; {}; {ways_out} to bring the worktree up to date, then commit again",
+            "refusing to commit: {lead}; {}; {ways_out} to bring the worktree up to date, then commit again{way_past}",
             clauses.join("; ")
         ))));
     }

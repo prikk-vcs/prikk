@@ -487,9 +487,27 @@ fn require_clean(
     if dirty.is_empty() {
         return Ok(());
     }
+    // 0.59.0 step G2b: when the record is stale, "commit it" is what refuses; say the two ways that work.
+    let way_past = match (
+        &comparison,
+        report.changes.iter().find(|change| {
+            matches!(
+                change.kind,
+                WorktreeChangeKind::Modified | WorktreeChangeKind::Missing
+            )
+        }),
+    ) {
+        (
+            crate::worktree_baseline::WorktreeBaselineComparison::Behind { recorded, .. },
+            Some(change),
+        ) => crate::worktree_baseline::past_a_stale_record(recorded, &change.path)
+            .map(|text| format!("; {text}"))
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
     Err(PrikkError::Precondition(format!(
         "the worktree is not clean against {from}: {}; commit it, or restore those files, before \
-         switching (`prikk worktree-status` lists them)",
+         switching (`prikk worktree-status` lists them){way_past}",
         dirty.join(", ")
     )))
 }

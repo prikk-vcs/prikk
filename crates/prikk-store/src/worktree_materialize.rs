@@ -138,9 +138,26 @@ pub(crate) fn require_worktree_clean_for_current_branch(
     if dirty.is_empty() {
         return Ok(());
     }
+    // 0.59.0 step G2b: as the switch's refusal: a stale record makes "commit it" refuse, so the two ways that work are said.
+    let way_past = match (
+        &comparison,
+        report.changes.iter().find(|change| {
+            matches!(
+                change.kind,
+                WorktreeChangeKind::Modified | WorktreeChangeKind::Missing
+            )
+        }),
+    ) {
+        (WorktreeBaselineComparison::Behind { recorded, .. }, Some(change)) => {
+            crate::worktree_baseline::past_a_stale_record(recorded, &change.path)
+                .map(|text| format!("; {text}"))
+                .unwrap_or_default()
+        }
+        _ => String::new(),
+    };
     Err(PrikkError::Precondition(format!(
         "the worktree is not clean against {current_branch}: {}; commit it, or restore those files, \
-         before {verb} (`prikk worktree-status` lists them)",
+         before {verb} (`prikk worktree-status` lists them){way_past}",
         dirty.join(", ")
     )))
 }
