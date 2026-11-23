@@ -64,10 +64,7 @@ pub fn build_sync_summary(layout: &RepositoryLayout) -> Result<Vec<u8>> {
         let envelope = object_store
             .read_typed(pointer.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "ref {} names missing RefState {}",
-                    pointer.ref_name, pointer.ref_state_id
-                ))
+                crate::refs::missing_ref_state(Some(&pointer.ref_name), pointer.ref_state_id)
             })?;
         let payload = RefStatePayload::decode_canonical(
             &envelope.canonical_payload,

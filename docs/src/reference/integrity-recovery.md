@@ -253,7 +253,11 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
   recovery log under one run -- `--recovery-restore <id>` undoes the whole
   switch byte for byte: both slots and the generation record all go back to what they were, naming the
   old slot live again. A restore refuses, and writes nothing, if an ordinary write has landed in the
-  rebuilt slot since (a new branch, a publication).
+  rebuilt slot since (a new branch, a publication). **It accepts a log that leads the pointer** (the pointer an earlier record of that
+  ref's log, or absent) **and refuses everything else it would have to drop** (0.59.0): a pointer more than one transition ahead, a
+  completable lead, and a **fork** -- a pointer that names a RefState the ref log does not hold, at a sequence the log already has. It
+  restores a pointer entry only when the entry's RefState is one of that ref's log records; the 0.49.0 to 0.58.0 rebuild compared sequences
+  only and called a fork stale. A refusal names the sound copy.
 - `--discard-damaged-commits [--plan-only]`: removes an acknowledged queued commit that the commit witness
   names and the WAL no longer holds soundly (RFC 166 D5, `doctor/discard_damaged_commits.rs`).
 - `--restore-queue-target --ref <ref> [--not-current-branch] [--plan-only]`: gives an active queue back its

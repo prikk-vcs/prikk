@@ -66,6 +66,12 @@ pub enum WayOut {
     /// 0.59.0 step G2a: the signature verifies, but its key is not adopted here (`PRIKK-TRUST-PUBLICATION-UNTRUSTED`): a key never adopted, or
     /// one `trust maintainer remove` revoked. Adding it back with its original public key restores everything it signed (measured).
     PublicationKeyNotAdopted,
+    /// 0.59.0 step G2c: the ref log is ahead of the pointer index (the pointer is an earlier record of the log, or absent): the shape
+    /// `prikk doctor --rebuild-pointer-index` re-derives and accepts (measured), and refuses everything else (a pointer the log does not hold, a
+    /// pointer more than one transition ahead). Chosen by the issue's typed `log_leads`, never by its words.
+    RefLogLeadsPointer,
+    /// 0.59.0 step G2c: a ref's pointer names a RefState the repository does not hold: no command repairs it in place.
+    RefStateMissing,
     /// A ref's pointer and log disagree, by the code `verify` gives that state.
     RefPublication {
         /// The `PRIKK-VERIFY-REF-*` code.
@@ -175,6 +181,14 @@ impl WayOut {
                 ),
                 _ => "the candidate is kept for inspection; doctor does not infer ownership or remove it".to_string(),
             },
+            Self::RefStateMissing => format!(
+                "no command repairs a missing RefState in place (`prikk doctor --repair-index` and `--rebuild-pointer-index` do not restore an \
+                 object that is in no container): {SOUND_COPY}"
+            ),
+            Self::RefLogLeadsPointer => "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor \
+                 --rebuild-pointer-index`: the ref log is ahead of the pointer index, and the rebuild re-derives the pointer index from \
+                 the log (it refuses a pointer the log does not hold, and a pointer more than one transition ahead, naming the sound copy)"
+                .to_string(),
             Self::PublicationKeyNotAdopted => {
                 "adopt the key that signed it with `prikk trust maintainer add --key-id <id> --public-key <hex>` and run `prikk verify` \
                  again: a key that was removed stops counting for everything it signed, and adding it back with its original public \
@@ -186,6 +200,19 @@ impl WayOut {
                  <hex>` and run `prikk verify` again; doctor will not auto-trust keys or repair signatures"
                     .to_string()
             }
+        }
+    }
+}
+
+/// The way out of one ref-publication finding: the rebuild for a log that leads the pointer, else the sentence of its code (0.59.0 step G2c).
+#[must_use]
+pub(crate) fn for_ref_issue(issue: &crate::refs::RefPublicationIssue) -> WayOut {
+    if issue.log_leads {
+        WayOut::RefLogLeadsPointer
+    } else {
+        WayOut::RefPublication {
+            code: issue.code.to_string(),
+            ref_name: issue.ref_name.clone(),
         }
     }
 }
@@ -216,17 +243,25 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
     {
         out.push(("a block's state root failed", WayOut::BlockState));
     }
-    if report
+    // 0.59.0 step G2c: a ref file or item that fails because its pointer names a RefState the repository does not hold is not the rebuild's to clear (the scan fails both the
+    // pointer record and the log record that name it), so the distinct way out below replaces the rebuild's.
+    let ref_files_failed = report
         .pointer_outcomes
         .iter()
         .chain(&report.log_outcomes)
-        .any(|o| matches!(o.status, crate::refs::RefFileStatus::Failed { .. }))
-        || report
-            .ref_item_outcomes
-            .iter()
-            .any(|o| matches!(o.status, crate::refs::RefItemStatus::Failed { .. }))
-    {
+        .any(|o| matches!(o.status, crate::refs::RefFileStatus::Failed { .. }));
+    let ref_items_failed = report
+        .ref_item_outcomes
+        .iter()
+        .any(|o| matches!(o.status, crate::refs::RefItemStatus::Failed { .. }));
+    if (ref_files_failed || ref_items_failed) && !report.ref_state_missing {
         out.push(("a ref file or ref failed", WayOut::RefFile));
+    }
+    if report.ref_state_missing {
+        out.push((
+            "a ref's pointer names a RefState this repository does not hold",
+            WayOut::RefStateMissing,
+        ));
     }
     if report
         .wal_record_outcomes
@@ -292,10 +327,7 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
         .iter()
         .filter(|issue| issue.blocking)
     {
-        let kind = WayOut::RefPublication {
-            code: issue.code.to_string(),
-            ref_name: issue.ref_name.clone(),
-        };
+        let kind = for_ref_issue(issue);
         if !out.iter().any(|(_, existing)| *existing == kind) {
             // 0.58.0 step 0b: a seal stopped after it published is not a disagreement (pointer and log agree); name the state.
             let label = if issue.code == "PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING" {

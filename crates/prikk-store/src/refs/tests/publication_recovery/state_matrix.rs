@@ -103,7 +103,8 @@ const CASES: &[StateCase] = &[
         },
         doctor_code: "PRIKK-VERIFY-REF-DIVERGENCE",
         doctor_severity: DoctorSeverity::Error,
-        recommendation: "no command resolves a pointer/log divergence in place",
+        // 0.59.0 step G2c: the log leading the pointer is the shape the rebuild accepts and clears; the other divergences keep "no command resolves".
+        recommendation: "run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`: the ref log is ahead of the pointer index",
         retry: RetryExpectation::Refuses,
         mutation_succeeds: false,
     },

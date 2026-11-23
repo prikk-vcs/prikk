@@ -814,9 +814,7 @@ pub fn preview_bundle_adopting(
                 ObjectType::RefState,
             )?;
             let local_ref_state_envelope = local_ref_state.ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "ref {ref_name} points to missing RefState {local_ref_state_id}"
-                ))
+                crate::refs::missing_ref_state(Some(ref_name), local_ref_state_id)
             })?;
             let local_ref_state_payload = RefStatePayload::decode_canonical(
                 &local_ref_state_envelope.canonical_payload,
@@ -1026,7 +1024,7 @@ pub fn export_bundle(
     let object_store = ObjectReadSnapshot::open(layout)?;
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {ref_state_id}")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, ref_state_id))?;
     let ref_state_payload = RefStatePayload::decode_canonical(
         &ref_state_envelope.canonical_payload,
         ref_state_envelope.schema_version,
@@ -3123,7 +3121,7 @@ fn read_ref_state_payload_for_chain(
 ) -> Result<RefStatePayload> {
     let envelope = reader
         .read_object(ref_state_id)?
-        .ok_or_else(|| PrikkError::Integrity(format!("RefState {ref_state_id} is missing")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, ref_state_id))?;
     if envelope.object_type != ObjectType::RefState {
         return Err(PrikkError::Integrity(format!(
             "object {ref_state_id} is {}, expected RefState",
@@ -3239,10 +3237,7 @@ fn classify_import_connectivity(
     let prior_ref_state_envelope = local_reader
         .read_typed(prior_pointer.ref_state_id, ObjectType::RefState)?
         .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "received pointer {received_ref_name} names missing RefState {}",
-                prior_pointer.ref_state_id
-            ))
+            crate::refs::missing_received_ref_state(received_ref_name, prior_pointer.ref_state_id)
         })?;
     let prior_ref_state_payload = RefStatePayload::decode_canonical(
         &prior_ref_state_envelope.canonical_payload,

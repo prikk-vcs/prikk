@@ -152,7 +152,7 @@ fn tip_block_of_ref_state(
 ) -> Result<ObjectId> {
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {ref_state_id}")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, ref_state_id))?;
     let ref_state_payload = RefStatePayload::decode_canonical(
         &ref_state_envelope.canonical_payload,
         ref_state_envelope.schema_version,
@@ -477,11 +477,7 @@ fn reachable_patch_ids_from_ref_state(
 ) -> Result<Vec<ObjectId>> {
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {pointer_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(pointer_name), ref_state_id))?;
     let ref_state_payload = RefStatePayload::decode_canonical(
         &ref_state_envelope.canonical_payload,
         ref_state_envelope.schema_version,

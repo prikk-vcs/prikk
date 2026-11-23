@@ -255,7 +255,7 @@ pub fn execute_merge(
         into_ref_state_id,
         ObjectType::RefState,
     )?
-    .ok_or_else(|| PrikkError::Integrity(format!("ref {into_ref} points to missing RefState")))?;
+    .ok_or_else(|| crate::refs::missing_ref_state(Some(&into_ref), into_ref_state_id))?;
     let into_ref_state = RefStatePayload::decode_canonical(
         &into_ref_state_envelope.canonical_payload,
         into_ref_state_envelope.schema_version,

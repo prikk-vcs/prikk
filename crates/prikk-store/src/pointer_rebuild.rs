@@ -231,14 +231,19 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
 
     // The ref log's own newest record per ref, in file order -- "last entry wins," the same
     // reduction `verify`'s `read_pointers` and `compact_ref_pointer_index` already persist for the
-    // pointer index itself. `log_tip_seq` is what tells a stale pointer (behind the log) apart from a
-    // genuine lead (ahead of it): the ref log's own chain invariant (enforced at write time, and
-    // itself just confirmed damage-free above) means at most one `RefState` can ever exist at a given
-    // `update_seq` for one ref, so comparing sequences is equivalent to -- and cheaper than -- asking
-    // "does this exact id appear anywhere in this ref's own log history."
+    // pointer index itself. `log_tip_seq` tells a pointer that is *not ahead* of the log (a candidate for "stale") from a genuine lead; **0.59.0
+    // step G2c: a sequence alone does not say it is behind.** Two RefStates can exist at one `update_seq` for one ref (a fork: the pointer index
+    // and the log came from two copies, or one was damaged and restored from another), so a pointer is *restored* only when its RefState id is
+    // one of that ref's own log records (`log_chain`), which is what "behind the log" means. Any other pointer at or below the log's tip is a fork
+    // and is refused, naming the sound copy. The published 0.58.0 compared sequences only: it called a sibling "stale, behind the log" and dropped it.
     let mut log_derived: BTreeMap<String, ObjectId> = BTreeMap::new();
     let mut log_tip_seq: BTreeMap<String, u64> = BTreeMap::new();
+    let mut log_chain: BTreeMap<String, BTreeSet<ObjectId>> = BTreeMap::new();
     for record in &discovery.records {
+        log_chain
+            .entry(record.ref_name.clone())
+            .or_default()
+            .insert(record.new_ref_state_id);
         log_derived.insert(record.ref_name.clone(), record.new_ref_state_id);
         log_tip_seq.insert(record.ref_name.clone(), record.update_seq);
     }
@@ -294,6 +299,7 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     // them, not only the first found.
     let mut completable_leads: Vec<String> = Vec::new();
     let mut refused_deep_leads: Vec<(String, u64)> = Vec::new();
+    let mut forked: Vec<(String, ObjectId)> = Vec::new();
     let mut dropped_leads: Vec<DroppedLead> = Vec::new();
     let mut restored: Vec<RestoredRef> = Vec::new();
     let mut per_ref: Vec<RefRebuildEntry> = Vec::new();
@@ -319,7 +325,13 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
                     .get(ref_name)
                     .is_some_and(|&tip_seq| leading_update_seq <= tip_seq);
 
-                if behind_the_log {
+                let in_the_chain = log_chain
+                    .get(ref_name)
+                    .is_some_and(|chain| chain.contains(&leading_id));
+                if behind_the_log && !in_the_chain {
+                    // 0.59.0 step G2c: at or below the log's tip, yet not one of its records: a fork, never stale.
+                    forked.push((ref_name.clone(), leading_id));
+                } else if behind_the_log {
                     // U4 review v1's own finding: a damaged newest pointer record resolves to an
                     // older, already-log-confirmed entry -- behind the log, not a lead, and nothing
                     // authorized is dropped. The rebuild simply restores the correct, sound value.
@@ -391,6 +403,21 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
              transitions, not only the first -- restore the ref log from a copy, then run the rebuild \
              again: {detail}",
             refused_deep_leads.len()
+        )));
+    }
+
+    if !forked.is_empty() {
+        let detail = forked
+            .iter()
+            .map(|(ref_name, id)| format!("{ref_name} (pointer RefState {id})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(PrikkError::Precondition(format!(
+            "{} ref(s) have a pointer that names a RefState the ref log does not hold, at a sequence the log already has (a fork: the pointer \
+             index and the log disagree about which transition came there); a rebuild would drop the pointer's RefState as if it were \
+             stale, and no command resolves a fork in place: {detail}; {}",
+            forked.len(),
+            crate::refs::SOUND_COPY
         )));
     }
 

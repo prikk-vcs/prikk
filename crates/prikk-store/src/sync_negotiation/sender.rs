@@ -165,10 +165,7 @@ pub fn build_sync_artifact(
         let ref_state_envelope = read_snapshot
             .read_typed(pointer.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "tag ref {} names missing RefState {}",
-                    pointer.ref_name, pointer.ref_state_id
-                ))
+                crate::refs::missing_ref_state(Some(&pointer.ref_name), pointer.ref_state_id)
             })?;
         let ref_state_payload = RefStatePayload::decode_canonical(
             &ref_state_envelope.canonical_payload,

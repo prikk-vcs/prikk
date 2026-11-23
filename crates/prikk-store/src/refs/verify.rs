@@ -33,6 +33,9 @@ pub struct RefPublicationIssue {
     pub message: String,
     /// Whether verification must return non-zero and unrelated mutation must remain blocked.
     pub blocking: bool,
+    /// 0.59.0 step G2c: the ref log is **ahead** of the pointer index for this ref (the pointer is an earlier record of the log, or absent while the
+    /// log has records): the one divergence `prikk doctor --rebuild-pointer-index` re-derives and accepts. Typed, so a way out never reads the message.
+    pub(crate) log_leads: bool,
 }
 
 impl RefPublicationIssue {
@@ -291,6 +294,9 @@ fn classify_ref_state(
                 ref_name,
                 "format-2 ref log leads the authoritative pointer".to_string(),
             ));
+            if let Some(issue) = issues.last_mut() {
+                issue.log_leads = true;
+            }
             Ok(())
         }
         (None, Some(log)) if log.record_count == 1 && log.previous_tip.is_none() => {
@@ -299,6 +305,9 @@ fn classify_ref_state(
                 ref_name,
                 "format-2 ref pointer is missing while committed log history exists".to_string(),
             ));
+            if let Some(issue) = issues.last_mut() {
+                issue.log_leads = true;
+            }
             Ok(())
         }
         (None, None) => Ok(()),
@@ -443,6 +452,7 @@ pub(in crate::refs) fn candidate_issues(
                 ref_name: None,
                 message: "non-authoritative ref pointer candidate remains".to_string(),
                 blocking: false,
+                log_leads: false,
             });
         } else {
             return Err(PrikkError::Integrity(
@@ -459,5 +469,6 @@ fn blocking_issue(code: &'static str, ref_name: &str, message: String) -> RefPub
         ref_name: Some(ref_name.to_string()),
         message,
         blocking: true,
+        log_leads: false,
     }
 }

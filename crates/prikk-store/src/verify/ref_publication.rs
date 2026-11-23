@@ -119,6 +119,7 @@ pub(super) fn in_flight_issue(ref_name: &str, pid: u32) -> RefPublicationIssue {
         ref_name: Some(ref_name.to_string()),
         message: in_flight_finding(ref_name, Some(pid)),
         blocking: false,
+        log_leads: false,
     }
 }
 
@@ -129,6 +130,7 @@ pub(super) fn in_flight_issue_for(ref_name: &str, pid: Option<u32>) -> RefPublic
         ref_name: Some(ref_name.to_string()),
         message: in_flight_finding(ref_name, pid),
         blocking: false,
+        log_leads: false,
     }
 }
 
@@ -178,6 +180,7 @@ fn add_incomplete_cleanup_issue(
                 ref_name: Some(ref_name.clone()),
                 message: in_flight_finding(ref_name, Some(pid)),
                 blocking: false,
+                log_leads: false,
             });
             return Ok(());
         }
@@ -187,6 +190,7 @@ fn add_incomplete_cleanup_issue(
             message: "pointer and log agree but matching active publication state remains"
                 .to_string(),
             blocking: true,
+            log_leads: false,
         });
     }
     Ok(())

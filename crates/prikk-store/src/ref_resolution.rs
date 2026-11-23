@@ -424,12 +424,7 @@ fn received_tip_block(
     let object_store = &crate::refs::PointerFreshReader::over(layout, object_store);
     let envelope = object_store
         .read_typed(pointer.ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "received ref {name} points to missing RefState {}",
-                pointer.ref_state_id
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_received_ref_state(name, pointer.ref_state_id))?;
     let ref_state =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     Ok(crate::refs::resolve_ref_tip_block(object_store, &ref_state)?.0)

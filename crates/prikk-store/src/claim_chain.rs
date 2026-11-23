@@ -138,11 +138,7 @@ fn resolve_tip_block_id(
 ) -> Result<ObjectId> {
     let ref_state_envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            prikk_error::PrikkError::Integrity(format!(
-                "ref {pointer_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(pointer_name), ref_state_id))?;
     let ref_state_payload = RefStatePayload::decode_canonical(
         &ref_state_envelope.canonical_payload,
         ref_state_envelope.schema_version,

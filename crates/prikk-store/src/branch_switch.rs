@@ -420,11 +420,7 @@ fn require_open_branch(layout: &RepositoryLayout, target: &str) -> Result<()> {
     let object_store = ObjectReadSnapshot::open(layout)?;
     let envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "missing RefState object for {target}: {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(target), ref_state_id))?;
     let state =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     if state.closed {

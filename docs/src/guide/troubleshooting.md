@@ -1216,8 +1216,9 @@ A command that publishes (or `trust maintainer add`/`remove`, `rollback-draft`, 
 | `run \`prikk ref complete <ref>\`` | an interrupted publication: the pointer leads the ref log by one sound transition | `prikk ref complete <ref>` |
 | `the ref pointer index has a damaged record; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then …` | a pointer-index record failed | `prikk doctor --rebuild-pointer-index --plan-only`, then without `--plan-only` |
 | `a seal stopped after it published … run \`prikk seal --allow-no-audit\`` | the queue is exactly the patches of a block its ref already points at | `prikk seal --allow-no-audit` |
-| `<ref> names RefState <id>, which this repository does not hold; no command repairs a missing RefState in place: restore a sound copy …` | the object is in no container | none: the sound-copy sequence (`prikk setup <new-dir>`, `archive verify`, `archive import --adopt`) |
-| `run \`prikk verify\`, which names the way out of this state` | a state the sentence cannot name (a log that leads the pointer, a lead the completion rule refuses) | `prikk verify` (and `prikk doctor`) print the way out |
+| `the ref log is ahead of the pointer index for <ref>; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then …` | the pointer index is older than the log, or lost its record of the ref | `prikk doctor --rebuild-pointer-index --plan-only`, then without `--plan-only`. It refuses a pointer the log does not hold (a fork) or one more than one transition ahead, and says so |
+| `<ref> names RefState <id>, which this repository does not hold; no command repairs a missing RefState in place: restore a sound copy …` | the object is in no container (the same sentence is printed by every command that reads it, with the `integrity error:` prefix) | none: the sound-copy sequence (`prikk setup <new-dir>`, `archive verify`, `archive import --adopt`). `doctor --repair-index` and `--rebuild-pointer-index` do not restore it |
+| `run \`prikk verify\`, which names the way out of this state` | a state the sentence cannot name (a pointer the log does not hold, a pointer more than one transition ahead, a lead the completion rule refuses) | `prikk verify` (and `prikk doctor`) print the way out: no command in place, then the sound copy |
 
 A leftover candidate in `.prikk/refs/tmp` keeps its older sentence for now.
 

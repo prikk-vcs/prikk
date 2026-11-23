@@ -107,9 +107,7 @@ pub(super) fn current_ref_state(
     let envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)
         .map_err(|err| err.to_string())?
-        .ok_or_else(|| {
-            format!("current ref {ref_name} points to missing RefState {ref_state_id}")
-        })?;
+        .ok_or_else(|| prikk_store::missing_ref_state_sentence(Some(ref_name), &ref_state_id))?;
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
             .map_err(|err| err.to_string())?;

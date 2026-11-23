@@ -235,9 +235,7 @@ fn load_ref_state(
     ref_name: &str,
 ) -> Result<RefStatePayload> {
     let Some(envelope) = object_store.read_typed(ref_state_id, ObjectType::RefState)? else {
-        return Err(PrikkError::Integrity(format!(
-            "checkout ref {ref_name} points to missing RefState {ref_state_id}"
-        )));
+        return Err(crate::refs::missing_ref_state(Some(ref_name), ref_state_id));
     };
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;

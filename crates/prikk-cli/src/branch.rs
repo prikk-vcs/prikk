@@ -126,10 +126,7 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             .read_typed(entry.ref_state_id, ObjectType::RefState)
             .map_err(|err| err.to_string())?
             .ok_or_else(|| {
-                format!(
-                    "ref {} RefState {} is missing",
-                    entry.ref_name, entry.ref_state_id
-                )
+                prikk_store::missing_ref_state_sentence(Some(&entry.ref_name), &entry.ref_state_id)
             })?;
         let payload =
             RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)
@@ -568,7 +565,9 @@ fn run_close(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErr
     let current_envelope = prikk_store::FileObjectStore::new(layout.clone())
         .read_typed(current_ref_state_id, ObjectType::RefState)
         .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("branch {canonical} RefState {current_ref_state_id} is missing"))?;
+        .ok_or_else(|| {
+            prikk_store::missing_ref_state_sentence(Some(&canonical), &current_ref_state_id)
+        })?;
     let current_payload = RefStatePayload::decode_canonical(
         &current_envelope.canonical_payload,
         current_envelope.schema_version,
@@ -727,7 +726,9 @@ fn resolve_published_target(
     let from_envelope = object_store
         .read_typed(from_ref_state_id, ObjectType::RefState)
         .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("--from ref {from_ref} RefState {from_ref_state_id} is missing"))?;
+        .ok_or_else(|| {
+            prikk_store::missing_ref_state_sentence(Some(from_ref), &from_ref_state_id)
+        })?;
     let from_payload = RefStatePayload::decode_canonical(
         &from_envelope.canonical_payload,
         from_envelope.schema_version,

@@ -165,10 +165,7 @@ pub fn received_tag_ids(layout: &RepositoryLayout) -> Result<Vec<ObjectId>> {
         let ref_state_envelope = object_store
             .read_typed(pointer.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "ref {} names missing RefState {}",
-                    pointer.ref_name, pointer.ref_state_id
-                ))
+                crate::refs::missing_ref_state(Some(&pointer.ref_name), pointer.ref_state_id)
             })?;
         let ref_state_payload = RefStatePayload::decode_canonical(
             &ref_state_envelope.canonical_payload,

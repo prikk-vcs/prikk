@@ -2122,11 +2122,7 @@ fn classify_archive_landing_against_local(
 
     let prior_envelope = local_reader
         .read_object(prior_ref_state_id)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "received pointer names missing RefState {prior_ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, prior_ref_state_id))?;
     let prior_payload = RefStatePayload::decode_canonical(
         &prior_envelope.canonical_payload,
         prior_envelope.schema_version,

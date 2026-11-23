@@ -217,9 +217,7 @@ fn read_ref_state(
     ref_name: &str,
 ) -> Result<RefStatePayload> {
     let Some(envelope) = object_store.read_object(ref_state_id)? else {
-        return Err(PrikkError::Integrity(format!(
-            "history RefState {ref_state_id} is missing"
-        )));
+        return Err(crate::refs::missing_ref_state(Some(ref_name), ref_state_id));
     };
     if envelope.object_type != ObjectType::RefState {
         return Err(PrikkError::Integrity(format!(

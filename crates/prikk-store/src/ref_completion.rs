@@ -250,8 +250,8 @@ pub fn incomplete_publication_refusal_naming_any_lead(
 /// settled queue (a `seal` that stopped after it published). **The last arm** -- a state none of those names -- says `run \`prikk verify\``,
 /// which reads the state and prints its way out (a test builds each state that reaches it and asserts `verify` does).
 ///
-/// The `ref complete` arm is above, for a completable lead. **Not named here:** a log that leads the pointer (step G2a holds that arm: the
-/// rebuild accepts a fork, which it must not -- the architect's ruling is pending), so it reaches the last arm.
+/// The `ref complete` arm is above, for a completable lead. A log that leads the pointer names the rebuild (step G2c: the rebuild refuses a fork
+/// and a pointer more than one transition ahead, so the sentence names it only for a shape it accepts).
 fn state_refusal(layout: &RepositoryLayout) -> Result<PrikkError> {
     use crate::refs::PublicationBlock;
     match crate::refs::classify_publication_block(layout)? {
@@ -275,9 +275,14 @@ fn state_refusal(layout: &RepositoryLayout) -> Result<PrikkError> {
             ref_state_id,
         }) => {
             return Ok(PrikkError::IncompletePublication(format!(
-                "repository mutation is blocked by incomplete ref publication: {ref_name} names RefState {ref_state_id}, which \
-                 this repository does not hold; no command repairs a missing RefState in place: {}",
-                crate::refs::SOUND_COPY
+                "repository mutation is blocked by incomplete ref publication: {}",
+                crate::refs::missing_ref_state_sentence(Some(&ref_name), &ref_state_id)
+            )));
+        }
+        Some(PublicationBlock::LogLeadsPointer { ref_name }) => {
+            return Ok(PrikkError::IncompletePublication(format!(
+                "repository mutation is blocked by incomplete ref publication: the ref log is ahead of the pointer index for {ref_name}; run \
+                 `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`"
             )));
         }
         Some(PublicationBlock::CandidateDebris) => {
@@ -393,7 +398,7 @@ fn judge_known_lead(
     let objects = FileObjectStore::new(layout.clone());
     let state_envelope = objects
         .read_typed(leading_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {leading_id}")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(ref_name), leading_id))?;
     let state = RefStatePayload::decode_canonical(
         &state_envelope.canonical_payload,
         state_envelope.schema_version,
@@ -498,10 +503,7 @@ pub fn complete_ref_publication(
     let ref_state = objects
         .read_typed(plan.leading_ref_state_id, ObjectType::RefState)?
         .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "missing RefState object: {}",
-                plan.leading_ref_state_id
-            ))
+            crate::refs::missing_ref_state(Some(&plan.ref_name), plan.leading_ref_state_id)
         })?;
 
     let update = RefUpdatePayload {

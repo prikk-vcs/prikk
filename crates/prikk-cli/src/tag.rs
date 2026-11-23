@@ -79,10 +79,7 @@ fn run_list(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
             .read_typed(entry.ref_state_id, ObjectType::RefState)
             .map_err(|err| err.to_string())?
             .ok_or_else(|| {
-                format!(
-                    "ref {} RefState {} is missing",
-                    entry.ref_name, entry.ref_state_id
-                )
+                prikk_store::missing_ref_state_sentence(Some(&entry.ref_name), &entry.ref_state_id)
             })?;
         let ref_state_payload = RefStatePayload::decode_canonical(
             &ref_state_envelope.canonical_payload,
@@ -212,7 +209,7 @@ fn resolve_target_block(
         .read_typed(target_ref_state_id, ObjectType::RefState)
         .map_err(|err| err.to_string())?
         .ok_or_else(|| {
-            format!("--target ref {target} RefState {target_ref_state_id} is missing")
+            prikk_store::missing_ref_state_sentence(Some(target), &target_ref_state_id)
         })?;
     let target_payload = RefStatePayload::decode_canonical(
         &target_envelope.canonical_payload,

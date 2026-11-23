@@ -1622,11 +1622,7 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
                 // --rebuild-pointer-index`): the rebuild re-derives the pointer index from the ref
                 // log, and a divergence is a conflict in the ref log itself -- the rebuild would
                 // only reproduce it, not resolve it.
-                let recommendation = crate::way_out::WayOut::RefPublication {
-                    code: issue.code.to_string(),
-                    ref_name: issue.ref_name.clone(),
-                }
-                .sentence();
+                let recommendation = crate::way_out::for_ref_issue(issue).sentence();
                 let doctor_issue = if issue.blocking {
                     DoctorIssue::error(issue.code, issue.message.clone(), recommendation)
                 } else if issue.code == crate::refs::in_flight::IN_FLIGHT_CODE {

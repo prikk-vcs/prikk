@@ -352,6 +352,7 @@ pub use ref_resolution::{
     require_block_reached_locally, require_existing_ref, resolve_branch_source_block,
     resolve_point,
 };
+pub use refs::missing_ref_state_sentence;
 pub use refs::{
     PointerIndexRepair, RefFileOutcome, RefFileStatus, RefItemOutcome, RefItemStatus, RefLogRecord,
     RefLogReplay, RefPointerSummary, RefPublication, RefPublicationIssue, RefRecoveryCandidate,

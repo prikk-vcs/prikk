@@ -6,7 +6,6 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use prikk_error::PrikkError;
 use prikk_object::{BlockKind, ObjectId, ObjectType};
 
 use crate::refs::view_hooks;
@@ -212,7 +211,8 @@ fn a_mutable_handle_is_refreshed_once_on_a_miss() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// The other half: a RefState that is truly missing is still called missing, with 0.58.0's words (`states.sh` state 5 holds them at the command).
+/// The other half: a RefState that is truly missing is still called missing, now with the one sentence every reader says (0.59.0 step G2c: it names that
+/// no command repairs it in place and the sound copy; `states.sh` state 5 lists the changed lines).
 #[test]
 fn a_truly_missing_ref_state_keeps_its_message() {
     let (layout, root, target) = repository("rs2b-missing");
@@ -223,13 +223,13 @@ fn a_truly_missing_ref_state_keeps_its_message() {
         .expect_err("missing");
     assert_eq!(
         error,
-        PrikkError::Integrity(format!("ref heads/main points to missing RefState {state}"))
+        crate::refs::missing_ref_state(Some("heads/main"), state)
     );
     let error = crate::history::load_ref_history(&layout, "heads/main", 10).expect_err("missing");
     assert!(
-        error
-            .to_string()
-            .contains(&format!("history RefState {state} is missing")),
+        error.to_string().contains(&format!(
+            "heads/main names RefState {state}, which this repository does not hold"
+        )),
         "{error}"
     );
     let error = crate::patch_set_digest::compute_patch_set_digest_for_ref(&layout, "heads/main")
@@ -237,7 +237,7 @@ fn a_truly_missing_ref_state_keeps_its_message() {
     assert!(
         error
             .to_string()
-            .contains(&format!("missing RefState object: {state}")),
+            .contains(&format!("RefState {state} is not held by this repository; no command repairs a missing RefState in place")),
         "{error}"
     );
     let _ = std::fs::remove_dir_all(root);

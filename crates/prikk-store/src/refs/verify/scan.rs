@@ -436,7 +436,7 @@ fn verified_ref_state_payload(
 ) -> Result<RefStatePayload> {
     let envelope = objects
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {ref_state_id}")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, ref_state_id))?;
     if envelope.signatures.is_empty() {
         return Err(PrikkError::Integrity(format!(
             "RefState {ref_state_id} is unsigned"

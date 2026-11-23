@@ -60,9 +60,7 @@ pub fn build_have_list(layout: &RepositoryLayout, ref_name: &str) -> Result<Vec<
             let envelope = object_store
                 .read_typed(ref_state_id, ObjectType::RefState)?
                 .ok_or_else(|| {
-                    PrikkError::Integrity(format!(
-                        "ref {canonical_ref} names missing RefState {ref_state_id}"
-                    ))
+                    crate::refs::missing_ref_state(Some(&canonical_ref), ref_state_id)
                 })?;
             let payload = RefStatePayload::decode_canonical(
                 &envelope.canonical_payload,

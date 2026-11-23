@@ -119,7 +119,7 @@ fn a_publication_landing_after_verifys_snapshot_is_not_a_failed_stage() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// A truly missing RefState is still a failed stage, with today's words: the view does not hide a pointer whose object is not there.
+/// A truly missing RefState is still a failed stage, with the one sentence every reader says (0.59.0 step G2c): the view does not hide a pointer whose object is not there.
 #[test]
 fn a_truly_missing_ref_state_is_still_a_failed_local_tag_trust_stage() {
     let (layout, root, target) = repository("rs2a-verify-missing-object");
@@ -133,7 +133,7 @@ fn a_truly_missing_ref_state_is_still_a_failed_local_tag_trust_stage() {
         .expect("one outcome per stage");
     assert!(
         matches!(&local_tag_trust.status, crate::StageStatus::Failed { message }
-            if message == &format!("integrity error: ref heads/main names missing RefState {state_id}")),
+            if message == &format!("integrity error: {}", crate::refs::missing_ref_state_sentence(Some("heads/main"), &state_id))),
         "{:?}",
         local_tag_trust.status
     );

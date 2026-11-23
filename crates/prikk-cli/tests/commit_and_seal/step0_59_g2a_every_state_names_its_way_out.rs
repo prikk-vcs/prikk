@@ -90,6 +90,8 @@ enum State {
     SealStoppedAfterPublish,
     Debris,
     LogLeads,
+    /// The pointer is two transitions ahead of the log (G2c: the rebuild refuses it; the last arm names `verify`).
+    TwoAhead,
 }
 
 fn build(state: State) -> PathBuf {
@@ -123,6 +125,11 @@ fn build(state: State) -> PathBuf {
                     .unwrap();
                 }
                 State::DamagedPointer => flip_near_end(&repo.join(POINTER)),
+                State::TwoAhead => {
+                    support::generation(&repo, "heads/main", "c.txt", b"three\n", "three");
+                    std::fs::copy(g1.join("refs/containers/log-a.container"), repo.join(LOG))
+                        .unwrap();
+                }
                 State::RefStateMissing => {
                     for part in [
                         "containers/ref-state/a.container",
@@ -212,7 +219,10 @@ fn names(state: State) -> &'static [&'static str] {
             "no command repairs a missing RefState in place: restore a sound copy of the sealed history",
         ],
         State::SealStoppedAfterPublish => &["run `prikk seal --allow-no-audit`"],
-        State::LogLeads => &["run `prikk verify`, which names the way out of this state"],
+        State::LogLeads => &[
+            "the ref log is ahead of the pointer index for heads/main; run `prikk doctor --rebuild-pointer-index --plan-only`, then `prikk doctor --rebuild-pointer-index`",
+        ],
+        State::TwoAhead => &["run `prikk verify`, which names the way out of this state"],
         State::Debris => &[OLD_GENERIC],
     }
 }
@@ -233,7 +243,7 @@ fn used_to_print_the_generic(state: State, label: &str) -> bool {
             ["branch create", "branch close", "uncommit"].contains(&label)
                 || always.contains(&label) && label != "rollback-draft"
         }
-        State::LogLeads | State::Debris => true,
+        State::LogLeads | State::Debris | State::TwoAhead => true,
     }
 }
 
@@ -246,6 +256,7 @@ fn every_writer_that_printed_the_generic_names_its_states_way_out() {
         State::SealStoppedAfterPublish,
         State::Debris,
         State::LogLeads,
+        State::TwoAhead,
     ] {
         let repo = build(state);
         for (label, args) in writers() {
@@ -276,7 +287,7 @@ fn every_writer_that_printed_the_generic_names_its_states_way_out() {
 /// seal that stopped after it published: the three states a named command clears).
 #[test]
 fn the_command_a_sentence_names_clears_the_state_and_the_next_writer_goes_through() {
-    let cases: [(State, &[&[&str]]); 3] = [
+    let cases: [(State, &[&[&str]]); 4] = [
         (State::Lead, &[&["ref", "complete", "heads/main"]]),
         (
             State::DamagedPointer,
@@ -288,6 +299,13 @@ fn the_command_a_sentence_names_clears_the_state_and_the_next_writer_goes_throug
         (
             State::SealStoppedAfterPublish,
             &[&["seal", "--allow-no-audit"]],
+        ),
+        (
+            State::LogLeads,
+            &[
+                &["doctor", "--rebuild-pointer-index", "--plan-only"],
+                &["doctor", "--rebuild-pointer-index"],
+            ],
         ),
     ];
     for (state, commands) in cases {
@@ -308,10 +326,10 @@ fn the_command_a_sentence_names_clears_the_state_and_the_next_writer_goes_throug
 }
 
 /// **The last arm holds only if it is true:** a state it names must be one `verify` reads and prints a way out for. The log leading the
-/// pointer reaches it today (the rebuild's acceptance of a fork is the architect's ruling, so that arm is held), and `verify` names a way out.
+/// pointer more than one transition ahead reaches it (the rebuild refuses that shape), and `verify` names a way out.
 #[test]
 fn the_last_arm_is_true_verify_names_a_way_out_of_every_state_that_reaches_it() {
-    let repo = build(State::LogLeads);
+    let repo = build(State::TwoAhead);
     let refused = prikk(
         &repo,
         &["tag", "create", "tags/p", "--target", "heads/main"],
@@ -326,6 +344,10 @@ fn the_last_arm_is_true_verify_names_a_way_out_of_every_state_that_reaches_it() 
         verify.lines().any(|line| line.starts_with("way out [")),
         "verify names a way out: {verify}"
     );
+    // G2c: for this shape the way out is not the rebuild: the rebuild refuses a pointer more than one transition ahead, so the sound copy is named.
+    assert!(verify.contains("prikk setup <new-dir>"), "{verify}");
+    let rebuild = prikk(&repo, &["doctor", "--rebuild-pointer-index", "--plan-only"]);
+    assert_eq!(rebuild.status.code(), Some(1), "{}", text(&rebuild));
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -586,6 +608,214 @@ fn the_stale_record_circle_names_two_ways_out_and_each_works() {
         std::fs::read(repo.join("a.txt")).unwrap(),
         b"base\n",
         "the change now lives on heads/other"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ---- G2c -----------------------------------------------------------------------------------------------------------------------------
+
+/// **The fork (G2c item 1).** `heads/main` sealed once, then two different second generations, X and Y, in two copies; X's repository takes Y's objects
+/// (the archive of Y imported without `--adopt`), its ref log names X and its pointer index names Y (both at update_seq 2, both signed, both
+/// chaining to the same first record). The published 0.58.0's rebuild called Y "stale, behind the log" and dropped it; it now refuses, in the plan
+/// and in the run, naming the sound copy, and the pointer index is not touched. The log-leads shapes stay accepted (the other tests of this file).
+#[test]
+fn the_rebuild_refuses_a_fork_and_leaves_the_pointer_index_as_it_was() {
+    let base = support::unique_repo("g2c-fork");
+    support::init(&base);
+    support::generation(&base, "heads/main", "a.txt", b"one\n", "one");
+    let x = PathBuf::from(format!("{}.x", base.display()));
+    let y = PathBuf::from(format!("{}.y", base.display()));
+    for copy in [&x, &y] {
+        let _ = std::fs::remove_dir_all(copy);
+        copy_tree(&base, copy);
+    }
+    support::generation(&x, "heads/main", "b.txt", b"two\n", "two on X");
+    support::generation(&y, "heads/main", "c.txt", b"three\n", "three on Y");
+    let archive = PathBuf::from(format!("{}.prepo", base.display()));
+    let _ = std::fs::remove_file(&archive);
+    ok(
+        &prikk(&y, &["archive", "export", archive.to_str().unwrap()]),
+        "archive export of Y",
+    );
+    ok(
+        &prikk(&x, &["archive", "import", archive.to_str().unwrap()]),
+        "archive import into X",
+    );
+    std::fs::copy(y.join(POINTER), x.join(POINTER)).unwrap();
+
+    assert_eq!(
+        prikk(&x, &["verify"]).status.code(),
+        Some(1),
+        "the fork fails verify"
+    );
+    let before = std::fs::read(x.join(POINTER)).unwrap();
+    for args in [
+        &["doctor", "--rebuild-pointer-index", "--plan-only"][..],
+        &["doctor", "--rebuild-pointer-index"][..],
+    ] {
+        let out = prikk(&x, args);
+        let said = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {said}");
+        assert!(
+            said.contains("have a pointer that names a RefState the ref log does not hold")
+                && said.contains("no command resolves a fork in place")
+                && said.contains("prikk setup <new-dir>"),
+            "{args:?}: {said}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(x.join(POINTER)).unwrap(),
+        before,
+        "the pointer index is as it was"
+    );
+    // The way out `verify` prints for the failed ref says the same: no command, then the sound copy.
+    let verify = text(&prikk(&x, &["verify"]));
+    assert!(verify.contains("prikk setup <new-dir>"), "{verify}");
+    for dir in [&base, &x, &y] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let _ = std::fs::remove_file(&archive);
+}
+
+/// **A RefState the repository does not hold, at every reader (G2c item 3):** one sentence from one constructor, the same words wherever it is
+/// printed, naming that no command repairs it in place and the sound copy; and `verify`'s way out for the state says none exists, not the rebuild
+/// (which does not restore an object that is in no container).
+#[test]
+fn a_missing_ref_state_says_the_same_thing_wherever_it_is_read() {
+    let repo = build(State::RefStateMissing);
+    let phrase = "which this repository does not hold; no command repairs a missing RefState in place: restore a sound copy of the sealed history";
+    for args in [
+        &["log", "--ref", "heads/main"][..],
+        &["branch", "list"][..],
+        &["tag", "create", "tags/p", "--target", "heads/main"][..],
+        &["branch", "create", "heads/x", "--from", "heads/main"][..],
+        &["commit", "-m", "x"][..],
+        &["seal", "--allow-no-audit"][..],
+    ] {
+        // `commit` and `seal` need something queued or changed to get as far as reading the ref.
+        std::fs::write(repo.join("w.txt"), b"w\n").unwrap();
+        let said = text(&prikk(&repo, args));
+        assert!(said.contains(phrase), "{args:?}: {said}");
+        assert!(
+            !said.contains(" is missing") || said.contains(phrase),
+            "{args:?}: {said}"
+        );
+    }
+    let verify = text(&prikk(&repo, &["verify"]));
+    assert!(
+        verify.contains("way out [a ref's pointer names a RefState this repository does not hold]: no command repairs a missing RefState in place"),
+        "{verify}"
+    );
+    assert!(
+        !verify.contains("way out [a ref file or ref failed]"),
+        "the rebuild's way out is not offered for a state it does not clear: {verify}"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A path as the shell would split it: `'…'` (with `'\''` for a quote) and `"…"`, else whitespace.
+fn split_command(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut started = false;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                started = true;
+                for q in chars.by_ref() {
+                    if q == '\'' {
+                        break;
+                    }
+                    current.push(q);
+                }
+            }
+            '"' => {
+                started = true;
+                for q in chars.by_ref() {
+                    if q == '"' {
+                        break;
+                    }
+                    current.push(q);
+                }
+            }
+            '\\' if chars.peek().is_some() => {
+                started = true;
+                current.push(chars.next().unwrap());
+            }
+            c if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            c => {
+                started = true;
+                current.push(c);
+            }
+        }
+    }
+    if started {
+        words.push(current);
+    }
+    words
+}
+
+/// **A path with a space is quoted in a printed command (G2c item 4),** and the command, split as a shell would split it, runs: the circle's way B
+/// with a file called `my notes.txt`.
+#[test]
+fn a_path_with_a_space_is_quoted_in_the_printed_command_and_the_command_runs() {
+    let repo = support::unique_repo("g2c-quoted");
+    support::init(&repo);
+    support::generation(&repo, "heads/main", "my notes.txt", b"base\n", "base");
+    ok(
+        &support::branch_create(&repo, "heads/other", "heads/main"),
+        "branch create other",
+    );
+    std::fs::write(repo.join("queued.txt"), b"q\n").unwrap();
+    ok(
+        &support::commit(&repo, "heads/other", "q"),
+        "commit --ref heads/other",
+    );
+    ok(
+        &support::seal(&repo, "heads/other"),
+        "seal --ref heads/other",
+    );
+    std::fs::write(repo.join("my notes.txt"), b"base\nmy edit\n").unwrap();
+
+    let switch = text(&prikk(&repo, &["branch", "switch", "heads/main"]));
+    let quote = if cfg!(windows) {
+        "\"my notes.txt\""
+    } else {
+        "'my notes.txt'"
+    };
+    assert!(
+        switch.contains(&format!(
+            "restore the file with `prikk cat --path {quote} --ref "
+        )),
+        "{switch}"
+    );
+    let start = switch.find("`prikk cat ").unwrap() + 1;
+    let end = switch[start..].find('`').unwrap() + start;
+    let words = split_command(&switch[start..end]);
+    assert_eq!(words[0], "prikk");
+    assert_eq!(
+        words
+            .iter()
+            .filter(|w| w.as_str() == "my notes.txt")
+            .count(),
+        2,
+        "{words:?}"
+    );
+    let args: Vec<&str> = words.iter().skip(1).map(String::as_str).collect();
+    ok(
+        &prikk(&repo, &args),
+        "the printed cat, split as a shell splits it",
+    );
+    assert_eq!(std::fs::read(repo.join("my notes.txt")).unwrap(), b"base\n");
+    ok(
+        &prikk(&repo, &["branch", "switch", "heads/main"]),
+        "the switch after the restore",
     );
     let _ = std::fs::remove_dir_all(&repo);
 }

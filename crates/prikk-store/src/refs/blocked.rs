@@ -28,6 +28,12 @@ pub(crate) enum PublicationBlock {
     PointerIndexDamaged,
     /// A ref-log record carries a non-zero `created_at`: no writer of this version produces one.
     LegacyTimestamp,
+    /// The ref log is ahead of the pointer index for `ref_name` (the pointer is an earlier record of that ref's log, or absent while the log has
+    /// records): the one divergence `doctor --rebuild-pointer-index` re-derives and accepts.
+    LogLeadsPointer {
+        /// The ref.
+        ref_name: String,
+    },
     /// The newest pointer of `ref_name` names a RefState the object index does not hold.
     MissingRefState {
         /// The ref.
@@ -58,6 +64,8 @@ pub(crate) fn classify_publication_block(
     let relative = layout.repository_relative(
         &layout.ref_log_container_slot_path(crate::foundation::layout::ContainerSlot::A),
     )?;
+    let mut chains: std::collections::BTreeMap<[u8; 32], (String, Vec<ObjectId>)> =
+        std::collections::BTreeMap::new();
     if let Some(bytes) = crate::foundation::fsutil::read_file_if_exists(
         layout.repository_mutation_root(),
         &relative,
@@ -70,7 +78,29 @@ pub(crate) fn classify_publication_block(
                 if update.created_at != 0 {
                     return Ok(Some(PublicationBlock::LegacyTimestamp));
                 }
+                chains
+                    .entry(record.ref_name_key)
+                    .or_insert_with(|| (update.ref_name.clone(), Vec::new()))
+                    .1
+                    .push(update.new_ref_state_id);
             }
+        }
+    }
+    let newest_pointer: std::collections::BTreeMap<[u8; 32], ObjectId> = pointer_replay
+        .entries
+        .iter()
+        .map(|entry| (entry.ref_name_key, entry.ref_state_id))
+        .collect();
+    for (key, (ref_name, chain)) in &chains {
+        let Some(tip) = chain.last() else { continue };
+        let leads = match newest_pointer.get(key) {
+            None => true,
+            Some(pointer) => pointer != tip && chain.contains(pointer),
+        };
+        if leads {
+            return Ok(Some(PublicationBlock::LogLeadsPointer {
+                ref_name: ref_name.clone(),
+            }));
         }
     }
     let objects = ObjectReadSnapshot::open(layout)?;
@@ -102,4 +132,35 @@ pub(crate) fn candidate_debris_refusal() -> PrikkError {
         "repository mutation is blocked by incomplete ref publication; run verify/doctor and use signer-backed seal retry"
             .to_string(),
     )
+}
+
+/// **The one sentence for a RefState the repository does not hold** (0.59.0 step G2c): every reader that follows a ref to its RefState and finds
+/// it absent says the same thing, and says plainly what no command can do. The sound-copy sequence is the way out (`verify`'s own way-out line
+/// for the state says the same). `ref_name` is the ref the pointer belongs to, when the site knows it.
+#[must_use]
+pub fn missing_ref_state_sentence(ref_name: Option<&str>, ref_state_id: &ObjectId) -> String {
+    match ref_name {
+        Some(name) => format!(
+            "{name} names RefState {ref_state_id}, which this repository does not hold; no command repairs a missing RefState in place: {SOUND_COPY}"
+        ),
+        None => format!(
+            "RefState {ref_state_id} is not held by this repository; no command repairs a missing RefState in place: {SOUND_COPY}"
+        ),
+    }
+}
+
+/// [`missing_ref_state_sentence`] as the `Integrity` error every store reader returns for it.
+#[must_use]
+pub(crate) fn missing_ref_state(ref_name: Option<&str>, ref_state_id: ObjectId) -> PrikkError {
+    PrikkError::Integrity(missing_ref_state_sentence(ref_name, &ref_state_id))
+}
+
+/// The same for a **received** ref (a pointer to what another repository sent, not local history): the way out is `received remove` and receiving it
+/// again, which is the sentence `verify` prints for a failed received ref.
+#[must_use]
+pub(crate) fn missing_received_ref_state(ref_name: &str, ref_state_id: ObjectId) -> PrikkError {
+    PrikkError::Integrity(format!(
+        "received ref {ref_name} names RefState {ref_state_id}, which this repository does not hold; run `prikk received remove {ref_name} \
+         --plan-only`, then `prikk received remove {ref_name}`, and receive it again if you still have it"
+    ))
 }

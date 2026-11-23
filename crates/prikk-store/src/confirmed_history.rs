@@ -86,9 +86,9 @@ fn note_forced_for_test(tip: ObjectId) -> Option<AdoptedHistoryNote> {
 }
 
 fn tip_block(reader: &impl ObjectReader, ref_state_id: ObjectId) -> Result<ObjectId> {
-    let envelope = reader.read_object(ref_state_id)?.ok_or_else(|| {
-        prikk_error::PrikkError::Integrity(format!("RefState {ref_state_id} is missing"))
-    })?;
+    let envelope = reader
+        .read_object(ref_state_id)?
+        .ok_or_else(|| crate::refs::missing_ref_state(None, ref_state_id))?;
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     Ok(crate::refs::resolve_ref_tip_block(reader, &payload)?.0)

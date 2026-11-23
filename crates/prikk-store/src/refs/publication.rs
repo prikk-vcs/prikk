@@ -477,7 +477,7 @@ pub(crate) fn queue_already_sealed(
     let objects = FileObjectStore::new(layout.clone());
     let state = objects
         .read_typed(state_id, prikk_object::ObjectType::RefState)?
-        .ok_or_else(|| PrikkError::Integrity(format!("missing RefState object: {state_id}")))?;
+        .ok_or_else(|| crate::refs::missing_ref_state(None, state_id))?;
     let target = RefStatePayload::decode_canonical(&state.canonical_payload, state.schema_version)?
         .target_object_id;
     let block = objects

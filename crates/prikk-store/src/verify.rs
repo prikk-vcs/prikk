@@ -710,6 +710,9 @@ pub struct RepositoryVerification {
     /// reaches: the text forms of `verify` and `doctor` print the existing `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT` finding instead of the per-object
     /// "reached by nothing" warnings and the count. `unreached_objects` itself keeps listing what the read found (a true fact at the read).
     pub unreached_withheld: bool,
+    /// 0.59.0 step G2c: a ref's newest pointer names a RefState the object index does not hold. No command repairs that in place (the rebuild and
+    /// `doctor --repair-index` do not restore an object that is in no container), so the way out `verify` prints says so instead of the rebuild's.
+    pub ref_state_missing: bool,
     /// 0.59.0 RS2e: a note for a stage reported `Evaluated` that did not classify what it reads (the active queue changed on every bounded read while
     /// another command held the active lock). Text only; the stage's status stays `evaluated`.
     pub stage_notes: Vec<(VerificationStage, String)>,
@@ -2040,6 +2043,12 @@ pub fn verify_repository_with_options(
                     .any(|object| reached.contains(&object.object_id))
             })
         });
+    let ref_state_missing = pointers_read.as_ref().is_ok_and(|replay| {
+        replay
+            .entries
+            .iter()
+            .any(|entry| !object_store.contains_object(ObjectType::RefState, entry.ref_state_id))
+    });
     let unreached_withheld =
         has_unreached_publishable && (writer_during_objects.is_some() || published_since);
     let non_ascii_paths_in_old_format = object_summary
@@ -2492,6 +2501,7 @@ pub fn verify_repository_with_options(
         unreferenced_remnants,
         unreached_objects,
         unreached_withheld,
+        ref_state_missing,
         stage_notes: queue_in_flight
             .map(|pid| {
                 [
@@ -2666,11 +2676,7 @@ pub(crate) fn verify_received_ref_state(
 ) -> Result<()> {
     let envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "received pointer {ref_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_received_ref_state(ref_name, ref_state_id))?;
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     ensure_ref_target_valid(
@@ -2727,10 +2733,7 @@ fn verify_local_tag_publication_trust(
         let ref_state_envelope = object_store
             .read_typed(summary.ref_state_id, ObjectType::RefState)?
             .ok_or_else(|| {
-                PrikkError::Integrity(format!(
-                    "ref {} names missing RefState {}",
-                    summary.ref_name, summary.ref_state_id
-                ))
+                crate::refs::missing_ref_state(Some(&summary.ref_name), summary.ref_state_id)
             })?;
         let ref_state_payload = RefStatePayload::decode_canonical(
             &ref_state_envelope.canonical_payload,

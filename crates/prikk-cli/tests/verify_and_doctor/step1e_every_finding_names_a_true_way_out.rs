@@ -195,6 +195,17 @@ fn cases() -> Vec<Case> {
             cure: Cure::Clears(&["doctor", "--rebuild-pointer-index"]),
         },
         Case {
+            // 0.59.0 step G2c: the shape the rebuild accepts and clears (F1's split). The pointer index lacks the ref the log holds.
+            name: "the ref log leads the pointer index (the pointer index lost its record of the ref)",
+            damage: |repo| {
+                std::fs::remove_file(repo.join(".prikk/refs/containers/pointer-index-a.container"))
+                    .unwrap()
+            },
+            kind: WayOut::RefLogLeadsPointer,
+            doctor_code: "PRIKK-VERIFY-REF-DIVERGENCE",
+            cure: Cure::Clears(&["doctor", "--rebuild-pointer-index"]),
+        },
+        Case {
             name: "a damaged ref log",
             damage: |repo| flip(repo, "refs/containers/log-a.container", |len| len / 2),
             kind: WayOut::RefFile,

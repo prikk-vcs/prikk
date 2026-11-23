@@ -114,11 +114,7 @@ fn resolve_branch_ref_tip(
     };
     let envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "ref {ref_name} names missing RefState {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(ref_name), ref_state_id))?;
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     if payload.kind != RefKind::Branch {

@@ -189,6 +189,24 @@ pub(crate) struct WorktreeBaselineIdentity {
     pub(crate) queued_fold: [u8; 32],
 }
 
+/// A path as one argument of a command printed in a sentence (0.59.0 step G2c): bare when it needs no quoting, else quoted so the command **types as
+/// printed** -- single quotes (an embedded `'` as `'\\''`) for a POSIX shell, double quotes on Windows, where a path cannot hold one.
+#[must_use]
+pub(crate) fn command_arg(path: &str) -> String {
+    let safe = !path.is_empty()
+        && path.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-')
+        });
+    if safe {
+        path.to_string()
+    } else if cfg!(windows) {
+        format!("\"{path}\"")
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
+}
+
 /// **The way past a stale record when the worktree holds a change of the user's** (0.59.0 step G2b). After `commit --ref <x>` and a `seal` the record names
 /// `<x>`'s sealed state; a commit onto the current branch then refuses as stale and names the switch, and the switch refuses as dirty and says
 /// "commit it, or restore those files" -- "commit it" being what refused. Two ways out exist, both measured end to end (`circle.sh`): **restore the file
@@ -205,9 +223,10 @@ pub(crate) fn past_a_stale_record(
         return None;
     }
     let ref_name = &recorded.ref_name;
+    let quoted = command_arg(path);
     Some(format!(
         "this worktree was last written from {ref_name}, so a commit onto this branch refuses until it is brought up to date, and for your change to {path} \
-         that needs a clean file: keep a copy of your change, restore the file with `prikk cat --path {path} --ref {block} --output {path} --force`, run \
+         that needs a clean file: keep a copy of your change, restore the file with `prikk cat --path {quoted} --ref {block} --output {quoted} --force`, run \
          the switch, then put your change back; or commit it where the worktree was last written, `prikk commit --ref {ref_name}`, then `prikk seal \
          --allow-no-audit --ref {ref_name}`"
     ))

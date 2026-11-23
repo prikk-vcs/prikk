@@ -8,8 +8,10 @@
 mod blocked;
 mod container;
 mod evidence;
+pub use blocked::missing_ref_state_sentence;
 pub(crate) use blocked::{
     PublicationBlock, SOUND_COPY, candidate_debris_refusal, classify_publication_block,
+    missing_received_ref_state, missing_ref_state,
 };
 pub(crate) mod in_flight;
 mod kept_pointer_index;
@@ -1103,11 +1105,7 @@ pub fn current_branch(layout: &RepositoryLayout) -> Result<String> {
     };
     let envelope = FileObjectStore::new(layout.clone())
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "missing RefState object for {canonical}: {ref_state_id}"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(&canonical), ref_state_id))?;
     let state =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     if state.closed {

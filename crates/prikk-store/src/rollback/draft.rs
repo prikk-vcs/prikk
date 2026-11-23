@@ -287,11 +287,7 @@ fn read_target_tip(layout: &RepositoryLayout, ref_name: &str) -> Result<Rollback
     let object_store = ObjectReadSnapshot::open(layout)?;
     let envelope = object_store
         .read_typed(ref_state_id, ObjectType::RefState)?
-        .ok_or_else(|| {
-            PrikkError::Integrity(format!(
-                "published ref {ref_name} points to missing RefState"
-            ))
-        })?;
+        .ok_or_else(|| crate::refs::missing_ref_state(Some(ref_name), ref_state_id))?;
     let payload =
         RefStatePayload::decode_canonical(&envelope.canonical_payload, envelope.schema_version)?;
     if payload.ref_name != ref_name {
