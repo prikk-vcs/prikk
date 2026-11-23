@@ -110,6 +110,8 @@ pub(crate) use anchored::remove_file_required;
 // already confirmed this), and removing an empty file before the real exclusive create must not
 // itself fail just because there was nothing there yet.
 pub(crate) use anchored::remove_file_if_present_required;
+// 0.59.0 step G2e: `doctor --remove-ref-candidates` removes an empty directory left in `refs/tmp`.
+pub(crate) use anchored::remove_empty_directory_if_present_required;
 // DC-97: needed on Windows now too -- conformance.rs's shared `assert_*` functions take
 // `impl DurabilityContract`, and that includes the new Windows wrapper.
 #[cfg(all(

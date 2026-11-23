@@ -10,8 +10,9 @@ mod container;
 mod evidence;
 pub use blocked::missing_ref_state_sentence;
 pub(crate) use blocked::{
-    PublicationBlock, SOUND_COPY, candidate_in_flight, classify_publication_block,
+    PublicationBlock, RefTmpEntryKind, SOUND_COPY, candidate_in_flight, classify_publication_block,
     decode_legacy_pointer_candidate, missing_received_ref_state, missing_ref_state,
+    ref_tmp_finding, ref_tmp_non_files,
 };
 pub(crate) mod in_flight;
 mod kept_pointer_index;

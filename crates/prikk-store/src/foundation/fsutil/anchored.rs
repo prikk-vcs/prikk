@@ -240,6 +240,14 @@ pub(crate) fn remove_file_if_present_required(
     ACTIVE_DURABILITY.remove_if_present(root, relative)
 }
 
+/// Remove an empty directory if present and sync its exact parent (0.59.0 step G2e). A directory that holds anything is an error.
+pub(crate) fn remove_empty_directory_if_present_required(
+    root: &MutationRoot,
+    relative: &Path,
+) -> Result<bool> {
+    ACTIVE_DURABILITY.remove_empty_directory_if_present(root, relative)
+}
+
 /// Attempt fallible removal where a destructor cannot report the result.
 pub(crate) fn remove_file_cleanup_best_effort(root: &MutationRoot, relative: &Path) {
     let _ = remove_file_required(root, relative);

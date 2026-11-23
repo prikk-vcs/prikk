@@ -418,6 +418,24 @@ impl DurabilityContract for WindowsDurability {
         }
     }
 
+    fn remove_empty_directory_if_present(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<bool> {
+        let parent = required_parent(relative)?;
+        let name = required_file_name(relative)?;
+        let resolved_parent = open_existing_windows_directory_required(root, parent)?;
+        let path = resolved_parent.join(name);
+        failpoints::unlink()?;
+        // `remove_dir` removes an empty directory only (a non-empty one is an error), and does not remove a symbolic link to one as a file.
+        match fs::remove_dir(&path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(io_error(&path, error)),
+        }
+    }
+
     fn ensure_directory(&self, root: &MutationRoot, relative: &Path) -> Result<()> {
         prepare_windows_directory_required(root, relative)?;
         Ok(())

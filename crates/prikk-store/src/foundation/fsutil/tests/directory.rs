@@ -104,3 +104,29 @@ fn required_directory_rejects_symlink_component() {
     assert!(ensure_directory_required(&root, Path::new("link/child")).is_err());
     let _ = fs::remove_dir_all(path);
 }
+
+/// 0.59.0 step G2e: `remove_empty_directory_if_present_required` removes an empty directory and reports it, reports absence as `false`, refuses a
+/// directory that holds anything (leaving it and its contents as they were), and never removes a symbolic link.
+#[test]
+fn an_empty_directory_is_removed_and_nothing_else_is() -> std::io::Result<()> {
+    use super::super::remove_empty_directory_if_present_required as remove;
+    let path = unique_temp_dir("remove-empty-directory");
+    let root = mutation_root(&path);
+    fs::create_dir_all(path.join("empty"))?;
+    fs::create_dir_all(path.join("full"))?;
+    fs::write(path.join("full/f"), b"x")?;
+    assert!(matches!(remove(&root, Path::new("empty")), Ok(true)));
+    assert!(!path.join("empty").exists());
+    assert!(matches!(remove(&root, Path::new("empty")), Ok(false)));
+    assert!(remove(&root, Path::new("full")).is_err());
+    assert_eq!(fs::read(path.join("full/f"))?, b"x");
+    #[cfg(target_family = "unix")]
+    {
+        fs::create_dir_all(path.join("target-dir"))?;
+        std::os::unix::fs::symlink(path.join("target-dir"), path.join("link"))?;
+        assert!(remove(&root, Path::new("link")).is_err());
+        assert!(path.join("link").is_symlink() && path.join("target-dir").is_dir());
+    }
+    let _ = fs::remove_dir_all(path);
+    Ok(())
+}

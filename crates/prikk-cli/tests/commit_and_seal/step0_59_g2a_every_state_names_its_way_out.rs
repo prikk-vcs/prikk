@@ -919,8 +919,8 @@ fn debris_does_not_refuse_a_writer_and_the_verb_clears_the_warning_and_is_undone
 }
 
 #[test]
-fn the_verb_runs_alone_and_refuses_a_directory_in_refs_tmp_without_touching_anything() {
-    let repo = sealed_repo("g2d-damage");
+fn the_verb_runs_alone() {
+    let repo = sealed_repo("g2d-alone");
     plant(&repo, "a.tmp", b"x");
     let usage = prikk(
         &repo,
@@ -932,7 +932,91 @@ fn the_verb_runs_alone_and_refuses_a_directory_in_refs_tmp_without_touching_anyt
         "{}",
         text(&usage)
     );
+    assert_eq!(tmp_names(&repo), ["a.tmp"]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// **A non-file in `refs/tmp` (0.59.0 step G2e):** no writer refuses; `verify` still fails the `refs` stage (its severity is unchanged) and names a
+/// way out by what the entry is. An empty directory: the verb's two commands, run, after which `verify` is clean. A directory that holds something
+/// (and, on Unix, a symbolic link): no prikk command, said plainly; the verb refuses naming it and touches nothing; removing it by hand clears it.
+#[test]
+fn a_non_file_in_refs_tmp_does_not_refuse_a_writer_and_its_way_out_is_true() {
+    let repo = sealed_repo("g2e-nonfile");
     std::fs::create_dir_all(repo.join(".prikk/refs/tmp/d")).unwrap();
+    // The writers go through.
+    for (label, args) in writers() {
+        if label == "commit" || label == "rollback-draft" {
+            continue;
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let said = text(&prikk(&repo, &args));
+        assert!(
+            !said.contains("non-file") && !said.contains("incomplete ref publication"),
+            "{label}: {said}"
+        );
+    }
+    // `verify`: still exit 1 (stage refs), and one way-out line for the entry, naming the verb.
+    let verify = prikk(&repo, &["verify"]);
+    assert_eq!(verify.status.code(), Some(1), "{}", text(&verify));
+    let said = text(&verify);
+    assert!(
+        said.contains(
+            "stage refs: failed: integrity error: unexpected non-file in ref candidate directory"
+        ),
+        "{said}"
+    );
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("way out [a non-file entry remains in refs/tmp]"))
+        .unwrap_or_else(|| panic!("no way-out line: {said}"));
+    assert!(
+        line.contains("empty directory")
+            && line.contains("`prikk doctor --remove-ref-candidates --plan-only`"),
+        "{line}"
+    );
+    let doctor = text(&prikk(&repo, &["doctor"]));
+    assert!(
+        doctor.contains("recommendation: `.prikk/refs/tmp/d` is an empty directory"),
+        "{doctor}"
+    );
+    // The commands the sentence names.
+    let plan = prikk(&repo, &["doctor", "--remove-ref-candidates", "--plan-only"]);
+    ok(&plan, "the plan");
+    assert!(
+        text(&plan).contains(
+            "refs/tmp/d: would be removed (an empty directory; no bytes, so nothing would be saved)"
+        ),
+        "{}",
+        text(&plan)
+    );
+    assert_eq!(tmp_names(&repo), ["d"]);
+    let run = prikk(&repo, &["doctor", "--remove-ref-candidates"]);
+    ok(&run, "the run");
+    assert!(
+        text(&run).contains("refs/tmp/d: removed (an empty directory; no bytes, nothing saved)"),
+        "{}",
+        text(&run)
+    );
+    assert!(tmp_names(&repo).is_empty());
+    ok(&prikk(&repo, &["verify"]), "verify after the verb");
+    let listing = text(&prikk(&repo, &["doctor", "--recovery-list"]));
+    assert!(!listing.contains("refs/tmp/d"), "{listing}");
+
+    // A directory that holds something: no command, said plainly; the verb refuses and touches nothing.
+    std::fs::create_dir_all(repo.join(".prikk/refs/tmp/full")).unwrap();
+    std::fs::write(repo.join(".prikk/refs/tmp/full/f"), b"y").unwrap();
+    plant(&repo, "a.tmp", b"x");
+    let said = text(&prikk(&repo, &["verify"]));
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("way out [a non-file entry remains in refs/tmp]"))
+        .unwrap_or_else(|| panic!("no way-out line: {said}"));
+    assert!(
+        line.contains("`.prikk/refs/tmp/full`")
+            && line.contains("no prikk command removes it: prikk never wrote it"),
+        "{line}"
+    );
+    assert!(!line.contains("--remove-ref-candidates"), "{line}");
     for args in [
         &["doctor", "--remove-ref-candidates", "--plan-only"][..],
         &["doctor", "--remove-ref-candidates"][..],
@@ -940,13 +1024,20 @@ fn the_verb_runs_alone_and_refuses_a_directory_in_refs_tmp_without_touching_anyt
         let out = prikk(&repo, args);
         assert_eq!(out.status.code(), Some(1), "{}", text(&out));
         assert!(
-            text(&out).contains("unexpected non-file in ref candidate directory: refs/tmp/d")
-                && text(&out).contains("no command removes it"),
+            text(&out).contains("unexpected non-file in ref candidate directory: refs/tmp/full")
+                && text(&out).contains("no prikk command removes it: prikk never wrote it"),
             "{}",
             text(&out)
         );
     }
-    assert_eq!(tmp_names(&repo), ["a.tmp", "d"]);
+    assert_eq!(tmp_names(&repo), ["a.tmp", "full"]);
+    // By hand, as the sentence says: then the verb takes the file, and `verify` is clean.
+    std::fs::remove_dir_all(repo.join(".prikk/refs/tmp/full")).unwrap();
+    ok(
+        &prikk(&repo, &["doctor", "--remove-ref-candidates"]),
+        "the verb, after by hand",
+    );
+    ok(&prikk(&repo, &["verify"]), "verify after");
     let _ = std::fs::remove_dir_all(&repo);
 }
 

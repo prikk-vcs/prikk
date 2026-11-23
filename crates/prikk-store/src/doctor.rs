@@ -971,7 +971,19 @@ pub fn doctor_repository(layout: &RepositoryLayout) -> DoctorReport {
             .into_iter()
             .filter_map(|(present, code)| present.then_some(code))
             .collect();
-            let stage_incomplete_recommendation = if damaged_container_codes.is_empty() {
+            let ref_tmp_cause = verification.ref_tmp_non_file.as_ref().map(|entry| {
+                crate::way_out::WayOut::RefTmpNonFile {
+                    name: entry.name.clone(),
+                    removable: entry.removable,
+                }
+                .sentence()
+            });
+            let stage_incomplete_recommendation = if let Some(cause) = ref_tmp_cause {
+                format!(
+                    "{cause}; if this stage still fails after that: {}",
+                    crate::way_out::WayOut::StageIncomplete.sentence()
+                )
+            } else if damaged_container_codes.is_empty() {
                 crate::way_out::WayOut::StageIncomplete.sentence()
             } else {
                 format!(

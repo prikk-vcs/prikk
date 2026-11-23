@@ -376,6 +376,10 @@ fn no_durability_every_method_fails_at_runtime_not_compile_time() {
             .err()
             .map(|error| error.to_string()),
         NoDurability
+            .remove_empty_directory_if_present(&root, relative)
+            .err()
+            .map(|error| error.to_string()),
+        NoDurability
             .ensure_directory(&root, relative)
             .err()
             .map(|error| error.to_string()),

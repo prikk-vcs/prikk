@@ -270,7 +270,7 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
   candidate names, in sorted order, and refuses at a running holder without waiting; reads again under the locks; **saves each file's bytes in
   the recovery log (a `remove` entry), then removes it, then syncs the directory**, so a crash leaves the file and a saved copy, and a run
   again finishes. `--plan-only` lists the files and writes nothing. A directory or other non-file in `refs/tmp` refuses before anything is
-  touched, and no command removes it. `--recovery-restore <id>` recreates a removed file, byte for byte, only where nothing is. A `remove`
+  touched: no prikk command removes it, because prikk never wrote it (`verify` still fails the `refs` stage for it and says so). An empty directory is removed with no entry saved (there are no bytes). `--recovery-restore <id>` recreates a removed file, byte for byte, only where nothing is. A `remove`
   entry is a version-2 frame: 0.58.0 lists it as written by a newer prikk and handles every other entry as before.
 - `--repair-main-ref`: a recognized input that performs no repair and is always refused
   (`doctor.rs:1263-1269`).

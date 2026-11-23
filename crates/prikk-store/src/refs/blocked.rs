@@ -170,14 +170,15 @@ pub(crate) fn decode_legacy_pointer_candidate(bytes: &[u8]) -> Option<(String, O
     Some((name, ObjectId::from_bytes(id)))
 }
 
-/// **A candidate a publisher could still be using** (0.59.0 step G2d): the only reason the write-path precondition has left to refuse on a file in
-/// `refs/tmp`. No writer of this version makes a candidate, so a file there is debris -- unless it decodes as a legacy pointer candidate for a ref
-/// whose `RefLock` another running process holds, which is in flight. `None` for everything else (the writers go on; `verify` keeps its warning, and
-/// `prikk doctor --remove-ref-candidates` clears it). A non-file entry is damage and refuses, as it always did.
+/// **A candidate a publisher could still be using** (0.59.0 step G2d): the only reason the write-path precondition has left to refuse on an entry in
+/// `refs/tmp`. No writer of this version makes a candidate, and none reads the directory, so an entry there is debris -- unless it decodes as a legacy
+/// pointer candidate for a ref whose `RefLock` another running process holds, which is in flight. `None` for everything else (the writers go on;
+/// `verify` keeps its finding, and `prikk doctor --remove-ref-candidates` clears what a prikk command can). **Since step G2e a non-file entry (a
+/// directory, a symbolic link) does not refuse a writer either**: no writer reads `refs/tmp` since RFC 102 Stage 4.
 ///
 /// # Errors
 ///
-/// A non-file entry in `refs/tmp`; an unreadable directory or file.
+/// An unreadable directory or file.
 pub(crate) fn candidate_in_flight(layout: &RepositoryLayout) -> Result<Option<PrikkError>> {
     let dir = layout.refs_dir().join("tmp");
     let relative = layout.repository_relative(&dir)?;
@@ -193,10 +194,7 @@ pub(crate) fn candidate_in_flight(layout: &RepositoryLayout) -> Result<Option<Pr
     };
     for entry in entries {
         if entry.kind != crate::foundation::fsutil::EntryKind::Regular {
-            return Err(PrikkError::Integrity(format!(
-                "unexpected non-file in ref candidate directory: refs/tmp/{}; no command removes it",
-                entry.name.to_string_lossy()
-            )));
+            continue;
         }
         let Some(bytes) =
             crate::foundation::fsutil::read_file_if_exists(root, &relative.join(&entry.name))?
@@ -213,4 +211,59 @@ pub(crate) fn candidate_in_flight(layout: &RepositoryLayout) -> Result<Option<Pr
         }
     }
     Ok(None)
+}
+
+/// What a non-file entry in `refs/tmp` is, to the one verb that can clear it (0.59.0 step G2e).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefTmpEntryKind {
+    /// A directory that holds nothing: `prikk doctor --remove-ref-candidates` removes it (no bytes, so nothing is saved).
+    EmptyDirectory,
+    /// A directory that holds something, a symbolic link, or anything else: prikk never wrote it, and no prikk command removes it.
+    NotPrikks,
+}
+
+/// The classification of every entry of `refs/tmp` that is not a regular file, by name, in name order. One definition for the verb (which acts on
+/// it), for `verify` (which prints the way out) and for the tests. A directory that cannot be listed counts as holding something.
+///
+/// # Errors
+///
+/// An unreadable `refs/tmp`.
+pub(crate) fn ref_tmp_non_files(
+    layout: &RepositoryLayout,
+) -> Result<Vec<(String, RefTmpEntryKind)>> {
+    use crate::foundation::fsutil::{EntryKind, list_directory, list_directory_tolerating_absence};
+    let dir = layout.refs_dir().join("tmp");
+    let relative = layout.repository_relative(&dir)?;
+    let root = layout.repository_mutation_root();
+    let Some(entries) =
+        list_directory_tolerating_absence(root, &dir, &relative, "the ref candidate directory")?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let name = entry.name.to_string_lossy().into_owned();
+        let kind = match entry.kind {
+            EntryKind::Regular => continue,
+            EntryKind::Directory => match list_directory(root, &relative.join(&entry.name)) {
+                Ok(inside) if inside.is_empty() => RefTmpEntryKind::EmptyDirectory,
+                _ => RefTmpEntryKind::NotPrikks,
+            },
+            _ => RefTmpEntryKind::NotPrikks,
+        };
+        out.push((name, kind));
+    }
+    Ok(out)
+}
+
+/// The one non-file entry of `refs/tmp` `verify` names a way out for (0.59.0 step G2e): the first that no prikk command removes, else the first empty
+/// directory. `None` when there is none, and when `refs/tmp` cannot be read. Read directly, never taken from the failed stage's message.
+#[must_use]
+pub(crate) fn ref_tmp_finding(layout: &RepositoryLayout) -> Option<(String, RefTmpEntryKind)> {
+    let entries = ref_tmp_non_files(layout).ok()?;
+    entries
+        .iter()
+        .find(|(_, kind)| *kind == RefTmpEntryKind::NotPrikks)
+        .or_else(|| entries.first())
+        .cloned()
 }

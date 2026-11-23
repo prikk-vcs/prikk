@@ -72,6 +72,14 @@ pub enum WayOut {
     RefLogLeadsPointer,
     /// 0.59.0 step G2c: a ref's pointer names a RefState the repository does not hold: no command repairs it in place.
     RefStateMissing,
+    /// 0.59.0 step G2e: an empty directory in `refs/tmp` (`removable`), or an entry no prikk command removes. Chosen by the report's typed
+    /// `ref_tmp_non_file`, never by the stage's message.
+    RefTmpNonFile {
+        /// The entry's name.
+        name: String,
+        /// `true` for an empty directory, which `prikk doctor --remove-ref-candidates` removes.
+        removable: bool,
+    },
     /// 0.59.0 step G2d: a lead of one transition that retained evidence does not prove: `ref complete` refuses it and the rebuild drops it.
     RefLeadUnproved,
     /// A ref's pointer and log disagree, by the code `verify` gives that state.
@@ -187,6 +195,20 @@ impl WayOut {
                     .to_string(),
                 _ => "the candidate is kept for inspection; doctor does not infer ownership or remove it".to_string(),
             },
+            Self::RefTmpNonFile {
+                name,
+                removable: true,
+            } => format!(
+                "`.prikk/refs/tmp/{name}` is an empty directory, which nothing in prikk writes or reads: run `prikk doctor --remove-ref-candidates \
+                 --plan-only`, then `prikk doctor --remove-ref-candidates` (it holds no bytes, so nothing is saved)"
+            ),
+            Self::RefTmpNonFile {
+                name,
+                removable: false,
+            } => format!(
+                "`.prikk/refs/tmp/{name}` is not a file or an empty directory; no prikk command removes it: prikk never wrote it, and nothing in prikk \
+                 reads it. Look at what it holds, then remove it yourself"
+            ),
             Self::RefLeadUnproved => format!(
                 "`prikk ref complete` refuses it (the retained evidence does not prove the lead). Run `prikk doctor --rebuild-pointer-index \
                  --plan-only`: it names the lead it would drop, a publication the ref log never confirmed; without `--plan-only` it drops that \
@@ -241,6 +263,15 @@ pub fn ways_out(report: &RepositoryVerification) -> Vec<(&'static str, WayOut)> 
         out.push((
             "a verification stage did not complete",
             WayOut::StageIncomplete,
+        ));
+    }
+    if let Some(entry) = &report.ref_tmp_non_file {
+        out.push((
+            "a non-file entry remains in refs/tmp",
+            WayOut::RefTmpNonFile {
+                name: entry.name.clone(),
+                removable: entry.removable,
+            },
         ));
     }
     if report

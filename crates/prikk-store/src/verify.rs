@@ -713,6 +713,9 @@ pub struct RepositoryVerification {
     /// 0.59.0 step G2c: a ref's newest pointer names a RefState the object index does not hold. No command repairs that in place (the rebuild and
     /// `doctor --repair-index` do not restore an object that is in no container), so the way out `verify` prints says so instead of the rebuild's.
     pub ref_state_missing: bool,
+    /// 0.59.0 step G2e: a non-file entry (a directory, a symbolic link) in `.prikk/refs/tmp`, read directly (never from the failed `refs` stage's
+    /// message). The stage still fails, as it always did; this is what lets `verify` and `doctor` name the way out, which depends on the entry.
+    pub ref_tmp_non_file: Option<RefTmpNonFile>,
     /// 0.59.0 RS2e: a note for a stage reported `Evaluated` that did not classify what it reads (the active queue changed on every bounded read while
     /// another command held the active lock). Text only; the stage's status stays `evaluated`.
     pub stage_notes: Vec<(VerificationStage, String)>,
@@ -848,6 +851,17 @@ pub struct RepositoryVerification {
     /// but nothing else reports it, so it is otherwise invisible until the next compaction silently
     /// overwrites it. Empty in the overwhelmingly common case (no compaction was cut short).
     pub retired_slot_tails: Vec<RetiredSlotTailNote>,
+}
+
+/// 0.59.0 step G2e: the non-file entry of `.prikk/refs/tmp` a way out is named for (see [`RepositoryVerification::ref_tmp_non_file`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RefTmpNonFile {
+    /// The entry's name in `refs/tmp`: the first one no prikk command removes, else the first empty directory.
+    pub name: String,
+    /// `true` for an empty directory, which `prikk doctor --remove-ref-candidates` removes; `false` for a directory that holds something, a symbolic
+    /// link or anything else, which prikk never wrote and no prikk command removes.
+    pub removable: bool,
 }
 
 /// 0.51.0 step 1 Part B item 4: one compacting container's own retired-slot tail warning (see
@@ -2049,6 +2063,10 @@ pub fn verify_repository_with_options(
             .iter()
             .any(|entry| !object_store.contains_object(ObjectType::RefState, entry.ref_state_id))
     });
+    let ref_tmp_non_file = crate::refs::ref_tmp_finding(layout).map(|(name, kind)| RefTmpNonFile {
+        name,
+        removable: kind == crate::refs::RefTmpEntryKind::EmptyDirectory,
+    });
     let unreached_withheld =
         has_unreached_publishable && (writer_during_objects.is_some() || published_since);
     let non_ascii_paths_in_old_format = object_summary
@@ -2502,6 +2520,7 @@ pub fn verify_repository_with_options(
         unreached_objects,
         unreached_withheld,
         ref_state_missing,
+        ref_tmp_non_file,
         stage_notes: queue_in_flight
             .map(|pid| {
                 [

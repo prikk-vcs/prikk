@@ -84,6 +84,15 @@ impl DurabilityContract for NoDurability {
         unsupported_mutation()
     }
 
+    fn remove_empty_directory_if_present(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<bool> {
+        let _ = (root, relative);
+        unsupported_mutation()
+    }
+
     fn ensure_directory(&self, root: &MutationRoot, relative: &Path) -> Result<()> {
         let _ = (root, relative);
         unsupported_mutation()

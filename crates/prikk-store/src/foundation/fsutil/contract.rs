@@ -159,6 +159,15 @@ pub(crate) trait DurabilityContract {
     /// confirmed prior absence, is synced) holds either way.
     fn remove_if_present(&self, root: &MutationRoot, relative: &Path) -> Result<bool>;
 
+    /// Durably remove `relative`, an **empty directory**, if present (0.59.0 step G2e); returns whether one was removed. Absence is not an error. A
+    /// directory that holds anything is an error and is left as it was: this never removes a tree, and never follows a symbolic link (a link is not
+    /// a directory to it). The parent's removal of the entry is synced.
+    fn remove_empty_directory_if_present(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<bool>;
+
     /// Ensure a relative directory tree exists, durably, tolerating a concurrent creator (G8).
     fn ensure_directory(&self, root: &MutationRoot, relative: &Path) -> Result<()>;
 

@@ -13,8 +13,9 @@
 //! directory (`remove_file_if_present_required` does). A crash between the save and the removal leaves the file and a saved copy; a run again saves
 //! again and removes. `--recovery-restore <run>` recreates a removed file, only where nothing is.
 //!
-//! **Every regular file in `refs/tmp` is removed**, decodable as a legacy pointer candidate or not: nothing else lives there. **A non-file entry**
-//! (a directory, a symlink) refuses before anything is touched, and says no command removes it.
+//! **Every regular file in `refs/tmp` is removed**, decodable as a legacy pointer candidate or not: nothing else lives there. **An empty directory** is
+//! removed too (0.59.0 step G2e; no bytes, so nothing is saved). **Any other entry** (a directory that holds something, a symlink) refuses before
+//! anything is touched, and says no prikk command removes it: prikk never wrote it.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -24,7 +25,7 @@ use prikk_object::ObjectId;
 
 use crate::foundation::fsutil::{
     EntryKind, list_directory_tolerating_absence, read_file_if_exists,
-    remove_file_if_present_required,
+    remove_empty_directory_if_present_required, remove_file_if_present_required,
 };
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryLayout};
 use crate::lock::{ActiveLock, RefLock};
@@ -42,6 +43,8 @@ pub enum RefCandidateKind {
     },
     /// A regular file that is not a ref pointer candidate (nothing that prikk writes).
     NotACandidate,
+    /// A directory that holds nothing (0.59.0 step G2e): removed with no bytes saved, since there are none.
+    EmptyDirectory,
 }
 
 /// What the verb did, or would do, to one file.
@@ -80,11 +83,11 @@ pub struct RemoveRefCandidatesReport {
     pub candidates: Vec<RefCandidateOutcome>,
 }
 
-/// `prikk doctor --remove-ref-candidates`: save, then remove, every file in `refs/tmp`.
+/// `prikk doctor --remove-ref-candidates`: save, then remove, every file in `refs/tmp`, and remove an empty directory there.
 ///
 /// # Errors
 ///
-/// A non-file entry in `refs/tmp`; another command publishing a ref a candidate names (or holding the active lock); a file that cannot be read,
+/// An entry in `refs/tmp` that is neither a regular file nor an empty directory (no prikk command removes it: prikk never wrote it); another command publishing a ref a candidate names (or holding the active lock); a file that cannot be read,
 /// saved or removed.
 pub fn remove_ref_candidates(layout: &RepositoryLayout) -> Result<RemoveRefCandidatesReport> {
     run(layout, false)
@@ -114,13 +117,27 @@ fn read_candidates(layout: &RepositoryLayout) -> Result<Vec<Found>> {
     else {
         return Ok(Vec::new());
     };
+    // Every entry that is neither a file nor an empty directory refuses first, before anything is read for removal.
+    let non_files = crate::refs::ref_tmp_non_files(layout)?;
+    if let Some((name, _)) = non_files
+        .iter()
+        .find(|(_, kind)| *kind == crate::refs::RefTmpEntryKind::NotPrikks)
+    {
+        return Err(PrikkError::Integrity(format!(
+            "unexpected non-file in ref candidate directory: refs/tmp/{name}; no prikk command removes it: prikk never wrote it, and nothing in prikk \
+             reads it. Look at what it holds, then remove it yourself; this command touches nothing in refs/tmp while it is there"
+        )));
+    }
     let mut found = Vec::new();
     for entry in entries {
         let name = entry.name.to_string_lossy().into_owned();
-        if entry.kind != EntryKind::Regular {
-            return Err(PrikkError::Integrity(format!(
-                "unexpected non-file in ref candidate directory: refs/tmp/{name}; no command removes it, and this one will not touch refs/tmp while it is there"
-            )));
+        if entry.kind == EntryKind::Directory {
+            found.push(Found {
+                name,
+                bytes: Vec::new(),
+                kind: RefCandidateKind::EmptyDirectory,
+            });
+            continue;
         }
         let Some(bytes) = read_file_if_exists(root, &relative.join(&entry.name))? else {
             continue;
@@ -154,7 +171,7 @@ fn run(layout: &RepositoryLayout, plan_only: bool) -> Result<RemoveRefCandidates
         .into_iter()
         .filter_map(|found| match found.kind {
             RefCandidateKind::LegacyPointer { ref_name, .. } => Some(ref_name),
-            RefCandidateKind::NotACandidate => None,
+            RefCandidateKind::NotACandidate | RefCandidateKind::EmptyDirectory => None,
         })
         .collect();
     let mut ref_locks = Vec::new();
@@ -179,6 +196,24 @@ fn run(layout: &RepositoryLayout, plan_only: bool) -> Result<RemoveRefCandidates
                 kind: file.kind,
                 bytes,
                 action: RefCandidateAction::WouldRemove,
+                recovery: None,
+            });
+            continue;
+        }
+        if file.kind == RefCandidateKind::EmptyDirectory {
+            // No bytes, so nothing to save. `rmdir` refuses a directory that filled since it was read, and that refusal is the run's.
+            #[cfg(test)]
+            crate::refs::view_hooks::run("remove-empty-directory-before");
+            let removed = remove_empty_directory_if_present_required(root, Path::new(&source))?;
+            candidates.push(RefCandidateOutcome {
+                name: file.name,
+                kind: file.kind,
+                bytes,
+                action: if removed {
+                    RefCandidateAction::Removed
+                } else {
+                    RefCandidateAction::AlreadyAbsent
+                },
                 recovery: None,
             });
             continue;

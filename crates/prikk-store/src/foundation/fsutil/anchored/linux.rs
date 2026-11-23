@@ -163,6 +163,27 @@ impl DurabilityContract for LinuxDurability {
         Ok(removed)
     }
 
+    fn remove_empty_directory_if_present(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+    ) -> Result<bool> {
+        let directory = open_existing_directory_required(root, required_parent(relative)?)?;
+        failpoints::unlink()?;
+        let removed = match fs::unlinkat(
+            &directory.fd,
+            required_file_name(relative)?,
+            fs::AtFlags::REMOVEDIR,
+        ) {
+            Ok(()) => true,
+            Err(rustix::io::Errno::NOENT) => false,
+            Err(error) => return Err(io_error(error)),
+        };
+        failpoints::cleanup_directory_sync()?;
+        directory.sync()?;
+        Ok(removed)
+    }
+
     fn ensure_directory(&self, root: &MutationRoot, relative: &Path) -> Result<()> {
         prepare_directory_required(root, relative)?;
         Ok(())

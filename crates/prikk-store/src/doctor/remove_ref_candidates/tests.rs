@@ -183,24 +183,122 @@ fn a_running_publisher_of_a_named_ref_or_the_queue_is_refused_before_any_write()
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// **Damage:** a directory in `refs/tmp`: refused before anything is touched, saying no command removes it.
+/// **Damage:** an entry that is neither a file nor an empty directory (a directory that holds something, a symbolic link): refused before anything
+/// is touched, naming it and saying no prikk command removes it.
 #[test]
-fn a_non_file_in_refs_tmp_refuses_before_anything_is_touched() {
-    let (layout, root) = repository("g2d-damage");
+fn an_entry_that_is_not_prikks_to_remove_refuses_before_anything_is_touched() {
+    let (layout, root) = repository("g2e-stuck");
     put(&layout, "a.tmp", b"x");
+    std::fs::create_dir_all(tmp_dir(&layout).join("e")).unwrap();
     std::fs::create_dir_all(tmp_dir(&layout).join("d")).unwrap();
+    std::fs::write(tmp_dir(&layout).join("d/inside"), b"y").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/nonexistent", tmp_dir(&layout).join("l")).unwrap();
     let before = recovery_bytes(&layout);
     for run in [plan_remove_ref_candidates, remove_ref_candidates] {
         let error = run(&layout).unwrap_err();
         assert!(
             matches!(&error, PrikkError::Integrity(message)
                 if message.contains("unexpected non-file in ref candidate directory: refs/tmp/d")
-                    && message.contains("no command removes it")),
+                    && message.contains("no prikk command removes it: prikk never wrote it")),
             "{error:?}"
         );
     }
-    assert_eq!(names(&layout), ["a.tmp", "d"]);
+    #[cfg(unix)]
+    {
+        // The directory that holds something goes; the link alone is refused too, by name.
+        std::fs::remove_file(tmp_dir(&layout).join("d/inside")).unwrap();
+        std::fs::remove_dir(tmp_dir(&layout).join("d")).unwrap();
+        let error = remove_ref_candidates(&layout).unwrap_err();
+        assert!(
+            matches!(&error, PrikkError::Integrity(message) if message.contains("refs/tmp/l")),
+            "{error:?}"
+        );
+        assert_eq!(names(&layout), ["a.tmp", "e", "l"]);
+    }
     assert_eq!(recovery_bytes(&layout), before);
+    assert!(tmp_dir(&layout).join("a.tmp").exists() && tmp_dir(&layout).join("e").is_dir());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// **An empty directory** is removed with no bytes saved: the plan says so, the run removes it, the repeat has none, and the recovery log is untouched.
+#[test]
+fn an_empty_directory_is_removed_and_nothing_is_saved_for_it() {
+    let (layout, root) = repository("g2e-empty");
+    std::fs::create_dir_all(tmp_dir(&layout).join("e")).unwrap();
+    put(&layout, "a.tmp", b"x");
+    let before = recovery_bytes(&layout);
+    let plan = plan_remove_ref_candidates(&layout).unwrap();
+    assert_eq!(plan.candidates[1].name, "e");
+    assert_eq!(plan.candidates[1].kind, RefCandidateKind::EmptyDirectory);
+    assert_eq!(plan.candidates[1].action, RefCandidateAction::WouldRemove);
+    assert_eq!(names(&layout), ["a.tmp", "e"]);
+    let run = remove_ref_candidates(&layout).unwrap();
+    assert_eq!(run.candidates[1].action, RefCandidateAction::Removed);
+    assert!(run.candidates[1].recovery.is_none());
+    assert!(run.candidates[0].recovery.is_some());
+    assert!(names(&layout).is_empty());
+    // One entry (the file); the directory left none.
+    assert_eq!(
+        crate::recovery_log::recovery_list(&layout)
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    assert_ne!(recovery_bytes(&layout), before);
+    assert!(
+        remove_ref_candidates(&layout)
+            .unwrap()
+            .candidates
+            .is_empty()
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// **Lost, for a directory:** it fills between the read and the removal: the removal refuses (`rmdir` removes nothing that holds something), the
+/// directory and its file are as they were, and the run says so.
+#[test]
+fn a_directory_that_fills_before_its_removal_is_kept() {
+    let (layout, root) = repository("g2e-fills");
+    std::fs::create_dir_all(tmp_dir(&layout).join("e")).unwrap();
+    let inside = tmp_dir(&layout).join("e/late");
+    crate::refs::view_hooks::set("remove-empty-directory-before", move || {
+        std::fs::write(inside, b"late").unwrap();
+    });
+    assert!(remove_ref_candidates(&layout).is_err());
+    assert!(!crate::refs::view_hooks::pending(
+        "remove-empty-directory-before"
+    ));
+    assert_eq!(
+        std::fs::read(tmp_dir(&layout).join("e/late")).unwrap(),
+        b"late"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// `verify`'s finding is read directly: an empty directory is removable, anything else is not, and a stuck entry is named before an empty one.
+#[test]
+fn the_finding_names_the_entry_no_command_removes_before_one_that_one_does() {
+    let (layout, root) = repository("g2e-finding");
+    assert_eq!(crate::refs::ref_tmp_finding(&layout), None);
+    std::fs::create_dir_all(tmp_dir(&layout).join("a-empty")).unwrap();
+    assert_eq!(
+        crate::refs::ref_tmp_finding(&layout),
+        Some((
+            "a-empty".to_string(),
+            crate::refs::RefTmpEntryKind::EmptyDirectory
+        ))
+    );
+    std::fs::create_dir_all(tmp_dir(&layout).join("z-full")).unwrap();
+    std::fs::write(tmp_dir(&layout).join("z-full/f"), b"y").unwrap();
+    assert_eq!(
+        crate::refs::ref_tmp_finding(&layout),
+        Some((
+            "z-full".to_string(),
+            crate::refs::RefTmpEntryKind::NotPrikks
+        ))
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -277,11 +375,15 @@ fn the_precondition_refuses_a_candidate_only_while_a_publisher_runs() {
     child.kill().unwrap();
     std::fs::remove_file(layout.ref_lock_path("heads/main")).unwrap();
     crate::refs::ensure_may_publish(&layout, "heads/x").unwrap();
-    // A directory is damage and refuses, as it always did.
+    // 0.59.0 step G2e: nor does a directory (empty or not) or a link: no writer reads `refs/tmp`.
     std::fs::create_dir_all(tmp_dir(&layout).join("d")).unwrap();
-    assert!(matches!(
-        crate::refs::ensure_may_publish(&layout, "heads/x").unwrap_err(),
-        PrikkError::Integrity(_)
-    ));
+    crate::refs::ensure_may_publish(&layout, "heads/x").unwrap();
+    std::fs::write(tmp_dir(&layout).join("d/f"), b"y").unwrap();
+    crate::refs::ensure_may_publish(&layout, "heads/x").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("/nonexistent", tmp_dir(&layout).join("l")).unwrap();
+        crate::refs::ensure_may_publish(&layout, "heads/x").unwrap();
+    }
     let _ = std::fs::remove_dir_all(root);
 }

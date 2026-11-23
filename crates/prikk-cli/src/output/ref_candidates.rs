@@ -8,6 +8,19 @@ pub(crate) fn print_remove_ref_candidates_report(report: &prikk_store::RemoveRef
         return;
     }
     for candidate in &report.candidates {
+        if candidate.kind == RefCandidateKind::EmptyDirectory {
+            let line = match candidate.action {
+                RefCandidateAction::Removed => {
+                    "removed (an empty directory; no bytes, nothing saved)"
+                }
+                RefCandidateAction::AlreadyAbsent => {
+                    "already absent (an empty directory); nothing to remove"
+                }
+                _ => "would be removed (an empty directory; no bytes, so nothing would be saved)",
+            };
+            println!("refs/tmp/{}: {line}", candidate.name);
+            continue;
+        }
         let what = match &candidate.kind {
             RefCandidateKind::LegacyPointer {
                 ref_name,
