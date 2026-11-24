@@ -116,6 +116,40 @@ fn cut_undone(current: Option<&[u8]>, entry: &Entry) -> bool {
         && bytes.get(offset..) == Some(entry.removed.as_slice())
 }
 
+/// How many of an append's removed bytes an interrupted restore already put back (0.59.0 K2): the file is longer than the cut's offset and shorter
+/// than offset + removed, the bytes before the offset are the bytes the repair left, and the bytes after it are a prefix of the removed bytes. `None`
+/// for any other state, which a restore refuses as it always did. A kill inside one `write` of more than a page can leave this state, and so can a
+/// power loss; a kill at a syscall boundary cannot.
+fn cut_partly_restored(current: Option<&[u8]>, entry: &Entry) -> Option<usize> {
+    let bytes = current?;
+    let offset = usize::try_from(entry.offset).ok()?;
+    let have = bytes.len().checked_sub(offset).filter(|have| *have > 0)?;
+    (have < entry.removed.len()
+        && sha(bytes.get(..offset)?) == entry.prefix_hash
+        && entry.removed.starts_with(bytes.get(offset..)?))
+    .then_some(have)
+}
+
+/// Whether a file holds a strict prefix of the bytes a repair removed, the empty prefix included (0.59.0 K2): the state a restore's own interrupted
+/// recreation of a removed file leaves (the file is created, and its bytes are written after). It is this step's own write, so the restore writes the
+/// whole file again from offset 0.
+fn remove_partly_restored(current: Option<&[u8]>, entry: &Entry) -> bool {
+    current
+        .is_some_and(|bytes| bytes.len() < entry.removed.len() && entry.removed.starts_with(bytes))
+}
+
+/// What a step writes, decided from the state it found.
+enum Act {
+    /// Append bytes to the file (a cut's undo, whole or the rest of an interrupted one).
+    Append(Vec<u8>),
+    /// Create a file that is absent.
+    Create(Vec<u8>),
+    /// Write the whole file again from offset 0, over an interrupted recreation of it.
+    Rewrite(Vec<u8>),
+    /// Overwrite at 0, then truncate to the bytes' length (a replace's undo).
+    Replace(Vec<u8>),
+}
+
 /// The state each file would be in after the steps already undone (A1 item 3). Read from the disk once, then overlaid, so every
 /// condition of a run is checked against the state each earlier step leaves, before anything is written.
 struct Overlay<'a> {
@@ -224,8 +258,8 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
         root,
         files: std::collections::BTreeMap::new(),
     };
-    // (source, kind, bytes, done) for each step in undo order, so the writes repeat exactly what the checks saw.
-    let mut writes: Vec<(String, Kind, Vec<u8>, bool)> = Vec::new();
+    // (source, what to write, done) for each step in undo order, so the writes repeat exactly what the checks saw.
+    let mut writes: Vec<(String, Act, bool)> = Vec::new();
     let mut overlap: Option<(String, String)> = None;
     for &index in members.iter().rev() {
         let Some(listed) = listing.entries.get(index) else {
@@ -233,7 +267,8 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
         };
         let entry = &listed.entry;
         let current = overlay.get(&entry.source)?;
-        let (done, bytes) = match entry.kind {
+        let was_absent = current.is_none();
+        let (done, mut bytes) = match entry.kind {
             Kind::Cut => (cut_undone(current.as_deref(), entry), entry.removed.clone()),
             Kind::Replace => (
                 current
@@ -258,7 +293,7 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                 conditions: Vec::new(),
                 bytes: 0,
             });
-            writes.push((entry.source.clone(), entry.kind, bytes, true));
+            writes.push((entry.source.clone(), Act::Append(Vec::new()), true));
             // The file already is in its undone state: nothing to overlay.
             continue;
         }
@@ -266,16 +301,27 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
         let next = match entry.kind {
             Kind::Cut => {
                 let offset = entry.offset;
-                let length_ok = current
-                    .as_ref()
-                    .is_some_and(|bytes| bytes.len() as u64 == offset);
+                let partly = cut_partly_restored(current.as_deref(), entry);
+                let length_ok = partly.is_some()
+                    || current
+                        .as_ref()
+                        .is_some_and(|bytes| bytes.len() as u64 == offset);
                 conditions.push(Condition {
-                    text: match current.as_ref().map(|bytes| bytes.len() as u64) {
-                        Some(len) if len == offset => {
+                    text: match (partly, current.as_ref().map(|bytes| bytes.len() as u64)) {
+                        (Some(have), _) => format!(
+                            "the source is {} bytes: {have} of the {} removed bytes are already back, from an interrupted restore of this step, and the rest is appended",
+                            offset + have as u64,
+                            entry.removed.len()
+                        ),
+                        (None, Some(len)) if len == offset => {
                             format!("the source is {offset} bytes, the length the repair left")
                         }
-                        Some(len) => format!("the source is {len} bytes; the repair left {offset}"),
-                        None => format!("the source is absent; the repair left {offset} bytes"),
+                        (None, Some(len)) => {
+                            format!("the source is {len} bytes; the repair left {offset}")
+                        }
+                        (None, None) => {
+                            format!("the source is absent; the repair left {offset} bytes")
+                        }
                     },
                     holds: length_ok,
                 });
@@ -297,19 +343,40 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                     },
                     holds: prefix_ok,
                 });
+                if let Some(have) = partly {
+                    bytes = entry.removed.get(have..).unwrap_or_default().to_vec();
+                }
                 // Undone, the file is its state before the cut: the bytes it had, then the removed bytes appended.
                 let mut after = current.unwrap_or_default();
+                after.truncate(usize::try_from(offset).unwrap_or(usize::MAX));
                 if length_ok {
                     after.extend_from_slice(&entry.removed);
                 }
                 Some(after)
             }
             Kind::Remove => {
-                // Recreated only where nothing is: a file now at the path is not the repair's to overwrite.
-                let holds = current.is_none();
+                // Recreated where nothing is, or finished where this step's own interrupted recreation left a strict prefix of the removed bytes
+                // (the file is created, then written: a kill between leaves it empty or part-written). A file with any other bytes is not the
+                // repair's to overwrite.
+                let partly = remove_partly_restored(current.as_deref(), entry);
+                let holds = current.is_none() || partly;
                 conditions.push(Condition {
-                    text: if holds {
+                    text: if current.is_none() {
                         format!("{} is absent, as the repair left it", entry.source)
+                    } else if partly {
+                        let have = current.as_ref().map_or(0, Vec::len);
+                        if have == 0 {
+                            format!(
+                                "{} exists and is empty, from an interrupted restore of this step (the file is created, then written), and is written whole",
+                                entry.source
+                            )
+                        } else {
+                            format!(
+                                "{} holds the first {have} of the {} removed bytes, from an interrupted restore of this step, and is written whole",
+                                entry.source,
+                                entry.removed.len()
+                            )
+                        }
                     } else {
                         format!(
                             "{} exists again, with other bytes than the repair removed",
@@ -368,7 +435,13 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
             conditions,
             bytes: bytes.len(),
         });
-        writes.push((entry.source.clone(), entry.kind, bytes, false));
+        let act = match entry.kind {
+            Kind::Cut => Act::Append(bytes),
+            Kind::Remove if was_absent => Act::Create(bytes),
+            Kind::Remove => Act::Rewrite(bytes),
+            Kind::Replace => Act::Replace(bytes),
+        };
+        writes.push((entry.source.clone(), act, false));
     }
 
     plan.conditions = plan
@@ -384,14 +457,14 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
         ));
     }
     if plan.can_restore() && !plan_only {
-        for (source, kind, bytes, done) in &writes {
+        for (source, act, done) in &writes {
             if *done {
                 continue;
             }
-            match kind {
-                Kind::Cut => append_file_required(root, Path::new(source), bytes)?,
-                Kind::Remove => {
-                    let relative = Path::new(source);
+            let relative = Path::new(source);
+            match act {
+                Act::Append(bytes) => append_file_required(root, relative, bytes)?,
+                Act::Create(bytes) => {
                     ensure_directory_required(
                         root,
                         relative.parent().unwrap_or_else(|| Path::new("")),
@@ -400,9 +473,10 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                         PrikkError::MalformedData(format!("recreating {source}: {error}"))
                     })?;
                 }
-                Kind::Replace => {
-                    overwrite_in_place_required(root, Path::new(source), 0, bytes)?;
-                    truncate_existing_file_required(root, Path::new(source), bytes.len() as u64)?;
+                Act::Rewrite(bytes) => overwrite_in_place_required(root, relative, 0, bytes)?,
+                Act::Replace(bytes) => {
+                    overwrite_in_place_required(root, relative, 0, bytes)?;
+                    truncate_existing_file_required(root, relative, bytes.len() as u64)?;
                 }
             }
         }

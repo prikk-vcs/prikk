@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 mod remove;
 mod restore;
+#[cfg(test)]
+mod restore_interrupted;
 mod run;
 pub(crate) use remove::{is_ref_candidate_source, save_remove};
 pub(crate) use restore::{UNCOMMIT_RUN_KIND, begin_run_as, restore};
