@@ -398,11 +398,14 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                     .as_ref()
                     .is_some_and(|bytes| sha(bytes) == entry.new_hash);
                 conditions.push(Condition {
+                    // 0.59.0 K5: a file that holds neither what the repair saved nor what it wrote is not "changed since the repair wrote": the
+                    // repair may not have finished writing it (a kill inside a rewrite leaves the new bytes up to some point and the old after it).
+                    // The sentence says exactly what is true: the file holds neither.
                     text: if holds {
                         format!("{} holds the bytes the repair wrote", entry.source)
                     } else {
                         format!(
-                            "{} has changed since the repair wrote its bytes",
+                            "{} holds neither the bytes the repair saved nor the bytes it wrote",
                             entry.source
                         )
                     },

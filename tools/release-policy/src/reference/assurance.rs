@@ -131,13 +131,19 @@ fn check_row(row: &Row, oses: &BTreeSet<Os>, tree: &mut walk::Tree, errors: &mut
         ));
     }
     let mut typed = BTreeSet::new();
+    let mut typed_x86_64 = BTreeSet::new();
     for label in row.platforms.split(',').map(str::trim) {
         // 0.59.0 K3: `Linux (x86_64)` says the test is also gated on the architecture (`target_arch`, evaluated by `walk::atom_value`); the OS is what
-        // is compared.
-        let label = label.strip_suffix(" (x86_64)").unwrap_or(label);
+        // is compared. K5: and the gate checks the claim (below): the test's `cfg` must name `target_arch = "x86_64"`.
+        let (label, arch_claimed) = label
+            .strip_suffix(" (x86_64)")
+            .map_or((label, false), |bare| (bare, true));
         match Os::parse(label) {
             Some(os) => {
                 typed.insert(os);
+                if arch_claimed {
+                    typed_x86_64.insert(os);
+                }
             }
             None => errors.push(format!("assurance-platform-unknown:{at}:`{label}`")),
         }
@@ -153,6 +159,14 @@ fn check_row(row: &Row, oses: &BTreeSet<Os>, tree: &mut walk::Tree, errors: &mut
         errors.push(format!(
             "assurance-test-ignored:{at}: an `#[ignore]` test is not run by CI and cannot be cited"
         ));
+    }
+    for os in &typed_x86_64 {
+        if !resolved.x86_64_only.contains(os) {
+            errors.push(format!(
+                "assurance-arch-label:{at}:the row says `{} (x86_64)`, and the test's `cfg` does not gate it on `target_arch = \"x86_64\"` there (it is built whatever the architecture, or not built on x86_64)",
+                labels(&BTreeSet::from([*os]))
+            ));
+        }
     }
     if resolved.platforms != typed {
         errors.push(format!(

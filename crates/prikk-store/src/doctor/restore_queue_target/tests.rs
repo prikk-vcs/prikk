@@ -516,68 +516,13 @@ fn restore_races_an_ordinary_commit_under_the_shared_active_lock() {
     std::fs::remove_dir_all(&root).ok();
 }
 
-/// K4: `ref-name`'s own write is a single atomic replace -- the whole point is that a crash during
-/// it can never leave the file torn, only fully the old value or fully the new one. Crashed at
-/// each of the three points `atomic_replace` itself can fail at, the file is always one or the
-/// other, never a third, garbled state, and a second run (with no injected failure) completes it.
-#[test]
-fn a_crash_during_the_atomic_replace_never_tears_ref_name() {
-    // `MutableParentSync` has no Windows counterpart at all (`foundation::fsutil::anchored::
-    // failpoints::Point`'s own doc: no directory sync happens there) -- included only where the
-    // platform actually has that boundary, matching `rfc163_stability_soak.rs::all_points`'s own
-    // established pattern, rather than left unconditional and invisible to a Linux-only `cargo
-    // test` run until cross-target clippy for Windows catches the missing variant.
-    #[allow(unused_mut)]
-    let mut points = vec![TestFailPoint::Truncate, TestFailPoint::AppendWrite];
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    points.push(TestFailPoint::RequiredFileSync);
-    for point in points {
-        let root = unique_temp_dir(&format!("rfc166-d5-restore-k4-atomic-{point:?}"));
-        let layout = RepositoryLayout::init(root.clone()).unwrap();
-        commit(&layout, "a.txt", b"one");
-        clear_ref_name(&layout);
-        let ref_name_path = layout.default_active_ref_name_path();
-        let before = std::fs::read(&ref_name_path).unwrap();
-        assert!(before.is_empty(), "the stranded state this verb repairs");
-
-        // The active lock's own exclusive create is the first RequiredFileSync of the verb: skip it for that point.
-        let skip = usize::from(matches!(point, TestFailPoint::RequiredFileSync));
-        fail_after_for_test(point, skip);
-        let crashed = restore_queue_target(&layout, "heads/main", false);
-        clear_failpoint_for_test();
-        assert!(
-            crashed.is_err(),
-            "{point:?}: the injected failure must actually fire"
-        );
-        let after = std::fs::read(&ref_name_path).unwrap();
-        assert!(
-            after == before || after == b"heads/main",
-            "{point:?}: ref-name must be fully the old value or fully the new one, got {after:?}"
-        );
-
-        if after == before {
-            // The crash genuinely landed before the rename -- a second, clean run must finish
-            // the job. (`MutableParentSync` fires *after* `renameat` already succeeded, so the
-            // new value can already be on disk even though this call reported failure; that
-            // case is handled below, not here.)
-            restore_queue_target(&layout, "heads/main", false)
-                .unwrap_or_else(|err| panic!("{point:?}: a clean second run completes it: {err}"));
-        }
-        assert_eq!(
-            std::fs::read(&ref_name_path).unwrap(),
-            b"heads/main",
-            "{point:?}: the file must end up at the new value either way"
-        );
-        std::fs::remove_dir_all(&root).ok();
-    }
-}
-
 /// K3/K4's own "a control must be able to fail": the SAME failpoint, armed against the
 /// truncate-then-append [`crate::write_active_ref_metadata`] this verb deliberately does NOT use
 /// (its own doc explains why: that sequence is safe only when the WAL is empty, which it never is
 /// here), does tear the file -- a crash between the truncate and the append leaves it empty,
-/// neither the old value nor the new one. Confirms the atomic-replace sweep above is actually
-/// sensitive to a real defect shape, not vacuously passing because nothing can tear this file.
+/// neither the old value nor the new one. Confirms that a kill of the atomic replace (the real-kill
+/// sweeps `restore_queue_target` and `recovery_restore_of_restore_queue_target`, which replaced a failpoint test that could not fail on its own
+/// fixture, 0.59.0 K5) is sensitive to a real defect shape, not vacuously passing because nothing can tear this file.
 #[test]
 fn the_control_the_truncate_then_append_write_this_verb_avoids_can_still_tear() {
     let root = unique_temp_dir("rfc166-d5-restore-k4-control");

@@ -247,3 +247,45 @@ fn a_replace_restores_and_a_later_write_still_refuses_even_when_the_saved_bytes_
     assert_eq!(read(&root, SOURCE), appended);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// 0.59.0 K5: a `Replace` step whose file holds neither the saved bytes nor the written bytes says exactly that, not that the file "has changed since the
+/// repair wrote its bytes" (it may never have finished writing them: a rewrite killed part-way leaves the new bytes up to some point and the old after).
+#[test]
+fn a_replace_whose_file_holds_neither_the_saved_nor_the_written_bytes_says_so() {
+    let previous: &[u8] = b"the old bytes of the file";
+    let written: &[u8] = b"NEW bytes, a different length!";
+    let (layout, root) = repository("k5-replace-neither");
+    let id = replace_run(&layout, &root, previous, written);
+    // A rewrite killed part-way: the first bytes are the repair's, the rest are still the old file's.
+    let torn = [&written[..7], &previous[7..]].concat();
+    put(&root, SOURCE, &torn);
+    let plan = restore(&layout, &id, false).unwrap();
+    assert!(!plan.can_restore() && !plan.written, "{plan:?}");
+    assert!(
+        plan.conditions.iter().any(|c| !c.holds
+            && c.text
+                .contains("holds neither the bytes the repair saved nor the bytes it wrote")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan
+            .conditions
+            .iter()
+            .any(|c| c.text.contains("has changed since the repair wrote")),
+        "the sentence that claimed the repair wrote them is gone: {plan:?}"
+    );
+    assert_eq!(read(&root, SOURCE), torn, "nothing was written");
+    // The two states the repair itself leaves are unchanged: the saved bytes (already restored) and the written bytes (restorable).
+    put(&root, SOURCE, previous);
+    let plan = restore(&layout, &id, false).unwrap();
+    assert!(
+        plan.conditions
+            .iter()
+            .all(|c| c.holds || c.text.contains("already")),
+        "{plan:?}"
+    );
+    put(&root, SOURCE, written);
+    assert!(restore(&layout, &id, false).unwrap().written);
+    assert_eq!(read(&root, SOURCE), previous);
+    let _ = std::fs::remove_dir_all(root);
+}

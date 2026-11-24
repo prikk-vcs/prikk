@@ -269,6 +269,24 @@ fn format_upgrade_lost_marker() {
     );
 }
 
+/// `setup` in an empty directory with no keys (a temporary `HOME`, test keys only), **ignored: it is red at 271 of 273 ordinals** (0.59.0 K5 findings,
+/// in the inventory and the K5 report). A kill leaves a `.prikk` that a rerun of `setup` refuses (`already holds a repository`), naming `prikk trust
+/// maintainer add`, which needs `--key-id` and a public key from keys that, before ordinal ~234, do not exist yet; and a half-written key file.
+#[test]
+#[ignore = "K5 finding: unsound at 271 of 273 ordinals (setup's refusal names a command that cannot work); see the inventory and the K5 report"]
+fn setup() {
+    sweep("setup", shapes::setup);
+}
+
+/// `key generate --out` (a temporary `HOME`; the seed is a test key), **ignored: it is red at 5 of 14 ordinals** (0.59.0 K5 finding): the seed and its
+/// key-id file are created, then written, so a kill leaves an empty or part-written file, and the rerun refuses (`a new seed needs both seed.out and
+/// seed.out.key-id to be absent`) naming no command.
+#[test]
+#[ignore = "K5 finding: unsound at ordinals 2-6 of 14 (an empty or part-written seed file; the rerun refuses naming no command); see the inventory and the K5 report"]
+fn key_generate() {
+    sweep("key generate --out", shapes::key_generate);
+}
+
 /// **The inventory against the CLI's own verb list.** Every verb `prikk --help` lists is in the table, every table verb is listed, every swept test
 /// named in the table exists in this file, and every `NotSwept` reason says something. A new verb fails here until it is placed.
 #[test]

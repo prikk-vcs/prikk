@@ -34,6 +34,9 @@ use crate::boundary::coupling::graph::{blank, classify, find_matching_brace};
 pub(super) struct Resolved {
     /// The OSes (of the job map) on which the test is built.
     pub(super) platforms: BTreeSet<Os>,
+    /// The OSes on which the test is built when the architecture is x86_64 and **not** when it is aarch64: the ones its `cfg` really gates on
+    /// `target_arch` (0.59.0 K5: a row labelled `(x86_64)` must be one of these).
+    pub(super) x86_64_only: BTreeSet<Os>,
     pub(super) ignored: bool,
     /// The test's body mentions `cfg!(`: it compiles everywhere and may assert something different on each OS.
     pub(super) runtime_cfg: bool,
@@ -156,35 +159,52 @@ impl Tree {
         let inner_cfgs = scan.inner_cfgs.clone();
         let runtime_cfg = item.body_has_cfg_macro;
         let mut platforms = BTreeSet::new();
+        let mut on_x86_64 = BTreeSet::new();
+        let mut on_aarch64 = BTreeSet::new();
         for (krate, cfgs) in &inclusions {
             for os in &self.oses {
-                let mut holds = true;
-                for cfg in cfgs.iter().chain(&inner_cfgs).chain(&enclosing).chain(&own) {
-                    if !self.holds(cfg, *os, krate, file)? {
-                        holds = false;
-                        break;
+                for (arch, into) in [
+                    (None, &mut platforms),
+                    (Some("x86_64"), &mut on_x86_64),
+                    (Some("aarch64"), &mut on_aarch64),
+                ] {
+                    let mut holds = true;
+                    for cfg in cfgs.iter().chain(&inner_cfgs).chain(&enclosing).chain(&own) {
+                        if !self.holds(cfg, *os, arch, krate, file)? {
+                            holds = false;
+                            break;
+                        }
                     }
-                }
-                if holds {
-                    platforms.insert(*os);
+                    if holds {
+                        into.insert(*os);
+                    }
                 }
             }
         }
+        let x86_64_only = on_x86_64.difference(&on_aarch64).copied().collect();
         Ok(Resolved {
             platforms,
+            x86_64_only,
             ignored,
             runtime_cfg,
         })
     }
 
-    fn holds(&self, cfg: &CfgExpr, os: Os, krate: &str, file: &str) -> Result<bool, String> {
+    fn holds(
+        &self,
+        cfg: &CfgExpr,
+        os: Os,
+        arch: Option<&str>,
+        krate: &str,
+        file: &str,
+    ) -> Result<bool, String> {
         let mut atoms = BTreeSet::new();
         cfg_expr::atoms(cfg, &mut atoms);
         let empty = BTreeSet::new();
         let features = self.features.get(krate).unwrap_or(&empty);
         let mut assignment = BTreeMap::new();
         for atom in atoms {
-            let value = atom_value(&atom, os, features).ok_or_else(|| {
+            let value = atom_value(&atom, os, arch, features).ok_or_else(|| {
                 format!("{file}: `cfg` atom `{atom}` is not one the gate evaluates")
             })?;
             assignment.insert(atom, value);
@@ -485,7 +505,7 @@ fn parse_cfg(inner: &str, file: &str) -> Result<CfgExpr, String> {
 // ---------------------------------------------------------------------------------------------- cfg atoms
 
 /// The atoms the repository's tests use (all of them, by grep). `None` for anything else: the gate refuses rather than guesses.
-fn atom_value(atom: &str, os: Os, features: &BTreeSet<String>) -> Option<bool> {
+fn atom_value(atom: &str, os: Os, arch: Option<&str>, features: &BTreeSet<String>) -> Option<bool> {
     let unix = os != Os::Windows;
     match atom {
         "test" => return Some(true),
@@ -509,9 +529,9 @@ fn atom_value(atom: &str, os: Os, features: &BTreeSet<String>) -> Option<bool> {
                     "pc"
                 },
         ),
-        // 0.59.0 K3: the CI runners this gate reads are `ubuntu-latest` and `windows-latest` (x86_64) and `macos-latest` (arm64). A test gated on
-        // `target_arch = "x86_64"` therefore runs on Linux and Windows, and not on the macOS runner.
-        "target_arch" => Some(value == if os == Os::Macos { "aarch64" } else { "x86_64" }),
+        // 0.59.0 K3, K5: the architecture is the runner's (`jobs::RUNNERS`, which the gate checks against `ci.yml`: a test gated on `target_arch = "x86_64"`
+        // runs on Linux and Windows and not on the macOS runner), or, for the question "is this test really gated on the architecture", the one asked.
+        "target_arch" => Some(value == arch.unwrap_or_else(|| super::jobs::runner_arch(os))),
         "feature" => Some(features.contains(value)),
         _ => None,
     }

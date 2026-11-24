@@ -221,6 +221,17 @@ pub struct Shape {
     pub follow_named: bool,
     /// A program other than `prikk` (the control, which is not a prikk command); `argv` are then its arguments.
     pub program: Option<PathBuf>,
+    /// The key directory (`Ctx::config`) the command starts from, restored before every run, for a command that writes keys (`setup`, `key generate`):
+    /// without it the second ordinal would find the first one's keys. `None`: the shared key directory is left as it is.
+    pub config_base: Option<PathBuf>,
+}
+
+/// Put `shape`'s starting key directory back (a temporary `HOME`, test keys only).
+fn reset_config(ctx: &Ctx, shape: &Shape) {
+    if let Some(base) = &shape.config_base {
+        let _ = std::fs::remove_dir_all(&ctx.config);
+        copy_tree(base, &ctx.config);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -267,6 +278,7 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
     // The dry run: the whole list of mutating syscalls.
     let _ = std::fs::remove_dir_all(&work);
     copy_tree(&shape.base, &work);
+    reset_config(ctx, shape);
     let dry = ptrace_sweep::trace(&real_command(ctx, shape, &work), &sink, None, When::Entry)
         .unwrap_or_else(|error| panic!("{}: {error}", shape.name));
     let total = dry.mutating.len() as u64;
@@ -282,6 +294,7 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
     for n in 1..=total {
         let _ = std::fs::remove_dir_all(&work);
         copy_tree(&shape.base, &work);
+        reset_config(ctx, shape);
         let run = ptrace_sweep::trace(
             &real_command(ctx, shape, &work),
             &sink,

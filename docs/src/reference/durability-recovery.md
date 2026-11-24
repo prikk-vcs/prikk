@@ -737,12 +737,12 @@ defect found by running anything):
   `doctor` have a real kill at every mutating syscall (Linux x86_64 only: the `Linux (x86_64)` rows).** Not killed for real: the verbs
   the inventory (`real_kill_sweep/inventory.rs`) names with a reason (among them `sync accept`, `bundle` and `archive` end to end
   beyond the rows above, `branch switch`'s publishing path, `checkout`, `trust`, `rollback-draft`, `mv`, `received`,
-  `setup`). **`init` was found unsound at one ordinal and is fixed (0.59.0 step K4):** a kill between creating `.prikk/FORMAT` and writing
+  `config`); **`setup` and `key generate --out` were swept and found unsound, and are not in the table** (0.59.0 K5): a kill leaves a `.prikk` that `setup` refuses naming a command that cannot work (no key exists yet before the keys are written), and an empty or part-written seed or key-id file that a rerun refuses naming no command; the way out is deleting what the kill left. **`init` was found unsound at one ordinal and is fixed (0.59.0 step K4):** a kill between creating `.prikk/FORMAT` and writing
   the format number left an empty marker every command refused and none cleared; the marker is now written last through a temporary and a
   rename, a kill leaves it absent, and the sentence for an absent or empty marker names `prikk init` or `prikk format upgrade`. The sweep kills a process: it does not lose power, and it does not tear a write inside one syscall.
 - **No real-kill test runs on Windows** (the sweep is `Linux (x86_64)`, the older real-kill rows `cfg(unix)`), and a power loss that loses the recovery log's first-creation name on Windows is not
   injectable (the residual stated above).
-- A torn write of `ref-name` by `doctor --restore-queue-target`, undone by `--recovery-restore`; a failure *saving* the recovery
+- A failure *saving* the recovery
   log during `--repair-wal-tail`; a kill or failpoint on the received-pointer append and on `bundle import --adopt`'s publish; the
   archive import journal read by `verify`, and a torn or damaged journal; a crash during the atomic replace of the verified-blocks
   record, the commit index or the lifecycle cache on its own; `sync accept` killed for real; `compact` killed for real and

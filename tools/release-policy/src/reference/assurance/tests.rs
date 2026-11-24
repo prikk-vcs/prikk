@@ -61,6 +61,14 @@ fn branches_at_run_time() {
     }
 }
 
+#[test]
+#[cfg(target_arch = \"x86_64\")]
+fn only_x86_64() {}
+
+#[test]
+#[cfg(target_arch = \"aarch64\")]
+fn only_aarch64() {}
+
 fn helper_not_a_test() {}
 ";
 const UNIX_ONLY_RS: &str = "#[test]\nfn only_unix() {}\n";
@@ -367,4 +375,87 @@ fn a_file_no_test_target_reaches_fails() {
             .any(|error| error.contains("is not part of any test target")),
         "{errors:?}"
     );
+}
+
+// ---- 0.59.0 K5: the two assumptions behind a `(x86_64)` label are checks ----------------------------------------------------------------------------
+
+/// A row labelled `(x86_64)` cites a test whose `cfg` names `target_arch = "x86_64"`: it passes, and it is the Linux and Windows runners that are x86_64.
+#[test]
+fn an_x86_64_label_on_a_test_gated_on_it_passes() {
+    let rows = vec![row(
+        "only_x86_64",
+        TESTS,
+        "Linux (x86_64), Windows (x86_64)",
+        "",
+    )];
+    assert_eq!(errors_of(fixture(&rows).path()), Vec::<String>::new());
+}
+
+/// Red control (the label): the same label on a test with no architecture gate, and on one gated on the other architecture.
+#[test]
+fn an_x86_64_label_on_a_test_the_cfg_does_not_gate_on_it_fails() {
+    let rows = vec![row(
+        "builds_everywhere",
+        TESTS,
+        "Linux (x86_64), macOS, Windows",
+        "",
+    )];
+    let errors = errors_of(fixture(&rows).path());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with(
+            "assurance-arch-label:row 1:builds_everywhere:the row says `Linux (x86_64)`"
+        ),
+        "{errors:?}"
+    );
+    // Gated on aarch64, so built only where the runner is arm64 (macOS): the label is false there too.
+    let rows = vec![row("only_aarch64", TESTS, "macOS (x86_64)", "")];
+    let errors = errors_of(fixture(&rows).path());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0]
+            .starts_with("assurance-arch-label:row 1:only_aarch64:the row says `macOS (x86_64)`"),
+        "{errors:?}"
+    );
+}
+
+/// Red control (the runners): the architecture of a runner is a fact about its label. A suite job on any other label (an arm Linux runner, an Intel
+/// macOS runner), or a missing one of the three, fails the gate naming the labels it found.
+#[test]
+fn a_suite_job_on_another_runner_label_fails_naming_it() {
+    let rows = vec![row(
+        "only_x86_64",
+        TESTS,
+        "Linux (x86_64), Windows (x86_64)",
+        "",
+    )];
+    for (from, to) in [
+        ("runs-on: ubuntu-latest", "runs-on: ubuntu-24.04-arm"),
+        ("runs-on: macos-latest", "runs-on: macos-13"),
+        ("runs-on: windows-latest", "runs-on: windows-11-arm"),
+    ] {
+        let fixture = fixture(&rows);
+        write(
+            fixture.path(),
+            ".github/workflows/ci.yml",
+            &CI.replace(from, to),
+        );
+        let errors = errors_of(fixture.path());
+        assert_eq!(errors.len(), 1, "{to}: {errors:?}");
+        assert!(
+            errors[0].starts_with("assurance-job-map:")
+                && errors[0].contains(to.trim_start_matches("runs-on: "))
+                && errors[0].contains(
+                    "ubuntu-latest (x86_64), windows-latest (x86_64), macos-latest (aarch64)"
+                ),
+            "{to}: {errors:?}"
+        );
+    }
+    // A dropped suite job leaves two of the three.
+    let fixture = fixture(&rows);
+    let without_macos = CI.replace("runs-on: macos-latest", "runs-on: windows-latest");
+    write(fixture.path(), ".github/workflows/ci.yml", &without_macos);
+    let errors = errors_of(fixture.path());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("the suite jobs run on ubuntu-latest, windows-latest; the gate's `target_arch` assumption is for exactly"), "{errors:?}");
 }

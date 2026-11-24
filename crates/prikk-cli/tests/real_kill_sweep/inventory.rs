@@ -23,14 +23,14 @@ pub const VERBS: &[(&str, Status)] = &[
     (
         "setup",
         NotSwept(
-            "not measured: creates a repository and the signing keys; `init` below is measured, and `setup` calls the same `init`",
+            "measured and **unsound at 271 of 273 ordinals** (K5): `setup` runs `init` (K4: sound), then writes the author and maintainer seeds and their key-id files, then adopts the maintainer key. A kill leaves a `.prikk`, and a rerun of `setup` refuses (`already holds a repository`) naming `prikk trust maintainer add`, which needs `--key-id` and a public key from `prikk key public`: **before ordinal ~234 no key exists yet, so nothing the sentence names can work** (a killed `init` is named by `status`, `prikk init`, which does not make keys); from ~234 the key files are written by create-then-write, so a kill leaves an empty or part-written seed or key-id (`maintainer.seed` of 0 bytes at ordinal 242). The way out is deleting `.prikk` and the key files and running `setup` again, which nothing says. The shape is `setup` in `shapes.rs` (with the key directory restored before every run), ignored until a ruling",
         ),
     ),
     ("init", Swept(&["init"])),
     (
         "key",
         NotSwept(
-            "not measured: writes seed files in the configuration directory, not in the repository",
+            "`key generate --out` measured and **unsound at 5 of 14 ordinals** (K5): the seed file and its `.key-id` file are created, then written, so a kill leaves an empty or part-written one, and the rerun refuses (`a new seed needs both <out> and <out>.key-id to be absent`) naming no command (nothing was issued: the seed is never printed with `--out`); `key generate` without `--out` prints and writes nothing, `key public` and `key status` read. The shape is `key_generate`, ignored until a ruling",
         ),
     ),
     (

@@ -14,9 +14,27 @@ use std::collections::BTreeSet;
 
 use super::Os;
 
+/// The hosted runners CI may run the suite on, with the architecture each is (0.59.0 K5). **A fact about the runners, read here, not typed in the walk:**
+/// a test gated on `target_arch` runs where the runner has that architecture, and the gate fails, naming the labels, if the suite jobs' `runs-on` are
+/// not exactly these three (a new label, an arm Linux runner, `macos-13`, a dropped job).
+pub(super) const RUNNERS: [(&str, Os, &str); 3] = [
+    ("ubuntu-latest", Os::Linux, "x86_64"),
+    ("windows-latest", Os::Windows, "x86_64"),
+    ("macos-latest", Os::Macos, "aarch64"),
+];
+
+/// The architecture of `os`'s runner (`target_arch`'s value there).
+pub(super) fn runner_arch(os: Os) -> &'static str {
+    RUNNERS
+        .iter()
+        .find(|(_, runner_os, _)| *runner_os == os)
+        .map_or("x86_64", |(_, _, arch)| arch)
+}
+
 /// The operating systems whose runner runs a whole, unfiltered `cargo test --workspace`.
 pub(super) fn suite_oses(ci_yml: &str) -> Result<BTreeSet<Os>, String> {
     let mut oses = BTreeSet::new();
+    let mut labels: BTreeSet<String> = BTreeSet::new();
     for job in jobs(ci_yml) {
         let mut suite = false;
         for line in &job.lines {
@@ -57,24 +75,44 @@ pub(super) fn suite_oses(ci_yml: &str) -> Result<BTreeSet<Os>, String> {
             .iter()
             .find_map(|line| line.strip_prefix("    runs-on:"))
             .map(str::trim);
-        let os = match runs_on {
-            Some("ubuntu-latest") => Os::Linux,
-            Some("macos-latest") => Os::Macos,
-            Some("windows-latest") => Os::Windows,
-            other => {
+        let os = match runs_on.and_then(|label| RUNNERS.iter().find(|(name, _, _)| *name == label))
+        {
+            Some((_, os, _)) => *os,
+            None => {
                 return Err(format!(
-                    "suite job `{}` has `runs-on: {}`, not a literal hosted runner",
+                    "suite job `{}` has `runs-on: {}`, not one of the runners the gate's `target_arch` assumption is for ({})",
                     job.key,
-                    other.unwrap_or("(none)")
+                    runs_on.unwrap_or("(none)"),
+                    runner_list()
                 ));
             }
         };
+        labels.insert(runs_on.unwrap_or_default().to_owned());
         oses.insert(os);
     }
     if oses.is_empty() {
         return Err("no job runs `cargo test --workspace --locked`".to_owned());
     }
+    let expected: BTreeSet<String> = RUNNERS
+        .iter()
+        .map(|(name, _, _)| (*name).to_owned())
+        .collect();
+    if labels != expected {
+        return Err(format!(
+            "the suite jobs run on {}; the gate's `target_arch` assumption is for exactly {}",
+            labels.iter().cloned().collect::<Vec<_>>().join(", "),
+            runner_list()
+        ));
+    }
     Ok(oses)
+}
+
+fn runner_list() -> String {
+    RUNNERS
+        .iter()
+        .map(|(name, _, arch)| format!("{name} ({arch})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 enum Command {

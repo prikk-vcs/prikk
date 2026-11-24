@@ -28,6 +28,7 @@ fn shape(
         verify_may_fail: false,
         follow_named: true,
         program: None,
+        config_base: None,
     }
 }
 
@@ -948,4 +949,39 @@ pub fn format_upgrade_lost_marker(ctx: &Ctx) -> Shape {
                 && std::fs::read(d.join(".prikk/FORMAT")).unwrap() == b"8\n"
         },
     )
+}
+
+// ---- 0.59.0 K5: the verbs that write keys (test keys only, in the sweep's own temporary `HOME`) -----------------------------------------------------
+
+/// An empty directory the sweep restores as the key directory before every run.
+fn empty_dir(ctx: &Ctx, name: &str) -> PathBuf {
+    let dir = ctx.root.join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// `prikk setup .` in an empty directory with no keys: it makes the repository, the author and maintainer seeds and their key-id files, and adopts
+/// the maintainer key. A kill part-way must leave something `setup` again (or a command the refusal names) finishes.
+pub fn setup(ctx: &Ctx) -> Shape {
+    let base = empty_dir(ctx, "base-setup");
+    let mut shape = shape("setup", base, args(&["setup", "."]), |ctx, d| {
+        ctx.exit(d, &["verify"]) == 0 && ctx.exit(d, &["key", "status"]) == 0
+    });
+    shape.config_base = Some(empty_dir(ctx, "config-base-setup"));
+    shape
+}
+
+/// `prikk key generate --out seed.out`: one seed file, mode 0600, written and never printed. There is no repository, so `verify` is not asked.
+pub fn key_generate(ctx: &Ctx) -> Shape {
+    let base = empty_dir(ctx, "base-key-generate");
+    let mut shape = shape(
+        "key generate --out",
+        base,
+        args(&["key", "generate", "--out", "seed.out"]),
+        |_, d| std::fs::read(d.join("seed.out")).is_ok_and(|bytes| bytes.len() == 65),
+    );
+    shape.verify_may_fail = true;
+    shape.config_base = Some(empty_dir(ctx, "config-base-key-generate"));
+    shape
 }
