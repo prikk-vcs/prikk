@@ -51,6 +51,8 @@ mod rfc165_addendum1_wedge_and_entry_points;
 mod support;
 // The file itself keeps its own name; the `mod` identifier is adjusted to snake_case
 // (`rustc`'s `nonstandard_style` lint, `-D warnings` under the `clippy*` gates).
+#[path = "verify_and_doctor/k3_a_later_write_after_a_cut_refuses_the_restore.rs"]
+mod k3_a_later_write_after_a_cut_refuses_the_restore;
 #[path = "verify_and_doctor/p3c_plain_doctor_writes_nothing.rs"]
 mod p3c_plain_doctor_writes_nothing;
 #[path = "verify_and_doctor/p4_checkpoint_blobs_are_reached.rs"]

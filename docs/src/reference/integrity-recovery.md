@@ -265,16 +265,16 @@ Doctor repairs are opt-in: a plain `prikk doctor` only diagnoses. The switches, 
 - `--recovery-list`, `--recovery-restore <id>`, and `--recovery-clear`: work with the recovery log. A restore writes only files on its
   repair list, which since 0.57.0 includes the worktree's record (`worktree.baseline`) and the rename declarations, because
   [`prikk uncommit`](commands.md) rewrites them along with the queue.
-  **A restore recognises the states its own interrupted writes leave, and finishes them** (0.59.0): an append that stopped part-way (the file is
+  **A restore recognises the states its own interrupted writes leave, and finishes them** (0.59.0), by their bytes: an append that stopped part-way (the file is
   longer than the repair left it and its extra bytes are a prefix of the removed ones) is completed, and a recreated file that is empty or holds a
-  prefix of the removed bytes is written whole. A file in any other state is refused, and the plan says why. A restore of an in-place overwrite (a
+  prefix of the removed bytes is written whole. **It only extends a file whose bytes already equal the target's at the same offsets: no byte already there is changed or removed.** A file in any other state is refused, and the plan says why. A restore of an in-place overwrite (a
   `replaced` entry) is not changed.
 - `--remove-ref-candidates [--plan-only]` (0.59.0): removes every file in `.prikk/refs/tmp` (the legacy ref pointer candidates RFC 102 Stage 4
   retired, and any stray file), clearing `PRIKK-VERIFY-REF-CANDIDATE-DEBRIS`. It takes the active lock and the lock of each ref a decodable
   candidate names, in sorted order, and refuses at a running holder without waiting; reads again under the locks; **saves each file's bytes in
   the recovery log (a `remove` entry), then removes it, then syncs the directory**, so a crash leaves the file and a saved copy, and a run
   again finishes. `--plan-only` lists the files and writes nothing. A directory or other non-file in `refs/tmp` refuses before anything is
-  touched: no prikk command removes it, because prikk never wrote it (`verify` still fails the `refs` stage for it and says so). An empty directory is removed with no entry saved (there are no bytes). `--recovery-restore <id>` recreates a removed file, byte for byte, where nothing is, and finishes its own interrupted recreation (a file that is empty or holds the first bytes of the removed ones is written whole); any other file at the path is not overwritten. A `remove`
+  touched: no prikk command removes it, because prikk never wrote it (`verify` still fails the `refs` stage for it and says so). An empty directory is removed with no entry saved (there are no bytes). `--recovery-restore <id>` recreates a removed file, byte for byte, where nothing is, and finishes an interrupted recreation (a file that is empty or holds the first bytes of the removed ones is written whole); any other file at the path is not overwritten. A `remove`
   entry is a version-2 frame: 0.58.0 lists it as written by a newer prikk and handles every other entry as before.
 - `--repair-main-ref`: a recognized input that performs no repair and is always refused
   (`doctor.rs:1263-1269`).

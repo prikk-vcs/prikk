@@ -62,6 +62,10 @@ rustix                      = { version = "1", features = ["fs", "process"] }
 # process-start-time (`proc_pidinfo`) and machine-identity (`gethostuuid`) calls, the macOS counterpart of
 # windows-sys below.
 libc                        = "0.2"
+# 0.59.0 K3: the real-kill sweep's ptrace driver (`tools/test-support`, unpublished, Linux only). Default features off; `ptrace`, `process` and `signal`
+# only. Two crates join `Cargo.lock` (`nix` and its build-time `cfg_aliases`); `libc`, `bitflags` and `cfg-if` are already locked. No `unsafe` in our
+# code: the child is attached with `PTRACE_SEIZE` after it blocks on a pipe, so no `pre_exec` is needed. Not in the shipped binary.
+nix                         = { version = "0.32", default-features = false, features = ["ptrace", "process", "signal"] }
 sha2                        = "0.11"
 # 0.57.0 U2 (Unicode repository paths; owner decision D2, option B): NFC/NFD and full case folding. Exact versions, because
 # the behaviour of both is pinned by tests (`prikk-object`'s `unicode_stability`), and a crate upgrade must be a deliberate

@@ -509,6 +509,9 @@ fn atom_value(atom: &str, os: Os, features: &BTreeSet<String>) -> Option<bool> {
                     "pc"
                 },
         ),
+        // 0.59.0 K3: the CI runners this gate reads are `ubuntu-latest` and `windows-latest` (x86_64) and `macos-latest` (arm64). A test gated on
+        // `target_arch = "x86_64"` therefore runs on Linux and Windows, and not on the macOS runner.
+        "target_arch" => Some(value == if os == Os::Macos { "aarch64" } else { "x86_64" }),
         "feature" => Some(features.contains(value)),
         _ => None,
     }

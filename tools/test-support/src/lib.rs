@@ -23,6 +23,10 @@
 /// `--format json` does not carry a third hand-written copy of one.
 pub mod json;
 
+/// 0.59.0 K3: the real-kill sweep's ptrace driver (Linux x86_64 only; the module is empty elsewhere).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod ptrace_sweep;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;

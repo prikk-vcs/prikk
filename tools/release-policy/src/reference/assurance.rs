@@ -132,6 +132,9 @@ fn check_row(row: &Row, oses: &BTreeSet<Os>, tree: &mut walk::Tree, errors: &mut
     }
     let mut typed = BTreeSet::new();
     for label in row.platforms.split(',').map(str::trim) {
+        // 0.59.0 K3: `Linux (x86_64)` says the test is also gated on the architecture (`target_arch`, evaluated by `walk::atom_value`); the OS is what
+        // is compared.
+        let label = label.strip_suffix(" (x86_64)").unwrap_or(label);
         match Os::parse(label) {
             Some(os) => {
                 typed.insert(os);

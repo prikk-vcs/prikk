@@ -659,6 +659,39 @@ reading of the test.
 | `sync accept`: failpoint between passes | `a_write_error_exits_1_and_a_rerun_finishes_from_the_state_it_left` (`crates/prikk-cli/tests/sync_and_exchange/p3b_streaming_accept.rs`) | failpoint | Linux, macOS, Windows |  |
 | Lock left by a crashed holder: verdict by liveness | `an_exited_but_unreaped_child_does_not_appear_running` (`crates/prikk-store/src/lock_holder/tests.rs`) | unit | Linux, macOS |  |
 | A pointer lead whose holder's liveness is unknown reads as interrupted, with its reason | `an_unknown_holder_is_interrupted_and_says_why` (`crates/prikk-store/src/refs/in_flight/tests.rs`) | unit | Linux, macOS, Windows | [os-varies] |
+| `commit` killed (SIGKILL) at every mutating syscall, then recovered | `commit` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `seal` killed at every mutating syscall, then recovered | `seal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `seal` of the 64th block (a checkpoint) killed at every mutating syscall | `seal_checkpoint` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `sync seal` of a 3-claim batch killed at every mutating syscall | `sync_seal_batch` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `uncommit` killed at every mutating syscall; the next `commit` goes through | `uncommit` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--repair-wal-tail` killed at every mutating syscall | `repair_wal_tail` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--repair-tails` killed at every mutating syscall | `repair_tails` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--repair-pointer-index-tail` killed at every mutating syscall | `repair_pointer_index_tail` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--repair-index` killed at every mutating syscall | `repair_index` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `tag create` killed at every mutating syscall | `tag_create` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `branch create` killed at every mutating syscall | `branch_create` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--remove-ref-candidates` killed at every mutating syscall | `remove_ref_candidates` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of a `Cut` run killed at every mutating syscall | `recovery_restore_cut` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of a `Remove` run killed at every mutating syscall (the created-and-not-written file) | `recovery_restore_remove` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-clear` killed at every mutating syscall | `recovery_clear` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--rebuild-pointer-index` killed at every mutating syscall | `rebuild_pointer_index` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--rebuild-caches` killed at every mutating syscall | `rebuild_caches` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `ref complete` killed at every mutating syscall | `ref_complete` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--discard-damaged-commits` killed at every mutating syscall | `discard_damaged_commits` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--restore-queue-target` killed at every mutating syscall | `restore_queue_target` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--cancel-import` killed at every mutating syscall | `cancel_import` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `compact --pointer-index` killed at every mutating syscall | `compact_pointer_index` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `compact --received-index` killed at every mutating syscall | `compact_received_index` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `compact --trust-policy` killed at every mutating syscall | `compact_trust_policy` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of an `uncommit` run (a `Replace` of the witness and the worktree's record) killed at every mutating syscall | `recovery_restore_of_uncommit` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of a `--discard-damaged-commits` run (a `Replace` of the witness) killed at every mutating syscall | `recovery_restore_of_discard` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of a `--rebuild-pointer-index` run over a shortened slot (a `Replace` whose saved bytes are not a prefix of the new) killed at every mutating syscall | `recovery_restore_of_rebuild_shortened_slot` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `--recovery-restore` of a `--restore-queue-target` run (a `Replace` of `ref-name`) killed at every mutating syscall | `recovery_restore_of_restore_queue_target` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `branch switch` refused by a queue that holds a path (the W2 refusal takes a lock and rewrites a cache): killed at every mutating syscall | `switch_refused_w2` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `merge --into` refused by a queue that holds a path (W3): killed at every mutating syscall | `w3_merge_refusal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `archive import --adopt` refused by a queue that holds a path (W3): killed at every mutating syscall | `w3_archive_adopt_refusal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `bundle import --adopt` refused by a queue that holds a path (W3): killed at every mutating syscall | `w3_bundle_adopt_refusal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `branch create` of the current branch refused by a queue that holds a path (W3): killed at every mutating syscall | `w3_branch_create_refusal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 <!-- assurance-table:end -->
 
 **What each kind proves, and what it does not.**
@@ -667,6 +700,16 @@ reading of the test.
   recovery reads the state a killed process of this binary leaves on this filesystem, locks included. It does not prove a state the
   chosen point does not reach, and it does not prove what the operating system does after a power cut: a killed process's written
   bytes still reach the disk, a power cut can lose them.
+  **The `Linux (x86_64)` rows are one test each, in `real_kill_sweep.rs`, and run a sweep:** the command is traced under `ptrace` and killed
+  with `SIGKILL` at **every mutating syscall it issues**, one ordinal at a time, each on a fresh copy of a prepared repository; then the locks
+  are cleared (`unlock --yes`, and `--force` only where `--yes` refused for an incomplete lock body), the command is run again (and the command
+  its refusal names, which must exit 0), and `verify` and the writer's own check must hold. **Its three limits:** it kills a process **at a
+  syscall boundary**, so it does not tear a write inside one syscall (a kill inside a `write` of more than a page, which the direct restore
+  tests build by hand); it is **not power loss** (the page cache survives a `SIGKILL`, so what `fsync` costs cannot change which states are
+  reached, and the failpoint rows hold fsync order); and it counts the syscalls in a **closed table** (an unclassified syscall fails the test, by
+  number and name) for **x86_64 Linux only** (aarch64 is a second register path, not built). A writer that creates a task fails the test.
+  **Every verb of the CLI is in an inventory** (`real_kill_sweep/inventory.rs`, checked against `prikk --help`): swept, or named with the
+  reason it is not.
 - **failpoint**: an error is injected at a named write or sync, counted by ordinal (a sweep tries every ordinal). It proves the
   recovery from the state the code would leave at that point. It does not prove the list of points is complete (a write with no
   failpoint is not tried), and it does not stop the process or lose any bytes: the injected error returns.
@@ -679,7 +722,7 @@ reading of the test.
 on which CI runs a whole, unfiltered `cargo test --workspace` (read from `.github/workflows/ci.yml`: Linux, macOS and Windows, the
 Linux job twice, on the stable and the minimum toolchain) intersected with the `cfg` of the test and of every module and file above
 it. A change that makes the gate unable to read this (a filter on a suite step, a matrix, an unknown `cfg`) fails it rather than
-narrowing the column. **No real-kill test runs on Windows**: every one is `cfg(unix)`, as are the fsutil failpoint matrices; on
+narrowing the column. **No real-kill test runs on Windows**: every one is `cfg(unix)` or Linux-only, as are the fsutil failpoint matrices; on
 Windows the evidence for a crash point is a failpoint or a hand-built state. `[os-varies]` in the note column marks a test that
 branches on the operating system *while it runs* (`cfg!`): it is built and run everywhere, but may assert less on some, which the
 column cannot show. The gate sees the test's own body only, not the helpers it calls.
@@ -687,11 +730,14 @@ column cannot show. The gate sees the test's own body only, not the helpers it c
 **Crash points no test holds**, so that this table is not read as wider than it is (each is a candidate in the ROADMAP, not a
 defect found by running anything):
 
-- There is **no real kill of `commit`, `seal`, or the repair verbs** (`--repair-wal-tail`, `--discard-damaged-commits`,
-  `--restore-queue-target`); `seal` is held between its pointer append and its log append by failpoints and hand-built states, and
-  not between its object writes and the pointer append. Only `bundle import`, `archive import`, `tag create` and `sync seal` are
-  killed for real.
-- **No real-kill test runs on Windows**, and a power loss that loses the recovery log's first-creation name on Windows is not
+- **Since 0.59.0, `commit`, `seal`, `uncommit`, `tag create`, `branch create`, `ref complete`, `compact` and every repair verb of
+  `doctor` have a real kill at every mutating syscall (Linux x86_64 only: the `Linux (x86_64)` rows).** Not killed for real: the verbs
+  the inventory (`real_kill_sweep/inventory.rs`) names with a reason (among them `sync accept`, `bundle` and `archive` end to end
+  beyond the rows above, `branch switch`'s publishing path, `checkout`, `trust`, `rollback-draft`, `mv`, `received`, `format`,
+  `setup`), and **`init`, which the sweep found unsound at one ordinal**: a kill between creating `.prikk/FORMAT` and writing the format
+  number leaves an empty marker every command refuses and none clears (a fresh repository loses nothing; deleting `.prikk` is the way
+  out). The sweep kills a process: it does not lose power, and it does not tear a write inside one syscall.
+- **No real-kill test runs on Windows** (the sweep is `Linux (x86_64)`, the older real-kill rows `cfg(unix)`), and a power loss that loses the recovery log's first-creation name on Windows is not
   injectable (the residual stated above).
 - A torn write of `ref-name` by `doctor --restore-queue-target`, undone by `--recovery-restore`; a failure *saving* the recovery
   log during `--repair-wal-tail`; a kill or failpoint on the received-pointer append and on `bundle import --adopt`'s publish; the

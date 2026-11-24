@@ -18,6 +18,9 @@ jobs:
   stable:
     name: stable
     runs-on: ubuntu-latest
+    # K3 (0.59.0): the real-kill sweep (`crates/prikk-cli/tests/real_kill_sweep.rs`, Linux x86_64) is part of this job's `cargo test --workspace` and of
+    # `msrv-1.85.0`'s: the assurance-table gate only cites a test that an unfiltered workspace run executes, so the sweep is not a job of its own. Measured on
+    # tmpfs it adds 12 s (32 cpus), 17 s (4) and 25 s (2) to the step, so no limit moves: 2 x (664 s + 25 s) = 23 min is inside this job's 25.
     timeout-minutes: 25
     steps:
       # RFC 127: `boundary::tests::workspace_and_product_boundaries_hold` (exercised by `cargo test

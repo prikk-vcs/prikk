@@ -13,5 +13,9 @@ repository.workspace = true
 [dependencies]
 prikk-store = { workspace = true }
 
+# 0.59.0 K3: the real-kill sweep's driver (`ptrace_sweep`), Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true }
+
 [lints]
 workspace = true

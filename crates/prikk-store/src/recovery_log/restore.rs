@@ -116,10 +116,15 @@ fn cut_undone(current: Option<&[u8]>, entry: &Entry) -> bool {
         && bytes.get(offset..) == Some(entry.removed.as_slice())
 }
 
-/// How many of an append's removed bytes an interrupted restore already put back (0.59.0 K2): the file is longer than the cut's offset and shorter
-/// than offset + removed, the bytes before the offset are the bytes the repair left, and the bytes after it are a prefix of the removed bytes. `None`
-/// for any other state, which a restore refuses as it always did. A kill inside one `write` of more than a page can leave this state, and so can a
-/// power loss; a kill at a syscall boundary cannot.
+/// How many of an append's removed bytes are already back (0.59.0 K2): the file is longer than the cut's offset and shorter than offset + removed, the
+/// bytes before the offset are the bytes the repair left, and the bytes after it are a prefix of the removed bytes. `None` for any other state, which
+/// a restore refuses as it always did.
+///
+/// **What this checks, and the invariant that makes accepting it safe.** It checks bytes, not their author: a restore that stopped part-way leaves this
+/// state, and so does nothing else any writer of ours does, but nothing here proves it was that restore. It does not need to: the restore **only
+/// extends** a file whose present bytes already equal the target's bytes at the same offsets, so **no byte that is there is changed or removed**, and
+/// the result is the file as it was before the repair. (A write stopped part-way needs a power loss or a kill inside one `write` of more than a page;
+/// a kill at a syscall boundary cannot leave it.)
 fn cut_partly_restored(current: Option<&[u8]>, entry: &Entry) -> Option<usize> {
     let bytes = current?;
     let offset = usize::try_from(entry.offset).ok()?;
@@ -130,9 +135,10 @@ fn cut_partly_restored(current: Option<&[u8]>, entry: &Entry) -> Option<usize> {
     .then_some(have)
 }
 
-/// Whether a file holds a strict prefix of the bytes a repair removed, the empty prefix included (0.59.0 K2): the state a restore's own interrupted
-/// recreation of a removed file leaves (the file is created, and its bytes are written after). It is this step's own write, so the restore writes the
-/// whole file again from offset 0.
+/// Whether a file holds a strict prefix of the bytes a repair removed, the empty prefix included (0.59.0 K2): the state an interrupted recreation of a
+/// removed file leaves (the file is created, and its bytes are written after). Checked by bytes, not by author, and safe by the same invariant as
+/// [`cut_partly_restored`]: the restore writes the whole file from offset 0, and every byte already there equals the byte it writes at that offset, so
+/// **no byte that is there is changed or removed**.
 fn remove_partly_restored(current: Option<&[u8]>, entry: &Entry) -> bool {
     current
         .is_some_and(|bytes| bytes.len() < entry.removed.len() && entry.removed.starts_with(bytes))
@@ -309,7 +315,7 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                 conditions.push(Condition {
                     text: match (partly, current.as_ref().map(|bytes| bytes.len() as u64)) {
                         (Some(have), _) => format!(
-                            "the source is {} bytes: {have} of the {} removed bytes are already back, from an interrupted restore of this step, and the rest is appended",
+                            "the source is {} bytes: the {have} after the offset are the first {have} of the {} removed bytes, as an interrupted restore leaves them; the rest is appended, and no byte there changes",
                             offset + have as u64,
                             entry.removed.len()
                         ),
@@ -367,12 +373,12 @@ pub(crate) fn restore(layout: &RepositoryLayout, id: &str, plan_only: bool) -> R
                         let have = current.as_ref().map_or(0, Vec::len);
                         if have == 0 {
                             format!(
-                                "{} exists and is empty, from an interrupted restore of this step (the file is created, then written), and is written whole",
+                                "{} is empty, as an interrupted restore leaves a file it created and did not write; it is written whole, and no byte there changes",
                                 entry.source
                             )
                         } else {
                             format!(
-                                "{} holds the first {have} of the {} removed bytes, from an interrupted restore of this step, and is written whole",
+                                "{} holds the first {have} of the {} removed bytes, as an interrupted restore leaves it; it is written whole, and no byte there changes",
                                 entry.source,
                                 entry.removed.len()
                             )

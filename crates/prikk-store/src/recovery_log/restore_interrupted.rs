@@ -62,7 +62,7 @@ fn a_file_created_and_not_finished_is_written_whole() {
         assert!(
             plan.conditions
                 .iter()
-                .any(|c| c.holds && c.text.contains("interrupted restore of this step")),
+                .any(|c| c.holds && c.text.contains("as an interrupted restore leaves")),
             "{prefix}: {plan:?}"
         );
         assert_eq!(
@@ -138,6 +138,11 @@ fn a_cut_whose_append_was_interrupted_is_finished() {
         put(&root, SOURCE, &WHOLE[..CUT_AT + appended]);
         let plan = restore(&layout, &id, true).unwrap();
         assert!(plan.can_restore(), "{appended}: {plan:?}");
+        assert!(
+            plan.conditions.iter().any(|c| c.holds
+                && c.text.contains("as an interrupted restore leaves them; the rest is appended, and no byte there changes")),
+            "{appended}: the plan says what was checked and the invariant: {plan:?}"
+        );
         assert_eq!(
             plan.would_write,
             WHOLE.len() - CUT_AT - appended,
