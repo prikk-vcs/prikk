@@ -213,6 +213,14 @@ repository at open. For non-ASCII paths, `commit` and `worktree-status` suggest 
 format-6 or format-7 repository is refused, naming the path, the format needed and `prikk format upgrade`.
 See [Release Compatibility](release-compatibility.md).
 
+**A lost format marker (0.59.0).** `.prikk/FORMAT` absent or empty is one of two states, and every command says which. An **`init` that did not
+finish** (`.prikk` holds only what `init` creates, each file empty or with the bytes `init` writes there, and nothing else): the sentence names
+`prikk init`, which finishes it and writes the marker last. A **repository that lost its marker** (anything else, an unknown file included):
+`init` refuses and writes nothing, and the sentence names `prikk format upgrade`, which takes the writer lock, runs the same verification, and
+writes format 8 through a temporary file and a rename. It claims no earlier number, because none can be read back; formats 6 and 7 are subsets of 8,
+so nothing stored changes, and prikk before 0.57.0 does not open format 8. A failed verification refuses, naming a sound copy to restore
+(`prikk verify` cannot run without a marker). `prikk unlock` opens such a repository too, because a killed `format upgrade` leaves its lock.
+
 **Non-ASCII repository paths (0.57.0).** `commit` records a non-ASCII name in a format-8 repository **if the name is in Unicode
 normalization form C (NFC)**, and never rewrites a name for you. A name in another form is refused, naming the name and its NFC
 spelling, both with the non-ASCII characters written `\u{..}` because the two look identical (rename the file to the NFC

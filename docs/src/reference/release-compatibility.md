@@ -120,7 +120,8 @@ holding one record per id: a second signer's copy of a stored object is refused,
 `prikk format upgrade` moves it to the current format, 8, in place, in one step from 6 or from 7: it takes the writer lock, refuses — changing
 nothing — unless `prikk verify` would pass, and then overwrites only the one byte of the `FORMAT` marker, in place and flushed (RFC 168 §3.3; no rename).
 Nothing stored is rewritten, because every format-6 repository is already a valid format-7 one, and every format-7 repository
-a valid format-8 one. The upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.56.0 and earlier refuse a
+a valid format-8 one. (The same verb restores a **lost marker** on a populated repository, as format 8: `init` never labels a repository it did not
+make. See `commands.md`.) The upgrade is explicit, never automatic, idempotent, and one-way: **prikk 0.56.0 and earlier refuse a
 format-8 repository at open** (0.44.0 and earlier already refuse format 7), so upgrade only once every prikk that opens the
 repository is newer. **For non-ASCII paths, prikk suggests the upgrade in three places only:** the refusal to author a non-ASCII path in a
 format-6 or format-7 repository (`commit`, and `worktree-status` as `authoring: refused`), the refusal of an artifact that

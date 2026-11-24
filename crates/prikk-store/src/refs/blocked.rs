@@ -13,13 +13,10 @@ use prikk_object::{ObjectId, ObjectType, RefUpdatePayload};
 use crate::foundation::layout::RepositoryLayout;
 use crate::object_store::ObjectReadSnapshot;
 
-/// The sound-copy sequence, in full: the way out of every state no command repairs in place. Defined here (a leaf both `way_out` and `ref_completion` read)
-/// so that `ref_completion` names it without an edge into `way_out`, which would close a cycle through `verify`. `way_out::SOUND_COPY` is this value.
-pub(crate) const SOUND_COPY: &str = "restore a sound copy of the sealed history: `prikk setup <new-dir>`, then, in \
-<new-dir>, `prikk archive verify <backup>` and `prikk archive import <backup> --adopt` (or `prikk bundle \
-import --input <bundle>` for one branch); the key that sealed the history must be adopted in <new-dir> \
-(`archive verify` reports it). Only sealed history travels in a backup: a commit still waiting for a \
-`prikk seal` is made again there";
+/// The sound-copy sequence, in full: the way out of every state no command repairs in place. Defined in the foundation layer (0.59.0 step K4: the layout's own
+/// refusal for a lost format marker names it, and the layout cannot read this module), and read here by `ref_completion` and `way_out` without an edge into
+/// `way_out`, which would close a cycle through `verify`. `way_out::SOUND_COPY` is this value.
+pub(crate) use crate::foundation::layout::SOUND_COPY;
 
 /// The state the precondition refused, when this module can tell.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -38,7 +38,9 @@ pub(crate) fn run_unlock(root: PathBuf, args: Vec<String>) -> std::result::Resul
         }
     }
 
-    let layout = crate::open_repository(root)?;
+    // Opened allowing a lost format marker: a `format upgrade` killed over one leaves its lock, and its refusal names this command (0.59.0 step K4).
+    let layout = prikk_store::RepositoryLayout::open_allowing_lost_marker(root)
+        .map_err(|err| err.to_string())?;
     let locks = list_held_locks(&layout).map_err(|err| err.to_string())?;
 
     let Some(target) = target else {

@@ -8,7 +8,7 @@ use prikk_object::{ObjectId, ObjectType, is_windows_reserved_name};
 
 use crate::foundation::fsutil::{
     EntryKind, MutationRoot, create_new_file_required, ensure_directory_required, inspect_entry,
-    list_directory, read_file_if_exists, read_file_range_if_exists,
+    list_directory, read_file_if_exists, read_file_range_if_exists, write_file_atomically,
 };
 
 const REPO_DIR: &str = ".prikk";
@@ -206,6 +206,9 @@ pub struct RepositoryLayout {
     worktree_mutation: MutationRoot,
     repository_mutation: MutationRoot,
     format: RepositoryFormat,
+    /// `prikk format upgrade` over a lost marker (0.59.0 step K4): the marker was absent or empty on a populated repository when this layout was
+    /// opened, and the layout stands for format 8 until the marker is written. Only `open_allowing_lost_marker` sets it.
+    marker_lost: bool,
 }
 
 impl PartialEq for RepositoryLayout {
@@ -241,14 +244,79 @@ impl RepositoryLayout {
         // entry for `.prikk`), and this function cannot tell which it is serving. Removing the sync for readers is a read-only open,
         // a new API; it is the architect's to rule (P1 report), not a one-line deletion.
         let repository_mutation = worktree_mutation.open_root(Path::new(REPO_DIR))?;
-        let format = read_repository_format(&repository_mutation)?;
-        Ok(Self {
+        Self::opened(
             root,
             prikk_dir,
             worktree_mutation,
             repository_mutation,
-            format,
-        })
+            false,
+        )
+    }
+
+    /// `new`'s second half: read the marker, or refuse with the sentence of a lost one. `lost_marker_is_a_format_8_layout` is `prikk format
+    /// upgrade`'s one exception: a populated repository whose marker is lost opens as format 8, flagged, so the verification it runs reads it as it
+    /// will be labelled.
+    fn opened(
+        root: PathBuf,
+        prikk_dir: PathBuf,
+        worktree_mutation: MutationRoot,
+        repository_mutation: MutationRoot,
+        lost_marker_is_a_format_8_layout: bool,
+    ) -> Result<Self> {
+        // One read of the marker serves both questions: is it lost, and what does it say.
+        let bytes = read_file_if_exists(&repository_mutation, Path::new("FORMAT"))?;
+        let state = lost_marker::state_of(bytes.as_deref());
+        let mut layout = Self {
+            root,
+            prikk_dir,
+            worktree_mutation,
+            repository_mutation,
+            format: RepositoryFormat::V8,
+            marker_lost: false,
+        };
+        if state.is_lost() {
+            if lost_marker_is_a_format_8_layout && !layout.holds_only_a_killed_inits_state()? {
+                layout.marker_lost = true;
+                return Ok(layout);
+            }
+            return Err(layout.lost_marker_refusal(state)?);
+        }
+        layout.format = parse_repository_format(bytes.as_deref().unwrap_or_default())?;
+        Ok(layout)
+    }
+
+    /// Open for the two commands a lost marker's way out runs through: `prikk format upgrade` (which writes the marker) and `prikk unlock` (which clears
+    /// the lock a killed `format upgrade` left, and which that refusal names). A populated repository whose marker is lost opens as format 8, flagged
+    /// (`marker_is_lost`); an unpopulated `.prikk` still refuses, naming `prikk init`. No other command opens one.
+    ///
+    /// # Errors
+    ///
+    /// No repository at `root`; an unpopulated `.prikk` whose marker is absent or empty; a marker this version does not read.
+    pub fn open_allowing_lost_marker(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        let prikk_dir = root.join(REPO_DIR);
+        if let Err(err) = std::fs::symlink_metadata(&prikk_dir) {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                return Err(PrikkError::Precondition(format!(
+                    "no prikk repository at {}",
+                    root.display()
+                )));
+            }
+        }
+        let worktree_mutation = MutationRoot::open(&root)?;
+        let repository_mutation = worktree_mutation.open_root(Path::new(REPO_DIR))?;
+        Self::opened(
+            root,
+            prikk_dir,
+            worktree_mutation,
+            repository_mutation,
+            true,
+        )
+    }
+
+    /// Whether this layout was opened over a lost marker (see `open_allowing_lost_marker`).
+    pub(crate) const fn marker_is_lost(&self) -> bool {
+        self.marker_lost
     }
 
     /// Initialize a repository layout on disk.
@@ -257,7 +325,12 @@ impl RepositoryLayout {
         let prikk_dir = root.join(REPO_DIR);
         let worktree_mutation = MutationRoot::open(&root)?;
         let repository_mutation = worktree_mutation.ensure_root(Path::new(REPO_DIR))?;
-        let existing = read_file_if_exists(&repository_mutation, Path::new("FORMAT"))?;
+        let state = lost_marker::marker_state(&repository_mutation)?;
+        let existing = if state.is_lost() {
+            None
+        } else {
+            read_file_if_exists(&repository_mutation, Path::new("FORMAT"))?
+        };
         if let Some(version) = &existing {
             if version.as_slice() != CURRENT_FORMAT_VERSION
                 && version.as_slice() != FORMAT_7_VERSION
@@ -293,127 +366,47 @@ impl RepositoryLayout {
             worktree_mutation,
             repository_mutation,
             format,
+            marker_lost: false,
         };
-        for dir in layout.required_repository_directories()? {
-            ensure_directory_required(layout.repository_mutation_root(), &dir)?;
+        // 0.59.0 step K4: `init` never labels a repository it did not make. An absent or empty marker over anything but what a killed `init` leaves is
+        // a repository whose format number is lost, and `prikk format upgrade` is the verb that proves it and writes the marker. Nothing is written first.
+        if state.is_lost() && !layout.holds_only_a_killed_inits_state()? {
+            return Err(layout.lost_marker_refusal(state)?);
         }
-        // RFC 102 Stage 1: created at `init`, never later -- a missing file and an idempotent
-        // re-`init` on an already-initialized repository must not clobber either.
-        create_empty_file_once(&layout, &layout.worktree_unclean_shutdown_marker_path())?;
-        // RFC 136 §10.3b.2: created at `init` on the same pattern, so setting it later is an append to
-        // an existing name rather than a new-name event.
-        create_empty_file_once(&layout, &layout.provisional_worktree_marker_path())?;
-        create_empty_file_once(&layout, &layout.default_queue_wal_path())?;
-        // RFC 102 Stage 5, design-v1.md §14.6: the active-WAL ref-ownership metadata, on the same
-        // marker pattern as the worktree marker above -- created empty at `init`, set by truncate-then
-        // -append, cleared by truncate-to-empty, never removed. Previously created lazily on the
-        // empty-to-non-empty WAL transition (`active.rs::prepare_empty_active_ref_for_append`).
-        create_empty_file_once(&layout, &layout.default_active_ref_name_path())?;
-        // RFC 168 §3.1 and §3.3: the recovery log and the default session's witness are created here, so every later write to
-        // either is to an existing name. An empty witness is "no witness yet", the state a new repository has always had.
-        layout.ensure_write_state()?;
-        // RFC 144 §4o.2: the live rename-declaration store, on the same marker pattern as the two
-        // files just above. `write_declarations_map` (`rename_declaration.rs`) also self-heals a
-        // missing file for a repository initialized before this line existed -- this is only the
-        // fast path for every repository `init` creates from here on.
-        create_empty_file_once(&layout, &layout.default_declarations_path())?;
-        // RFC 151 §2.1: the current-branch pointer, `heads/main` for every repository `init` (and so
-        // `setup`) creates, through the same atomic write as the repository's other mutable
-        // metadata. Only when absent, like every file above: a re-`init` never moves a branch
-        // someone switched to. A repository initialized before RFC 151 has no file and reads as
-        // `heads/main` (`refs::current_branch`), which never writes one.
-        let pointer = layout.repository_relative(&layout.current_branch_path())?;
-        if read_file_if_exists(layout.repository_mutation_root(), &pointer)?.is_none() {
-            create_new_file_required(layout.repository_mutation_root(), &pointer, b"heads/main\n")?;
+        // Every name `init` creates is one entry of `init_entries`, in the order it is created (`init_set.rs`): that list is also what the question above
+        // reads, so the two cannot drift. Each is created once and never clobbered: a missing file and an idempotent re-`init` on an already-initialized
+        // repository must not overwrite either (RFC 102 Stage 1). Every file is allocated here and nowhere else (RFC 102 Stage 3 acceptance criterion 1;
+        // Stage 4's ref-log and pointer-index containers; Stage 6's compaction targets; DC-53's author-key container: a repository initialized before any
+        // of them simply has no such file and reads it as empty). The current-branch pointer is `heads/main` (RFC 151 §2.1), only when absent: a
+        // re-`init` never moves a branch someone switched to.
+        for entry in layout.init_entries()? {
+            match entry {
+                init_set::InitEntry::Directory(dir) => {
+                    ensure_directory_required(layout.repository_mutation_root(), &dir)?;
+                }
+                init_set::InitEntry::File { path, bytes: [] } => {
+                    create_empty_file_once(&layout, &layout.prikk_dir.join(path))?;
+                }
+                init_set::InitEntry::File { path, bytes } => {
+                    if read_file_if_exists(layout.repository_mutation_root(), &path)?.is_none() {
+                        create_new_file_required(layout.repository_mutation_root(), &path, bytes)?;
+                    }
+                }
+            }
         }
-        // RFC 102 Stage 3, design-v1.md §2: every container name, both slots, plus the index and the
-        // (currently unused) compaction generation log -- all allocated here, at `init`, and nowhere
-        // else, for the life of the repository. This is the acceptance test itself (handoff §5
-        // criterion 1): enumerate every one of these paths and confirm none of them is ever created
-        // by any other code path.
-        for object_type in persisted_object_types() {
-            create_empty_file_once(
-                &layout,
-                &layout.container_slot_path(object_type, ContainerSlot::A),
-            )?;
-            create_empty_file_once(
-                &layout,
-                &layout.container_slot_path(object_type, ContainerSlot::B),
-            )?;
-        }
-        create_empty_file_once(&layout, &layout.container_index_path())?;
-        create_empty_file_once(&layout, &layout.container_generation_log_path())?;
-        // RFC 102 Stage 4, Step 0 §13.2/§13.4: the shared ref-log container's both slots, plus the
-        // separate ref-pointer-index container -- allocated here, at `init`, and nowhere else, the
-        // same acceptance-criterion-1 discipline Stage 3 established.
-        create_empty_file_once(
-            &layout,
-            &layout.ref_log_container_slot_path(ContainerSlot::A),
-        )?;
-        create_empty_file_once(
-            &layout,
-            &layout.ref_log_container_slot_path(ContainerSlot::B),
-        )?;
-        // RFC 102 Stage 6 Step 1, design-v1.md §15.6: the three genuine compaction targets each gain
-        // an A/B pair and their own generation log here, allocated at `init` like every other name --
-        // Step 1 itself never writes B or a generation record, so every one of these stays empty
-        // until Step 2's compactor exists (handoff §2 criterion 2, "no behaviour change").
-        create_empty_file_once(
-            &layout,
-            &layout.ref_pointer_index_slot_path(ContainerSlot::A),
-        )?;
-        create_empty_file_once(
-            &layout,
-            &layout.ref_pointer_index_slot_path(ContainerSlot::B),
-        )?;
-        create_empty_file_once(&layout, &layout.ref_pointer_index_generation_log_path())?;
-        create_empty_file_once(&layout, &layout.received_index_slot_path(ContainerSlot::A))?;
-        create_empty_file_once(&layout, &layout.received_index_slot_path(ContainerSlot::B))?;
-        create_empty_file_once(&layout, &layout.received_index_generation_log_path())?;
-        create_empty_file_once(&layout, &layout.trust_key_container_path())?;
-        // DC-53 Stage 1: allocated at `init` like every other container name, for new repositories.
-        // A repository initialized before this increment simply has no such file --
-        // `author_key_index.rs` reads that identically to an empty container, so no format bump or
-        // migration step is needed for existing repositories. True for writes too, not just reads:
-        // `record_author_key_material` creates the container lazily on first write if it is still
-        // absent (`author_key_index.rs::ensure_author_key_container_exists`), since
-        // `append_file_required` -- unlike the read path -- requires the target to already exist.
-        create_empty_file_once(&layout, &layout.author_key_container_path())?;
-        create_empty_file_once(
-            &layout,
-            &layout.trust_policy_container_slot_path(ContainerSlot::A),
-        )?;
-        create_empty_file_once(
-            &layout,
-            &layout.trust_policy_container_slot_path(ContainerSlot::B),
-        )?;
-        create_empty_file_once(&layout, &layout.trust_policy_generation_log_path())?;
-        // RFC 102 Stage 5, design-v1.md §14.2: written last, once every container/marker/WAL name
-        // above is confirmed present. `FORMAT`'s presence is what certifies `init` completed --
-        // written first (the old order), a crash between it and the containers left a repository
-        // that read as a valid, empty format-4 repository with every container absent, and nothing
-        // detected it (`status`/`verify`/`doctor` all exited 0 against a probe repository with all 16
-        // container files deleted). Written last, an interrupted `init` leaves `FORMAT` absent, so a
-        // re-`init` skips the mismatched-format guard above (it only fires when `FORMAT` already
-        // exists) and re-enters this same body -- every `create_empty_file_once` call above is
-        // idempotent, so the re-run completes whichever names are still missing and finishes by
-        // writing `FORMAT`, exactly the "detectable and completable" property the reordering exists
-        // to provide.
+        // RFC 102 Stage 5, design-v1.md §14.2: written last, once every container/marker/WAL name above is confirmed present. `FORMAT`'s presence is what
+        // certifies `init` completed: written first, a crash between it and the containers left a repository that read as a valid, empty one with every
+        // container absent, and nothing detected it. Written last, an interrupted `init` leaves it absent, a re-`init` re-enters this body, and every
+        // creation above is idempotent.
         //
-        // RFC 102 Stage 5, design-v1.md §14.10: `create_new_file_required` (`create_exclusive`), not
-        // `write_file_atomically` (`atomic_replace`) -- the same primitive `create_empty_file_once`
-        // already uses for every other name above. For a name that does not yet exist,
-        // `atomic_replace`'s rename-into-place is a new-directory-entry event, exactly the class this
-        // RFC exists to eliminate; `create_exclusive` is one new-name event with no temp file and no
-        // rename. Confirmed, not assumed: `create_exclusive` (`anchored/linux.rs`) syncs both the file
-        // and the parent directory, the same durability `atomic_replace` provided. The `is_none()`
-        // guard above still governs whether this runs at all -- unchanged -- but the create call
-        // itself is now exclusive, so a genuine concurrent-`init` race now errors on `FORMAT` the same
-        // way it already does on every other name `create_empty_file_once` allocates, rather than
-        // FORMAT alone silently accepting whichever racer's rename landed last. Not a new failure
-        // mode: it is FORMAT joining the behavior every other name in this function already has.
-        if read_file_if_exists(layout.repository_mutation_root(), Path::new("FORMAT"))?.is_none() {
-            create_new_file_required(
+        // 0.59.0 step K4: through a temporary file and a rename, not `create_exclusive` (create, then write). A kill between the create and the write
+        // left an EMPTY marker, which every command refused and none could clear (`real_kill_sweep`, ordinal 221 of 228). Now a kill leaves the old marker
+        // (none) or the new, and at most a `FORMAT.tmp.*` that the question above accepts. **Nothing else writes the marker while this runs:** no other
+        // command opens a repository whose marker is lost (`new` refuses), `prikk format upgrade` writes it only over a POPULATED repository and `init`
+        // only over an unpopulated one, and a second `init` writes the same two bytes through its own temporary, so a rename over an `init`'s rename is
+        // the same file. The rename replaces the empty marker of a killed pre-0.59.0 `init`.
+        if lost_marker::marker_state(layout.repository_mutation_root())?.is_lost() {
+            write_file_atomically(
                 layout.repository_mutation_root(),
                 Path::new("FORMAT"),
                 CURRENT_FORMAT_VERSION,
@@ -434,6 +427,11 @@ impl RepositoryLayout {
     }
 
     pub(crate) fn validate_format(&self) -> Result<()> {
+        // `prikk format upgrade` over a lost marker (K4) runs its verification before the marker exists: the layout stands for format 8 while it is absent.
+        if self.marker_lost && lost_marker::marker_state(self.repository_mutation_root())?.is_lost()
+        {
+            return Ok(());
+        }
         let format = read_repository_format(self.repository_mutation_root())?;
         if format != self.format {
             // The marker changed under an open layout — `prikk format upgrade` ran meanwhile. Name
@@ -1081,8 +1079,13 @@ fn create_empty_file_once(layout: &RepositoryLayout, path: &Path) -> Result<()> 
 }
 
 mod format_marker;
-use format_marker::read_repository_format;
+mod init_set;
+mod lost_marker;
+use format_marker::{parse_repository_format, read_repository_format};
+pub(crate) use lost_marker::SOUND_COPY;
 
+#[cfg(test)]
+mod lost_marker_tests;
 #[cfg(test)]
 mod tests;
 

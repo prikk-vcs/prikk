@@ -14,13 +14,13 @@
 //! write nothing a format-6 repository could not already hold, so they cannot invalidate what was
 //! verified.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use prikk_error::{PrikkError, Result};
 
-use crate::foundation::fsutil::overwrite_in_place_required;
+use crate::foundation::fsutil::{overwrite_in_place_required, write_file_atomically};
 use crate::foundation::layout::{
-    CURRENT_FORMAT_VERSION, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout,
+    CURRENT_FORMAT_VERSION, DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout, SOUND_COPY,
 };
 use crate::lock::ActiveLock;
 use crate::verify::{RepositoryVerification, verify_repository};
@@ -33,6 +33,12 @@ pub enum FormatUpgradeOutcome {
     AlreadyCurrent {
         /// The format it is at.
         format: u32,
+    },
+    /// The marker was lost (absent or empty) on a populated repository, and is written again: the repository verified, and it is format 8 now. The
+    /// number it held is not known, so none is claimed (0.59.0 step K4).
+    MarkerRestored {
+        /// The format it is at now.
+        to: u32,
     },
     /// The marker was changed.
     Upgraded {
@@ -57,7 +63,10 @@ pub fn upgrade_repository_format(
 ) -> Result<FormatUpgradeOutcome> {
     let _lock = ActiveLock::acquire_for_write(layout, DEFAULT_ACTIVE_NAME)?;
     // The marker as it is now, under the lock — not as it was when `layout` was opened.
-    let current = RepositoryLayout::open(layout.root().to_path_buf())?;
+    let current = RepositoryLayout::open_allowing_lost_marker(layout.root().to_path_buf())?;
+    if current.marker_is_lost() {
+        return restore_lost_marker(&current, verdict);
+    }
     let from = match current.format() {
         RepositoryFormat::V8 => {
             return Ok(FormatUpgradeOutcome::AlreadyCurrent {
@@ -99,6 +108,57 @@ pub fn upgrade_repository_format(
         from,
         to: RepositoryFormat::V8.number(),
     })
+}
+
+/// `prikk format upgrade` over a marker that is absent or empty on a **populated** repository (0.59.0 step K4; an unpopulated `.prikk` is an `init` that did
+/// not finish, and opening it refuses naming `prikk init`). The earlier number is lost, so none is claimed: the repository must verify, and the marker is
+/// written as format 8, which holds everything formats 6 and 7 hold. Written through a temporary file and a rename, because there is no marker to overwrite:
+/// a kill leaves the marker absent or empty as it was, or format 8, never a part of it.
+fn restore_lost_marker(
+    current: &RepositoryLayout,
+    verdict: impl FnOnce(&RepositoryVerification) -> std::result::Result<(), String>,
+) -> Result<FormatUpgradeOutcome> {
+    let report = verify_repository(current)?;
+    verdict(&report).map_err(|reason| {
+        PrikkError::Precondition(format!(
+            "refusing to restore the format marker: verification did not pass ({reason}), and `prikk verify` cannot run without the marker; nothing \
+             was changed; {SOUND_COPY}"
+        ))
+    })?;
+
+    #[cfg(test)]
+    if let Some(change) = BEFORE_MARKER_WRITE.with(|slot| slot.borrow_mut().take()) {
+        change();
+    }
+
+    write_file_atomically(
+        current.repository_mutation_root(),
+        Path::new("FORMAT"),
+        CURRENT_FORMAT_VERSION,
+    )?;
+    let restored = RepositoryLayout::open(current.root().to_path_buf())?;
+    if restored.format() != RepositoryFormat::V8 {
+        return Err(PrikkError::Integrity(format!(
+            "the format marker was written but reads format {} afterwards",
+            restored.format().number()
+        )));
+    }
+    Ok(FormatUpgradeOutcome::MarkerRestored {
+        to: RepositoryFormat::V8.number(),
+    })
+}
+
+/// `prikk format upgrade [path]`: open `root` (a populated repository with a lost marker included) and upgrade it.
+///
+/// # Errors
+///
+/// As [`upgrade_repository_format`]; an unpopulated `.prikk` with no marker refuses, naming `prikk init`.
+pub fn upgrade_repository_format_in(
+    root: impl Into<PathBuf>,
+    verdict: impl FnOnce(&RepositoryVerification) -> std::result::Result<(), String>,
+) -> Result<FormatUpgradeOutcome> {
+    let layout = RepositoryLayout::open_allowing_lost_marker(root)?;
+    upgrade_repository_format(&layout, verdict)
 }
 
 #[cfg(test)]

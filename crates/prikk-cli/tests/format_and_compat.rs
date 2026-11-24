@@ -3,6 +3,8 @@
 //! and this grouping file's `mod` line are new. See the module's own file under
 //! `tests/format_and_compat/` for its own doc comment.
 
+#[path = "format_and_compat/k4_a_lost_format_marker.rs"]
+mod k4_a_lost_format_marker;
 #[path = "format_and_compat/rfc136_anchored_text.rs"]
 mod rfc136_anchored_text;
 #[path = "format_and_compat/rfc136_derivation_gate.rs"]

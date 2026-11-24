@@ -157,16 +157,16 @@ fn classify(number: i64, regs: &libc::user_regs_struct) -> Option<Class> {
         SYS_fdatasync, SYS_fstat, SYS_fstatfs, SYS_fsync, SYS_ftruncate, SYS_futex, SYS_futimesat,
         SYS_getcwd, SYS_getdents, SYS_getdents64, SYS_getegid, SYS_geteuid, SYS_getgid, SYS_getpid,
         SYS_getppid, SYS_getrandom, SYS_getresgid, SYS_getresuid, SYS_getrlimit, SYS_gettid,
-        SYS_getuid, SYS_ioctl, SYS_lchown, SYS_link, SYS_linkat, SYS_lseek, SYS_lstat, SYS_madvise,
-        SYS_mkdir, SYS_mkdirat, SYS_mknod, SYS_mknodat, SYS_mmap, SYS_mprotect, SYS_mremap,
-        SYS_munmap, SYS_nanosleep, SYS_newfstatat, SYS_open, SYS_openat, SYS_poll, SYS_pread64,
-        SYS_preadv, SYS_prlimit64, SYS_pwrite64, SYS_pwritev, SYS_pwritev2, SYS_read, SYS_readlink,
-        SYS_readlinkat, SYS_readv, SYS_rename, SYS_renameat, SYS_renameat2, SYS_rmdir, SYS_rseq,
-        SYS_rt_sigaction, SYS_rt_sigprocmask, SYS_rt_sigreturn, SYS_sched_getaffinity,
-        SYS_sched_yield, SYS_sendfile, SYS_set_robust_list, SYS_set_tid_address, SYS_sigaltstack,
-        SYS_stat, SYS_statfs, SYS_statx, SYS_symlink, SYS_symlinkat, SYS_sysinfo, SYS_truncate,
-        SYS_uname, SYS_unlink, SYS_unlinkat, SYS_utime, SYS_utimensat, SYS_utimes, SYS_write,
-        SYS_writev,
+        SYS_getuid, SYS_ioctl, SYS_kill, SYS_lchown, SYS_link, SYS_linkat, SYS_lseek, SYS_lstat,
+        SYS_madvise, SYS_mkdir, SYS_mkdirat, SYS_mknod, SYS_mknodat, SYS_mmap, SYS_mprotect,
+        SYS_mremap, SYS_munmap, SYS_nanosleep, SYS_newfstatat, SYS_open, SYS_openat, SYS_poll,
+        SYS_pread64, SYS_preadv, SYS_prlimit64, SYS_pwrite64, SYS_pwritev, SYS_pwritev2, SYS_read,
+        SYS_readlink, SYS_readlinkat, SYS_readv, SYS_rename, SYS_renameat, SYS_renameat2,
+        SYS_rmdir, SYS_rseq, SYS_rt_sigaction, SYS_rt_sigprocmask, SYS_rt_sigreturn,
+        SYS_sched_getaffinity, SYS_sched_yield, SYS_sendfile, SYS_set_robust_list,
+        SYS_set_tid_address, SYS_sigaltstack, SYS_stat, SYS_statfs, SYS_statx, SYS_symlink,
+        SYS_symlinkat, SYS_sysinfo, SYS_truncate, SYS_uname, SYS_unlink, SYS_unlinkat, SYS_utime,
+        SYS_utimensat, SYS_utimes, SYS_write, SYS_writev,
     };
     let number = number as libc::c_long;
     // Mutating: counted.
@@ -228,6 +228,11 @@ fn classify(number: i64, regs: &libc::user_regs_struct) -> Option<Class> {
             .contains(&regs.rsi)
             .then_some(Class::Quiet);
     }
+    // `kill` with signal 0 sends nothing: it asks whether a process exists (a lock's holder, `ActiveLock`'s liveness probe, which `format upgrade` makes). Any other
+    // signal is unclassified and stops the run.
+    if number == SYS_kill {
+        return (regs.rsi == 0).then_some(Class::Quiet);
+    }
     if number == SYS_open {
         return Some(Class::Open(regs.rsi));
     }
@@ -235,7 +240,7 @@ fn classify(number: i64, regs: &libc::user_regs_struct) -> Option<Class> {
         return Some(Class::Open(regs.rdx));
     }
     // Read-only, or process plumbing: not counted. Every entry is a syscall some writer of ours was seen to issue (`strace -f -c` over the
-    // writers, K1 and K3), or one that only reads; an `ioctl` (`FICLONE` writes), `kill`, `io_uring_enter`, `openat2` and the rest are deliberately
+    // writers, K1 and K3), or one that only reads; an `ioctl` (`FICLONE` writes), `kill` with a signal, `io_uring_enter`, `openat2` and the rest are deliberately
     // absent, so the run that first issues one stops and says so.
     if [
         SYS_read,

@@ -667,6 +667,9 @@ reading of the test.
 | `--repair-wal-tail` killed at every mutating syscall | `repair_wal_tail` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `--repair-tails` killed at every mutating syscall | `repair_tails` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `--repair-pointer-index-tail` killed at every mutating syscall | `repair_pointer_index_tail` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `init` killed at every mutating syscall; `init` run again finishes (the format marker is written last, through a temporary and a rename, so a kill leaves it absent, never empty) | `init` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `format upgrade` of a format-7 repository killed at every mutating syscall (the marker's one byte is overwritten in place) | `format_upgrade` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
+| `format upgrade` over a lost marker killed at every mutating syscall (the marker is written through a temporary and a rename; a killed run's lock is cleared by `unlock`) | `format_upgrade_lost_marker` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `--repair-index` killed at every mutating syscall | `repair_index` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `tag create` killed at every mutating syscall | `tag_create` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `branch create` killed at every mutating syscall | `branch_create` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
@@ -733,10 +736,10 @@ defect found by running anything):
 - **Since 0.59.0, `commit`, `seal`, `uncommit`, `tag create`, `branch create`, `ref complete`, `compact` and every repair verb of
   `doctor` have a real kill at every mutating syscall (Linux x86_64 only: the `Linux (x86_64)` rows).** Not killed for real: the verbs
   the inventory (`real_kill_sweep/inventory.rs`) names with a reason (among them `sync accept`, `bundle` and `archive` end to end
-  beyond the rows above, `branch switch`'s publishing path, `checkout`, `trust`, `rollback-draft`, `mv`, `received`, `format`,
-  `setup`), and **`init`, which the sweep found unsound at one ordinal**: a kill between creating `.prikk/FORMAT` and writing the format
-  number leaves an empty marker every command refuses and none clears (a fresh repository loses nothing; deleting `.prikk` is the way
-  out). The sweep kills a process: it does not lose power, and it does not tear a write inside one syscall.
+  beyond the rows above, `branch switch`'s publishing path, `checkout`, `trust`, `rollback-draft`, `mv`, `received`,
+  `setup`). **`init` was found unsound at one ordinal and is fixed (0.59.0 step K4):** a kill between creating `.prikk/FORMAT` and writing
+  the format number left an empty marker every command refused and none cleared; the marker is now written last through a temporary and a
+  rename, a kill leaves it absent, and the sentence for an absent or empty marker names `prikk init` or `prikk format upgrade`. The sweep kills a process: it does not lose power, and it does not tear a write inside one syscall.
 - **No real-kill test runs on Windows** (the sweep is `Linux (x86_64)`, the older real-kill rows `cfg(unix)`), and a power loss that loses the recovery log's first-creation name on Windows is not
   injectable (the residual stated above).
 - A torn write of `ref-name` by `doctor --restore-queue-target`, undone by `--recovery-restore`; a failure *saving* the recovery

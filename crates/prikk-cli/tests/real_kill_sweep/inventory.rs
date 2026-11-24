@@ -23,15 +23,10 @@ pub const VERBS: &[(&str, Status)] = &[
     (
         "setup",
         NotSwept(
-            "not measured: creates a repository and the signing keys; `init` below is measured and has a finding",
+            "not measured: creates a repository and the signing keys; `init` below is measured, and `setup` calls the same `init`",
         ),
     ),
-    (
-        "init",
-        NotSwept(
-            "measured and **unsound at one ordinal**: a kill between creating `.prikk/FORMAT` and writing the format number leaves an empty marker that every command, `init` included, refuses (`the repository format marker .prikk/FORMAT holds \"\"`), and no command clears; a fresh repository loses nothing, and the way out is deleting `.prikk`. A finding of K3, on the ROADMAP; the shape is `init` in `shapes.rs`, ignored until fixed",
-        ),
-    ),
+    ("init", Swept(&["init"])),
     (
         "key",
         NotSwept(
@@ -163,6 +158,6 @@ pub const VERBS: &[(&str, Status)] = &[
     ),
     (
         "format",
-        NotSwept("not measured: upgrades the repository format in place (its own failpoint rows)"),
+        Swept(&["format_upgrade", "format_upgrade_lost_marker"]),
     ),
 ];

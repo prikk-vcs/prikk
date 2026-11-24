@@ -474,10 +474,10 @@ fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
         Some(path) => PathBuf::from(path),
         None => current_dir()?,
     };
-    let layout = open_repository(root)?;
     // The verdict is `prikk verify`'s own declaration, so an upgrade passes exactly when `prikk verify`
-    // would exit 0 — not a second, hand-written reading of the report.
-    let outcome = prikk_store::upgrade_repository_format(&layout, |report| {
+    // would exit 0 — not a second, hand-written reading of the report. Opened by the store, not here: a
+    // populated repository whose marker is lost opens for this command alone (0.59.0 step K4).
+    let outcome = prikk_store::upgrade_repository_format_in(root, |report| {
         match verify_verdict::first_true_condition(report) {
             Some(condition) => Err(condition.id.to_string()),
             None => Ok(()),
@@ -487,6 +487,15 @@ fn run_format(args: Vec<String>) -> std::result::Result<(), CliError> {
     match outcome {
         prikk_store::FormatUpgradeOutcome::Upgraded { from, to } => {
             println!("repository format: upgraded from {from} to {to}");
+            println!(
+                "note: nothing stored was rewritten; prikk 0.56.0 and earlier refuse a format-{to} \
+                 repository at open, and there is no downgrade"
+            );
+        }
+        prikk_store::FormatUpgradeOutcome::MarkerRestored { to } => {
+            println!(
+                "repository format: the format marker was lost; the number it held is not known, and the repository is now format {to}"
+            );
             println!(
                 "note: nothing stored was rewritten; prikk 0.56.0 and earlier refuse a format-{to} \
                  repository at open, and there is no downgrade"

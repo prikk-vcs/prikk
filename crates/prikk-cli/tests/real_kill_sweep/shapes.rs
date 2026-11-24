@@ -901,12 +901,51 @@ pub fn control_destroyer(ctx: &Ctx) -> Shape {
     s
 }
 
-/// `prikk init` into an empty directory: a kill part-way must leave something `init` again (or `verify`) can finish or refuse by name.
+/// `prikk init` into an empty directory: a kill part-way must leave something `init` again (or `verify`) can finish or refuse by name. Since 0.59.0
+/// step K4 the marker is written last, through a temporary and a rename, so a kill leaves the marker absent or whole, never empty.
 pub fn init(ctx: &Ctx) -> Shape {
     let base = ctx.root.join("base-init");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
     shape("init", base, args(&["init"]), |ctx, d| {
-        ctx.exit(d, &["verify"]) == 0
+        ctx.exit(d, &["verify"]) == 0 && std::fs::read(d.join(".prikk/FORMAT")).unwrap() == b"8\n"
     })
+}
+
+/// `prikk format upgrade` over a format-7 repository: the marker's one byte is overwritten in place, so a kill leaves 7 or 8, and the command run again
+/// leaves 8. (A new repository holds nothing a format-7 repository could not, so this is a genuine format 7.)
+pub fn format_upgrade(ctx: &Ctx) -> Shape {
+    let base = ctx.repo("base-format-upgrade");
+    std::fs::write(base.join("a.txt"), "a\n").unwrap();
+    ctx.ok(&base, &["commit", "--from-worktree", "-m", "a"]);
+    ctx.ok(&base, &["seal", "--allow-no-audit"]);
+    std::fs::write(base.join(".prikk/FORMAT"), b"7\n").unwrap();
+    shape(
+        "format upgrade",
+        base,
+        args(&["format", "upgrade"]),
+        |ctx, d| {
+            ctx.exit(d, &["verify"]) == 0
+                && std::fs::read(d.join(".prikk/FORMAT")).unwrap() == b"8\n"
+        },
+    )
+}
+
+/// `prikk format upgrade` over a populated repository whose marker is gone: the marker is written through a temporary and a rename, so a kill leaves it
+/// absent (every command then names `prikk format upgrade`) or format 8, never a part of it. The temporary a kill leaves is counted.
+pub fn format_upgrade_lost_marker(ctx: &Ctx) -> Shape {
+    let base = ctx.repo("base-format-upgrade-lost");
+    std::fs::write(base.join("a.txt"), "a\n").unwrap();
+    ctx.ok(&base, &["commit", "--from-worktree", "-m", "a"]);
+    ctx.ok(&base, &["seal", "--allow-no-audit"]);
+    std::fs::remove_file(base.join(".prikk/FORMAT")).unwrap();
+    shape(
+        "format upgrade (lost marker)",
+        base,
+        args(&["format", "upgrade"]),
+        |ctx, d| {
+            ctx.exit(d, &["verify"]) == 0
+                && std::fs::read(d.join(".prikk/FORMAT")).unwrap() == b"8\n"
+        },
+    )
 }

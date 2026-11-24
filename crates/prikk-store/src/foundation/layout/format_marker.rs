@@ -18,8 +18,13 @@ const LEGACY_FORMAT_4_VERSION: &[u8] = b"4\n";
 const LEGACY_FORMAT_5_VERSION: &[u8] = b"5\n";
 
 pub(super) fn read_repository_format(root: &MutationRoot) -> Result<RepositoryFormat> {
-    let version = read_file_required(root, Path::new("FORMAT"))?;
-    match version.as_slice() {
+    parse_repository_format(&read_file_required(root, Path::new("FORMAT"))?)
+}
+
+/// The format a marker's bytes name, or the refusal that names what they hold. (A marker that is absent or empty never gets here at open: `lost_marker.rs`
+/// has its own sentence.)
+pub(super) fn parse_repository_format(version: &[u8]) -> Result<RepositoryFormat> {
+    match version {
         // RFC 114 §5.3 (owner decision): formats 1-5 are not supported. A real released version can
         // still read this one -- 0.19.0 and earlier, confirmed against the release record -- so the
         // message must not claim otherwise; it states withdrawal, not absence.

@@ -2,7 +2,9 @@
 
 use prikk_object::{ObjectEnvelope, ObjectType};
 
-use crate::foundation::fsutil::{TestFailPoint, fail_after_for_test, fail_once_for_test};
+use crate::foundation::fsutil::{
+    TestFailPoint, clear_failpoint_for_test, fail_after_for_test, fail_once_for_test,
+};
 use crate::test_gates::test_support::{dummy_signature, text_replay_manifest, unique_temp_dir};
 use crate::worktree::materialize_replay_manifest_entries;
 use crate::{
@@ -10,35 +12,25 @@ use crate::{
     write_active_ref_metadata,
 };
 
-/// RFC 102 Stage 5, design-v1.md §14.10: `FORMAT` now goes through `create_new_file_required`
-/// (`create_exclusive`), the same primitive every other `init`-time name uses -- `MutableParentSync`
-/// (`atomic_replace`-only) no longer fires anywhere in `init` at all. `create_exclusive` shares
-/// `RequiredDirectorySync` with every other name's own creation, so landing on `FORMAT`'s specific
-/// occurrence (the last one, since §14.2 orders it last) needs a skip count derived from the exact
-/// sequence, not assumed. RFC 102 Stage 6 Step 1 (design-v1.md §15.6) gives each of the three genuine
-/// compaction targets (ref pointer index, received index, trust policy container) its own A/B slot
-/// pair and generation log -- 3 names apiece instead of the 1 each carried before this stage. RFC 115
-/// Stage 2 added `ObjectType::RecognitionClaim` as a seventh persisted object type (two more slot
-/// creations, A and B).
-/// Recomputed directly from `init`'s own call sequence: 5 fixed names (worktree marker, RFC 136
-/// §10.3b's provisional-worktree marker, WAL, active-ref metadata, RFC 144 §4o.2's rename-declaration
-/// store) + 7 persisted object types × 2 slots (14) + the object index + generation log (2) + 2
-/// ref-log slots + 3 ref-pointer-index (A/B/genlog) + 3 received-index (A/B/genlog) + 1 trust key + 3
-/// trust-policy (A/B/genlog) = 33 names before `FORMAT` itself. The skip below is one more than the
-/// name count, as it was before the provisional marker (32 names, skip 33). If a future stage adds
-/// another `init`-time name before `FORMAT`, this count needs updating -- the same maintenance
-/// `ref_log_parent_sync_failure_retains_one_update_and_retries` below already carries for the same
-/// reason.
+/// 0.59.0 step K4: `FORMAT` goes through `write_file_atomically` again (a temporary file and a rename, written last), because `create_exclusive`
+/// (RFC 102 Stage 5, design-v1.md §14.10: create, then write) left an empty marker when a kill landed between the two. `MutableParentSync`
+/// (`atomic_replace`-only) therefore fires exactly once in `init`, on the marker, and the failure injected there lands after the rename: the marker
+/// is whole and the retry finds it. (The count of `RequiredDirectorySync` calls the old body skipped to reach the marker's create is gone with
+/// the create: nothing here depends on how many names `init` allocates before it.)
 #[test]
 fn repository_format_create_sync_failure_retains_and_retries() -> prikk_error::Result<()> {
     let root = unique_temp_dir("repository-sync-matrix");
-    // RFC 168 §3.1 and §3.3 added the recovery log and the default witness to `init` before `FORMAT`: two names, and the
-    // `recovery/` directory's own create and sync. The directory sync that lands on `FORMAT`'s create is the 37th.
-    fail_after_for_test(TestFailPoint::RequiredDirectorySync, 37);
-    assert!(RepositoryLayout::init(root.clone()).is_err());
+    fail_once_for_test(TestFailPoint::MutableParentSync);
+    let failed = RepositoryLayout::init(root.clone());
+    clear_failpoint_for_test();
     assert!(
-        root.join(".prikk/FORMAT").is_file(),
-        "the create already landed before the directory sync failed"
+        failed.is_err(),
+        "the marker's parent sync is the one failure injected"
+    );
+    assert_eq!(
+        std::fs::read(root.join(".prikk/FORMAT"))?,
+        b"8\n",
+        "the rename already landed before the directory sync failed, and the marker is whole"
     );
     assert!(RepositoryLayout::init(root.clone()).is_ok());
     let _ = std::fs::remove_dir_all(root);

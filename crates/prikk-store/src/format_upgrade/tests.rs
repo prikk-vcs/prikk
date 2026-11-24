@@ -4,7 +4,10 @@ use std::path::Path;
 
 use prikk_error::PrikkError;
 
-use super::{FormatUpgradeOutcome, before_marker_write_for_test, upgrade_repository_format};
+use super::{
+    FormatUpgradeOutcome, before_marker_write_for_test, upgrade_repository_format,
+    upgrade_repository_format_in,
+};
 use crate::foundation::layout::{DEFAULT_ACTIVE_NAME, RepositoryFormat, RepositoryLayout};
 use crate::lock::ActiveLock;
 use crate::test_gates::test_support::{repository_bytes, unique_temp_dir};
@@ -171,6 +174,142 @@ fn a_format_marker_write_torn_before_its_byte_leaves_the_marker_at_six() -> prik
         RepositoryLayout::open(root.clone())?.format(),
         RepositoryFormat::CurrentV6
     );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// 0.59.0 step K4: a repository whose marker is lost (absent or empty) and that holds more than a killed `init` leaves. The stray file is what makes it
+/// populated; `verify` ignores it, so the repository verifies.
+fn populated_with_a_lost_marker(tag: &str, empty: bool) -> prikk_error::Result<std::path::PathBuf> {
+    let root = unique_temp_dir(tag);
+    RepositoryLayout::init(root.clone())?;
+    std::fs::write(root.join(".prikk").join("stray"), b"history")?;
+    std::fs::remove_file(root.join(".prikk").join("FORMAT"))?;
+    if empty {
+        std::fs::write(root.join(".prikk").join("FORMAT"), b"")?;
+    }
+    Ok(root)
+}
+
+fn without_the_marker(
+    files: std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    files
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("FORMAT"))
+        .collect()
+}
+
+#[test]
+fn a_lost_marker_on_a_populated_repository_is_written_after_it_verifies() -> prikk_error::Result<()>
+{
+    for empty in [false, true] {
+        let root = populated_with_a_lost_marker("k4-restore-marker", empty)?;
+        let before = without_the_marker(repository_bytes_of(&root)?);
+        assert_eq!(
+            upgrade_repository_format_in(root.clone(), passes)?,
+            FormatUpgradeOutcome::MarkerRestored { to: 8 },
+            "empty marker: {empty}"
+        );
+        assert_eq!(marker(&root), b"8\n");
+        assert_eq!(
+            RepositoryLayout::open(root.clone())?.format(),
+            RepositoryFormat::V8
+        );
+        assert_eq!(
+            without_the_marker(repository_bytes_of(&root)?),
+            before,
+            "nothing but the marker changed"
+        );
+        // Run again: the marker is there, so it is the ordinary idempotent answer.
+        assert_eq!(
+            upgrade_repository_format_in(root.clone(), passes)?,
+            FormatUpgradeOutcome::AlreadyCurrent { format: 8 }
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+    Ok(())
+}
+
+fn repository_bytes_of(
+    root: &Path,
+) -> prikk_error::Result<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>> {
+    // `RepositoryLayout::open` refuses a lost marker, so walk the files directly.
+    let mut files = std::collections::BTreeMap::new();
+    let mut stack = vec![root.join(".prikk")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if !path.to_string_lossy().contains("lock") {
+                files.insert(path.clone(), std::fs::read(&path)?);
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[test]
+fn a_lost_marker_whose_verification_fails_writes_nothing_and_names_a_way_out()
+-> prikk_error::Result<()> {
+    let root = populated_with_a_lost_marker("k4-restore-refused", false)?;
+    let before = repository_bytes_of(&root)?;
+    let refused = upgrade_repository_format_in(root.clone(), |_| Err("a-finding".to_string()));
+    let Err(PrikkError::Precondition(sentence)) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(sentence.contains("a-finding"), "{sentence}");
+    assert!(
+        sentence.contains(crate::foundation::layout::SOUND_COPY),
+        "{sentence}"
+    );
+    assert!(
+        !sentence.contains("run `prikk verify`"),
+        "verify cannot run without the marker: {sentence}"
+    );
+    assert_eq!(repository_bytes_of(&root)?, before);
+    assert!(!root.join(".prikk").join("FORMAT").exists());
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn a_lost_marker_on_an_unpopulated_directory_names_init_and_writes_nothing()
+-> prikk_error::Result<()> {
+    let root = unique_temp_dir("k4-restore-unpopulated");
+    RepositoryLayout::init(root.clone())?;
+    std::fs::remove_file(root.join(".prikk").join("FORMAT"))?;
+    let before = repository_bytes_of(&root)?;
+    let refused = upgrade_repository_format_in(root.clone(), passes);
+    let Err(PrikkError::Precondition(sentence)) = refused else {
+        panic!("{refused:?}");
+    };
+    assert!(sentence.contains("`prikk init` finishes it"), "{sentence}");
+    assert_eq!(repository_bytes_of(&root)?, before);
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn a_kill_in_the_restored_markers_write_leaves_it_lost_and_a_run_again_finishes()
+-> prikk_error::Result<()> {
+    use crate::foundation::fsutil::{TestFailPoint, clear_failpoint_for_test, fail_once_for_test};
+    let root = populated_with_a_lost_marker("k4-restore-torn", true)?;
+    fail_once_for_test(TestFailPoint::MutableRename);
+    let torn = upgrade_repository_format_in(root.clone(), passes);
+    clear_failpoint_for_test();
+    assert!(torn.is_err(), "the injected failure must fire");
+    assert_eq!(
+        marker(&root),
+        b"",
+        "the marker is as it was: empty, not a part of format 8"
+    );
+    assert_eq!(
+        upgrade_repository_format_in(root.clone(), passes)?,
+        FormatUpgradeOutcome::MarkerRestored { to: 8 }
+    );
+    assert_eq!(marker(&root), b"8\n");
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }

@@ -134,6 +134,19 @@ means "at the block this ref names".
 Earlier releases reported this as `error: object type mismatch: expected block, got tag`, which read
 as repository damage rather than as a correctable argument.
 
+## `the format marker is lost (.prikk/FORMAT is absent)` or `an `init` did not finish here` (0.59.0)
+
+`.prikk/FORMAT` is absent or empty. Which of two states it is decides the command:
+
+- **`error: precondition not met: the format marker .prikk/FORMAT is absent: an `init` did not finish here: `prikk init` finishes it`.**
+  `.prikk` holds only what a killed `prikk init` leaves. Run `prikk init`: it finishes and writes the marker. (An empty marker, left by
+  a release before 0.59.0 whose `init` was killed, reads the same and is finished the same way.)
+- **`error: integrity error: the format marker is lost (.prikk/FORMAT is absent): `prikk format upgrade` verifies the repository and writes format 8 …`.**
+  The repository holds more than `init` creates, so the format number it had (6, 7 or 8) cannot be read back, and `init` refuses
+  rather than label it. Run `prikk format upgrade`: it runs `prikk verify`'s own check and, if that passes, writes format 8. Nothing
+  stored changes, and prikk before 0.57.0 does not open format 8. If it refuses, `prikk verify` cannot say why (it needs the marker too):
+  restore a sound copy, as the sentence says. If a `format upgrade` was killed and left its lock, `prikk unlock` clears it.
+
 ## `error: precondition not met: <path> already holds a repository`
 
 You ran `prikk setup` on a directory that already has a `.prikk` in it. `setup` is the first-run

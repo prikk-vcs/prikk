@@ -431,7 +431,8 @@ fn a_cfg_test_subtree_is_never_walked() {
     // 0.59.0 step W2 added `branch_switch/queue_held.rs` (the switch's refusal of a path the target's own queue holds): 197 -> 198.
     // 0.59.0 step G2a added `refs/blocked.rs`: 198 -> 199.
     // 0.59.0 step G2d added `doctor/remove_ref_candidates.rs`, and split `recovery_log/remove.rs` and `recovery_log/run.rs` out of `recovery_log.rs` (1,200-line limit): 199 -> 202.
-    assert_eq!(store.production_files, 202);
+    // 0.59.0 step K4 added `foundation/layout/init_set.rs` (what `init` creates, as one list, and the question that list answers) and `foundation/layout/lost_marker.rs` (the sentence for an absent or empty format marker): 202 -> 204.
+    assert_eq!(store.production_files, 204);
 }
 
 /// Control 4: the report serialises, and its verdict is the one the exit code is taken from.

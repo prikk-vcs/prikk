@@ -247,12 +247,26 @@ fn the_sweep_flags_a_writer_that_is_unsound_between_its_syscalls() {
     let _ = std::fs::remove_dir_all(&ctx.root);
 }
 
-/// `init`'s sweep, **ignored until it is fixed**: it is red at ordinal 221 (K3 finding: a kill between creating `.prikk/FORMAT` and writing the format
-/// number leaves an empty marker that every command refuses and none clears). It is not cited in the assurance table.
+/// `init`'s sweep. It was red at ordinal 221 of 228 until 0.59.0 step K4 (K3's finding: a kill between creating `.prikk/FORMAT` and writing the format
+/// number left an empty marker that every command refused and none cleared); the marker is now written last, through a temporary and a rename.
 #[test]
-#[ignore = "K3 finding: unsound at ordinal 221 of 228 (an empty FORMAT marker); see the inventory and the K3 report"]
 fn init() {
     sweep("init", shapes::init);
+}
+
+/// `format upgrade` over a format-7 repository (the marker's one byte overwritten in place).
+#[test]
+fn format_upgrade() {
+    sweep("format upgrade", shapes::format_upgrade);
+}
+
+/// `format upgrade` over a populated repository whose marker is lost (the marker written through a temporary and a rename).
+#[test]
+fn format_upgrade_lost_marker() {
+    sweep(
+        "format upgrade (lost marker)",
+        shapes::format_upgrade_lost_marker,
+    );
 }
 
 /// **The inventory against the CLI's own verb list.** Every verb `prikk --help` lists is in the table, every table verb is listed, every swept test
