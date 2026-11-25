@@ -25,7 +25,7 @@ mod query;
 mod types;
 mod validation;
 
-pub use types::{LiveNode, NodeContent, NodeLifecycleState, Tombstone};
+pub use types::{LiveNode, NodeContent, NodeLifecycleState, PathChange, Tombstone};
 pub use validation::{ensure_node_id_nonzero, validate_kind_content_shape};
 
 #[cfg(test)]

@@ -4,11 +4,21 @@ use prikk_object::{NodeId, NodeKind, ObjectId};
 use crate::path::RepoPath;
 
 use super::{
-    LiveNode, NodeContent, NodeLifecycleState, Tombstone, ensure_node_id_nonzero,
+    LiveNode, NodeContent, NodeLifecycleState, PathChange, Tombstone, ensure_node_id_nonzero,
     validate_kind_content_shape, validation::ensure_restoration_equivalent,
 };
 
 impl NodeLifecycleState {
+    /// Journal a change of the live path set, when the state is journaling.
+    fn note_path(&mut self, path: &RepoPath, added: bool) {
+        if let Some(journal) = self.path_journal.0.as_mut() {
+            journal.push(PathChange {
+                path: path.clone(),
+                added,
+            });
+        }
+    }
+
     /// Introduce a node (`CreateFile` / `CreateSymlink`).
     ///
     /// Rejects reuse of a currently-live `node_id`, rejects occupying an
@@ -50,6 +60,7 @@ impl NodeLifecycleState {
         self.latest_tombstone_by_id.remove(&node_id);
         self.seen_ids.insert(node_id);
         self.path_to_id.insert(node.path.clone(), node_id);
+        self.note_path(&node.path, true);
         self.live_by_id.insert(node_id, node);
         Ok(())
     }
@@ -65,6 +76,7 @@ impl NodeLifecycleState {
         match self.path_to_id.get(&node.path) {
             Some(id) if *id == node_id => {
                 self.path_to_id.remove(&node.path);
+                self.note_path(&node.path, false);
             }
             Some(_) => {
                 return Err(PrikkError::Integrity(
@@ -115,7 +127,9 @@ impl NodeLifecycleState {
         }
         node.path = new_path.clone();
         self.path_to_id.remove(&old_path);
-        self.path_to_id.insert(new_path, node_id);
+        self.path_to_id.insert(new_path.clone(), node_id);
+        self.note_path(&old_path, false);
+        self.note_path(&new_path, true);
         Ok(())
     }
 
@@ -264,9 +278,11 @@ impl NodeLifecycleState {
         // loop, not about failure -- Phase 1 already proved there is none left to find).
         for (_node_id, old_path, _new_path) in renames {
             self.path_to_id.remove(old_path);
+            self.note_path(old_path, false);
         }
         for (node_id, _old_path, new_path) in renames {
             self.path_to_id.insert(new_path.clone(), *node_id);
+            self.note_path(new_path, true);
             if let Some(node) = self.live_by_id.get_mut(node_id) {
                 node.path = new_path.clone();
             }
@@ -385,6 +401,7 @@ impl NodeLifecycleState {
         }
         self.seen_ids.insert(node_id);
         self.path_to_id.insert(node.path.clone(), node_id);
+        self.note_path(&node.path, true);
         self.live_by_id.insert(node_id, node);
         Ok(())
     }

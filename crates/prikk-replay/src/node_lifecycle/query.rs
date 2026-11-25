@@ -2,7 +2,7 @@ use prikk_object::NodeId;
 
 use crate::path::RepoPath;
 
-use super::{LiveNode, NodeLifecycleState, Tombstone};
+use super::{LiveNode, NodeLifecycleState, PathChange, Tombstone};
 
 impl NodeLifecycleState {
     /// The live node for an identity, if any.
@@ -39,6 +39,28 @@ impl NodeLifecycleState {
     /// `create_node`/`delete_node`'s invariants — is exactly `seen_ids` minus the live set.
     pub fn tombstones(&self) -> impl Iterator<Item = (&NodeId, &Tombstone)> {
         self.latest_tombstone_by_id.iter()
+    }
+
+    /// Every live path, in path order.
+    pub fn live_paths(&self) -> impl Iterator<Item = &RepoPath> {
+        self.path_to_id.keys()
+    }
+
+    /// Start journaling the changes the mutators make to the set of live paths (an empty journal; a journal already running is emptied).
+    /// A consumer that must judge the state's paths after every step reads [`Self::take_path_changes`] instead of listing them again.
+    /// The journal is not part of the state's identity (`==` ignores it) and a clone carries it.
+    pub fn record_path_changes(&mut self) {
+        self.path_journal.0 = Some(Vec::new());
+    }
+
+    /// The path changes journaled since the last call, in the order they were made (the journal keeps running); empty when the state is
+    /// not journaling.
+    pub fn take_path_changes(&mut self) -> Vec<PathChange> {
+        self.path_journal
+            .0
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// Number of live nodes in the reconstructed clean tree.

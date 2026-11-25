@@ -3,7 +3,7 @@
 //!
 //! **The measured defect (external review 046, §0).** An `EditText` names no Blob, so the content
 //! Blobs of a text file edited step after step are named only by the snapshot manifest a checkpoint
-//! Block (every 64th) carries. The reach walk followed a Block's `snapshot_blob_ref` to the manifest
+//! Block (the 1st, and every 64th after it) carries. The reach walk followed a Block's `snapshot_blob_ref` to the manifest
 //! Blob and then expanded nothing, so `verify` and `doctor` reported one unreached Blob per
 //! checkpoint, each with the forgery-leftover warning: 64 blocks read 0, 130 read 2.
 //!
@@ -65,7 +65,7 @@ fn a_text_file_edited_at_every_step_reads_no_unreached_objects_past_a_checkpoint
     let repo = support::unique_repo("p4-checkpoint-blobs");
     support::init(&repo);
 
-    // 65 blocks: the first checkpoint (the 64th) has been written.
+    // 65 blocks: the second checkpoint (the 65th Block; the first is Block 1) has been written.
     edit_steps(&repo, 1, 65);
     assert_no_unreached(&repo, 65);
 
@@ -89,7 +89,7 @@ fn a_text_file_edited_at_every_step_reads_no_unreached_objects_past_a_checkpoint
         "archive verify reports an unreached object:\n{archive_text}"
     );
 
-    // 130 blocks: the second checkpoint (the 128th) too.
+    // 130 blocks: the third checkpoint (the 129th Block) too.
     edit_steps(&repo, 66, 65);
     assert_no_unreached(&repo, 130);
 

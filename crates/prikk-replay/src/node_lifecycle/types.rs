@@ -43,6 +43,28 @@ pub struct Tombstone {
     pub path: RepoPath,
 }
 
+/// One change to the set of live paths, as the state's mutators make it (see [`NodeLifecycleState::record_path_changes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathChange {
+    /// The path that became occupied (`added`) or vacated.
+    pub path: RepoPath,
+    /// `true` when a live node now occupies `path`, `false` when one stopped.
+    pub added: bool,
+}
+
+/// The journal of path changes a state keeps when asked to. **Never part of a state's identity:** two states are equal whatever each one
+/// has journaled, and a state that does not journal holds nothing.
+#[derive(Debug, Default, Clone)]
+pub(super) struct PathJournal(pub(super) Option<Vec<PathChange>>);
+
+impl PartialEq for PathJournal {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for PathJournal {}
+
 /// Replay-derived node lifecycle index. Not a root of trust (FDD-02 §12).
 ///
 /// Live-node uniqueness is structural: `live_by_id` is keyed by `node_id`, and
@@ -54,6 +76,7 @@ pub struct NodeLifecycleState {
     pub(super) path_to_id: BTreeMap<RepoPath, NodeId>,
     pub(super) latest_tombstone_by_id: BTreeMap<NodeId, Tombstone>,
     pub(super) seen_ids: BTreeSet<NodeId>,
+    pub(super) path_journal: PathJournal,
 }
 
 impl NodeLifecycleState {

@@ -5,6 +5,7 @@
 use prikk_error::{PrikkError, Result};
 use prikk_object::{BlockKind, BlockPayload, MerkleRoot, ObjectId, ObjectType};
 
+use super::collision_index::CollisionIndex;
 use super::{
     CandidateStateDerivationError, StateAnchoring, checkpoint_due, derive_candidate,
     state_derivation_parent, write_signed_block,
@@ -136,6 +137,8 @@ impl Drop for RetainedState {
 pub(crate) struct BatchFold {
     state: NodeLifecycleState,
     text_cache: TextCache,
+    /// Kept only by [`BatchFold::track_collisions`]: what the state's paths collide as, claim by claim.
+    collisions: Option<CollisionIndex>,
     /// Blocks whose roots the starting derivation confirmed by replay (the first sealed claim records them, as before).
     verified: Vec<ObjectId>,
 }
@@ -152,6 +155,7 @@ impl BatchFold {
         Ok(Self {
             state: derived.state,
             text_cache: derived.text_cache,
+            collisions: None,
             verified: derived.verified,
         })
     }
@@ -162,6 +166,7 @@ impl BatchFold {
         Self {
             state: self.state.clone(),
             text_cache: self.text_cache.clone(),
+            collisions: None,
             verified: Vec::new(),
         }
     }
@@ -174,6 +179,32 @@ impl BatchFold {
     ) -> std::result::Result<(), CandidateStateDerivationError> {
         apply_candidate_patches(reader, &mut self.state, &mut self.text_cache, patch_ids)
             .map_err(CandidateStateDerivationError::Patch)
+    }
+
+    /// Start keeping the collision policy's answer incrementally ([`BatchFold::apply_checked`]): the index of the state's paths as they
+    /// are now, and a journal of the paths each later claim adds or vacates.
+    pub(crate) fn track_collisions(&mut self) {
+        self.collisions = Some(CollisionIndex::of_state(&self.state));
+        self.state.record_path_changes();
+    }
+
+    /// [`BatchFold::apply`], and whether the state it leaves collides (`refuse_colliding_entries` would refuse it): the answer 0.58.0's fold
+    /// got by listing every entry after every claim, here from the claim's own changed paths. Needs [`BatchFold::track_collisions`].
+    pub(crate) fn apply_checked(
+        &mut self,
+        reader: &impl ObjectReader,
+        patch_ids: &[ObjectId],
+    ) -> std::result::Result<bool, CandidateStateDerivationError> {
+        self.apply(reader, patch_ids)?;
+        let changes = self.state.take_path_changes();
+        Ok(match self.collisions.as_mut() {
+            Some(index) => {
+                index.apply(&changes);
+                index.collides()
+            }
+            // Not tracking: ask the state itself (listing every path), as a fold without the index must.
+            None => CollisionIndex::of_state(&self.state).collides(),
+        })
     }
 
     /// Apply `patch_ids` to the running state and return the state root of the result: what the Block sealed from these patches carries.

@@ -257,7 +257,7 @@ pub(crate) fn expand_frontier(envelope: &ObjectEnvelope) -> Vec<ObjectId> {
         // reachable Block's `snapshot_blob_ref`) reaches every content Blob its entries name. An
         // `EditText` names no Blob, so a text file edited step after step has its content Blobs named
         // only by the checkpoint manifests: without this arm every checkpoint's Blobs read as
-        // unreached (one per 64th block), with the forgery-leftover warning, on an honest repository.
+        // unreached (one per checkpoint: Block 1 and every 64th after it), with the forgery-leftover warning, on an honest repository.
         // Every other Blob kind names nothing. A manifest that does not decode is treated like a Patch
         // that does not decode (above): the manifest Blob itself stays reached (the caller inserted
         // it before this runs), the walk builds no further past it, and the damage is `verify`'s

@@ -9,6 +9,7 @@
 ### Upgrading
 
 - **If you call the `prikk-store` library:** `plan_seal_batch` and `SealBatchPlan::fold` gain a last argument, `current_branch: bool`: pass `true` when the batch seals onto the current branch (the in-the-way check will run and needs the state the batch ends in), `false` otherwise. A plan folded with `false` has no such state, and `require_nothing_in_the_way_for_seal_batch` over it skips itself.
+- **If you call the `prikk-replay` library:** new, additive: `PathChange`, `NodeLifecycleState::live_paths`, `NodeLifecycleState::record_path_changes` and `NodeLifecycleState::take_path_changes`. A state journals the paths its mutators add and vacate only after `record_path_changes`; `==` ignores the journal.
 
 ### Output changes
 

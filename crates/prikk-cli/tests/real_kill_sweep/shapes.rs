@@ -98,11 +98,52 @@ pub fn seal(ctx: &Ctx) -> Shape {
     )
 }
 
-pub fn seal_checkpoint(ctx: &Ctx) -> Shape {
-    let base = ctx.repo("base-cp");
+/// The size of the blob container: an ordinary seal of these shapes (one edited text file) writes no blob, so it grows only when a seal writes
+/// a checkpoint's snapshot manifest.
+fn blob_container_bytes(dir: &Path) -> u64 {
+    std::fs::metadata(dir.join(".prikk/containers/blob/a.container")).map_or(0, |meta| meta.len())
+}
+
+/// Pin that `command`, run in a copy of `base`, writes a checkpoint's snapshot. The sweeps named for a checkpoint are worth nothing if the
+/// Block they kill is not one (0.59.0 P5a1b: `seal_checkpoint` sealed the 64th Block for two releases; checkpoints are the 1st and the 65th,
+/// 129th, ...), so each builds the shape and then proves it before the first kill.
+fn pin_that_a_checkpoint_is_written(ctx: &Ctx, base: &Path, name: &str, command: &[&str]) {
+    let probe = ctx.root.join(format!("probe-{name}"));
+    let _ = std::fs::remove_dir_all(&probe);
+    copy_tree(base, &probe);
+    let before = blob_container_bytes(&probe);
+    ctx.ok(&probe, command);
+    let after = blob_container_bytes(&probe);
+    assert!(
+        after > before,
+        "{name}: the shape's command wrote no snapshot ({before} -> {after} bytes of blobs): it does not seal a checkpoint"
+    );
+    let _ = std::fs::remove_dir_all(&probe);
+}
+
+/// `seal` of the **64th** Block, which is **not** a checkpoint: the shape the reviewer's kit calls its "checkpoint seal" (`probe25.sh`: 63 sealed
+/// generations, then one more), kept only so the reference test can count what the kit counted (94 ordinals). The sweep that kills a checkpoint
+/// is [`seal_checkpoint`].
+pub fn seal_the_64th_block_as_the_kit_has_it(ctx: &Ctx) -> Shape {
+    let base = ctx.repo("base-64th");
     ctx.gens(&base, 63, true, 1);
     std::fs::write(base.join("s.txt"), "step 64\n").unwrap();
     ctx.ok(&base, &["commit", "--from-worktree", "-m", "s64"]);
+    shape(
+        "seal-64th-block",
+        base,
+        args(&["seal", "--allow-no-audit"]),
+        |ctx, d| ctx.tree_files(d) == 1,
+    )
+}
+
+/// `seal` of the **65th** Block, the second checkpoint (a ref's first Block and every 64th after it are checkpoints: 1, 65, 129, ...).
+pub fn seal_checkpoint(ctx: &Ctx) -> Shape {
+    let base = ctx.repo("base-cp");
+    ctx.gens(&base, 64, true, 1);
+    std::fs::write(base.join("s.txt"), "step 65\n").unwrap();
+    ctx.ok(&base, &["commit", "--from-worktree", "-m", "s65"]);
+    pin_that_a_checkpoint_is_written(ctx, &base, "seal-checkpoint", &["seal", "--allow-no-audit"]);
     shape(
         "seal-checkpoint",
         base,
@@ -210,6 +251,18 @@ pub fn sync_seal_checkpoint(ctx: &Ctx) -> Shape {
             "accept",
             art.to_str().unwrap(),
             "--claims-out",
+            claims.to_str().unwrap(),
+        ],
+    );
+    pin_that_a_checkpoint_is_written(
+        ctx,
+        &base,
+        "sync-seal-checkpoint",
+        &[
+            "sync",
+            "seal",
+            "heads/main",
+            "--claims",
             claims.to_str().unwrap(),
         ],
     );

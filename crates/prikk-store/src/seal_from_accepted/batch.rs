@@ -533,11 +533,12 @@ impl SealBatchPlan {
     }
 }
 
-/// The state the in-the-way check judges, and how many of `steps` the plan keeps: **the state after the last claim that folded, and every claim
-/// that folded**, as the 0.58.0 fold judged it. The quick way is one apply-only pass over every claim and one entries derivation with the
-/// collision policy at the end. If a claim does not apply, or the final state collides, the quick way cannot say which claim to stop at, so
-/// the same claims are folded again the exact way (each one's entries and collision policy, keeping the last good state): that is the 0.58.0
-/// fold, run only for a batch with a claim that would not seal.
+/// The state the in-the-way check judges, and how many of `steps` the plan keeps: **the state after the last claim whose state does not
+/// collide and that applied, and every claim before it**, exactly as the 0.58.0 fold judged it (that fold stopped at the first claim that did not
+/// apply or whose state collided, even if a later claim would have healed the collision). One apply-only pass, which asks the collision policy
+/// of each claim's own changed paths ([`BatchFold::apply_checked`]), finds the first claim that fails either; the state before it is then built
+/// by applying the claims before it again, without a check. A batch with no such claim costs the one pass and one entries derivation. If
+/// anything in that does not hold (the prefix does not apply again, the final state collides), [`exact_judged_state`] answers the 0.58.0 way.
 fn judged_state(
     layout: &RepositoryLayout,
     read_snapshot: &ObjectReadSnapshot,
@@ -545,14 +546,51 @@ fn judged_state(
     mut fold: crate::block_state::batch_fold::BatchFold,
     steps: &std::collections::VecDeque<PlannedStep>,
 ) -> Option<(usize, Option<FinalState>)> {
-    let applied = steps
-        .iter()
-        .try_for_each(|step| fold.apply(read_snapshot, &step.selected));
-    if applied.is_ok() {
-        if let Ok(final_state) = fold.into_final_state() {
-            return Some((steps.len(), Some(final_state)));
-        }
+    #[cfg(test)]
+    if FORCE_EXACT.with(std::cell::Cell::get) {
+        return exact_judged_state(layout, read_snapshot, tip, steps);
     }
+    fold.track_collisions();
+    let first_bad = steps
+        .iter()
+        .position(|step| !matches!(fold.apply_checked(read_snapshot, &step.selected), Ok(false)));
+    let kept = first_bad.unwrap_or(steps.len());
+    let state = if first_bad.is_none() {
+        Some(fold)
+    } else if kept == 0 {
+        return Some((0, None));
+    } else {
+        // The state before the first claim that fails: derived again, and the claims before it applied (they applied and did not collide).
+        crate::block_state::batch_fold::BatchFold::begin(
+            layout,
+            read_snapshot,
+            tip,
+            StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
+        )
+        .ok()
+        .and_then(|mut again| {
+            steps
+                .iter()
+                .take(kept)
+                .try_for_each(|step| again.apply(read_snapshot, &step.selected))
+                .ok()
+                .map(|()| again)
+        })
+    };
+    match state.map(crate::block_state::batch_fold::BatchFold::into_final_state) {
+        Some(Ok(final_state)) => Some((kept, Some(final_state))),
+        _ => exact_judged_state(layout, read_snapshot, tip, steps),
+    }
+}
+
+/// The 0.58.0 fold, claim by claim: each claim's entries and the collision policy over all of them, keeping the last good state. The answer
+/// `judged_state` must equal; its fallback, and (with `FORCE_EXACT`) its oracle in the tests.
+fn exact_judged_state(
+    layout: &RepositoryLayout,
+    read_snapshot: &ObjectReadSnapshot,
+    tip: Option<ObjectId>,
+    steps: &std::collections::VecDeque<PlannedStep>,
+) -> Option<(usize, Option<FinalState>)> {
     let mut exact = crate::block_state::batch_fold::BatchFold::begin(
         layout,
         read_snapshot,
@@ -570,6 +608,12 @@ fn judged_state(
         kept += 1;
     }
     Some((kept, last))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// A control and an oracle (`cfg(test)`): judge the state the 0.58.0 way, claim by claim over every entry.
+    pub(super) static FORCE_EXACT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Read the batch and fold it once, before anything is written: [`SealBatchPlan::open`] and [`SealBatchPlan::fold`], with a plan that

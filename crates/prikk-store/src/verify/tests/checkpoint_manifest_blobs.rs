@@ -2,7 +2,7 @@
 //!
 //! A text file edited at every step has its content Blobs named by no Patch (an `EditText` names
 //! none), only by the snapshot manifest a checkpoint Block carries. Before this, the walk's `Blob`
-//! arm expanded nothing, so each checkpoint's content Blobs (every 64th block) read as unreached
+//! arm expanded nothing, so each checkpoint's content Blobs (the 1st Block and every 64th after it) read as unreached
 //! objects, with the forgery-leftover warning, on an honest repository. These tests pin the step
 //! itself (`expand_frontier`, the one function `verify` and `archive verify` both walk with); the
 //! end-to-end shape (65 and 130 blocks, `verify`, `archive verify`) is

@@ -6,9 +6,9 @@
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, NodeId, ObjectEnvelope,
-    ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
-    RecognitionClaimPayload,
+    BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, DeleteNode, DeleteNodePreimage,
+    NodeId, NodeKind, ObjectEnvelope, ObjectId, ObjectType, Operation, OperationKind, PatchPayload,
+    PatchPurpose, RecognitionClaimPayload, RenamePath,
 };
 
 use super::{SealFromAcceptedOutcome, seal_from_accepted_claim};
@@ -2058,5 +2058,232 @@ fn p5a1_a_short_batch_onto_62_blocks_crosses_a_checkpoint() -> Result<()> {
         "the third claim's Block is the 65th: a checkpoint inside a batch of three"
     );
     cleanup(&fixture.layout);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 P5a1b: the state the in-the-way check judges is exactly the 0.58.0 fold's, collision by collision.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+/// One claim of a scripted batch: create a file (`seed` names its node), delete that node, or rename it.
+#[derive(Clone, Copy)]
+enum ScriptOp {
+    Create(&'static str, u8),
+    Delete(u8),
+    Rename(u8, &'static str),
+}
+
+fn op_patch(
+    signer: &Ed25519AuthorSigner,
+    kind: OperationKind,
+    message: &str,
+) -> Result<ObjectEnvelope> {
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind,
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: Some(message.to_string()),
+    };
+    let mut envelope = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        prikk_object::PATCH_MESSAGE_SCHEMA,
+        payload.to_canonical_bytes()?,
+    );
+    let id = envelope.object_id();
+    envelope.add_signature(author_signature(signer, id)?)?;
+    Ok(envelope)
+}
+
+/// A chain of single-patch claims, one per `ScriptOp`, over `base_fixture`'s repository.
+fn scripted_batch_fixture(name: &str, script: &[ScriptOp]) -> Result<(BaseFixture, Vec<ObjectId>)> {
+    let fixture = base_fixture(name)?;
+    let author = author_signer(0x70)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let mut claims = Vec::new();
+    let mut previous_block = None;
+    let mut files: std::collections::BTreeMap<u8, (String, ObjectId)> =
+        std::collections::BTreeMap::new();
+    for (index, op) in script.iter().enumerate() {
+        let message = format!("script {index}");
+        let kind = match *op {
+            ScriptOp::Create(path, seed) => {
+                let blob = write_blob(&mut objects, format!("file {index}\n").as_bytes())?;
+                files.insert(seed, (path.to_string(), blob));
+                OperationKind::CreateFile(CreateFile {
+                    path: path.to_string(),
+                    node_id: NodeId::from_bytes([seed; 32]),
+                    blob_id: blob,
+                    mode: 0o100_644,
+                })
+            }
+            ScriptOp::Delete(seed) => {
+                let (path, blob) = files.get(&seed).cloned().expect("a created node");
+                OperationKind::DeleteNode(DeleteNode {
+                    path,
+                    node_id: NodeId::from_bytes([seed; 32]),
+                    old_node_kind: NodeKind::TextFile,
+                    preimage: DeleteNodePreimage::File {
+                        old_blob_id: blob,
+                        old_mode: 0o100_644,
+                    },
+                })
+            }
+            ScriptOp::Rename(seed, to) => {
+                let entry = files.get_mut(&seed).expect("a created node");
+                let old_path = std::mem::replace(&mut entry.0, to.to_string());
+                OperationKind::RenamePath(RenamePath {
+                    node_id: NodeId::from_bytes([seed; 32]),
+                    old_path,
+                    new_path: to.to_string(),
+                })
+            }
+        };
+        let patch = objects.write_object(&op_patch(&author, kind, &message)?)?;
+        let mut block = [0xB0_u8; 32];
+        block[..8].copy_from_slice(&u64::try_from(index).unwrap_or(0).to_be_bytes());
+        let block_id = ObjectId::from_bytes(block);
+        claims.push(write_claim_with_parents(
+            &mut objects,
+            &fixture.signer,
+            block_id,
+            vec![patch],
+            previous_block.into_iter().collect(),
+        )?);
+        previous_block = Some(block_id);
+    }
+    Ok((fixture, claims))
+}
+
+/// (claims kept, entries judged) by the quick way and by the 0.58.0 way, how many claims a real batch sealed, and its refusal.
+type JudgedBothWays = (
+    (usize, Option<usize>),
+    (usize, Option<usize>),
+    usize,
+    Option<String>,
+);
+
+/// The plan's judged state for a script, by the quick way and by the 0.58.0 way (every claim's entries and the policy over all of them),
+/// and what a real batch seals: (claims kept, entries judged) each, and how many claims the loop sealed before it refused.
+fn judged_both_ways(name: &str, script: &[ScriptOp]) -> Result<JudgedBothWays> {
+    let mut results = Vec::new();
+    for exact in [false, true] {
+        let (fixture, claims) = scripted_batch_fixture(&format!("{name}-{exact}"), script)?;
+        super::batch::FORCE_EXACT.with(|flag| flag.set(exact));
+        let run = run_batch(&fixture, &claims, TARGET_REF, Some(true));
+        super::batch::FORCE_EXACT.with(|flag| flag.set(false));
+        let run = run?;
+        results.push((
+            (run.planned_after_fold, run.judged_entries),
+            run.sealed,
+            run.refusal,
+        ));
+        cleanup(&fixture.layout);
+    }
+    let exact = results.pop().expect("two runs");
+    let quick = results.pop().expect("two runs");
+    assert_eq!(quick.1, exact.1, "{name}: the same claims seal");
+    assert_eq!(quick.2, exact.2, "{name}: the same refusal");
+    Ok((quick.0, exact.0, quick.1, quick.2))
+}
+
+/// The state judged by the in-the-way check is the 0.58.0 fold's, in each way a claim's state can collide: collide then heal (the case P5a1's
+/// quick way got wrong), collide and stay, a rename into a collision, the removal of one of a pair, and the pairs the policy folds beyond ASCII.
+/// Each is compared with the 0.58.0 way run on the same batch, and pinned to what it must be.
+#[test]
+fn p5a1b_the_judged_state_is_the_0_58_0_fold_collision_by_collision() -> Result<()> {
+    use ScriptOp::{Create, Delete, Rename};
+    // (name, script, claims kept, entries judged)
+    let cases: Vec<(&str, Vec<ScriptOp>, usize, Option<usize>)> = vec![
+        (
+            "heal",
+            vec![
+                Create("a.txt", 1),
+                Create("b.txt", 2),
+                Create("A.TXT", 3),
+                Delete(3),
+                Create("c.txt", 4),
+            ],
+            2,
+            Some(2),
+        ),
+        (
+            "stay",
+            vec![Create("a.txt", 1), Create("A.TXT", 2), Create("c.txt", 3)],
+            1,
+            Some(1),
+        ),
+        (
+            "rename-into",
+            vec![
+                Create("a.txt", 1),
+                Create("b.txt", 2),
+                Rename(2, "A.TXT"),
+                Create("c.txt", 4),
+            ],
+            2,
+            Some(2),
+        ),
+        (
+            "remove-one-of-a-pair",
+            vec![
+                Create("a.txt", 1),
+                Create("A.TXT", 2),
+                Delete(1),
+                Create("c.txt", 4),
+            ],
+            1,
+            Some(1),
+        ),
+        (
+            "sharp-s",
+            vec![
+                Create("x", 1),
+                Create("stra\u{df}e", 2),
+                Create("strasse", 3),
+                Delete(3),
+                Create("y", 4),
+            ],
+            2,
+            Some(2),
+        ),
+        (
+            "normalization",
+            vec![Create("\u{e9}", 1), Create("e\u{301}", 2), Create("z", 3)],
+            1,
+            Some(1),
+        ),
+        (
+            "a-rename-that-heals-nothing",
+            vec![
+                Create("a.txt", 1),
+                Create("b.txt", 2),
+                Rename(2, "c.txt"),
+                Rename(1, "d.txt"),
+            ],
+            4,
+            Some(2),
+        ),
+        ("no-collision", vec![Create("a.txt", 1)], 1, Some(1)),
+    ];
+    for (name, script, kept, entries) in cases {
+        let (quick, exact, sealed, refusal) = judged_both_ways(&format!("p5a1b-{name}"), &script)?;
+        assert_eq!(
+            quick, exact,
+            "{name}: the quick way judges what the 0.58.0 fold judged"
+        );
+        assert_eq!(quick, (kept, entries), "{name}");
+        assert_eq!(sealed, kept, "{name}: the loop seals the same claims");
+        assert_eq!(
+            refusal.is_some(),
+            kept < script.len(),
+            "{name}: a claim that collides is refused, from disk: {refusal:?}"
+        );
+    }
     Ok(())
 }

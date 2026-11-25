@@ -1109,6 +1109,7 @@ fn verify_v2_lineage_roots(
 
 pub(crate) mod anchored_parent;
 pub(crate) mod batch_fold;
+pub(crate) mod collision_index;
 pub(crate) mod confirm_lineage;
 
 #[cfg(test)]

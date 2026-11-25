@@ -475,7 +475,7 @@ of sealed blocks.
   2.0 over depth 128–1,024 (1.9 over 64–1,024). **Quadratic is the release build's shape too, but
   only from about depth 128 on**: over depth 32–128, the only range a debug build measured, the
   cumulative exponent is 1.4 in release against 1.96 in debug (the cause was not investigated). A release seal is 15–33 times cheaper than a debug one at
-  the same depth (0.30 s against 9.9 s at depth 128). **Every 64th seal also writes a checkpoint and
+  the same depth (0.30 s against 9.9 s at depth 128). **A ref's first seal, and every 64th after it (blocks 65, 129, …), also writes a checkpoint and
   costs more than an ordinary one**: about twice as much near depth 128 (the seal of block 129 took 0.61 s against
   0.31–0.33 s for blocks 128 and 130), less at depth, because the lineage walk dominates both (1.6× at block 513, 1.4× at
   961). The per-seal figures above are means over

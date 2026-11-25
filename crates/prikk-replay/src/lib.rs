@@ -16,7 +16,7 @@ mod node_lifecycle;
 mod path;
 
 pub use node_lifecycle::{
-    LiveNode, NodeContent, NodeLifecycleState, Tombstone, ensure_node_id_nonzero,
+    LiveNode, NodeContent, NodeLifecycleState, PathChange, Tombstone, ensure_node_id_nonzero,
     validate_kind_content_shape,
 };
 pub use path::{
