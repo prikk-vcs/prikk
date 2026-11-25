@@ -287,8 +287,9 @@ fn key_directory_role(path: &Path) -> Option<crate::key_material::Role> {
 /// permissions are the *right* ones and are stated rather than assumed: `%APPDATA%` is per-user by
 /// platform ACL, `key_material::default_key_dir` says so, and `first-run.md` says so to the reader.
 ///
-/// On Unix this is `write_seed_to_path`'s own `0600` create-new, unchanged — including its refusal
-/// to overwrite, so a second `prikk setup` cannot quietly replace a key you are still using.
+/// On every platform the file is created whole or not at all and never replaces one (0.59.0 K6,
+/// `key_material::publish_new_file`), so a second `prikk setup` cannot quietly replace a key you are still using, and a kill
+/// cannot leave a torn seed in the key directory.
 pub(crate) fn write_seed_to_key_dir(
     seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     path: &Path,
@@ -296,40 +297,19 @@ pub(crate) fn write_seed_to_key_dir(
     write_seed_into_key_dir_platform(seed, path)
 }
 
-#[cfg(unix)]
+/// The key directory's own seed file: created whole or not at all and never replacing (`key_material::publish_new_file`), on every platform.
 fn write_seed_into_key_dir_platform(
     seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     path: &Path,
 ) -> std::result::Result<(), CliError> {
-    write_seed_to_path_platform(seed, path)
+    crate::key_material::publish_new_file(path, &seed_file_bytes(seed))
 }
 
-#[cfg(not(unix))]
-fn write_seed_into_key_dir_platform(
-    seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
-    path: &Path,
-) -> std::result::Result<(), CliError> {
-    use std::io::Write;
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                CliError::Failure(format!(
-                    "refusing to overwrite an existing file: {}",
-                    path.display()
-                ))
-            } else {
-                CliError::Failure(format!("failed to create {}: {err}", path.display()))
-            }
-        })?;
-    let seed_hex = prikk_hash::to_hex(seed);
-    file.write_all(seed_hex.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|err| CliError::Failure(format!("failed to write {}: {err}", path.display())))?;
-    Ok(())
+/// What a seed file holds: 64 hex characters and a newline.
+fn seed_file_bytes(seed: &[u8; prikk_crypto::ED25519_KEY_LEN]) -> Vec<u8> {
+    let mut bytes = prikk_hash::to_hex(seed).into_bytes();
+    bytes.push(b'\n');
+    bytes
 }
 
 #[cfg(windows)]
@@ -345,29 +325,7 @@ fn write_seed_to_path_platform(
     seed: &[u8; prikk_crypto::ED25519_KEY_LEN],
     path: &Path,
 ) -> std::result::Result<(), CliError> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|err| {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                CliError::Failure(format!(
-                    "refusing to overwrite an existing file: {}",
-                    path.display()
-                ))
-            } else {
-                CliError::Failure(format!("failed to create {}: {err}", path.display()))
-            }
-        })?;
-    let seed_hex = prikk_hash::to_hex(seed);
-    file.write_all(seed_hex.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|err| CliError::Failure(format!("failed to write {}: {err}", path.display())))?;
-    Ok(())
+    crate::key_material::publish_new_file(path, &seed_file_bytes(seed))
 }
 
 #[cfg(not(any(unix, windows)))]

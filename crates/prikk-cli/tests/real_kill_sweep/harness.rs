@@ -201,7 +201,7 @@ fn temp_files(dir: &Path) -> usize {
         }
     }
     let mut n = 0;
-    walk(&dir.join(".prikk"), &mut n);
+    walk(dir, &mut n);
     n
 }
 
@@ -224,7 +224,13 @@ pub struct Shape {
     /// The key directory (`Ctx::config`) the command starts from, restored before every run, for a command that writes keys (`setup`, `key generate`):
     /// without it the second ordinal would find the first one's keys. `None`: the shared key directory is left as it is.
     pub config_base: Option<PathBuf>,
+    /// A state that must never exist right after a kill, whatever the recovery would make of it (0.59.0 K6: no key file is part-written; a torn file
+    /// that a sentence and a removal can clear is a handled state, and is still not allowed to exist). Run before anything recovers; a message is an X.
+    pub never_after_a_kill: Option<NeverAfterAKill>,
 }
+
+/// See [`Shape::never_after_a_kill`].
+pub type NeverAfterAKill = Box<dyn Fn(&Ctx, &Path) -> Result<(), String>>;
 
 /// Put `shape`'s starting key directory back (a temporary `HOME`, test keys only).
 fn reset_config(ctx: &Ctx, shape: &Shape) {
@@ -307,6 +313,16 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
             "{}: ordinal {n} of {total} was not reached (the run is not deterministic)",
             shape.name
         );
+        if let Some(never) = &shape.never_after_a_kill {
+            if let Err(message) = never(ctx, &work) {
+                outcome.x.push(format!(
+                    "ordinal {n} ({} at {}): {message}",
+                    run.killed_at.as_ref().map_or("?", |k| k.name),
+                    run.killed_at.as_ref().map_or(0, |k| k.ordinal)
+                ));
+                continue;
+            }
+        }
         let v1 = ctx.exit(&work, &["verify"]);
         let d1 = ctx.exit(&work, &["doctor"]);
         if v1 != 0 {
@@ -348,11 +364,40 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
                     ));
                 }
                 rerun = real_command(ctx, shape, &work).output().expect("rerun");
+            } else if let Some(paths) = named_removals(&text(&rerun)) {
+                // A refusal whose way out is the user's own act (0.59.0 K6: `prikk` never deletes a key file): the sweep does what the sentence says,
+                // to exactly the files it names, which must be inside the sweep's own scratch directory, then runs the command again.
+                for path in &paths {
+                    let path = &if path.is_relative() {
+                        work.join(path)
+                    } else {
+                        path.clone()
+                    };
+                    assert!(
+                        path.starts_with(&ctx.root),
+                        "a refusal names a file outside the sweep's scratch directory: {}",
+                        path.display()
+                    );
+                    if let Err(err) = std::fs::remove_file(path) {
+                        bad = Some(format!(
+                            "the file the refusal says to remove, {}, cannot be: {err}",
+                            path.display()
+                        ));
+                    }
+                }
+                named = format!("remove {} file(s)", paths.len());
+                rerun = real_command(ctx, shape, &work).output().expect("rerun");
             }
         }
         let v2 = ctx.exit(&work, &["verify"]);
         let check_ok = (shape.check)(ctx, &work);
-        if temp_files(&work) > 0 {
+        if temp_files(&work)
+            + shape
+                .config_base
+                .as_ref()
+                .map_or(0, |_| temp_files(&ctx.config))
+            > 0
+        {
             outcome.leftover_tmp_ordinals += 1;
         }
         let verified = v2 == 0 || shape.verify_may_fail;
@@ -384,6 +429,23 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
     }
     let _ = std::fs::remove_dir_all(&work);
     outcome
+}
+
+/// The files a refusal says to remove: `remove `a` and `b` (…)`, each path in backticks. `None` when the sentence says no such thing.
+pub fn named_removals(text: &str) -> Option<Vec<PathBuf>> {
+    let after = text.split("; remove ").nth(1)?;
+    let mut paths = Vec::new();
+    let mut rest = after;
+    loop {
+        let inside = rest.strip_prefix('`')?;
+        let (path, tail) = inside.split_once('`')?;
+        paths.push(PathBuf::from(path));
+        match tail.strip_prefix(" and ") {
+            Some(next) => rest = next,
+            None => break,
+        }
+    }
+    Some(paths)
 }
 
 /// The first `prikk …` command in backticks in a refusal that is **not the shape's own command** (a prefix of it, or it) and not a `--plan-only` query: a refusal that says "run that same command again" names

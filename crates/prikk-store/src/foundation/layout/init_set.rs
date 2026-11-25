@@ -154,6 +154,16 @@ impl RepositoryLayout {
     /// `true` when `.prikk` holds only what a killed `init` leaves (see the module doc). Reads no file whole: a populated container is read for one
     /// byte past what `init` writes there, and the walk stops at the first entry that is not `init`'s.
     pub(crate) fn holds_only_a_killed_inits_state(&self) -> Result<bool> {
+        self.holds_only_inits_entries(false)
+    }
+
+    /// `true` when `.prikk` holds nothing yet but what `init` creates **and the worktree baseline `prikk init` records after it** (0.59.0 K6): a repository
+    /// no one has adopted a key in, committed to, or sealed. What `prikk setup` may finish rather than refuse.
+    pub(crate) fn holds_nothing_yet_checked(&self) -> Result<bool> {
+        self.holds_only_inits_entries(true)
+    }
+
+    fn holds_only_inits_entries(&self, with_baseline: bool) -> Result<bool> {
         let mut expected: BTreeMap<PathBuf, InitEntry> = BTreeMap::new();
         for entry in self.init_entries()? {
             let path = match &entry {
@@ -161,13 +171,14 @@ impl RepositoryLayout {
             };
             expected.insert(path, entry);
         }
-        self.directory_holds_only_inits_entries(Path::new(""), &expected)
+        self.directory_holds_only_inits_entries(Path::new(""), &expected, with_baseline)
     }
 
     fn directory_holds_only_inits_entries(
         &self,
         relative: &Path,
         expected: &BTreeMap<PathBuf, InitEntry>,
+        with_baseline: bool,
     ) -> Result<bool> {
         let root = self.repository_mutation_root();
         for entry in list_directory(root, relative)? {
@@ -176,6 +187,10 @@ impl RepositoryLayout {
             if relative.as_os_str().is_empty() {
                 // The marker itself is the caller's question. Its temporary is `init`'s own, holding at most a prefix of what it writes.
                 if name == "FORMAT" && entry.kind == EntryKind::Regular {
+                    continue;
+                }
+                if with_baseline && name == "worktree.baseline" && entry.kind == EntryKind::Regular
+                {
                     continue;
                 }
                 if name.starts_with(FORMAT_TEMP_PREFIX) && entry.kind == EntryKind::Regular {
@@ -194,7 +209,7 @@ impl RepositoryLayout {
             }
             match (expected.get(&child), entry.kind) {
                 (Some(InitEntry::Directory(_)), EntryKind::Directory) => {
-                    if !self.directory_holds_only_inits_entries(&child, expected)? {
+                    if !self.directory_holds_only_inits_entries(&child, expected, with_baseline)? {
                         return Ok(false);
                     }
                 }

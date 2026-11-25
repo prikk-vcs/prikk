@@ -41,6 +41,23 @@ reports how many your file actually had, so it will differ from the `8` shown he
 longer, or non-hex value is rejected before anything is signed; nothing is written to the repository
 when this fires. `prikk key status` reports such a file as `reason: undecodable`.
 
+## `<path> holds N bytes, not a whole seed` / `… not a whole key id` / `<key-id file> is here and <seed> is not` (0.59.0)
+
+A `prikk setup` or `prikk key generate` that is killed (power loss, `kill -9`, a closed terminal) while it
+writes a key could, in 0.58.0 and earlier, leave a **seed or key-id file in your key directory that
+was created and not finished**. Every later `commit`, `seal` or `setup`, in any repository, then refused
+it (`author.seed must be 64 hex characters, got 0`). Since 0.59.0 a key file is written to a temporary,
+synced, and published whole by a no-replace rename, so a kill leaves it absent or complete, and a
+file that is there is never replaced. For one an earlier release left, every command that reads a seed
+(`commit`, `seal`, `setup`, `key generate`, `key public`, `key status`) prints one sentence: the file
+holds N bytes, not a whole seed; **no key was ever made from it, so nothing was signed with it**;
+remove the files it names (the seed and its `.key-id`, both of the pair), then run the command again.
+`prikk` does not delete key files itself. A key-id file with no seed beside it is the same
+interruption (the key-id is written first, so that a seed without one cannot silently sign under the
+shared legacy id); it names the one file to remove. A temporary `<name>.tmp.<pid>.<n>` left beside a
+key file by a killed run holds a whole or part-written copy of the same bytes, mode `0600`, and can be
+removed.
+
 ## `error: invalid name: worktree has no node-addressed changes to commit`
 
 You ran `commit` with nothing changed since the last commit or seal — no new, edited, or deleted
@@ -156,9 +173,11 @@ it to do on a repository that already has adopted keys. It refuses before doing 
 `--maintainer-seed-out`.
 
 Two ways on, both named in the message: to work in the existing repository with keys you already
-hold, run `prikk trust maintainer add --key-id ID --public-key HEX` (`prikk key status --role
-maintainer` reports the id, and `prikk key public --role maintainer` derives the public half); to start a new project, point `setup` at a different
-directory.
+hold, run the `prikk trust maintainer add --key-id … --public-key …` the message spells out from your
+key directory (0.59.0; before, it named the command with no arguments, and `prikk key status --role
+maintainer` and `prikk key public --role maintainer` gave the id and the public half); to start a new project, point `setup` at a different
+directory. A directory that holds nothing yet but what `init` creates (a killed `init`, or a `setup`
+killed before it adopted a key) is not refused: `setup` finishes it.
 
 Earlier releases got further before failing: they printed `initialized Prikk repository at …`, minted
 two keys, wrote any `--*-seed-out` file, and only then reported `maintainer key id maintainer is

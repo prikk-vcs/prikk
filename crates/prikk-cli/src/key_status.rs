@@ -121,6 +121,10 @@ fn print_prose(statuses: &[(KeyStatus, Option<Binding>)]) {
         println!("usable: {}", status.usable());
         if let Err(reason) = &status.seed {
             println!("reason: {}", reason.code());
+            // 0.59.0 K6: the one sentence every reader of a seed prints for a key a kill left part-written (JSON keeps the reason code alone).
+            if let Some(sentence) = crate::key_material::interrupted_key_sentence(&status.path) {
+                println!("detail: {sentence}");
+            }
         }
         match &status.key_id_source {
             crate::key_material::KeyIdSource::KeyFile(path) => {

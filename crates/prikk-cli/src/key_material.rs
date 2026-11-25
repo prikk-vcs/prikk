@@ -318,16 +318,96 @@ pub(crate) fn resolve_key_id(
 /// Refuse to create a seed at `seed_path` if it, or the key-id file that would belong to it, already
 /// exists — naming both paths, and before either is written. A leftover key-id file beside a new seed
 /// would otherwise be refused at the first signature.
+///
+/// **0.59.0 K6: it says which file it found.** A whole pair is an existing key (`refusing to overwrite`, as before). A torn seed or key-id file, and
+/// a key-id file with no seed beside it, are what an interrupted `setup` or `key generate` left: the sentence says so, says nothing was signed with
+/// it, and names the files to remove (`prikk` never deletes a key file).
 pub(crate) fn require_new_key_paths(seed_path: &Path) -> std::result::Result<(), CliError> {
     let key_id_file = key_id_path(seed_path);
-    if seed_path.exists() || key_id_file.exists() {
-        return Err(CliError::Failure(format!(
-            "refusing to overwrite an existing file: a new seed needs both {} and {} to be absent",
-            seed_path.display(),
-            key_id_file.display()
-        )));
+    if !(seed_path.exists() || key_id_file.exists()) {
+        return Ok(());
     }
-    Ok(())
+    if let Some(sentence) = interrupted_key_sentence(seed_path) {
+        return Err(CliError::Failure(sentence));
+    }
+    Err(CliError::Failure(format!(
+        "refusing to overwrite an existing file: a new seed needs both {} and {} to be absent",
+        seed_path.display(),
+        key_id_file.display()
+    )))
+}
+
+/// Whether `text` is a strict prefix of what `prikk` writes into a key-id file (`ed25519-` and 16 lowercase hex characters, then a newline; the id
+/// without its newline is whole enough, and reads as the id), including nothing at all: a file that a kill left part-written. A different id, a
+/// hand-edited file, is not.
+fn is_part_of_a_key_id(text: &str) -> bool {
+    const PREFIX: &str = "ed25519-";
+    let body = text.strip_suffix('\n').unwrap_or(text);
+    if body.len() >= PREFIX.len() + 16 {
+        return false;
+    }
+    match body.strip_prefix(PREFIX) {
+        Some(hex) => hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        None => PREFIX.starts_with(body),
+    }
+}
+
+/// Whether `text` is a seed file a kill left part-written: hex characters, fewer than 64 (the whole seed is 64 and a newline).
+pub(crate) fn is_part_of_a_seed(text: &str) -> bool {
+    let body = text.trim_end_matches('\n');
+    body.len() < 64 && body.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The files of the pair that exist, as the sentence's removal list (`a` and `b`, each in backticks).
+fn pair_to_remove(seed_path: &Path) -> String {
+    let paths: Vec<String> = [seed_path.to_path_buf(), key_id_path(seed_path)]
+        .into_iter()
+        .filter(|path| path.exists())
+        .map(|path| format!("`{}`", path.display()))
+        .collect();
+    paths.join(" and ")
+}
+
+/// The sentence for a key creation that was interrupted, when the files beside `seed_path` show one; `None` for a whole pair or anything else.
+/// **One sentence for every reader of a seed** (`commit`, `seal`, `setup`, `key generate`, `key public`, `key status`): the file holds N bytes, not a
+/// whole seed (or key id); no key was made from it, so nothing was signed with it; remove the pair's files, then run the command again.
+pub(crate) fn interrupted_key_sentence(seed_path: &Path) -> Option<String> {
+    let key_id_file = key_id_path(seed_path);
+    let seed_len = std::fs::metadata(seed_path).ok().map(|meta| meta.len());
+    let seed_text = std::fs::read_to_string(seed_path).ok();
+    let id_len = std::fs::metadata(&key_id_file).ok().map(|meta| meta.len());
+    let id_text = std::fs::read_to_string(&key_id_file).ok();
+    let left = "left by a setup or key generate that was interrupted while it wrote the key; no key was ever made from it, so nothing was signed with it";
+    let how = format!(
+        "remove {} (prikk never deletes a key file), then run the command again",
+        pair_to_remove(seed_path)
+    );
+    if let (Some(len), Some(text)) = (seed_len, &seed_text) {
+        if is_part_of_a_seed(text) {
+            return Some(format!(
+                "{} holds {len} bytes, not a whole seed (64 hex characters and a newline), {left}; {how}",
+                seed_path.display()
+            ));
+        }
+    }
+    if let (Some(len), Some(text)) = (id_len, &id_text) {
+        if is_part_of_a_key_id(text) {
+            return Some(format!(
+                "{} holds {len} bytes, not a whole key id, {left}; {how}",
+                key_id_file.display()
+            ));
+        }
+    }
+    if seed_len.is_none() && id_len.is_some() {
+        return Some(format!(
+            "{} is here and {} is not: a key creation was interrupted after the key id was written, so no key exists and nothing was signed; {how}",
+            key_id_file.display(),
+            seed_path.display()
+        ));
+    }
+    None
 }
 
 /// Create a new key on disk: the key-id file **first**, then the seed (distinct default key ids, addendum
@@ -366,15 +446,42 @@ pub(crate) fn fail_next_seed_write_for_test() {
     FAIL_SEED_WRITE.with(|fail| fail.set(true));
 }
 
-/// Write the key-id file for a seed just created: the id and one trailing newline, `0600` on Unix (the
-/// key directory's ACL on Windows), never overwriting.
+/// Write the key-id file for a seed just created: the id and one trailing newline, `0600` on Unix (the key directory's ACL on Windows), **never
+/// replacing** and never torn ([`publish_new_file`]).
 pub(crate) fn write_key_id_file(
     seed_path: &Path,
     key_id: &str,
 ) -> std::result::Result<PathBuf, CliError> {
+    let path = key_id_path(seed_path);
+    publish_new_file(&path, format!("{key_id}\n").as_bytes())?;
+    Ok(path)
+}
+
+/// **Create `path` whole or not at all, and never replace a file that is there** (0.59.0 K6).
+///
+/// A key file used to be created, then written (`create_new`, then `write_all`), so a kill between the two left an empty or part-written seed or key-id
+/// in the user's key directory: every later `commit`, `seal` or `setup`, in any repository, refused it. Now the bytes go to a temporary beside `path`
+/// (created `0600` on Unix, exclusively, so a same-named temporary is refused rather than reused), are synced, and are **published by a no-replace
+/// rename** (`prikk_store::rename_new_directory_no_replace`: `renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS,
+/// `MoveFileExW` without `MOVEFILE_REPLACE_EXISTING` on Windows). A file already at `path` is refused and left as it was, whatever races; the temporary is
+/// removed on every failure the process survives; a kill leaves the file absent, at most with a `<name>.tmp.<pid>.<nanos>` beside it. The parent is
+/// synced on Unix (a directory has no sync on Windows, where the rename itself is written through). A file system without no-replace rename (the call
+/// refuses with `EINVAL`) fails loudly here: there is no replacing fallback.
+pub(crate) fn publish_new_file(path: &Path, contents: &[u8]) -> std::result::Result<(), CliError> {
     use std::io::Write;
 
-    let path = key_id_path(seed_path);
+    let name = path
+        .file_name()
+        .ok_or_else(|| CliError::Failure(format!("{} has no file name", path.display())))?;
+    let mut temp_name = name.to_os_string();
+    temp_name.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos())
+    ));
+    let temp = path.with_file_name(temp_name);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -383,12 +490,44 @@ pub(crate) fn write_key_id_file(
         options.mode(0o600);
     }
     let mut file = options
-        .open(&path)
+        .open(&temp)
         .map_err(|err| CliError::Failure(format!("failed to create {}: {err}", path.display())))?;
-    file.write_all(key_id.as_bytes())
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|err| CliError::Failure(format!("failed to write {}: {err}", path.display())))?;
-    Ok(path)
+    let written = file.write_all(contents).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(err) = written {
+        let _ = std::fs::remove_file(&temp);
+        return Err(CliError::Failure(format!(
+            "failed to write {}: {err}",
+            path.display()
+        )));
+    }
+    if let Err(err) = prikk_store::rename_new_directory_no_replace(&temp, path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(CliError::Failure(
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("refusing to overwrite an existing file: {}", path.display())
+            } else {
+                format!("failed to create {}: {err}", path.display())
+            },
+        ));
+    }
+    sync_parent_directory(path)
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> std::result::Result<(), CliError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|err| CliError::Failure(format!("failed to sync {}: {err}", parent.display())))
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> std::result::Result<(), CliError> {
+    Ok(())
 }
 
 /// Answer "what key material does this role have, and can it sign?" — reading, never refusing.
@@ -480,6 +619,12 @@ fn read_seed_at(
     let contents = std::fs::read_to_string(path).map_err(|err| Unusable::Undecodable {
         detail: format!("cannot read {}: {err}", path.display()),
     })?;
+    // 0.59.0 K6: a seed a kill left part-written is said to be that, with the files to remove, not "must be 64 hex characters, got N".
+    if is_part_of_a_seed(&contents) {
+        if let Some(detail) = interrupted_key_sentence(path) {
+            return Err(Unusable::Undecodable { detail });
+        }
+    }
     crate::decode_seed_hex(contents.trim(), &path.display().to_string())
         .map_err(|detail| Unusable::Undecodable { detail })
 }
@@ -522,6 +667,17 @@ pub(crate) fn read_seed(
 fn refusal_for(status: &KeyStatus, reason: &Unusable) -> CliError {
     let shown = status.path.display().to_string();
     match reason {
+        // 0.59.0 K6: a key-id file with no seed beside it is an interrupted key creation, and the way out is to remove it (`key generate --out` over
+        // it would refuse): say that, not "create one".
+        Unusable::Missing | Unusable::OverrideMissing
+            if interrupted_key_sentence(&status.path).is_some() =>
+        {
+            CliError::Failure(format!(
+                "{} signing is required: {}",
+                status.role.label(),
+                interrupted_key_sentence(&status.path).unwrap_or_default()
+            ))
+        }
         Unusable::Missing | Unusable::OverrideMissing => CliError::Failure(format!(
             "{} signing is required: no seed at {shown}. Create one with `prikk key generate --out \
              {shown}`, run `prikk setup` in a new project directory, or set {} to an existing seed \
@@ -533,6 +689,13 @@ fn refusal_for(status: &KeyStatus, reason: &Unusable) -> CliError {
             "{shown} is readable by group or other (mode {mode:04o}); run `chmod 600 {shown}`"
         )),
         Unusable::Undecodable { detail } => CliError::Failure(detail.clone()),
+        Unusable::KeyIdFileMismatch { .. } if interrupted_key_sentence(&status.path).is_some() => {
+            CliError::Failure(format!(
+                "{} signing refused: {}",
+                status.role.label(),
+                interrupted_key_sentence(&status.path).unwrap_or_default()
+            ))
+        }
         Unusable::KeyIdFileMismatch {
             path,
             file_id,

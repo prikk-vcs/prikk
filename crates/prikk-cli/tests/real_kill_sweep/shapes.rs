@@ -29,6 +29,7 @@ fn shape(
         follow_named: true,
         program: None,
         config_base: None,
+        never_after_a_kill: None,
     }
 }
 
@@ -966,9 +967,14 @@ fn empty_dir(ctx: &Ctx, name: &str) -> PathBuf {
 pub fn setup(ctx: &Ctx) -> Shape {
     let base = empty_dir(ctx, "base-setup");
     let mut shape = shape("setup", base, args(&["setup", "."]), |ctx, d| {
-        ctx.exit(d, &["verify"]) == 0 && ctx.exit(d, &["key", "status"]) == 0
+        // Done means done: both keys usable, and the maintainer key adopted here (`binding: matches`), not only a repository that verifies.
+        let status = text(&ctx.out(d, &["key", "status", "--format", "json"]));
+        ctx.exit(d, &["verify"]) == 0
+            && status.matches("\"usable\": true").count() == 2
+            && status.contains("\"binding\": \"matches\"")
     });
     shape.config_base = Some(empty_dir(ctx, "config-base-setup"));
+    shape.never_after_a_kill = Some(Box::new(no_torn_key_file));
     shape
 }
 
@@ -983,5 +989,49 @@ pub fn key_generate(ctx: &Ctx) -> Shape {
     );
     shape.verify_may_fail = true;
     shape.config_base = Some(empty_dir(ctx, "config-base-key-generate"));
+    shape.never_after_a_kill = Some(Box::new(no_torn_key_file));
     shape
+}
+
+/// **No key file is ever part-written** (0.59.0 K6): every seed (`*.seed`, `seed.out`) in the key directory or the working directory holds exactly 65
+/// bytes, every key-id file exactly 25, and a temporary (`*.tmp.*`) is not a key file. Checked right after the kill, before any recovery.
+fn no_torn_key_file(ctx: &Ctx, work: &Path) -> Result<(), String> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        if let Ok(read) = std::fs::read_dir(dir) {
+            for entry in read.flatten() {
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    if path.file_name().is_some_and(|name| name != ".prikk") {
+                        walk(&path, out);
+                    }
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&ctx.config, &mut files);
+    walk(work, &mut files);
+    for path in files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.contains(".tmp.") {
+            continue;
+        }
+        let expected = if name.ends_with(".key-id") {
+            25
+        } else if name.ends_with(".seed") || name == "seed.out" {
+            65
+        } else {
+            continue;
+        };
+        let len = std::fs::metadata(&path).unwrap().len();
+        if len != expected {
+            return Err(format!(
+                "{} holds {len} bytes, not the {expected} of a whole key file",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }

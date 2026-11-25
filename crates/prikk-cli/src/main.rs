@@ -1951,6 +1951,12 @@ pub(crate) fn maintainer_signer_from_env() -> std::result::Result<Ed25519Maintai
 pub(crate) fn read_seed_file(path: &std::path::Path) -> std::result::Result<[u8; 32], CliError> {
     let contents = std::fs::read_to_string(path)
         .map_err(|err| CliError::Failure(format!("cannot read {}: {err}", path.display())))?;
+    // 0.59.0 K6: a seed a kill left part-written says so and names the files to remove (one sentence for every reader of a seed).
+    if key_material::is_part_of_a_seed(&contents) {
+        if let Some(sentence) = key_material::interrupted_key_sentence(path) {
+            return Err(CliError::Failure(sentence));
+        }
+    }
     decode_seed_hex(contents.trim(), &path.display().to_string()).map_err(CliError::Failure)
 }
 

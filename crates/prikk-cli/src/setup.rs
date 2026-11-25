@@ -85,16 +85,16 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     // So the check is *before* `create_dir_all`, ahead of every write and every line of output: if
     // this directory already holds a repository, nothing at all runs. A caller-fixable state, and
     // the message names both ways out rather than only reporting the collision.
+    // 0.59.0 K6: a `.prikk` that holds nothing yet but what `init` creates and the baseline `init` records (no key adopted, nothing committed or
+    // sealed: what a killed `init`, or a `setup` killed before it adopted a key, leaves) is **finished**, not refused: `init` completes it, whole keys
+    // are reused, missing ones are made, and the maintainer key is adopted. Anything else is a repository, and the sentence spells out the one command
+    // that adopts the keys this directory already has.
     let existing = root.join(".prikk");
-    if existing.exists() {
+    let finishing = existing.exists()
+        && RepositoryLayout::holds_nothing_yet(root.clone()).map_err(|err| err.to_string())?;
+    if existing.exists() && !finishing {
         return Err(CliError::Failure(
-            prikk_error::PrikkError::Precondition(format!(
-                "{} already holds a repository; to use your existing keys here run `prikk trust \
-                 maintainer add` (see `prikk key public`), or pick a different directory for a new \
-                 project",
-                root.display()
-            ))
-            .to_string(),
+            prikk_error::PrikkError::Precondition(already_a_repository_sentence(&root)).to_string(),
         ));
     }
 
@@ -106,7 +106,7 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     //
     // Deciding here, before `create_dir_all`, is what makes the refusal arm honest: a missing
     // counterpart seed stops the command with nothing written and nothing printed.
-    let existing_keys = classify_existing_keys(&author_seed_out, &maintainer_seed_out)?;
+    let existing_keys = classify_existing_keys(&author_seed_out, &maintainer_seed_out, finishing)?;
     // A seed this run creates, and the key-id file that will belong to it, must both be new -- checked
     // here, before anything is created, so a refusal leaves nothing behind.
     if !existing_keys.author_is_reused {
@@ -123,6 +123,12 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     std::fs::create_dir_all(&root)
         .map_err(|err| format!("failed to create {}: {err}", root.display()))?;
 
+    if finishing {
+        println!(
+            "finishing the repository an interrupted `prikk init` or `prikk setup` left at {}",
+            existing.display()
+        );
+    }
     let layout = RepositoryLayout::init(root.clone()).map_err(|err| err.to_string())?;
     // 0.56.0 step W2 (R1): see `run_init`'s identical call -- `setup` performs `init` as its own
     // first step (this function's own doc), so it needs the same genesis-record establishment, not a
@@ -245,6 +251,33 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
     Ok(())
 }
 
+/// The refusal for a directory that already holds a repository (`prikk setup` over a repository that has history, an adopted key, or a queue). It
+/// **spells out the one command that adopts the keys this directory already has**, from the key directory: a key id and a public key are not secret
+/// (0.59.0 K6; it used to name `prikk trust maintainer add` with no arguments, which cannot be run from the sentence).
+fn already_a_repository_sentence(root: &Path) -> String {
+    let adopt = crate::key_material::status(crate::key_material::Role::Maintainer)
+        .ok()
+        .and_then(|status| {
+            status.public_key_hex().map(|public_key| {
+                format!(
+                    "prikk trust maintainer add --key-id {} --public-key {public_key}",
+                    status.key_id
+                )
+            })
+        });
+    match adopt {
+        Some(command) => format!(
+            "{} already holds a repository; to use your existing maintainer key here run `{command}`, or pick a different directory for a new project",
+            root.display()
+        ),
+        None => format!(
+            "{} already holds a repository, and your key directory holds no usable maintainer key; make one with `prikk key generate --out <path>` (it prints its key id \
+             and public key), then run `prikk trust maintainer add --key-id <id> --public-key <hex>` with them, or pick a different directory for a new project",
+            root.display()
+        ),
+    }
+}
+
 /// Which roles already have a seed in the key directory, and therefore reuse it (RFC 148 §2c).
 struct ExistingKeys {
     author_is_reused: bool,
@@ -277,6 +310,7 @@ impl ExistingKeys {
 fn classify_existing_keys(
     author_seed_out: &Option<PathBuf>,
     maintainer_seed_out: &Option<PathBuf>,
+    finishing: bool,
 ) -> std::result::Result<ExistingKeys, CliError> {
     let author_defaulted = author_seed_out.is_none();
     let maintainer_defaulted = maintainer_seed_out.is_none();
@@ -295,7 +329,13 @@ fn classify_existing_keys(
 
     // Only a run where *both* roles default can be half-present; if one role was given a path, the
     // other's presence is simply reuse-or-mint on its own.
-    if author_defaulted && maintainer_defaulted && author_present != maintainer_present {
+    // 0.59.0 K6: **not when finishing** a `.prikk` nothing was adopted in: a key directory with one whole seed is then what the interrupted run
+    // itself left (the author seed is written before the maintainer's), so the whole one is reused and the missing one is made.
+    if !finishing
+        && author_defaulted
+        && maintainer_defaulted
+        && author_present != maintainer_present
+    {
         let missing = if author_present {
             &maintainer_path
         } else {

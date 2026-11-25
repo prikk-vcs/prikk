@@ -20,17 +20,13 @@ const READS: &str = "reads: it writes no history, ref, queue or worktree byte; l
 const OUTPUT_ONLY: &str = "not measured: it writes a file the user names, outside `.prikk`, and may take a lock; a kill leaves a partial output file, which the durable-output tests (`dc44_bundle_export_durability`, `durable_output`) hold";
 
 pub const VERBS: &[(&str, Status)] = &[
-    (
-        "setup",
-        NotSwept(
-            "measured and **unsound at 271 of 273 ordinals** (K5): `setup` runs `init` (K4: sound), then writes the author and maintainer seeds and their key-id files, then adopts the maintainer key. A kill leaves a `.prikk`, and a rerun of `setup` refuses (`already holds a repository`) naming `prikk trust maintainer add`, which needs `--key-id` and a public key from `prikk key public`: **before ordinal ~234 no key exists yet, so nothing the sentence names can work** (a killed `init` is named by `status`, `prikk init`, which does not make keys); from ~234 the key files are written by create-then-write, so a kill leaves an empty or part-written seed or key-id (`maintainer.seed` of 0 bytes at ordinal 242). The way out is deleting `.prikk` and the key files and running `setup` again, which nothing says. The shape is `setup` in `shapes.rs` (with the key directory restored before every run), ignored until a ruling",
-        ),
-    ),
+    ("setup", Swept(&["setup"])),
     ("init", Swept(&["init"])),
     (
         "key",
-        NotSwept(
-            "`key generate --out` measured and **unsound at 5 of 14 ordinals** (K5): the seed file and its `.key-id` file are created, then written, so a kill leaves an empty or part-written one, and the rerun refuses (`a new seed needs both <out> and <out>.key-id to be absent`) naming no command (nothing was issued: the seed is never printed with `--out`); `key generate` without `--out` prints and writes nothing, `key public` and `key status` read. The shape is `key_generate`, ignored until a ruling",
+        Partly(
+            &["key_generate"],
+            "`key generate` without `--out` prints a seed and writes nothing, and `key public` and `key status` read",
         ),
     ),
     (

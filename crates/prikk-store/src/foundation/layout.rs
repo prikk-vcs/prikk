@@ -314,6 +314,32 @@ impl RepositoryLayout {
         )
     }
 
+    /// Whether the repository at `root` holds nothing yet but what `init` creates and the baseline `prikk init` records after it: no key adopted, nothing
+    /// committed, nothing sealed (0.59.0 K6; see `init_set.rs`). The marker is not read: a repository whose `init` was killed, or whose `setup` was killed
+    /// before it adopted a key, is this, and `prikk setup` finishes it rather than refusing. `false` when there is no `.prikk`.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be read.
+    pub fn holds_nothing_yet(root: impl Into<PathBuf>) -> Result<bool> {
+        let root = root.into();
+        let prikk_dir = root.join(REPO_DIR);
+        if std::fs::symlink_metadata(&prikk_dir).is_err() {
+            return Ok(false);
+        }
+        let worktree_mutation = MutationRoot::open(&root)?;
+        let repository_mutation = worktree_mutation.open_root(Path::new(REPO_DIR))?;
+        let layout = Self {
+            root,
+            prikk_dir,
+            worktree_mutation,
+            repository_mutation,
+            format: RepositoryFormat::V8,
+            marker_lost: false,
+        };
+        layout.holds_nothing_yet_checked()
+    }
+
     /// Whether this layout was opened over a lost marker (see `open_allowing_lost_marker`).
     pub(crate) const fn marker_is_lost(&self) -> bool {
         self.marker_lost

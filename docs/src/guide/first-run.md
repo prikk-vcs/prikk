@@ -170,7 +170,7 @@ public key: ...
 ```
 
 `--out` also writes the key's id to `<path>.key-id`, and the id is found there whichever role uses the
-seed. `--out` refuses to overwrite an existing file (the seed or its key-id file), and refuses any path with a `.prikk` component — prikk
+seed. `--out` writes each file to a temporary and publishes it whole by a no-replace rename (a kill leaves it absent or complete, never part-written; 0.59.0), refuses to overwrite an existing file (the seed or its key-id file), and refuses any path with a `.prikk` component — prikk
 never invents a secret's location and never manages its lifecycle (writing it once, where you asked,
 is the entire commitment). **On Windows, `--out` currently refuses outright**: Unix file permissions
 (mode `0600`) have no portable equivalent here without unsafe code or a new dependency, and writing a
@@ -246,14 +246,19 @@ in your key directory, so it minted nothing and wrote nothing — it initialized
 adopted the maintainer key you already have, which is the one step a new repository genuinely needs.
 Both projects sign with the same identity, which is usually what you want when it is the same person.
 
-Pointed at a directory that *already holds a repository*, `setup` refuses before doing anything at
-all:
+Pointed at a directory that *already holds a repository* (history, a queue, or an adopted key),
+`setup` refuses before doing anything at all, and the sentence is the command that adopts the key you
+already have, spelled out from your key directory (a key id and a public key are not secret):
 
 ```
-error: precondition not met: ./second-project already holds a repository; to use your existing keys
-here run `prikk trust maintainer add` (see `prikk key public`), or pick a different directory for a
-new project
+error: precondition not met: ./second-project already holds a repository; to use your existing
+maintainer key here run `prikk trust maintainer add --key-id ed25519-… --public-key …`, or pick a
+different directory for a new project
 ```
+
+A directory that holds *nothing yet* — what a killed `prikk init`, or a `prikk setup` killed before it
+adopted a key, leaves — is **finished**, not refused: `init` completes, whole keys are reused, missing
+ones are made, and the maintainer key is adopted (0.59.0).
 
 **If you want the second project to have its own identity**, give the new seeds their own paths:
 
