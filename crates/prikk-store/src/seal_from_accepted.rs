@@ -275,7 +275,7 @@ fn seal_from_accepted_claim_impl(
     match plan.as_deref_mut() {
         Some(plan) if plan.reads.is_some() => {
             plan.refresh_claims(layout)?;
-            plan.refuse_if_order_ambiguous(claim_id, &claim)?;
+            plan.refuse_if_order_ambiguous(layout, claim_id, &claim)?;
         }
         _ => refuse_if_order_ambiguous(layout, claim_id, &claim)?,
     }
@@ -402,7 +402,10 @@ fn seal_from_accepted_claim_impl(
         // does not reach (see the module doc).
         if !claim.parent_block_ids.is_empty() {
             let enumerated;
-            let by_block = match plan.as_deref().and_then(SealBatchPlan::claims_by_block) {
+            let by_block = match plan
+                .as_deref()
+                .and_then(|plan| plan.claims_by_block(layout))
+            {
                 Some(by_block) => by_block,
                 None => {
                     enumerated = enumerate_stored_claims(layout)?;
@@ -588,6 +591,7 @@ fn classify_patch_application_failure(error: LifecycleReplayError) -> PrikkError
 }
 
 mod batch;
+mod stored_claims;
 pub use batch::{SealBatchPlan, plan_seal_batch, require_nothing_in_the_way_for_seal_batch};
 
 struct CurrentTip {
@@ -779,32 +783,70 @@ fn ref_history(object_store: &impl ObjectReader, tip: Option<ObjectId>) -> Resul
 /// about one block carry the same patches and parents).
 fn claims_by_block(claims: &[(ObjectId, RecognitionClaimPayload)]) -> ClaimsByBlock<'_> {
     ClaimsByBlock {
-        claims,
-        index: std::borrow::Cow::Owned(batch::ClaimsIndex::build(claims).by_block),
+        source: ClaimSource::Held {
+            claims,
+            index: batch::ClaimsIndex::build(claims).by_block,
+        },
     }
 }
 
-/// A block id -> (the id of a held claim about it, that claim's payload): the held claims and each block's position among them. A batch
-/// builds the positions once per claim set (0.58.0 S6, [`batch::ClaimsIndex`]) and lends them; any other caller builds its own.
+/// A block id -> (the id of a held claim about it, that claim's payload). **Two sources:** the claims a caller holds whole (the single-claim path, which
+/// enumerates every stored claim), and the batch's own subset (0.59.0 P5a3: every stored claim indexed by its block, the payloads of the claims the
+/// batch's checks read held, any other claim's payload read from its record when a parent check asks for it).
 pub(crate) struct ClaimsByBlock<'a> {
-    claims: &'a [(ObjectId, RecognitionClaimPayload)],
-    index: std::borrow::Cow<'a, BTreeMap<ObjectId, usize>>,
+    source: ClaimSource<'a>,
+}
+
+enum ClaimSource<'a> {
+    Held {
+        claims: &'a [(ObjectId, RecognitionClaimPayload)],
+        index: BTreeMap<ObjectId, usize>,
+    },
+    Subset {
+        stored: &'a stored_claims::StoredClaims,
+        layout: &'a RepositoryLayout,
+    },
+}
+
+/// A claim's payload, borrowed from the held claims or shared from the subset's.
+pub(crate) enum ClaimRef<'a> {
+    Borrowed(&'a RecognitionClaimPayload),
+    Shared(std::rc::Rc<RecognitionClaimPayload>),
+}
+
+impl std::ops::Deref for ClaimRef<'_> {
+    type Target = RecognitionClaimPayload;
+    fn deref(&self) -> &RecognitionClaimPayload {
+        match self {
+            Self::Borrowed(claim) => claim,
+            Self::Shared(claim) => claim,
+        }
+    }
 }
 
 impl<'a> ClaimsByBlock<'a> {
-    pub(crate) fn lent(
-        claims: &'a [(ObjectId, RecognitionClaimPayload)],
-        index: &'a BTreeMap<ObjectId, usize>,
+    pub(super) fn subset(
+        stored: &'a stored_claims::StoredClaims,
+        layout: &'a RepositoryLayout,
     ) -> Self {
         Self {
-            claims,
-            index: std::borrow::Cow::Borrowed(index),
+            source: ClaimSource::Subset { stored, layout },
         }
     }
 
-    fn get(&self, block: &ObjectId) -> Option<(ObjectId, &'a RecognitionClaimPayload)> {
-        let (claim_id, claim) = self.claims.get(*self.index.get(block)?)?;
-        Some((*claim_id, claim))
+    /// The claim about `block`: its id and payload. An error only when a claim outside the subset cannot be read from its record.
+    fn get(&self, block: &ObjectId) -> Result<Option<(ObjectId, ClaimRef<'_>)>> {
+        match &self.source {
+            ClaimSource::Held { claims, index } => {
+                let Some(position) = index.get(block) else {
+                    return Ok(None);
+                };
+                Ok(claims
+                    .get(*position)
+                    .map(|(claim_id, claim)| (*claim_id, ClaimRef::Borrowed(claim))))
+            }
+            ClaimSource::Subset { stored, layout } => stored.claim_for_block(layout, block),
+        }
     }
 }
 
@@ -847,7 +889,7 @@ fn parent_reached_visiting(
                 .all(|id| history.patches.contains(id))
         }));
     }
-    let Some((_, claim)) = by_block.get(&parent) else {
+    let Some((_, claim)) = by_block.get(&parent)? else {
         return Ok(false);
     };
     if !visiting.insert(parent) {
@@ -966,7 +1008,7 @@ fn held_unsealed_ancestry(
         if !seen.insert(block) {
             return Some(());
         }
-        let (claim_id, claim) = by_block.get(&block)?;
+        let (claim_id, claim) = by_block.get(&block).ok()??;
         for &ancestor in &claim.parent_block_ids {
             visit(object_store, by_block, history, ancestor, seen, out)?;
         }

@@ -31,7 +31,9 @@ fn fresh_repo(name: &str) -> Result<RepositoryLayout> {
     RepositoryLayout::init(unique_temp_dir(name))
 }
 
-fn maintainer_signer(seed: u8) -> Result<Ed25519MaintainerSigner> {
+pub(in crate::seal_from_accepted) fn maintainer_signer(
+    seed: u8,
+) -> Result<Ed25519MaintainerSigner> {
     Ed25519MaintainerSigner::from_seed(format!("seal-from-accepted-maintainer-{seed}"), &[seed; 32])
 }
 
@@ -110,7 +112,7 @@ fn write_claim(
     write_claim_with_parents(objects, signer, block_id, patch_ids, Vec::new())
 }
 
-fn write_claim_with_parents(
+pub(in crate::seal_from_accepted) fn write_claim_with_parents(
     objects: &mut FileObjectStore,
     signer: &Ed25519MaintainerSigner,
     block_id: ObjectId,
@@ -167,14 +169,14 @@ fn block_container_bytes(layout: &RepositoryLayout) -> Result<Vec<u8>> {
 /// The base fixture every other test builds on: one repository, one adopted+trusted maintainer
 /// signer, one AUTHOR signer, one blob, one unsealed patch, one claim naming it (block_id is
 /// decorative for this path -- see the module doc -- so an arbitrary id is fine).
-struct BaseFixture {
-    layout: RepositoryLayout,
-    signer: Ed25519MaintainerSigner,
+pub(in crate::seal_from_accepted) struct BaseFixture {
+    pub(in crate::seal_from_accepted) layout: RepositoryLayout,
+    pub(in crate::seal_from_accepted) signer: Ed25519MaintainerSigner,
     patch_id: ObjectId,
     claim_id: ObjectId,
 }
 
-fn base_fixture(name: &str) -> Result<BaseFixture> {
+pub(in crate::seal_from_accepted) fn base_fixture(name: &str) -> Result<BaseFixture> {
     let layout = fresh_repo(name)?;
     let signer = maintainer_signer(0x10)?;
     adopt(&layout, &signer)?;
@@ -196,7 +198,7 @@ fn base_fixture(name: &str) -> Result<BaseFixture> {
     })
 }
 
-fn cleanup(layout: &RepositoryLayout) {
+pub(in crate::seal_from_accepted) fn cleanup(layout: &RepositoryLayout) {
     let _ = std::fs::remove_dir_all(layout.root());
 }
 
@@ -1384,7 +1386,7 @@ fn s3_a_batch_reads_the_claims_and_the_history_once() -> Result<()> {
     let (fixture, claims) = chained_batch_fixture("s3-reads-once", 6)?;
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
     let before = super::batch_reads_for_test();
-    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF, &claims)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
     plan.fold(&fixture.layout, &claims, true);
     for claim in &claims {
@@ -1421,7 +1423,7 @@ fn s6_a_batch_builds_its_claims_index_once() -> Result<()> {
     let (fixture, claims) = chained_batch_fixture("s6-index-once", 6)?;
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
     let before = super::batch::claims_index_builds_for_test();
-    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF, &claims)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
     plan.fold(&fixture.layout, &claims, true);
     for claim in &claims {
@@ -1502,7 +1504,7 @@ fn s6_the_indexed_ambiguity_check_equals_the_whole_set_check() -> Result<()> {
 fn s6_a_batch_writes_the_record_once_and_a_later_claim_sees_an_earlier_entry() -> Result<()> {
     let (fixture, claims) = chained_batch_fixture("s6-record-once", 5)?;
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
-    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF, &claims)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
     plan.fold(&fixture.layout, &claims, true);
     let record = crate::verified_blocks::record_path(&fixture.layout);
@@ -1573,7 +1575,7 @@ fn s3_a_claim_stored_mid_batch_is_seen_by_the_next_claim() -> Result<()> {
     let claims = vec![first_claim, second_claim];
 
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
-    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF, &claims)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
     plan.fold(&fixture.layout, &claims, true);
     let sealed = super::seal_from_accepted_claim_in_batch(
@@ -1758,7 +1760,7 @@ fn run_batch(
         .transpose()?;
     let mut planned = match plan {
         Some(current_branch) => {
-            let mut planned = super::SealBatchPlan::open(&fixture.layout, ref_name)?;
+            let mut planned = super::SealBatchPlan::open(&fixture.layout, ref_name, claims)?;
             planned.require_parents_reached(&fixture.layout, claims)?;
             planned.fold(&fixture.layout, claims, current_branch);
             Some(planned)

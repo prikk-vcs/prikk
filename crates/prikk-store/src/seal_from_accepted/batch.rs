@@ -6,9 +6,10 @@
 use prikk_error::Result;
 use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload};
 
+use super::stored_claims::{BatchScope, StoredClaims};
 use super::{
-    ClaimsByBlock, RefHistory, enumerate_stored_claims, parent_not_reached_refusal, parent_reached,
-    read_current_tip, ref_history, refuse_if_order_ambiguous_indexed,
+    ClaimsByBlock, RefHistory, parent_not_reached_refusal, parent_reached, read_current_tip,
+    ref_history, refuse_if_order_ambiguous, refuse_if_order_ambiguous_indexed,
 };
 use crate::anchor_trust::AnchorSite;
 use crate::block_state::StateAnchoring;
@@ -60,13 +61,34 @@ pub struct SealBatchPlan {
     sealed_counts: (usize, usize),
 }
 
+/// The order-ambiguity check of `claim` over the batch's stored claims: through the subset's index when every patch of `claim` is one the subset was
+/// read for (the claims it skips name none of them, so the check skips them too), else over every stored claim, read whole, as before.
+pub(super) fn check_order(
+    layout: &RepositoryLayout,
+    stored: &StoredClaims,
+    claim_id: ObjectId,
+    claim: &RecognitionClaimPayload,
+) -> Result<()> {
+    if stored.covers(&claim.patch_ids) {
+        refuse_if_order_ambiguous_indexed(
+            stored.kept(),
+            &stored.kept_index().by_patch,
+            claim_id,
+            claim,
+        )
+    } else {
+        refuse_if_order_ambiguous(layout, claim_id, claim)
+    }
+}
+
 /// What a batch reads once.
 pub(super) struct BatchReads {
     canonical_ref: String,
-    /// Every stored recognition claim, enumerated at `claims_version`.
-    claims: Vec<(ObjectId, RecognitionClaimPayload)>,
-    /// The claims' positions by block, by patch and by id, built with `claims` (0.58.0 S6) and rebuilt only when they are re-read.
-    index: ClaimsIndex,
+    /// The stored recognition claims as the batch needs them, read at `claims_version`: every claim indexed by its block, and the payloads of the claims
+    /// that name a patch of the batch (0.59.0 P5a3, `stored_claims.rs`). Rebuilt only when the claim container changes.
+    stored: StoredClaims,
+    /// The batch the claims were read for, kept for the re-read.
+    scope: BatchScope,
     claims_version: Option<ClaimContainerVersion>,
     /// The ref's history as of `tip`, extended by each block this batch publishes ([`SealBatchPlan::note_published`]).
     history: RefHistory,
@@ -116,6 +138,15 @@ pub(crate) fn claims_index_builds_for_test() -> usize {
 
 impl ClaimsIndex {
     pub(crate) fn build(claims: &[(ObjectId, RecognitionClaimPayload)]) -> Self {
+        Self::build_with(claims, true)
+    }
+
+    /// The patch and id indexes only (`by_block` left empty): the batch's subset indexes every claim by its block separately, in a compact form.
+    pub(super) fn build_without_blocks(claims: &[(ObjectId, RecognitionClaimPayload)]) -> Self {
+        Self::build_with(claims, false)
+    }
+
+    fn build_with(claims: &[(ObjectId, RecognitionClaimPayload)], with_blocks: bool) -> Self {
         #[cfg(test)]
         CLAIMS_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
         let mut by_block = std::collections::BTreeMap::new();
@@ -123,7 +154,9 @@ impl ClaimsIndex {
             std::collections::BTreeMap::new();
         let mut by_id = std::collections::BTreeMap::new();
         for (position, (claim_id, claim)) in claims.iter().enumerate() {
-            by_block.entry(claim.block_id).or_insert(position);
+            if with_blocks {
+                by_block.entry(claim.block_id).or_insert(position);
+            }
             by_id.entry(*claim_id).or_insert(position);
             for patch_id in &claim.patch_ids {
                 let positions = by_patch.entry(*patch_id).or_default();
@@ -180,7 +213,11 @@ impl SealBatchPlan {
     ///
     /// An invalid ref name, a ref whose RefState or Block cannot be read, a history that cannot be walked, or a claim container that
     /// cannot be decoded.
-    pub fn open(layout: &RepositoryLayout, ref_name: &str) -> Result<Self> {
+    pub fn open(
+        layout: &RepositoryLayout,
+        ref_name: &str,
+        ordered_claim_ids: &[ObjectId],
+    ) -> Result<Self> {
         let canonical_ref = validate_local_branch_ref(ref_name)?;
         let snapshot = ObjectReadSnapshot::open(layout)?;
         // 0.59.0 RS2b: the pointer is read after the snapshot opened: the ids it names are looked up through the fresh-on-miss reader.
@@ -191,12 +228,14 @@ impl SealBatchPlan {
         let history = ref_history(&object_store, tip)?;
         // The version is read before the claims: a claim written in between is read now and read again at the next check.
         let claims_version = claim_container_version(layout)?;
-        let claims = enumerate_stored_claims(layout)?;
+        // 0.59.0 P5a3: the claims are read for this batch, as a subset (`stored_claims.rs`).
+        let scope = BatchScope::of(ordered_claim_ids);
+        let stored = StoredClaims::read(layout, Some(&scope))?;
         Ok(Self {
             reads: Some(BatchReads {
                 canonical_ref,
-                index: ClaimsIndex::build(&claims),
-                claims,
+                stored,
+                scope,
                 claims_version,
                 history,
                 tip,
@@ -221,30 +260,33 @@ impl SealBatchPlan {
         };
         let version = claim_container_version(layout)?;
         if version != reads.claims_version {
-            reads.claims = enumerate_stored_claims(layout)?;
-            reads.index = ClaimsIndex::build(&reads.claims);
+            reads.stored = StoredClaims::read(layout, Some(&reads.scope))?;
             reads.claims_version = version;
         }
         Ok(())
     }
 
     /// The stored claims keyed by block, from the batch's index (built once per claim set).
-    pub(super) fn claims_by_block(&self) -> Option<ClaimsByBlock<'_>> {
+    pub(super) fn claims_by_block<'a>(
+        &'a self,
+        layout: &'a RepositoryLayout,
+    ) -> Option<ClaimsByBlock<'a>> {
         self.reads
             .as_ref()
-            .map(|reads| ClaimsByBlock::lent(&reads.claims, &reads.index.by_block))
+            .map(|reads| ClaimsByBlock::subset(&reads.stored, layout))
     }
 
     /// The order-ambiguity check of `claim` against the batch's stored claims, through the index.
     pub(super) fn refuse_if_order_ambiguous(
         &self,
+        layout: &RepositoryLayout,
         claim_id: ObjectId,
         claim: &RecognitionClaimPayload,
     ) -> Result<()> {
         let Some(reads) = self.reads.as_ref() else {
             return Ok(());
         };
-        refuse_if_order_ambiguous_indexed(&reads.claims, &reads.index.by_patch, claim_id, claim)
+        check_order(layout, &reads.stored, claim_id, claim)
     }
 
     /// The batch's history, if it ends at exactly `tip` (the ref's tip the caller just read). A different tip means something moved the
@@ -288,14 +330,9 @@ impl SealBatchPlan {
             blocks: reads.history.blocks.clone(),
             patches: reads.history.patches.clone(),
         };
-        let by_block = ClaimsByBlock::lent(&reads.claims, &reads.index.by_block);
+        let by_block = ClaimsByBlock::subset(&reads.stored, layout);
         for claim_id in ordered_claim_ids {
-            let Some((_, claim)) = reads
-                .index
-                .by_id
-                .get(claim_id)
-                .and_then(|&position| reads.claims.get(position))
-            else {
+            let Some(claim) = reads.stored.kept_claim(claim_id) else {
                 return Ok(());
             };
             if !claim
@@ -485,14 +522,7 @@ impl SealBatchPlan {
                 continue;
             }
             // The real loop refuses an order-ambiguous claim before it derives anything; the plan stops where it would.
-            if refuse_if_order_ambiguous_indexed(
-                &reads.claims,
-                &reads.index.by_patch,
-                claim_id,
-                &claim,
-            )
-            .is_err()
-            {
+            if check_order(layout, &reads.stored, claim_id, &claim).is_err() {
                 break;
             }
             let checkpoint = snapshot_distance.is_none();
@@ -625,7 +655,7 @@ pub fn plan_seal_batch(
     ordered_claim_ids: &[ObjectId],
     current_branch: bool,
 ) -> SealBatchPlan {
-    match SealBatchPlan::open(layout, ref_name) {
+    match SealBatchPlan::open(layout, ref_name, ordered_claim_ids) {
         Ok(mut plan) => {
             plan.fold(layout, ordered_claim_ids, current_branch);
             plan

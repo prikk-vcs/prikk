@@ -279,7 +279,7 @@ fn a_torn_tail_and_a_damaged_interior_record_are_read_whole() -> Result<()> {
 #[test]
 fn an_unsound_chain_falls_back_and_is_refused_as_the_whole_walk_refuses() -> Result<()> {
     type Plant = fn(&RepositoryLayout);
-    let cases: [(&str, Plant, Option<Fallback>); 4] = [
+    let cases: [(&str, Plant, Option<Fallback>); 5] = [
         (
             "a duplicate record of one id",
             |layout| {
@@ -299,6 +299,25 @@ fn an_unsound_chain_falls_back_and_is_refused_as_the_whole_walk_refuses() -> Res
                     layout,
                     MAIN,
                     &update(MAIN, current, sample_object_id("skip"), 9, 0),
+                );
+            },
+            Some(Fallback::ChainUnsound),
+        ),
+        (
+            "a fork: the right sequence and name, an old id that is not the previous tip",
+            |layout| {
+                let store = RefStore::new(layout.clone());
+                let seq = store.replay_log(MAIN).unwrap().records.len() as u64 + 1;
+                append_record(
+                    layout,
+                    MAIN,
+                    &update(
+                        MAIN,
+                        Some(sample_object_id("not the tip")),
+                        sample_object_id("fork"),
+                        seq,
+                        0,
+                    ),
                 );
             },
             Some(Fallback::ChainUnsound),
@@ -426,5 +445,34 @@ fn a_holds_publications_read_the_log_whole_once_and_never_fall_back() -> Result<
         "the only fallback is the first use, which had nothing kept"
     );
     let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}
+
+/// The first record of a ref has its own checks (no old id, sequence 1), and the chain carries them: each is caught by a case that **only** it
+/// catches. (The `created_at == 0` of both the first record and the rest is not a conjunct any case can reach: the decoder calls a record with
+/// `created_at != 0` damage, so a log that holds one is never clean and never summarised. It mirrors `log_position` and is said, not tested.)
+#[test]
+fn a_first_record_with_an_old_id_or_a_sequence_other_than_one_falls_back() -> Result<()> {
+    for (label, old, seq) in [
+        (
+            "an old id on the first record",
+            Some(sample_object_id("before")),
+            1,
+        ),
+        ("a first record numbered 2", None, 2),
+    ] {
+        let (layout, root) = repository("p5a2-first");
+        append_record(
+            &layout,
+            MAIN,
+            &update(MAIN, old, sample_object_id("first"), seq, 0),
+        );
+        let (_, fallbacks) = both_ways(&layout, label);
+        assert!(
+            fallbacks.contains(&Fallback::ChainUnsound),
+            "{label}: {fallbacks:?}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
     Ok(())
 }

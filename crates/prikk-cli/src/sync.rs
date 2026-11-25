@@ -494,7 +494,8 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     //
     // 0.58.0 S3: the batch reads the stored claims and the ref's history once (`SealBatchPlan::open`), and this check, the fold below and
     // every per-claim check in the loop read those sets, not the containers again.
-    let mut plan = SealBatchPlan::open(&layout, &canonical_ref).map_err(|err| err.to_string())?;
+    let mut plan =
+        SealBatchPlan::open(&layout, &canonical_ref, &ordered).map_err(|err| err.to_string())?;
     plan.require_parents_reached(&layout, &ordered)
         .map_err(|err| err.to_string())?;
 
