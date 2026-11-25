@@ -48,13 +48,36 @@ use crate::foundation::index::{self, IndexEntry, VerifiedTail};
 use crate::foundation::layout::RepositoryLayout;
 
 /// The decoded entries and the id -> last position map, shared by `Arc`.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct IndexData {
     entries: Vec<IndexEntry>,
     /// 0.55.0 step 3 Part 1 (2C, ruling C1): id -> position in `entries`, kept alongside it on every path that changes `entries` -- a full
     /// rebuild on `open`/a replace, an incremental extend on the one true append path. `entries` itself is kept exactly as it was (never
     /// removed): its own forward order is what makes "last entry wins" the natural result of inserting into this map in that same order.
     by_id: HashMap<ObjectId, u32>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static INDEX_DATA_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the decoded index was copied (a copy-on-write copy under `Arc::make_mut`) on this thread (`cfg(test)`; the index is shared
+/// on Linux and macOS only).
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn index_data_copies_for_test() -> usize {
+    INDEX_DATA_COPIES.with(std::cell::Cell::get)
+}
+
+impl Clone for IndexData {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        INDEX_DATA_COPIES.with(|copies| copies.set(copies.get() + 1));
+        Self {
+            entries: self.entries.clone(),
+            by_id: self.by_id.clone(),
+        }
+    }
 }
 
 /// What a hold keeps: the data, and what it was decoded from.

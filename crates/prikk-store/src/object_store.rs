@@ -9,6 +9,8 @@ use std::collections::HashMap;
 
 mod index_snapshot;
 use index_snapshot::IndexSnapshot;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use index_snapshot::index_data_copies_for_test;
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};

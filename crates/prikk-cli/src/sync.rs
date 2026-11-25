@@ -501,45 +501,49 @@ fn run_seal(root: PathBuf, args: Vec<String>) -> std::result::Result<(), CliErro
     // 0.58.0 S2b: the batch is folded once, here, before anything is written -- the pre-batch state derived once, each claim's patches
     // applied to it in order. The in-the-way check below judges the state it ends in, and the loop seals each claim with the root it
     // produced; a claim it could not fold is sealed from disk, as before.
-    plan.fold(&layout, &ordered);
+    //
+    // 0.59.0 P5a1: the plan applies the batch once up front only when the in-the-way check below will run (the current branch): that pass's
+    // only product is the state the check judges. The loop advances the plan's own running fold, one claim at a time.
+    let current_branch = crate::current_branch::displayed_current_branch(&layout);
+    let judges_the_state =
+        !ordered.is_empty() && current_branch.as_deref() == Some(canonical_ref.as_str());
+    plan.fold(&layout, &ordered, judges_the_state);
 
     // Steps 1-2: the clean check and the pre-write in-the-way check, once, before the first
     // claim's first write -- only when `canonical_ref` is the current branch, and only when there
     // is at least one claim to seal (an empty `--claims <file>` writes nothing regardless).
-    let current_branch = crate::current_branch::displayed_current_branch(&layout);
-    let pending_materialization =
-        if !ordered.is_empty() && current_branch.as_deref() == Some(canonical_ref.as_str()) {
-            let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
-                .replay()
-                .map_err(|err| err.to_string())?;
-            let pending = require_worktree_clean_and_capture(
-                &layout,
-                &canonical_ref,
-                &active_replay,
-                &format!("sealing onto {canonical_ref}"),
-            )
+    let pending_materialization = if judges_the_state {
+        let active_replay = Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+            .replay()
             .map_err(|err| err.to_string())?;
-            // The pre-write in-the-way check, against the batch's own simulated state as far as it
-            // can be folded claim by claim -- see `require_nothing_in_the_way_for_seal_batch`'s own
-            // doc (0.56.0 step W3c-4b) for why this replays by patch id, folded one claim at a
-            // time, rather than by any claim's own (foreign, unresolvable here) block id.
-            require_nothing_in_the_way_for_seal_batch(
-                &layout,
-                &pending,
-                &plan,
-                &format!("sealing onto {canonical_ref}"),
-            )
-            .map_err(|err| err.to_string())?;
-            // Step 2b: the marker, before the batch's first claim is sealed -- the earliest point
-            // that can be this batch's first write (an `AlreadySealed` claim writes nothing, but it
-            // costs nothing for the marker to be cleared again below, whether by the materialize
-            // call, once something really publishes, or directly by
-            // `abandon_unpublished_materialization` (0.56.0 step W3c-4b) when nothing ever does).
-            mark_current_branch_switch_pending(&layout, &pending).map_err(|err| err.to_string())?;
-            Some(pending)
-        } else {
-            None
-        };
+        let pending = require_worktree_clean_and_capture(
+            &layout,
+            &canonical_ref,
+            &active_replay,
+            &format!("sealing onto {canonical_ref}"),
+        )
+        .map_err(|err| err.to_string())?;
+        // The pre-write in-the-way check, against the batch's own simulated state as far as it
+        // can be folded claim by claim -- see `require_nothing_in_the_way_for_seal_batch`'s own
+        // doc (0.56.0 step W3c-4b) for why this replays by patch id, folded one claim at a
+        // time, rather than by any claim's own (foreign, unresolvable here) block id.
+        require_nothing_in_the_way_for_seal_batch(
+            &layout,
+            &pending,
+            &plan,
+            &format!("sealing onto {canonical_ref}"),
+        )
+        .map_err(|err| err.to_string())?;
+        // Step 2b: the marker, before the batch's first claim is sealed -- the earliest point
+        // that can be this batch's first write (an `AlreadySealed` claim writes nothing, but it
+        // costs nothing for the marker to be cleared again below, whether by the materialize
+        // call, once something really publishes, or directly by
+        // `abandon_unpublished_materialization` (0.56.0 step W3c-4b) when nothing ever does).
+        mark_current_branch_switch_pending(&layout, &pending).map_err(|err| err.to_string())?;
+        Some(pending)
+    } else {
+        None
+    };
 
     // Step 3 (unconditional, exactly as before this round): seal every claim in order, stopping at
     // the first failure and leaving every already-sealed claim sealed -- no rollback (§3).

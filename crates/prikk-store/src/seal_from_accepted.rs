@@ -433,13 +433,19 @@ fn seal_from_accepted_claim_impl(
     // variant alive to the classification point rather than flattening it into an undifferentiated
     // `PrikkError::Integrity` the way ordinary `seal_block` does.
     crash_point("before-block");
+    // 0.59.0 P5a1: nothing read through these is used past here, and a write session extends the object index through `Arc::make_mut`,
+    // which copies the whole index while any snapshot of it is alive. Dropped first, the write extends the one kept copy in place; held, every
+    // claim copied the index (two live copies at the peak). A later use of either is a compile error.
+    drop(fresh);
+    drop(read_snapshot);
     let mut object_store = ObjectWriteSession::open(layout)?;
-    // 0.58.0 S2b: the root this claim's Block carries is the one the batch's single fold produced, when the plan still holds it (its next
-    // step's selection is exactly this claim's) and no checkpoint is due (that Block carries a snapshot of its own state, which the plan
-    // does not hold). Otherwise this claim is sealed from disk exactly as it was before, with the same checks and the same messages.
+    // 0.58.0 S2b / 0.59.0 P5a1: the root this claim's Block carries is the one the batch's running fold produces here, when the plan still
+    // holds it (its next step's selection is exactly this claim's), and a checkpoint's snapshot is written from that fold's state for
+    // this claim alone. Otherwise (the plan was abandoned, or its fold could not apply the claim) this claim is sealed from disk exactly
+    // as it was before, with the same checks and the same messages.
     let planned = plan
         .as_deref_mut()
-        .and_then(|plan| plan.take_step_for(&selected_patch_ids));
+        .and_then(|plan| plan.take_step_for(&selected_patch_ids, &object_store));
     let folded_block = match planned {
         Some((root, verified)) => crate::block_state::batch_fold::seal_block_with_folded_root(
             layout,
@@ -452,6 +458,8 @@ fn seal_from_accepted_claim_impl(
         )?,
         None => None,
     };
+    #[cfg(any(test, feature = "test-support"))]
+    let sealed_from_the_plan = folded_block.is_some();
     let block_id = match folded_block {
         Some(block_id) => block_id,
         None => seal_block_classified(
@@ -470,6 +478,10 @@ fn seal_from_accepted_claim_impl(
         )?,
     };
 
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(plan) = plan.as_deref_mut() {
+        plan.note_sealed(sealed_from_the_plan);
+    }
     crash_point("after-block");
     // AUD-08: untested here, deliberately -- unlike `seal`/`execute_merge`, this function's own
     // `ensure_no_incomplete_publication(layout)` call above (line 108) already refuses the only way

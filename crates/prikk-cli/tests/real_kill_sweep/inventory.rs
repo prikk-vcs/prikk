@@ -87,7 +87,7 @@ pub const VERBS: &[(&str, Status)] = &[
     (
         "sync",
         Partly(
-            &["sync_seal_batch"],
+            &["sync_seal_batch", "sync_seal_checkpoint"],
             "`sync accept`, `sync adopt-tag` and the rest are not measured; `sync seal` rows have their own real-kill tests",
         ),
     ),

@@ -995,7 +995,7 @@ fn the_plan_folds_every_claim_of_these_shapes() {
         // The batch's own order, as `sync seal --claims` derives it from the claims' signed parent relationships.
         let snapshot = prikk_store::ObjectReadSnapshot::open(&layout).unwrap();
         let ordered = prikk_store::order_claims_for_sealing(&snapshot, &claims).unwrap();
-        let plan = prikk_store::plan_seal_batch(&layout, "heads/main", &ordered);
+        let plan = prikk_store::plan_seal_batch(&layout, "heads/main", &ordered, true);
         assert_eq!(
             plan.planned_claims(),
             claims_expected,

@@ -49,6 +49,76 @@ pub(crate) fn nearest_snapshot_within_cadence(
     Ok(None)
 }
 
+/// What one claim's fold produced.
+pub(crate) struct FoldedStep {
+    /// The root of the state after the claim's patches: the root its Block carries.
+    pub(crate) root: MerkleRoot,
+    /// The entries and text cache of that state, kept only when the claim's Block is a checkpoint (it carries a snapshot of its own
+    /// state, written before the Block).
+    pub(crate) snapshot_inputs: Option<RetainedState>,
+}
+
+/// A checkpoint's state, held from the claim's fold until its snapshot is written. **At most one is alive at a time** (0.59.0 P5a1): the
+/// running fold produces it at the claim whose Block is a checkpoint, the seal consumes it before the next claim is folded, and the plan
+/// keeps none. (0.58.0 kept every checkpoint's state from the up-front fold until its claim was sealed, which in a tree that gains a path
+/// per claim is about 0.81 x claims^2 bytes.)
+pub(crate) struct RetainedState {
+    entries: Vec<StateRootEntry>,
+    text_cache: TextCache,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RETAINED_LIVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static RETAINED_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// A control (`cfg(test)`): the last entry of every checkpoint snapshot is left out, so a test can see that its comparison can fail.
+    static DROP_SNAPSHOT_ENTRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The most checkpoint states alive at once on this thread since the last call (`cfg(test)`): the pin that a batch holds one at a time.
+#[cfg(test)]
+pub(crate) fn retained_states_peak_for_test() -> usize {
+    RETAINED_PEAK.with(|peak| peak.replace(RETAINED_LIVE.with(std::cell::Cell::get)))
+}
+
+/// Run `body` with the snapshot-entry control on (`cfg(test)`).
+#[cfg(test)]
+pub(crate) fn with_snapshot_entry_dropped_for_test<T>(body: impl FnOnce() -> T) -> T {
+    DROP_SNAPSHOT_ENTRY.with(|flag| flag.set(true));
+    let result = body();
+    DROP_SNAPSHOT_ENTRY.with(|flag| flag.set(false));
+    result
+}
+
+impl RetainedState {
+    fn new(entries: Vec<StateRootEntry>, text_cache: TextCache) -> Self {
+        #[cfg(test)]
+        RETAINED_LIVE.with(|live| {
+            live.set(live.get() + 1);
+            RETAINED_PEAK.with(|peak| peak.set(peak.get().max(live.get())));
+        });
+        Self {
+            entries,
+            text_cache,
+        }
+    }
+
+    /// The entries and the text cache, leaving this empty.
+    pub(crate) fn into_parts(mut self) -> (Vec<StateRootEntry>, TextCache) {
+        (
+            std::mem::take(&mut self.entries),
+            std::mem::take(&mut self.text_cache),
+        )
+    }
+}
+
+#[cfg(test)]
+impl Drop for RetainedState {
+    fn drop(&mut self) {
+        RETAINED_LIVE.with(|live| live.set(live.get().saturating_sub(1)));
+    }
+}
+
 /// One running derivation through a `sync seal` batch (0.58.0 S2b, RFC 159's mechanism with the batch's own state as an in-memory
 /// anchor). The pre-batch state is derived **once**, anchored as RFC 159 already anchors `AnchorSite::SealFromAccepted`
 /// ([`BatchFold::begin`]); each claim's patches are then applied to that one state in claim order ([`BatchFold::fold`]), and the root of
@@ -58,21 +128,14 @@ pub(crate) fn nearest_snapshot_within_cadence(
 /// never reused past a doubt -- the plan that holds the fold ends at the first claim whose fold fails or whose selection differs from the
 /// real loop's, and every later claim derives from disk as it always did.
 ///
-/// A `BatchFold` whose `fold` returned an error is partly applied and must be dropped; the caller stops folding there.
-/// What one claim's fold produced.
-pub(crate) struct FoldedStep {
-    /// The root of the state after the claim's patches: the root its Block carries.
-    pub(crate) root: MerkleRoot,
-    /// The entries and text cache of that state, kept only when the claim's Block is a checkpoint (it carries a snapshot of its own
-    /// state, written before the Block).
-    pub(crate) snapshot_inputs: Option<(Vec<StateRootEntry>, TextCache)>,
-}
-
+/// **0.59.0 P5a1: the fold advances with the loop.** The plan holds the fold and the loop advances it one claim at a time, so the
+/// batch holds one state (and, at a checkpoint, that one claim's snapshot inputs), not one per checkpoint. The same fold also exists
+/// in a second form, [`BatchFold::apply`]-only, run once up front on the current branch to reach the state the in-the-way check judges.
+///
+/// A `BatchFold` whose `fold` or `apply` returned an error is partly applied and must be dropped; the caller stops there.
 pub(crate) struct BatchFold {
     state: NodeLifecycleState,
     text_cache: TextCache,
-    /// Entries of the state after the last claim folded, kept for the one use past the roots: the in-the-way check's target manifest.
-    last_entries: Vec<StateRootEntry>,
     /// Blocks whose roots the starting derivation confirmed by replay (the first sealed claim records them, as before).
     verified: Vec<ObjectId>,
 }
@@ -89,9 +152,28 @@ impl BatchFold {
         Ok(Self {
             state: derived.state,
             text_cache: derived.text_cache,
-            last_entries: derived.entries,
             verified: derived.verified,
         })
+    }
+
+    /// A second fold at the same state, for the loop to advance while this one runs ahead: the state and text cache are copied, the
+    /// verified ids stay with the original.
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            text_cache: self.text_cache.clone(),
+            verified: Vec::new(),
+        }
+    }
+
+    /// Apply `patch_ids` to the running state and nothing else: no entries, no collision check, no root.
+    pub(crate) fn apply(
+        &mut self,
+        reader: &impl ObjectReader,
+        patch_ids: &[ObjectId],
+    ) -> std::result::Result<(), CandidateStateDerivationError> {
+        apply_candidate_patches(reader, &mut self.state, &mut self.text_cache, patch_ids)
+            .map_err(CandidateStateDerivationError::Patch)
     }
 
     /// Apply `patch_ids` to the running state and return the state root of the result: what the Block sealed from these patches carries.
@@ -101,16 +183,23 @@ impl BatchFold {
         patch_ids: &[ObjectId],
         retain_for_snapshot: bool,
     ) -> std::result::Result<FoldedStep, CandidateStateDerivationError> {
-        apply_candidate_patches(reader, &mut self.state, &mut self.text_cache, patch_ids)
-            .map_err(CandidateStateDerivationError::Patch)?;
+        self.apply(reader, patch_ids)?;
         // The same collision policy a sealed state asks (`derive_candidate`): a state being authored refuses a collision.
         let entries = entries_from_state(&self.state)
             .and_then(|entries| refuse_colliding_entries(&entries).map(|()| entries))
             .map_err(CandidateStateDerivationError::Lineage)?;
         let root = compute_state_root(&entries).map_err(CandidateStateDerivationError::Lineage)?;
-        let snapshot_inputs =
-            retain_for_snapshot.then(|| (entries.clone(), self.text_cache.clone()));
-        self.last_entries = entries;
+        let snapshot_inputs = retain_for_snapshot.then(|| {
+            #[cfg(test)]
+            let entries = if DROP_SNAPSHOT_ENTRY.with(std::cell::Cell::get) {
+                let mut entries = entries;
+                entries.pop();
+                entries
+            } else {
+                entries
+            };
+            RetainedState::new(entries, self.text_cache.clone())
+        });
         Ok(FoldedStep {
             root,
             snapshot_inputs,
@@ -122,9 +211,15 @@ impl BatchFold {
         &self.verified
     }
 
-    /// The state after the last claim folded: the entries and the text cache (the target manifest of the in-the-way check).
-    pub(crate) fn into_last_state(self) -> (Vec<StateRootEntry>, TextCache) {
-        (self.last_entries, self.text_cache)
+    /// The entries and the text cache of the state as it stands (the target manifest of the in-the-way check), derived once, with the
+    /// collision policy of [`BatchFold::fold`].
+    pub(crate) fn into_final_state(
+        self,
+    ) -> std::result::Result<(Vec<StateRootEntry>, TextCache), CandidateStateDerivationError> {
+        let entries = entries_from_state(&self.state)
+            .and_then(|entries| refuse_colliding_entries(&entries).map(|()| entries))
+            .map_err(CandidateStateDerivationError::Lineage)?;
+        Ok((entries, self.text_cache))
     }
 }
 
@@ -143,9 +238,10 @@ pub(crate) fn seal_block_with_folded_root(
     replay_verified: Vec<ObjectId>,
 ) -> Result<Option<ObjectId>> {
     let snapshot_blob_ref = if checkpoint_due(&*object_store, parent)? {
-        let Some((entries, text_cache)) = step.snapshot_inputs else {
+        let Some(retained) = step.snapshot_inputs else {
             return Ok(None);
         };
+        let (entries, text_cache) = retained.into_parts();
         Some(write_checkpoint_snapshot(
             object_store,
             entries,

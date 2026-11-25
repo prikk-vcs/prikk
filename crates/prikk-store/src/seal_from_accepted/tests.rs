@@ -6,8 +6,9 @@
 
 use prikk_error::{PrikkError, Result};
 use prikk_object::{
-    BlobKind, BlobPayload, CanonicalEncode, CreateFile, NodeId, ObjectEnvelope, ObjectId,
-    ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose, RecognitionClaimPayload,
+    BlobKind, BlobPayload, CanonicalEncode, ChangePerm, CreateFile, NodeId, ObjectEnvelope,
+    ObjectId, ObjectType, Operation, OperationKind, PatchPayload, PatchPurpose,
+    RecognitionClaimPayload,
 };
 
 use super::{SealFromAcceptedOutcome, seal_from_accepted_claim};
@@ -1346,7 +1347,7 @@ fn s2b_a_batch_of_chained_claims_is_derived_once() -> Result<()> {
 
         let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
         let before = crate::block_state::derive_candidate_calls_for_test();
-        let mut plan = super::plan_seal_batch(&fixture.layout, TARGET_REF, &claims);
+        let mut plan = super::plan_seal_batch(&fixture.layout, TARGET_REF, &claims, true);
         assert_eq!(plan.planned_claims(), claim_count, "every claim folds");
         for claim in &claims {
             let outcome = super::seal_from_accepted_claim_in_batch(
@@ -1385,7 +1386,7 @@ fn s3_a_batch_reads_the_claims_and_the_history_once() -> Result<()> {
     let before = super::batch_reads_for_test();
     let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
-    plan.fold(&fixture.layout, &claims);
+    plan.fold(&fixture.layout, &claims, true);
     for claim in &claims {
         let outcome = super::seal_from_accepted_claim_in_batch(
             &fixture.layout,
@@ -1422,7 +1423,7 @@ fn s6_a_batch_builds_its_claims_index_once() -> Result<()> {
     let before = super::batch::claims_index_builds_for_test();
     let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
-    plan.fold(&fixture.layout, &claims);
+    plan.fold(&fixture.layout, &claims, true);
     for claim in &claims {
         let outcome = super::seal_from_accepted_claim_in_batch(
             &fixture.layout,
@@ -1503,7 +1504,7 @@ fn s6_a_batch_writes_the_record_once_and_a_later_claim_sees_an_earlier_entry() -
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
     let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
-    plan.fold(&fixture.layout, &claims);
+    plan.fold(&fixture.layout, &claims, true);
     let record = crate::verified_blocks::record_path(&fixture.layout);
     let mut sealed = Vec::new();
     for claim in &claims {
@@ -1574,7 +1575,7 @@ fn s3_a_claim_stored_mid_batch_is_seen_by_the_next_claim() -> Result<()> {
     let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
     let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF)?;
     plan.require_parents_reached(&fixture.layout, &claims)?;
-    plan.fold(&fixture.layout, &claims);
+    plan.fold(&fixture.layout, &claims, true);
     let sealed = super::seal_from_accepted_claim_in_batch(
         &fixture.layout,
         &lock,
@@ -1616,6 +1617,446 @@ fn s3_a_claim_stored_mid_batch_is_seen_by_the_next_claim() -> Result<()> {
         "the first claim's seal is kept"
     );
     drop(lock);
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 P5a1: the fold holds one state at a time, and the claim drops its read snapshot before it writes.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+/// One claim of a shaped batch: a file created at a new path (the tree gains a path), a mode change of the first file (the tree stays the
+/// same size), or a mode change of a node that does not exist (a claim whose patches cannot apply), or a path that differs only in case from
+/// the first file's (a claim whose state collides).
+#[derive(Clone, Copy)]
+enum BatchStep {
+    Create,
+    TogglePerm,
+    UnknownNodePerm,
+    CollidingCreate,
+}
+
+fn perm_patch(
+    signer: &Ed25519AuthorSigner,
+    node_seed: u8,
+    old_mode: u32,
+    new_mode: u32,
+    message: &str,
+) -> Result<ObjectEnvelope> {
+    let payload = PatchPayload {
+        operations: vec![Operation {
+            op_seq: 1,
+            op_id: None,
+            preconditions: Vec::new(),
+            kind: OperationKind::ChangePerm(ChangePerm {
+                node_id: NodeId::from_bytes([node_seed; 32]),
+                old_mode,
+                new_mode,
+            }),
+        }],
+        intent: None,
+        preconditions: Vec::new(),
+        purpose: PatchPurpose::Normal,
+        message: Some(message.to_string()),
+    };
+    let mut envelope = ObjectEnvelope::unsigned(
+        ObjectType::Patch,
+        prikk_object::PATCH_MESSAGE_SCHEMA,
+        payload.to_canonical_bytes()?,
+    );
+    let id = envelope.object_id();
+    envelope.add_signature(author_signature(signer, id)?)?;
+    Ok(envelope)
+}
+
+/// A chain of single-patch claims (each naming the previous as its parent) of the given steps, over `base_fixture`'s repository. The first
+/// `Create` is the node every `TogglePerm` changes.
+fn shaped_batch_fixture(name: &str, steps: &[BatchStep]) -> Result<(BaseFixture, Vec<ObjectId>)> {
+    let fixture = base_fixture(name)?;
+    let author = author_signer(0x70)?;
+    let mut objects = FileObjectStore::new(fixture.layout.clone());
+    let mut claims = Vec::new();
+    let mut previous_block = None;
+    let mut creates = 0_u8;
+    let mut exec = false;
+    for (index, step) in steps.iter().enumerate() {
+        let blob = write_blob(&mut objects, format!("file {index}\n").as_bytes())?;
+        let patch = match step {
+            BatchStep::Create => {
+                let seed = 0x71_u8.wrapping_add(creates);
+                let path = format!("f{creates}.txt");
+                creates += 1;
+                write_create_file_patch(&mut objects, &author, &path, seed, blob)?
+            }
+            BatchStep::CollidingCreate => {
+                write_create_file_patch(&mut objects, &author, "F0.TXT", 0xE0, blob)?
+            }
+            BatchStep::TogglePerm => {
+                let (old, new) = if exec {
+                    (0o100_755, 0o100_644)
+                } else {
+                    (0o100_644, 0o100_755)
+                };
+                exec = !exec;
+                objects.write_object(&perm_patch(
+                    &author,
+                    0x71,
+                    old,
+                    new,
+                    &format!("toggle {index}"),
+                )?)?
+            }
+            BatchStep::UnknownNodePerm => objects.write_object(&perm_patch(
+                &author,
+                0xEE,
+                0o100_644,
+                0o100_755,
+                &format!("unknown {index}"),
+            )?)?,
+        };
+        let mut block = [0xB0_u8; 32];
+        block[..8].copy_from_slice(&u64::try_from(index).unwrap_or(0).to_be_bytes());
+        let block_id = ObjectId::from_bytes(block);
+        claims.push(write_claim_with_parents(
+            &mut objects,
+            &fixture.signer,
+            block_id,
+            vec![patch],
+            previous_block.into_iter().collect(),
+        )?);
+        previous_block = Some(block_id);
+    }
+    Ok((fixture, claims))
+}
+
+/// What sealing a batch left: the outcomes up to the first refusal, the tip, the Block container's bytes, and what the plan counted.
+struct BatchRun {
+    sealed: usize,
+    refusal: Option<String>,
+    tip: Option<ObjectId>,
+    blocks: Vec<u8>,
+    counts: (usize, usize),
+    retained_peak: usize,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    index_copies: usize,
+    planned_after_fold: usize,
+    judged_entries: Option<usize>,
+    steps_capacity: usize,
+}
+
+/// Seal `claims` in order onto `ref_name`, stopping at the first refusal, as `sync seal` does. `plan`: `None` seals every claim from disk
+/// (no plan: the semantics every batch had before 0.58.0), `Some(current_branch)` plans the batch as the CLI does.
+fn run_batch(
+    fixture: &BaseFixture,
+    claims: &[ObjectId],
+    ref_name: &str,
+    plan: Option<bool>,
+) -> Result<BatchRun> {
+    // A batch holds the active lock for its whole length; the disk path takes it claim by claim itself.
+    let lock = plan
+        .map(|_| crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME))
+        .transpose()?;
+    let mut planned = match plan {
+        Some(current_branch) => {
+            let mut planned = super::SealBatchPlan::open(&fixture.layout, ref_name)?;
+            planned.require_parents_reached(&fixture.layout, claims)?;
+            planned.fold(&fixture.layout, claims, current_branch);
+            Some(planned)
+        }
+        None => None,
+    };
+    let planned_after_fold = planned
+        .as_ref()
+        .map_or(0, super::SealBatchPlan::planned_claims);
+    let judged_entries = planned
+        .as_ref()
+        .and_then(super::SealBatchPlan::final_state_entries);
+    let _ = crate::block_state::batch_fold::retained_states_peak_for_test();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let copies_before = crate::object_store::index_data_copies_for_test();
+    let mut sealed = 0;
+    let mut refusal = None;
+    for claim in claims {
+        let outcome = match (planned.as_mut(), lock.as_ref()) {
+            (Some(plan), Some(lock)) => super::seal_from_accepted_claim_in_batch(
+                &fixture.layout,
+                lock,
+                ref_name,
+                *claim,
+                &fixture.signer,
+                plan,
+            ),
+            _ => {
+                super::seal_from_accepted_claim(&fixture.layout, ref_name, *claim, &fixture.signer)
+            }
+        };
+        match outcome {
+            Ok(SealFromAcceptedOutcome::Sealed { .. }) => sealed += 1,
+            Ok(other) => panic!("{other:?}"),
+            Err(error) => {
+                refusal = Some(error.to_string());
+                break;
+            }
+        }
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let index_copies = crate::object_store::index_data_copies_for_test() - copies_before;
+    let retained_peak = crate::block_state::batch_fold::retained_states_peak_for_test();
+    let counts = planned
+        .as_ref()
+        .map_or((0, 0), super::SealBatchPlan::sealed_counts);
+    let steps_capacity = planned
+        .as_ref()
+        .map_or(0, super::SealBatchPlan::steps_capacity);
+    drop(planned);
+    drop(lock);
+    let ref_store = RefStore::new(fixture.layout.clone());
+    let tip = match ref_store.read_current_ref_state_id(ref_name)? {
+        Some(ref_state_id) => {
+            let object_store = FileObjectStore::new(fixture.layout.clone());
+            let envelope = crate::object_store::ObjectReader::read_typed(
+                &object_store,
+                ref_state_id,
+                ObjectType::RefState,
+            )?
+            .expect("ref state must exist");
+            Some(
+                prikk_object::RefStatePayload::decode_canonical(
+                    &envelope.canonical_payload,
+                    envelope.schema_version,
+                )?
+                .target_object_id,
+            )
+        }
+        None => None,
+    };
+    Ok(BatchRun {
+        sealed,
+        refusal,
+        tip,
+        blocks: block_container_bytes(&fixture.layout)?,
+        counts,
+        retained_peak,
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        index_copies,
+        planned_after_fold,
+        judged_entries,
+        steps_capacity,
+    })
+}
+
+fn growing_steps(claims: usize) -> Vec<BatchStep> {
+    vec![BatchStep::Create; claims]
+}
+
+fn fixed_steps(claims: usize) -> Vec<BatchStep> {
+    let mut steps = vec![BatchStep::Create];
+    steps.extend(std::iter::repeat_n(BatchStep::TogglePerm, claims - 1));
+    steps
+}
+
+/// The batch's bytes with the running fold equal the batch's bytes from disk, in both shapes (a tree that gains a path per claim, a tree that
+/// does not), on the current branch and on another, over a batch long enough to cross a checkpoint (the 65th Block); no claim of a normal batch
+/// falls back to disk; and **a control that can fail**: with the last entry of each checkpoint's snapshot left out the bytes differ.
+#[test]
+fn p5a1_the_running_fold_seals_the_bytes_the_disk_path_seals() -> Result<()> {
+    for (shape, steps) in [("growing", growing_steps(66)), ("fixed", fixed_steps(66))] {
+        for (ref_name, current_branch) in [
+            (TARGET_REF, true),
+            (TARGET_REF, false),
+            ("heads/other", false),
+        ] {
+            let case = format!("{shape}-{}-{current_branch}", ref_name.replace('/', "-"));
+            let (disk_fixture, disk_claims) =
+                shaped_batch_fixture(&format!("p5a1-disk-{case}"), &steps)?;
+            let disk = run_batch(&disk_fixture, &disk_claims, ref_name, None)?;
+            let (fixture, claims) = shaped_batch_fixture(&format!("p5a1-plan-{case}"), &steps)?;
+            let run = run_batch(&fixture, &claims, ref_name, Some(current_branch))?;
+            assert_eq!(
+                disk.sealed, 66,
+                "{case}: the disk path seals every claim ({:?})",
+                disk.refusal
+            );
+            assert_eq!(run.sealed, 66, "{case}");
+            assert_eq!(run.refusal, None, "{case}");
+            assert_eq!(run.tip, disk.tip, "{case}: the same tip");
+            assert_eq!(
+                run.blocks, disk.blocks,
+                "{case}: the same Blocks, byte for byte"
+            );
+            assert_eq!(
+                run.counts,
+                (66, 0),
+                "{case}: every claim sealed from the plan's running fold, none from disk"
+            );
+            assert_eq!(
+                run.steps_capacity, 0,
+                "{case}: a finished plan keeps no capacity of its steps buffer"
+            );
+            assert!(
+                run.retained_peak >= 1,
+                "{case}: the batch crossed a checkpoint, so a state was kept for a snapshot"
+            );
+            cleanup(&fixture.layout);
+            cleanup(&disk_fixture.layout);
+        }
+        // The control: the same batch with each checkpoint's snapshot short of its last entry must not equal the disk path.
+        let (disk_fixture, disk_claims) =
+            shaped_batch_fixture(&format!("p5a1-ctl-disk-{shape}"), &steps)?;
+        let disk = run_batch(&disk_fixture, &disk_claims, TARGET_REF, None)?;
+        let (fixture, claims) = shaped_batch_fixture(&format!("p5a1-ctl-plan-{shape}"), &steps)?;
+        let perturbed =
+            crate::block_state::batch_fold::with_snapshot_entry_dropped_for_test(|| {
+                run_batch(&fixture, &claims, TARGET_REF, Some(true))
+            })?;
+        assert_ne!(
+            perturbed.blocks, disk.blocks,
+            "{shape}: the comparison above can fail"
+        );
+        cleanup(&fixture.layout);
+        cleanup(&disk_fixture.layout);
+    }
+    Ok(())
+}
+
+/// The fold holds **at most one checkpoint state at a time** (not a timing: a count of live states). Three checkpoints (the 1st, 65th and
+/// 129th Blocks), and the plan itself holds no state per step.
+#[test]
+fn p5a1_the_batch_holds_one_checkpoint_state_at_a_time() -> Result<()> {
+    for current_branch in [true, false] {
+        let (fixture, claims) = shaped_batch_fixture(
+            &format!("p5a1-one-state-{current_branch}"),
+            &growing_steps(130),
+        )?;
+        let run = run_batch(&fixture, &claims, TARGET_REF, Some(current_branch))?;
+        assert_eq!(run.sealed, 130);
+        assert_eq!(
+            run.retained_peak, 1,
+            "130 claims cross three checkpoints; one state is alive at a time (current branch: {current_branch})"
+        );
+        assert_eq!(run.counts, (130, 0), "none sealed from disk");
+        cleanup(&fixture.layout);
+    }
+    Ok(())
+}
+
+/// The up-front apply-only pass runs on the current branch only: it is what the in-the-way check judges, and nothing else uses it.
+#[test]
+fn p5a1_the_state_the_check_judges_is_built_for_the_current_branch_only() -> Result<()> {
+    let steps = growing_steps(5);
+    let (fixture, claims) = shaped_batch_fixture("p5a1-judged-current", &steps)?;
+    let current = run_batch(&fixture, &claims, TARGET_REF, Some(true))?;
+    assert_eq!(
+        current.judged_entries,
+        Some(5),
+        "the state after all five claims"
+    );
+    cleanup(&fixture.layout);
+    let (fixture, claims) = shaped_batch_fixture("p5a1-judged-other", &steps)?;
+    let other = run_batch(&fixture, &claims, TARGET_REF, Some(false))?;
+    assert_eq!(
+        other.judged_entries, None,
+        "no state is built for a branch that is not the current one"
+    );
+    assert_eq!(other.planned_after_fold, 5, "every claim is still planned");
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// A claim whose patches cannot apply, or whose state collides, ends the plan there, as the 0.58.0 fold did: the state the check judges is the
+/// one after the last claim that folded, the claims before it seal from the plan, and the claim itself is refused from disk with the
+/// refusal the disk path gives (the same text with and without a plan, on the current branch and not).
+#[test]
+fn p5a1_a_claim_that_will_not_fold_ends_the_plan_there() -> Result<()> {
+    for (label, bad) in [
+        ("unapplicable", BatchStep::UnknownNodePerm),
+        ("colliding", BatchStep::CollidingCreate),
+    ] {
+        let steps = [BatchStep::Create, BatchStep::Create, bad, BatchStep::Create];
+        let (disk_fixture, disk_claims) =
+            shaped_batch_fixture(&format!("p5a1-bad-disk-{label}"), &steps)?;
+        let disk = run_batch(&disk_fixture, &disk_claims, TARGET_REF, None)?;
+        assert_eq!(
+            disk.sealed, 2,
+            "{label}: the disk path seals two and refuses the third"
+        );
+        let refusal = disk.refusal.clone().expect("the third claim is refused");
+        for current_branch in [true, false] {
+            let (fixture, claims) =
+                shaped_batch_fixture(&format!("p5a1-bad-{label}-{current_branch}"), &steps)?;
+            let run = run_batch(&fixture, &claims, TARGET_REF, Some(current_branch))?;
+            assert_eq!(run.sealed, 2, "{label} {current_branch}");
+            assert_eq!(
+                run.refusal.as_deref(),
+                Some(refusal.as_str()),
+                "{label} {current_branch}: the same refusal"
+            );
+            assert_eq!(
+                run.blocks, disk.blocks,
+                "{label} {current_branch}: the same Blocks"
+            );
+            assert_eq!(
+                run.counts,
+                (2, 0),
+                "{label} {current_branch}: the claim that does not fold is refused before a Block is sealed"
+            );
+            if current_branch {
+                assert_eq!(
+                    run.planned_after_fold, 2,
+                    "{label}: the plan ends at the claim that does not fold"
+                );
+                assert_eq!(
+                    run.judged_entries,
+                    Some(2),
+                    "{label}: the state the check judges is the one after the second claim"
+                );
+            } else {
+                assert_eq!(run.judged_entries, None);
+            }
+            cleanup(&fixture.layout);
+        }
+        cleanup(&disk_fixture.layout);
+    }
+    Ok(())
+}
+
+/// A claim's write extends the one kept object index in place: the claim's read snapshot is gone before the write session opens, so
+/// `Arc::make_mut` finds no other holder and copies nothing. Before 0.59.0 every claim of a batch copied the whole index (two live copies
+/// at the peak).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn p5a1_a_claim_does_not_copy_the_object_index() -> Result<()> {
+    let (fixture, claims) = shaped_batch_fixture("p5a1-index-copies", &growing_steps(8))?;
+    let run = run_batch(&fixture, &claims, TARGET_REF, Some(true))?;
+    assert_eq!(run.sealed, 8);
+    assert_eq!(
+        run.index_copies, 0,
+        "no copy-on-write copy of the index during the batch"
+    );
+    cleanup(&fixture.layout);
+    Ok(())
+}
+
+/// The shape of the real-kill sweep `sync_seal_checkpoint`: a base of 62 sealed Blocks and a batch of three claims, which crosses a checkpoint
+/// (the 65th Block carries a snapshot), so the sweep kills a batch whose running fold hands a state to a snapshot write. The pin that the shape
+/// does what the sweep's name says.
+#[test]
+fn p5a1_a_short_batch_onto_62_blocks_crosses_a_checkpoint() -> Result<()> {
+    let (fixture, claims) = shaped_batch_fixture("p5a1-short-batch", &growing_steps(65))?;
+    let base = run_batch(&fixture, &claims[..62], TARGET_REF, Some(true))?;
+    assert_eq!(base.sealed, 62);
+    assert_eq!(base.retained_peak, 1, "the first Block is a checkpoint");
+    let batch = run_batch(&fixture, &claims[62..], TARGET_REF, Some(true))?;
+    assert_eq!(batch.sealed, 3);
+    assert_eq!(
+        batch.counts,
+        (3, 0),
+        "all three sealed from the running fold"
+    );
+    assert_eq!(
+        batch.retained_peak, 1,
+        "the third claim's Block is the 65th: a checkpoint inside a batch of three"
+    );
     cleanup(&fixture.layout);
     Ok(())
 }

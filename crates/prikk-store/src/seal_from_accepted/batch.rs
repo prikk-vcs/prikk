@@ -23,11 +23,13 @@ use crate::worktree_materialize::{
 
 /// The batch, read and folded once (0.58.0 S2b and S3; RFC 159's mechanism with the batch's running state as an in-memory anchor).
 ///
-/// **S2b, the fold.** [`SealBatchPlan::fold`] derives the pre-batch state once and applies each claim's patches to that one state in the
-/// batch's order, producing the state root each claim's Block will carry and, at the end, the state the batch will publish -- the target of
-/// the pre-write in-the-way check ([`require_nothing_in_the_way_for_seal_batch`]). The real loop ([`super::seal_from_accepted_claim_in_batch`])
-/// consumes it claim by claim, so the batch is derived **once**.
-///
+/// **S2b, the fold (0.59.0 P5a1: one state at a time).** [`SealBatchPlan::fold`] derives the pre-batch state once and **selects** each
+/// claim's patches (its own, less what the ref's history holds) in the batch's order. On the current branch it also runs an **apply-only**
+/// pass over a copy of that state (no entries, no root), because the pre-write in-the-way check
+/// ([`require_nothing_in_the_way_for_seal_batch`]) judges the state the batch will publish; on any other branch that pass is skipped, since
+/// its only product is that state. The real loop ([`super::seal_from_accepted_claim_in_batch`]) advances a **second, running fold** one
+/// claim at a time and seals each claim with the root it produces, writing a checkpoint's snapshot from that claim's state alone, so the
+/// batch holds one state, never one per checkpoint (0.58.0 held them all: about 0.81 x claims^2 bytes in a tree that gains a path per claim).
 /// **S3, the reads.** [`SealBatchPlan::open`] reads, once per batch, the two sets every per-claim check used to re-read: the stored
 /// recognition claims (the order-ambiguity check and the parent check) and the ref's history (which patches are already sealed). They live
 /// here, beside the fold's running state, as one reader each. The history is **extended** by each block the batch publishes, not re-walked;
@@ -41,18 +43,21 @@ pub struct SealBatchPlan {
     /// The batch-scoped reads; `None` for a plan that could not be opened (every check then reads as it always did).
     pub(super) reads: Option<BatchReads>,
     steps: std::collections::VecDeque<PlannedStep>,
-    /// The state after the last claim folded (its entries and text cache); `None` when no claim folded. The in-the-way check turns it
-    /// into the replay manifest it judges, only when it runs: that manifest holds every file's bytes, which a batch onto a branch that is
-    /// not the current one never needs.
-    final_state: Option<(
-        Vec<crate::state_root::StateRootEntry>,
-        crate::lifecycle_cache::replay::TextCache,
-    )>,
+    /// The fold the loop advances, one claim per [`Self::take_step_for`]; `None` when no claim is planned.
+    running: Option<crate::block_state::batch_fold::BatchFold>,
+    /// The state after the last claim that applied (its entries and text cache); `None` when no claim did, and **always `None` for a
+    /// batch onto a branch that is not the current one** (the in-the-way check does not run there). The check turns it into the replay
+    /// manifest it judges, only when it runs: that manifest holds every file's bytes.
+    final_state: Option<FinalState>,
     /// Blocks the starting derivation verified, recorded with the first Block this plan seals.
     verified: Option<Vec<ObjectId>>,
     /// While the plan is alive the replay-verified record is not rewritten per sealed Block: the batch's ids are written once, when this
     /// ends ([`Self::finish_records`], or the plan's drop). 0.58.0 S6.
     records: Option<crate::verified_blocks::DeferredRecords>,
+    /// Claims sealed with the root the plan's running fold produced, and claims sealed from disk with a plan present (`cfg(test)` and
+    /// `test-support`): a batch whose claims all fold asserts the second is zero.
+    #[cfg(any(test, feature = "test-support"))]
+    sealed_counts: (usize, usize),
 }
 
 /// What a batch reads once.
@@ -135,11 +140,17 @@ impl ClaimsIndex {
     }
 }
 
+/// The entries and text cache of a state: what the in-the-way check turns into the manifest it judges.
+type FinalState = (
+    Vec<crate::state_root::StateRootEntry>,
+    crate::lifecycle_cache::replay::TextCache,
+);
+
 struct PlannedStep {
     /// The patches this claim seals (its own, less what the ref's history already holds), in the claim's order.
     selected: Vec<ObjectId>,
-    /// The root of the state after them, and (for a checkpoint) what its snapshot is written from.
-    folded: crate::block_state::batch_fold::FoldedStep,
+    /// This claim's Block is a checkpoint: it carries a snapshot of its own state, which the running fold keeps for it.
+    checkpoint: bool,
 }
 
 impl SealBatchPlan {
@@ -147,9 +158,12 @@ impl SealBatchPlan {
         Self {
             reads: None,
             steps: std::collections::VecDeque::new(),
+            running: None,
             final_state: None,
             verified: None,
             records: None,
+            #[cfg(any(test, feature = "test-support"))]
+            sealed_counts: (0, 0),
         }
     }
 
@@ -319,22 +333,42 @@ impl SealBatchPlan {
         Ok(())
     }
 
-    /// The planned root for the claim whose own selection is `selected`, if the plan is still the plan: the next step's selection must be
-    /// exactly this one. Any other selection abandons the plan's fold (every claim after it seals from disk).
+    /// The root for the claim whose own selection is `selected`, if the plan is still the plan: the next step's selection must be exactly
+    /// this one. Any other selection, and any claim the running fold cannot apply, abandons the plan (every claim after it seals from
+    /// disk). **The running fold advances here**, one claim, reading the patches through `reader`.
     pub(super) fn take_step_for(
         &mut self,
         selected: &[ObjectId],
+        reader: &impl ObjectReader,
     ) -> Option<(crate::block_state::batch_fold::FoldedStep, Vec<ObjectId>)> {
         let matches = self
             .steps
             .front()
             .is_some_and(|step| step.selected == selected);
         if !matches {
-            self.steps.clear();
+            self.abandon();
             return None;
         }
         let step = self.steps.pop_front()?;
-        Some((step.folded, self.verified.take().unwrap_or_default()))
+        let folded = self
+            .running
+            .as_mut()
+            .and_then(|running| running.fold(reader, &step.selected, step.checkpoint).ok());
+        let Some(folded) = folded else {
+            self.abandon();
+            return None;
+        };
+        if self.steps.is_empty() {
+            self.abandon();
+        }
+        Some((folded, self.verified.take().unwrap_or_default()))
+    }
+
+    /// Drop what the plan holds for the claims still to come: the steps (and their buffer, which popping does not shrink) and the
+    /// running fold.
+    fn abandon(&mut self) {
+        self.steps = std::collections::VecDeque::new();
+        self.running = None;
     }
 
     /// How many claims are still planned (for the controls).
@@ -344,11 +378,49 @@ impl SealBatchPlan {
         self.steps.len()
     }
 
-    /// Fold the batch once, before anything is written. Stops with no opinion at the first doubt, and leaves the plan with the steps it
-    /// has by then.
-    pub fn fold(&mut self, layout: &RepositoryLayout, ordered_claim_ids: &[ObjectId]) {
-        if self.fold_inner(layout, ordered_claim_ids).is_none() {
-            self.steps.clear();
+    /// How many claims this plan sealed from its running fold, and how many it sealed from disk (`cfg(test)` and `test-support`).
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn sealed_counts(&self) -> (usize, usize) {
+        self.sealed_counts
+    }
+
+    /// How many entries the state the in-the-way check will judge has (`cfg(test)`).
+    #[cfg(test)]
+    pub(super) fn final_state_entries(&self) -> Option<usize> {
+        self.final_state.as_ref().map(|(entries, _)| entries.len())
+    }
+
+    /// The capacity the plan's steps buffer holds (`cfg(test)`): a popped `VecDeque` keeps its buffer, so a finished plan must hold none.
+    #[cfg(test)]
+    pub(super) fn steps_capacity(&self) -> usize {
+        self.steps.capacity()
+    }
+
+    /// Count one claim sealed with the plan present (`planned`: from the running fold's root).
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn note_sealed(&mut self, planned: bool) {
+        if planned {
+            self.sealed_counts.0 += 1;
+        } else {
+            self.sealed_counts.1 += 1;
+        }
+    }
+
+    /// Select the batch's claims once and, when `current_branch` (the in-the-way check will run), apply them once to a copy of the
+    /// pre-batch state, before anything is written. Stops with no opinion at the first doubt, and leaves the plan with the steps it has by
+    /// then.
+    pub fn fold(
+        &mut self,
+        layout: &RepositoryLayout,
+        ordered_claim_ids: &[ObjectId],
+        current_branch: bool,
+    ) {
+        if self
+            .fold_inner(layout, ordered_claim_ids, current_branch)
+            .is_none()
+        {
+            self.abandon();
             self.final_state = None;
             self.verified = None;
         }
@@ -358,6 +430,7 @@ impl SealBatchPlan {
         &mut self,
         layout: &RepositoryLayout,
         ordered_claim_ids: &[ObjectId],
+        current_branch: bool,
     ) -> Option<()> {
         self.refresh_claims(layout).ok()?;
         let reads = self.reads.as_ref()?;
@@ -366,7 +439,7 @@ impl SealBatchPlan {
         // The ref's own history, as the real loop selects against it (`seal_from_accepted_claim_impl`): a claim's patches the history
         // already holds are skipped, and each claim's selection joins the history for the claims after it.
         let mut patches = reads.history.patches.clone();
-        let mut fold = crate::block_state::batch_fold::BatchFold::begin(
+        let fold = crate::block_state::batch_fold::BatchFold::begin(
             layout,
             &read_snapshot,
             tip,
@@ -423,9 +496,6 @@ impl SealBatchPlan {
                 break;
             }
             let checkpoint = snapshot_distance.is_none();
-            let Ok(folded) = fold.fold(&read_snapshot, &selected, checkpoint) else {
-                break;
-            };
             // The Block this claim will seal becomes the new tip: it carries a snapshot if it is a checkpoint, else the nearest snapshot
             // is one block further back (and out of reach once it is the cadence away).
             snapshot_distance = if checkpoint {
@@ -436,17 +506,70 @@ impl SealBatchPlan {
                     .filter(|distance| *distance < crate::snapshot::CHECKPOINT_CADENCE)
             };
             patches.extend(selected.iter().copied());
-            steps.push_back(PlannedStep { selected, folded });
+            steps.push_back(PlannedStep {
+                selected,
+                checkpoint,
+            });
         }
-        self.final_state = if steps.is_empty() {
-            None
+        if steps.is_empty() {
+            self.final_state = None;
+            self.verified = Some(verified);
+            return Some(());
+        }
+        if current_branch {
+            // The running fold starts from a copy; the original runs ahead, apply-only, to the state the in-the-way check judges.
+            let running = fold.fork();
+            let (kept, final_state) = judged_state(layout, &read_snapshot, tip, fold, &steps)?;
+            steps.truncate(kept);
+            self.final_state = final_state;
+            self.running = Some(running);
         } else {
-            Some(fold.into_last_state())
-        };
+            self.final_state = None;
+            self.running = Some(fold);
+        }
         self.steps = steps;
         self.verified = Some(verified);
         Some(())
     }
+}
+
+/// The state the in-the-way check judges, and how many of `steps` the plan keeps: **the state after the last claim that folded, and every claim
+/// that folded**, as the 0.58.0 fold judged it. The quick way is one apply-only pass over every claim and one entries derivation with the
+/// collision policy at the end. If a claim does not apply, or the final state collides, the quick way cannot say which claim to stop at, so
+/// the same claims are folded again the exact way (each one's entries and collision policy, keeping the last good state): that is the 0.58.0
+/// fold, run only for a batch with a claim that would not seal.
+fn judged_state(
+    layout: &RepositoryLayout,
+    read_snapshot: &ObjectReadSnapshot,
+    tip: Option<ObjectId>,
+    mut fold: crate::block_state::batch_fold::BatchFold,
+    steps: &std::collections::VecDeque<PlannedStep>,
+) -> Option<(usize, Option<FinalState>)> {
+    let applied = steps
+        .iter()
+        .try_for_each(|step| fold.apply(read_snapshot, &step.selected));
+    if applied.is_ok() {
+        if let Ok(final_state) = fold.into_final_state() {
+            return Some((steps.len(), Some(final_state)));
+        }
+    }
+    let mut exact = crate::block_state::batch_fold::BatchFold::begin(
+        layout,
+        read_snapshot,
+        tip,
+        StateAnchoring::Anchored(AnchorSite::SealFromAccepted),
+    )
+    .ok()?;
+    let mut kept = 0;
+    let mut last = None;
+    for step in steps {
+        let Ok(folded) = exact.fold(read_snapshot, &step.selected, true) else {
+            break;
+        };
+        last = folded.snapshot_inputs.map(|state| state.into_parts());
+        kept += 1;
+    }
+    Some((kept, last))
 }
 
 /// Read the batch and fold it once, before anything is written: [`SealBatchPlan::open`] and [`SealBatchPlan::fold`], with a plan that
@@ -456,10 +579,11 @@ pub fn plan_seal_batch(
     layout: &RepositoryLayout,
     ref_name: &str,
     ordered_claim_ids: &[ObjectId],
+    current_branch: bool,
 ) -> SealBatchPlan {
     match SealBatchPlan::open(layout, ref_name) {
         Ok(mut plan) => {
-            plan.fold(layout, ordered_claim_ids);
+            plan.fold(layout, ordered_claim_ids, current_branch);
             plan
         }
         Err(_) => SealBatchPlan::empty(),

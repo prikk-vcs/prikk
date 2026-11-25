@@ -50,6 +50,12 @@ fn sync_seal_batch() {
     sweep("sync_seal_batch", shapes::sync_seal);
 }
 
+/// `sync seal` of a batch that crosses a checkpoint (0.59.0 P5a1): a base of 62 sealed blocks and three claims.
+#[test]
+fn sync_seal_checkpoint() {
+    sweep("sync_seal_checkpoint", shapes::sync_seal_checkpoint);
+}
+
 #[test]
 fn uncommit() {
     sweep("uncommit", shapes::uncommit);

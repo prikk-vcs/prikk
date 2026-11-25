@@ -165,6 +165,68 @@ pub fn sync_seal(ctx: &Ctx) -> Shape {
     )
 }
 
+/// `sync seal` of a batch of three claims onto a base of **62 sealed blocks**, so the batch crosses a checkpoint (a Block carries a snapshot of its
+/// own state when none lies within 63 ancestors: the 65th Block of the chain). 0.59.0 P5a1: the checkpoint is where the batch's running fold hands its
+/// state to `write_checkpoint_snapshot`, which `sync_seal`'s three claims onto an empty base never reach. A short batch, not a long one: the ordinals
+/// are K's, plus the snapshot's own.
+pub fn sync_seal_checkpoint(ctx: &Ctx) -> Shape {
+    let source = ctx.repo("src-sync-cp");
+    ctx.gens(&source, 62, true, 1);
+    // The maintainer's repository: a copy of the source at generation 62 (the keys are the one temporary key directory's).
+    let base = ctx.root.join("base-sync-cp");
+    let _ = std::fs::remove_dir_all(&base);
+    copy_tree(&source, &base);
+    ctx.gens(&source, 3, true, 63);
+    let have = ctx.root.join("have-cp.bin");
+    let art = ctx.root.join("art-cp.bin");
+    let claims = ctx.root.join("claims-cp.txt");
+    ctx.ok(
+        &base,
+        &[
+            "sync",
+            "have",
+            "heads/main",
+            "--output",
+            have.to_str().unwrap(),
+        ],
+    );
+    ctx.ok(
+        &source,
+        &[
+            "sync",
+            "build",
+            "heads/main",
+            "--have",
+            have.to_str().unwrap(),
+            "--output",
+            art.to_str().unwrap(),
+            "--force",
+        ],
+    );
+    ctx.ok(
+        &base,
+        &[
+            "sync",
+            "accept",
+            art.to_str().unwrap(),
+            "--claims-out",
+            claims.to_str().unwrap(),
+        ],
+    );
+    shape(
+        "sync-seal-checkpoint",
+        base,
+        args(&[
+            "sync",
+            "seal",
+            "heads/main",
+            "--claims",
+            claims.to_str().unwrap(),
+        ]),
+        |ctx, d| ctx.tree_files(d) == 1,
+    )
+}
+
 pub fn uncommit(ctx: &Ctx) -> Shape {
     let base = ctx.repo("base-uncommit");
     std::fs::write(base.join("one.txt"), "one\n").unwrap();
