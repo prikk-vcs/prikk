@@ -20,6 +20,7 @@ mod kept_ref_log;
 mod pointer_index;
 pub(crate) mod publication;
 mod rebuild_discovery;
+pub(crate) mod ref_log_summary;
 pub(crate) mod verify;
 
 // `append_ref_container_record`'s own sole consumer via this re-export is `refs::tests`
@@ -273,7 +274,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     // has its pointer entry in the pointer read that follows it; reading the pointer first let a first-ever publication land between the two
     // reads and read as a log record with no pointer (`in_flight::refusal_for_mismatch`). The two reads are made here and judged below in the
     // order this function has always judged them (a damaged pointer index first), so every genuine state is refused exactly as before.
-    let loaded_ref_log = kept_ref_log::load_ref_log_shared(layout);
+    let loaded_ref_log = kept_ref_log::load_ref_log_view(layout);
     #[cfg(test)]
     view_hooks::run("precondition-between-log-and-pointer");
     let pointer_replay = kept_pointer_index::replay_pointer_index_shared(layout)?;
@@ -290,8 +291,24 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     let mut newest_log: BTreeMap<[u8; 32], ObjectId> = BTreeMap::new();
     let mut log_names: BTreeMap<[u8; 32], String> = BTreeMap::new();
     let mut pending_tail_refusal: Option<(usize, usize)> = None;
-    if let Some(loaded) = loaded_ref_log? {
-        let (bytes, discovery) = (&loaded.bytes, &*loaded.replay);
+    // 0.59.0 P5a2: under a hold that kept a summary of a clean log, the loop below is the summary's answer (its newest record per ref, and whether any
+    // record carries `created_at != 0`): the same two facts, the same refusal, without decoding every record again. Anything else is the whole read.
+    let loaded_ref_log = match loaded_ref_log? {
+        Some(kept_ref_log::RefLogView::Summary(summary)) => {
+            if summary.created_at_bad() {
+                return Err(incomplete_publication_refusal());
+            }
+            for (key, chain) in summary.chains() {
+                newest_log.insert(*key, chain.tip);
+                log_names.insert(*key, chain.last_name.clone());
+            }
+            None
+        }
+        Some(kept_ref_log::RefLogView::Whole(loaded)) => Some(loaded),
+        None => None,
+    };
+    if let Some(loaded) = loaded_ref_log {
+        let (bytes, discovery) = (&loaded.bytes, &loaded.replay);
         // RFC 165 R5 (§9.2): `has_damage()` is true for a complete, fully-written record whose later
         // validation failed (damage, wherever it sits) or a `Failed` frame with something sound or
         // failed after it (interior damage) -- never for the container's own genuine, lead-free tail
@@ -410,38 +427,7 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     Ok(())
 }
 
-/// RFC 165 R5 (§9.2, Rule B extended to the ref log): the container's own tail/damage status, for
-/// `verify`'s `AppendedFileTailStatus` reporting (RFC 164 Rule B) and `doctor --repair-tails`, matching
-/// how both already read each Rule-A file directly and independently rather than through whatever else
-/// touches it first. Returns `(trailing_partial_bytes, tail_offset, interior_damage_message)` -- plain
-/// primitives, since `AppendedFileTailStatus` itself lives in `crate::verify`, a sibling module that
-/// cannot see `container`'s own `pub(in crate::refs)` internals.
-pub(crate) fn ref_log_tail_status(
-    layout: &RepositoryLayout,
-) -> Result<(usize, usize, Option<String>)> {
-    ref_log_tail_status_of(container::read_and_decode_ref_log(layout, "ref-log-replay")?.as_ref())
-}
-
-/// [`ref_log_tail_status`] from an already-decoded ref log, for `verify`'s shared decode.
-pub(crate) fn ref_log_tail_status_of(
-    decoded: Option<&container::DecodedRefLog>,
-) -> Result<(usize, usize, Option<String>)> {
-    let Some(decoded) = decoded else {
-        return Ok((0, 0, None));
-    };
-    if let Some(tail) = container::ref_log_container_tail(&decoded.bytes, &decoded.replay) {
-        return Ok((tail.len, tail.offset, None));
-    }
-    let interior_damage = decoded
-        .replay
-        .record_outcomes
-        .iter()
-        .find_map(|outcome| match &outcome.status {
-            container::RefContainerRecordStatus::Failed { message, .. } => Some(message.clone()),
-            container::RefContainerRecordStatus::Evaluated => None,
-        });
-    Ok((0, 0, interior_damage))
-}
+pub(crate) use container::{ref_log_tail_status, ref_log_tail_status_of};
 
 pub(crate) use rebuild_discovery::{decode_ref_log_for_rebuild, mismatched_lead_candidate};
 

@@ -383,8 +383,39 @@ fn run_pointer_index_rebuild(layout: &RepositoryLayout, mode: RebuildMode) -> Re
     }
 
     if !completable_leads.is_empty() {
+        // 0.59.0 P5a2 (G3's last surface): a lead whose queue is sealed into it names the `seal` first, as every surface does (at most one ref
+        // can be: the active queue has one owner); the others keep `ref complete`.
+        let mut sealed = None;
+        for ref_name in &completable_leads {
+            if crate::ref_completion::queue_sealed_into_lead_now(layout, ref_name)?.is_some() {
+                sealed = Some(ref_name.clone());
+                break;
+            }
+        }
+        let first_step = match &sealed {
+            None => "run `prikk ref complete <ref>` first".to_string(),
+            Some(sealed) => {
+                let others = completable_leads
+                    .iter()
+                    .filter(|ref_name| *ref_name != sealed)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let rest = if others.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; for {}: run `prikk ref complete <ref>` first",
+                        others.join(", ")
+                    )
+                };
+                format!(
+                    "for {sealed}, whose queued patches are already sealed in it: {}{rest}",
+                    crate::ref_completion::seal_then_complete_steps(sealed)
+                )
+            }
+        };
         return Err(PrikkError::Precondition(format!(
-            "{} ref(s) have a completable lead; run `prikk ref complete <ref>` first -- a rebuild \
+            "{} ref(s) have a completable lead; {first_step} -- a rebuild \
              would drop an authorized transition: {}",
             completable_leads.len(),
             completable_leads.join(", ")

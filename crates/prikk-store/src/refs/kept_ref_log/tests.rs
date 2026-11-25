@@ -1,8 +1,8 @@
-//! 0.58.0 S5: the ref log a hold keeps (`refs/kept_ref_log.rs`).
+//! 0.58.0 S5, 0.59.0 P5a2: the ref log a hold keeps (`refs/kept_ref_log.rs`): since P5a2 a per-ref summary, not the decoded replay.
 //!
 //! What these hold: nothing is kept outside a hold and the last release drops it; under a hold the log is read whole once and every later use
 //! reads the canary and what was appended (this command's own publication is picked up by the next use's tail read and kept from then on); the
-//! copy equals a fresh decode after every kind of change (another ref's publication, a replaced file, a truncate-and-regrow, a damaged or torn
+//! copy (its summary) equals a summary of a fresh decode after every kind of change (another ref's publication, a replaced file, a truncate-and-regrow, a damaged or torn
 //! tail); and a publication meeting a torn tail does under a hold exactly what it does without one. **Linux and macOS only**: the identity
 //! is `(device, inode)`.
 
@@ -10,12 +10,13 @@
 
 use prikk_error::Result;
 
-use super::{KeptRefLog, load_ref_log_shared};
+use super::{KeptRefLog, RefLogView, load_ref_log_view};
 use crate::foundation::fsutil::read_tally;
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 use crate::lock::acquire_container_locks;
 use crate::refs::container::decode_ref_container_records;
 use crate::refs::kept_pointer_index::tests::publish_ref;
+use crate::refs::ref_log_summary::RefLogSummary;
 use crate::test_gates::test_support::unique_temp_dir;
 use crate::{LockableContainer, RefStore};
 
@@ -58,17 +59,34 @@ fn repository(name: &str) -> (RepositoryLayout, std::path::PathBuf) {
     (RepositoryLayout::init(root.clone()).expect("init"), root)
 }
 
-/// The shared replay must equal a fresh decode of the file, every time.
-fn assert_equals_a_fresh_decode(layout: &RepositoryLayout, label: &str) {
-    let shared = load_ref_log_shared(layout)
-        .expect("shared")
-        .expect("a log exists");
+/// The summary of a decode of the file as it is now.
+fn fresh_summary(layout: &RepositoryLayout) -> RefLogSummary {
     let fresh = decode_ref_container_records(&std::fs::read(log_path(layout)).expect("read"))
         .expect("decode");
-    assert_eq!(
-        *shared.replay, fresh,
-        "{label}: kept and fresh decode differ"
-    );
+    let mut summary = RefLogSummary::default();
+    summary.extend(&fresh.records).expect("summarise");
+    summary
+}
+
+/// What a use sees must equal what a fresh decode of the file says, every time: the kept summary equals a summary of a fresh decode, or (when
+/// the use read the whole log) the replay equals the fresh decode.
+fn assert_equals_a_fresh_decode(layout: &RepositoryLayout, label: &str) {
+    match load_ref_log_view(layout)
+        .expect("view")
+        .expect("a log exists")
+    {
+        RefLogView::Summary(kept) => assert_eq!(
+            format!("{:?}", *kept),
+            format!("{:?}", fresh_summary(layout)),
+            "{label}: kept and fresh summary differ"
+        ),
+        RefLogView::Whole(loaded) => assert_eq!(
+            loaded.replay,
+            decode_ref_container_records(&std::fs::read(log_path(layout)).expect("read"))
+                .expect("decode"),
+            "{label}: whole read and fresh decode differ"
+        ),
+    }
 }
 
 #[test]
@@ -76,10 +94,10 @@ fn nothing_is_kept_outside_a_hold_and_the_last_release_drops_it() -> Result<()> 
     let (layout, root) = repository("s5l-absent");
     publish_ref(&layout, "heads/main", 1)?;
     let mutation = layout.repository_mutation_root();
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
     assert!(!mutation.kept_value_is_held_for_test::<KeptRefLog>());
     let first = hold(&layout);
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
     assert!(mutation.kept_value_is_held_for_test::<KeptRefLog>());
     drop(first);
     assert!(!mutation.kept_value_is_held_for_test::<KeptRefLog>());
@@ -100,28 +118,34 @@ fn a_hold_reads_the_log_whole_once_then_the_canary_and_what_was_appended() -> Re
 
     read_tally::reset();
     for _ in 0..3 {
-        let _ = load_ref_log_shared(&layout)?;
+        let _ = load_ref_log_view(&layout)?;
     }
     assert_eq!(bytes_read(&layout), 3 * whole);
 
     let _hold = hold(&layout);
     read_tally::reset();
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
     assert_eq!(bytes_read(&layout), whole);
     read_tally::reset();
     for _ in 0..5 {
-        let _ = load_ref_log_shared(&layout)?;
+        let _ = load_ref_log_view(&layout)?;
     }
     assert_eq!(bytes_read(&layout), 5 * record);
 
     publish_ref(&layout, "heads/main", 21)?;
     let record = last_record_len(&layout);
     read_tally::reset();
-    let loaded = load_ref_log_shared(&layout)?.expect("log");
-    assert_eq!(loaded.replay.records.len(), 21);
-    assert!(loaded.bytes.is_empty(), "the kept copy carries no bytes");
+    let Some(RefLogView::Summary(kept)) = load_ref_log_view(&layout)? else {
+        panic!("a hold that kept the log answers with the summary");
+    };
+    assert_eq!(
+        kept.chain(&crate::foundation::layout::ref_name_key_bytes("heads/main"))
+            .expect("heads/main")
+            .count,
+        21
+    );
     read_tally::reset();
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
     assert_eq!(
         bytes_read(&layout),
         record,
@@ -164,7 +188,7 @@ fn damage_and_a_torn_tail_between_two_uses_behave_as_a_fresh_read_does() -> Resu
         publish_ref(&layout, "heads/main", 1)?;
         let other = another_process(&layout);
         let _hold = hold(&layout);
-        let _ = load_ref_log_shared(&layout)?;
+        let _ = load_ref_log_view(&layout)?;
         assert!(
             layout
                 .repository_mutation_root()
@@ -181,9 +205,11 @@ fn damage_and_a_torn_tail_between_two_uses_behave_as_a_fresh_read_does() -> Resu
             bytes[flip] ^= 0xff;
             std::fs::write(&path, &bytes)?;
         }
-        let loaded = load_ref_log_shared(&layout)?.expect("log");
+        let Some(RefLogView::Whole(loaded)) = load_ref_log_view(&layout)? else {
+            panic!("damage or a torn tail is read whole, never answered from the kept copy");
+        };
         let fresh = decode_ref_container_records(&std::fs::read(&path)?)?;
-        assert_eq!(*loaded.replay, fresh);
+        assert_eq!(loaded.replay, fresh);
         assert!(
             !layout
                 .repository_mutation_root()
@@ -214,14 +240,14 @@ fn a_replaced_file_and_a_truncate_and_regrow_are_read_whole() -> Result<()> {
     let other = another_process(&layout);
     let path = log_path(&layout);
     let _hold = hold(&layout);
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
 
     let bytes = std::fs::read(&path)?;
     let temporary = path.with_extension("swap");
     std::fs::write(&temporary, &bytes)?;
     std::fs::rename(&temporary, &path)?;
     read_tally::reset();
-    let _ = load_ref_log_shared(&layout)?;
+    let _ = load_ref_log_view(&layout)?;
     assert_eq!(bytes_read(&layout), bytes.len() as u64);
     assert_equals_a_fresh_decode(&layout, "after the file was replaced");
 
@@ -252,7 +278,7 @@ fn a_replaced_file_and_a_truncate_and_regrow_are_read_whole() -> Result<()> {
     Ok(())
 }
 
-/// The kept copy equals a fresh decode after every step of a mixed sequence of this command's and another command's publications.
+/// The kept copy (its summary) equals a summary of a fresh decode after every step of a mixed sequence of this command's and another command's publications.
 #[test]
 fn the_kept_copy_equals_a_fresh_decode_after_every_publication() -> Result<()> {
     let (layout, root) = repository("s5l-sequence");
@@ -284,7 +310,7 @@ fn a_publication_meeting_a_torn_tail_does_the_same_under_a_hold_as_without_one()
         publish_ref(&layout, "heads/main", 1)?;
         publish_ref(&layout, "heads/other", 1)?;
         let _hold = with_hold.then(|| hold(&layout));
-        let _ = load_ref_log_shared(&layout)?;
+        let _ = load_ref_log_view(&layout)?;
         let path = log_path(&layout);
         let file = std::fs::OpenOptions::new().write(true).open(&path)?;
         file.set_len(std::fs::metadata(&path)?.len() - 11)?;

@@ -853,7 +853,8 @@ pub(in crate::refs) fn replay_ref_subsequence(
     layout: &RepositoryLayout,
     ref_name_key: [u8; 32],
 ) -> Result<RefLogReplay> {
-    match super::kept_ref_log::load_ref_log_shared(layout)? {
+    // The records themselves are wanted, so this is the whole read; the hold's kept summary is not asked (0.59.0 P5a2: `classify_state` asks it first).
+    match super::kept_ref_log::load_ref_log_whole(layout)? {
         Some(loaded) => ref_subsequence_of_parts(&loaded.replay, &loaded.bytes, ref_name_key),
         None => Ok(RefLogReplay {
             records: Vec::new(),
@@ -1088,3 +1089,36 @@ fn record_checksum(ref_name_key: [u8; 32], body_len: u64, body: &[u8]) -> [u8; 3
 
 #[cfg(test)]
 mod tests;
+
+/// RFC 165 R5 (§9.2, Rule B extended to the ref log): the container's own tail/damage status, for
+/// `verify`'s `AppendedFileTailStatus` reporting (RFC 164 Rule B) and `doctor --repair-tails`, matching
+/// how both already read each Rule-A file directly and independently rather than through whatever else
+/// touches it first. Returns `(trailing_partial_bytes, tail_offset, interior_damage_message)` -- plain
+/// primitives, since `AppendedFileTailStatus` itself lives in `crate::verify`, a sibling module that
+/// cannot see `container`'s own `pub(in crate::refs)` internals.
+pub(crate) fn ref_log_tail_status(
+    layout: &RepositoryLayout,
+) -> Result<(usize, usize, Option<String>)> {
+    ref_log_tail_status_of(read_and_decode_ref_log(layout, "ref-log-replay")?.as_ref())
+}
+
+/// [`ref_log_tail_status`] from an already-decoded ref log, for `verify`'s shared decode.
+pub(crate) fn ref_log_tail_status_of(
+    decoded: Option<&DecodedRefLog>,
+) -> Result<(usize, usize, Option<String>)> {
+    let Some(decoded) = decoded else {
+        return Ok((0, 0, None));
+    };
+    if let Some(tail) = ref_log_container_tail(&decoded.bytes, &decoded.replay) {
+        return Ok((tail.len, tail.offset, None));
+    }
+    let interior_damage = decoded
+        .replay
+        .record_outcomes
+        .iter()
+        .find_map(|outcome| match &outcome.status {
+            RefContainerRecordStatus::Failed { message, .. } => Some(message.clone()),
+            RefContainerRecordStatus::Evaluated => None,
+        });
+    Ok((0, 0, interior_damage))
+}

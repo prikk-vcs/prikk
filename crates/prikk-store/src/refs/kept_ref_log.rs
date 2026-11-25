@@ -1,10 +1,9 @@
 //! The ref log a hold keeps (0.58.0 S5, the third user of S4's mechanism; the pointer index is `kept_pointer_index.rs`).
 //!
 //! `publish_body` and the publication precondition decode the whole ref log three times per `sync seal` claim (S5a, `probe-groups-250.txt`):
-//! the precondition twice, `classify_state`'s `replay_log` once. While a command holds a lock, [`load_ref_log_shared`] keeps the decoded
-//! container replay on the repository's `MutationRoot` (the hold's slot, S4's) and, at the next use, reads only what was appended. **Outside a
-//! hold nothing is kept** and every call is the whole read and decode it has always been. What is kept is the decoded replay itself, behind
-//! the signatures the publication has always had (S5a ruling 1): `replay_ref_subsequence` and the precondition read the same records.
+//! the precondition twice, `classify_state`'s `replay_log` once. While a command holds a lock, [`load_ref_log_view`] keeps what the log says on the
+//! repository's `MutationRoot` (the hold's slot, S4's) and, at the next use, reads only what was appended. **Outside a hold nothing is kept** and
+//! every call is the whole read and decode it has always been.
 //!
 //! **Never stale** (S4's rule). One `stat` of the log (device, inode, size): the same file at the known size is used as is; a longer one is read
 //! from where the copy ends, together with the copy's last record (the canary), by `kept_file::read_verified_tail`; another inode, a shorter file
@@ -24,8 +23,11 @@
 //! **Residual, stated** (as S4's, `kept_file.rs`): a truncate below the copy's extent and a regrowth that re-creates our last record byte for
 //! byte at its offset after rewriting the prefix is not seen; the append protocol does not produce it.
 //!
-//! **Cost, said.** The kept replay is about nine times the file in memory, and `ref_subsequence_of` still walks every record per use (S5a ruling 1:
-//! accepted, and measured at 10,000 claims). A summary per ref would remove both; it is a later round, only if those numbers ask for it.
+//! **What is kept (0.59.0 P5a2).** Not the decoded replay (about nine times the file in memory, and walked per use) but a per-ref **summary**
+//! (`ref_log_summary.rs`): for every ref the newest record's ids and envelope, the record count and whether the chain is sound to the tip, and
+//! whether any record carried `created_at != 0`. It is built from a whole decode of a clean log and extended by the appended tail only, so a use
+//! under a hold reads the canary and what was appended, and decodes only that. A use that needs the records themselves, or meets any doubt (see
+//! `ref_log_summary::Fallback`, each counted), takes the whole read it has always taken.
 //!
 //! **Platform.** Linux and macOS (the identity is `(device, inode)`); on Windows nothing is kept and every call reads the whole log.
 
@@ -37,30 +39,36 @@ use super::container::{
     RefContainerRecordOutcome, RefContainerRecordStatus, RefContainerReplay,
     decode_ref_container_records,
 };
+use super::ref_log_summary::{Fallback, RefLogSummary, count_fallback, enabled};
 use crate::foundation::fsutil::{FileIdentity, read_file_if_exists};
 use crate::foundation::kept_file::{self, VerifiedBytes};
 use crate::foundation::layout::{ContainerSlot, RepositoryLayout};
 
 /// What a hold keeps of the ref log.
 struct KeptRefLog {
-    replay: Arc<RefContainerReplay>,
+    summary: Arc<RefLogSummary>,
     known_length: u64,
     identity: FileIdentity,
-    /// The last record the replay decoded, as the file holds it (empty for an empty file).
+    /// The last record the summary covers, as the file holds it (empty for an empty file).
     canary: Vec<u8>,
 }
 
-/// The ref log as one use sees it.
+/// The ref log read whole: its decode and its bytes.
 pub(in crate::refs) struct LoadedRefLog {
-    pub(in crate::refs) replay: Arc<RefContainerReplay>,
-    /// The file's bytes. **Empty when the replay came from a hold's kept copy**, which is only ever a clean replay with no trailing partial
-    /// record -- the one case in which no reader of these bytes (the tail attribution, the torn-tail checks) looks at them.
+    pub(in crate::refs) replay: RefContainerReplay,
     pub(in crate::refs) bytes: Vec<u8>,
 }
 
-/// The ref log container, read and decoded -- or, under a hold that kept a decode of the same file, that decode brought up to date by its tail.
-/// `None` when the file does not exist.
-pub(in crate::refs) fn load_ref_log_shared(
+/// The ref log as one use sees it: the kept summary, brought up to date, or the whole log read now.
+pub(in crate::refs) enum RefLogView {
+    /// A hold's kept summary of a **clean** log (every frame evaluated, no trailing partial record), current as of this call.
+    Summary(Arc<RefLogSummary>),
+    /// The whole log, read and decoded now (and, under a hold, a clean one has been summarised and kept for the next use).
+    Whole(LoadedRefLog),
+}
+
+/// The ref log container, read and decoded in full, never kept. `None` when the file does not exist.
+pub(in crate::refs) fn load_ref_log_whole(
     layout: &RepositoryLayout,
 ) -> Result<Option<LoadedRefLog>> {
     // RFC 165 R2: the `ref-log-replay` open finding (`whole_read_guard.rs`'s `SCOPES` table) -- one read per precondition check or
@@ -70,38 +78,57 @@ pub(in crate::refs) fn load_ref_log_shared(
     let relative =
         layout.repository_relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?;
     let root = layout.repository_mutation_root();
-    if let Some(replay) = refresh(layout, &relative)? {
-        return Ok(Some(LoadedRefLog {
-            replay,
-            bytes: Vec::new(),
-        }));
+    let Some(bytes) = read_file_if_exists(root, &relative)? else {
+        return Ok(None);
+    };
+    let replay = decode_ref_container_records(&bytes)?;
+    Ok(Some(LoadedRefLog { replay, bytes }))
+}
+
+/// The ref log as the next use needs it: under a hold that kept a summary of the same file, that summary brought up to date by the appended
+/// tail; otherwise the whole read (summarised and kept when a hold is open and the log is clean). `None` when the file does not exist.
+pub(in crate::refs) fn load_ref_log_view(layout: &RepositoryLayout) -> Result<Option<RefLogView>> {
+    let relative =
+        layout.repository_relative(&layout.ref_log_container_slot_path(ContainerSlot::A))?;
+    let root = layout.repository_mutation_root();
+    if enabled() {
+        if let Some(summary) = refresh(layout, &relative)? {
+            return Ok(Some(RefLogView::Summary(summary)));
+        }
     }
     let before = if root.hold_is_open() {
         Some(kept_file::stat_file(root, &relative)?)
     } else {
         None
     };
-    let Some(bytes) = read_file_if_exists(root, &relative)? else {
+    let Some(loaded) = load_ref_log_whole(layout)? else {
         return Ok(None);
     };
-    let replay = Arc::new(decode_ref_container_records(&bytes)?);
     if let Some(before) = before {
-        if is_clean(&replay) && kept_file::stat_file(root, &relative)?.identity == before.identity {
+        if enabled()
+            && is_clean(&loaded.replay)
+            && kept_file::stat_file(root, &relative)?.identity == before.identity
+        {
             if let Some(identity) = before.identity {
-                keep(
-                    layout,
-                    &replay,
-                    identity,
-                    bytes.len() as u64,
-                    last_record(&bytes, &replay.record_outcomes),
-                );
+                let mut summary = RefLogSummary::default();
+                if summary.extend(&loaded.replay.records).is_ok() {
+                    keep(
+                        layout,
+                        Arc::new(summary),
+                        identity,
+                        loaded.bytes.len() as u64,
+                        last_record(&loaded.bytes, &loaded.replay.record_outcomes),
+                    );
+                } else {
+                    count_fallback(Fallback::PayloadUndecodable);
+                }
             }
         }
     }
-    Ok(Some(LoadedRefLog { replay, bytes }))
+    Ok(Some(RefLogView::Whole(loaded)))
 }
 
-/// A replay a hold may keep: every frame evaluated and no trailing partial record.
+/// A replay a hold may keep a summary of: every frame evaluated and no trailing partial record.
 fn is_clean(replay: &RefContainerReplay) -> bool {
     replay.trailing_partial_bytes == 0
         && replay
@@ -121,7 +148,7 @@ fn last_record(bytes: &[u8], outcomes: &[RefContainerRecordOutcome]) -> Vec<u8> 
 
 fn keep(
     layout: &RepositoryLayout,
-    replay: &Arc<RefContainerReplay>,
+    summary: Arc<RefLogSummary>,
     identity: FileIdentity,
     known_length: u64,
     canary: Vec<u8>,
@@ -129,63 +156,70 @@ fn keep(
     layout
         .repository_mutation_root()
         .keep_value(Arc::new(KeptRefLog {
-            replay: Arc::clone(replay),
+            summary,
             known_length,
             identity,
             canary,
         }));
 }
 
-/// The kept replay, brought up to date; `None` (the kept copy is gone) when nothing was kept or it cannot be proven current.
+/// The kept summary, brought up to date; `None` (the kept copy is gone) when nothing was kept or it cannot be proven current. **Every `None` is
+/// a doubt, counted by its reason** ([`Fallback`]): the caller reads the whole log, whose refusals are the ones every caller has always printed.
 fn refresh(
     layout: &RepositoryLayout,
     relative: &std::path::Path,
-) -> Result<Option<Arc<RefContainerReplay>>> {
+) -> Result<Option<Arc<RefLogSummary>>> {
     let root = layout.repository_mutation_root();
     let Some(kept) = root.take_kept_value::<KeptRefLog>() else {
+        count_fallback(Fallback::NothingKept);
         return Ok(None);
     };
     let kept = Arc::try_unwrap(kept).unwrap_or_else(|shared| KeptRefLog {
-        replay: Arc::clone(&shared.replay),
+        summary: Arc::clone(&shared.summary),
         known_length: shared.known_length,
         identity: shared.identity,
         canary: shared.canary.clone(),
     });
     let observed = kept_file::stat_file(root, relative)?;
     if observed.identity != Some(kept.identity) || observed.size < kept.known_length {
+        count_fallback(Fallback::FileChanged);
         return Ok(None);
     }
     let VerifiedBytes::Tail(tail) =
         kept_file::read_verified_tail(root, relative, kept.known_length, observed, &kept.canary)?
     else {
+        count_fallback(Fallback::CanaryDiffers);
         return Ok(None);
     };
-    let mut replay = kept.replay;
+    let mut summary = kept.summary;
     let mut canary = kept.canary;
     let mut known_length = kept.known_length;
     if !tail.is_empty() {
         let extension = decode_ref_container_records(&tail)?;
         // Never add a damaged or torn tail; the caller's whole read applies the damaged-log rules.
         if !is_clean(&extension) {
+            count_fallback(Fallback::TailNotClean);
             return Ok(None);
         }
         canary = last_record(&tail, &extension.record_outcomes);
         known_length += tail.len() as u64;
-        let base = usize::try_from(kept.known_length).unwrap_or(usize::MAX);
-        // Copies the replay only if another caller still holds it (`make_mut`).
-        let whole = Arc::make_mut(&mut replay);
-        whole.records.extend(extension.records);
-        whole
-            .record_outcomes
-            .extend(extension.record_outcomes.into_iter().map(|outcome| {
-                RefContainerRecordOutcome {
-                    offset: outcome.offset + base,
-                    status: outcome.status,
-                }
-            }));
+        // Copies the summary only if another caller still holds it (`make_mut`).
+        if Arc::make_mut(&mut summary)
+            .extend(&extension.records)
+            .is_err()
+        {
+            count_fallback(Fallback::PayloadUndecodable);
+            return Ok(None);
+        }
     }
-    keep(layout, &replay, kept.identity, known_length, canary);
-    Ok(Some(replay))
+    keep(
+        layout,
+        Arc::clone(&summary),
+        kept.identity,
+        known_length,
+        canary,
+    );
+    Ok(Some(summary))
 }
 
 // 0.58.0 S5: Linux and macOS only, like the mechanism (its identity is `(device, inode)`).

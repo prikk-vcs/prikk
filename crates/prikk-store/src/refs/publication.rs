@@ -330,7 +330,7 @@ pub(in crate::refs) fn classify_state(
     update: &RefUpdatePayload,
 ) -> Result<(PublicationState, super::RefLogReplay)> {
     let current = store.read_current_ref_state_id(&publication.ref_name)?;
-    let replay = store.replay_log(&publication.ref_name)?;
+    let (replay, summarised) = read_ref_log_for_publication(store, publication)?;
     // RFC 102 Stage 2: a damaged record silently missing from `replay.records` could make
     // `log_position` below classify a corrupted log as a shorter, sound one -- refuse explicitly
     // rather than let a publication proceed against a chain that isn't what it appears to be.
@@ -340,7 +340,10 @@ pub(in crate::refs) fn classify_state(
             publication.ref_name
         )));
     }
-    let (log_tip, exact_last, previous_log_tip) = log_position(&replay, publication)?;
+    let (log_tip, exact_last, previous_log_tip) = match summarised {
+        Some(position) => position,
+        None => log_position(&replay, publication)?,
+    };
     let expected = publication.expected_previous_ref_state_id;
     let proposed = Some(update.new_ref_state_id);
     let state = match (current, log_tip, exact_last, previous_log_tip) {
@@ -363,6 +366,71 @@ pub(in crate::refs) fn classify_state(
         }
     };
     Ok((state, replay))
+}
+
+/// The log position a summary gives a publication: (the log's tip for the ref, whether its last record is exactly the publication's `RefUpdate`,
+/// the tip before it).
+type LogPosition = (Option<ObjectId>, bool, Option<ObjectId>);
+
+/// What `classify_state` reads of the ref log for this publication's ref, and, when the hold's summary answered, the position it gives
+/// (0.59.0 P5a2). **The summary answers only a sound chain for this publication's own ref name**: then the replay returned is the ref's **last
+/// record alone** (what the append's idempotency check and the post-write agreement check read of it: `records.last()`, `trailing_partial_bytes`,
+/// `has_item_failure`), the log is clean by construction, and the position is the chain's tip, its envelope against the publication's and the tip
+/// before it -- `log_position`'s three answers over a chain it has already checked record by record. Every other case (no summary kept, an unsound
+/// chain, another name, a log that is not clean) is the whole subsequence, exactly as before, and `log_position` walks it and refuses as it always did.
+fn read_ref_log_for_publication(
+    store: &RefStore,
+    publication: &RefPublication,
+) -> Result<(super::RefLogReplay, Option<LogPosition>)> {
+    use super::kept_ref_log::{RefLogView, load_ref_log_view};
+    use super::ref_log_summary::{Fallback, count_fallback};
+    let key = ref_name_key_bytes(&publication.ref_name);
+    match load_ref_log_view(&store.layout)? {
+        None => Ok((
+            super::RefLogReplay {
+                records: Vec::new(),
+                trailing_partial_bytes: 0,
+                record_outcomes: Vec::new(),
+            },
+            None,
+        )),
+        Some(RefLogView::Whole(loaded)) => Ok((
+            container::ref_subsequence_of_parts(&loaded.replay, &loaded.bytes, key)?,
+            None,
+        )),
+        Some(RefLogView::Summary(summary)) => match summary.chain(&key) {
+            None => Ok((
+                super::RefLogReplay {
+                    records: Vec::new(),
+                    trailing_partial_bytes: 0,
+                    record_outcomes: Vec::new(),
+                },
+                Some((None, false, None)),
+            )),
+            Some(chain) if chain.sound && chain.name == publication.ref_name => Ok((
+                super::RefLogReplay {
+                    records: vec![super::RefLogRecord {
+                        envelope: chain.last.clone(),
+                    }],
+                    trailing_partial_bytes: 0,
+                    record_outcomes: Vec::new(),
+                },
+                Some((
+                    Some(chain.tip),
+                    chain.last == publication.ref_update,
+                    chain.before_last,
+                )),
+            )),
+            Some(chain) => {
+                count_fallback(if chain.sound {
+                    Fallback::NameMismatch
+                } else {
+                    Fallback::ChainUnsound
+                });
+                Ok((store.replay_log(&publication.ref_name)?, None))
+            }
+        },
+    }
 }
 
 fn log_position(

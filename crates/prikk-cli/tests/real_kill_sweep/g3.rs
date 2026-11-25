@@ -189,6 +189,27 @@ fn every_surface_names_the_seal_first_and_it_ends_in_verify_0() {
         assert!(!merge.status.success(), "{at_n}: merge succeeded");
         names_the_seal_first(&format!("{at_n}: merge"), &text(&merge));
 
+        // The rebuild's own refusal (0.59.0 P5a2, G3's last surface): it names the `seal` first for this state, too.
+        let rebuild = ctx.out(
+            &fresh("rebuild"),
+            &["doctor", "--rebuild-pointer-index", "--plan-only"],
+        );
+        assert!(
+            !rebuild.status.success(),
+            "{at_n}: the rebuild ran over a completable lead"
+        );
+        let rebuild = text(&rebuild);
+        assert!(
+            rebuild.contains("a completable lead")
+                && at(&format!("{at_n}: rebuild"), &rebuild, SEAL)
+                    < at(
+                        &format!("{at_n}: rebuild"),
+                        &rebuild,
+                        "prikk ref complete heads/main"
+                    ),
+            "{at_n}: the rebuild's refusal does not name the seal first:\n{rebuild}"
+        );
+
         // The named command, run as printed: verify 0, the queue gone, two blocks.
         let by_seal = fresh("by-seal");
         ctx.ok(&by_seal, &["seal", "--allow-no-audit"]);
@@ -292,6 +313,13 @@ fn a_lead_with_no_matching_queue_still_names_ref_complete() {
         assert!(
             commit.contains("prikk ref complete heads/x") && !commit.contains(SEAL),
             "ordinal {n}: commit:\n{commit}"
+        );
+        let rebuild = text(&ctx.out(dir, &["doctor", "--rebuild-pointer-index", "--plan-only"]));
+        assert!(
+            rebuild.contains("a completable lead")
+                && rebuild.contains("run `prikk ref complete <ref>` first")
+                && !rebuild.contains(SEAL),
+            "ordinal {n}: the rebuild's refusal for a plain lead:\n{rebuild}"
         );
         let run = ctx.out(dir, &["ref", "complete", "heads/x"]);
         assert!(run.status.success(), "{}", text(&run));
