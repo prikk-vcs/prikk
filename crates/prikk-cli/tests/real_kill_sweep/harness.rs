@@ -431,9 +431,9 @@ pub fn sweep(ctx: &Ctx, shape: &Shape) -> Outcome {
     outcome
 }
 
-/// The files a refusal says to remove: `remove `a` and `b` (…)`, each path in backticks. `None` when the sentence says no such thing.
+/// The files a refusal says to remove, in its first branch (`if this key never signed anything (a new install), remove `a` and `b` (…)`), each path in backticks. `None` when the sentence says no such thing.
 pub fn named_removals(text: &str) -> Option<Vec<PathBuf>> {
-    let after = text.split("; remove ").nth(1)?;
+    let after = text.split("(a new install), remove ").nth(1)?;
     let mut paths = Vec::new();
     let mut rest = after;
     loop {

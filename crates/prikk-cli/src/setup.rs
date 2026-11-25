@@ -125,7 +125,7 @@ pub fn run_setup(args: Vec<String>) -> std::result::Result<(), CliError> {
 
     if finishing {
         println!(
-            "finishing the repository an interrupted `prikk init` or `prikk setup` left at {}",
+            "this repository holds nothing yet (no key adopted, nothing committed or sealed): setup finishes it ({})",
             existing.display()
         );
     }

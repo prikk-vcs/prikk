@@ -48,15 +48,24 @@ writes a key could, in 0.58.0 and earlier, leave a **seed or key-id file in your
 was created and not finished**. Every later `commit`, `seal` or `setup`, in any repository, then refused
 it (`author.seed must be 64 hex characters, got 0`). Since 0.59.0 a key file is written to a temporary,
 synced, and published whole by a no-replace rename, so a kill leaves it absent or complete, and a
-file that is there is never replaced. For one an earlier release left, every command that reads a seed
-(`commit`, `seal`, `setup`, `key generate`, `key public`, `key status`) prints one sentence: the file
-holds N bytes, not a whole seed; **no key was ever made from it, so nothing was signed with it**;
-remove the files it names (the seed and its `.key-id`, both of the pair), then run the command again.
-`prikk` does not delete key files itself. A key-id file with no seed beside it is the same
-interruption (the key-id is written first, so that a seed without one cannot silently sign under the
-shared legacy id); it names the one file to remove. A temporary `<name>.tmp.<pid>.<n>` left beside a
-key file by a killed run holds a whole or part-written copy of the same bytes, mode `0600`, and can be
-removed.
+file that is there is never replaced.
+
+**What the sentence says, and why it has two branches.** Every command that reads a seed (`commit`,
+`seal`, `setup`, `key generate`, `key public`, `key status`) prints one sentence for a file that is not
+whole: it holds N bytes, not a whole seed, *as an interrupted `setup` or `key generate` leaves it*.
+`prikk` cannot tell that from a seed that had signed and was damaged afterwards, so it gives both:
+
+- **if this key never signed anything** (a new install), remove the seed and its `.key-id` file (both
+  paths are named; `prikk` never deletes a key file), then run the command again;
+- **if it did sign**, the seed is damaged: **restore it from your backup**. The sentence names the key
+  id (from the key-id file) that says which backup. **Removing these files loses that key's name**, so
+  do not remove them in this case.
+
+A key-id file with no seed beside it says "no key exists here" and gives the same two branches (the
+key-id is written first, so that a seed without one cannot silently sign under the shared legacy id). A
+seed that is not hex, or not 64 characters, says what is wrong and to restore it from your backup; it never
+advises removal. A temporary `<name>.tmp.<pid>.<n>` left beside a key file by a killed run holds a whole
+or part-written copy of the same bytes, mode `0600`, never used, and can be removed.
 
 ## `error: invalid name: worktree has no node-addressed changes to commit`
 

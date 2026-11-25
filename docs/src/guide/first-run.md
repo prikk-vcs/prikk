@@ -257,7 +257,8 @@ different directory for a new project
 ```
 
 A directory that holds *nothing yet* — what a killed `prikk init`, or a `prikk setup` killed before it
-adopted a key, leaves — is **finished**, not refused: `init` completes, whole keys are reused, missing
+adopted a key, leaves — is **finished**, not refused (`this repository holds nothing yet (no key adopted,
+nothing committed or sealed): setup finishes it`): `init` completes, whole keys are reused, missing
 ones are made, and the maintainer key is adopted (0.59.0).
 
 **If you want the second project to have its own identity**, give the new seeds their own paths:

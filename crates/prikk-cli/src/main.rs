@@ -1957,7 +1957,8 @@ pub(crate) fn read_seed_file(path: &std::path::Path) -> std::result::Result<[u8;
             return Err(CliError::Failure(sentence));
         }
     }
-    decode_seed_hex(contents.trim(), &path.display().to_string()).map_err(CliError::Failure)
+    decode_seed_hex(contents.trim(), &path.display().to_string())
+        .map_err(|detail| CliError::Failure(key_material::unreadable_seed_sentence(&detail, path)))
 }
 
 /// Decode exactly 64 hex characters into a 32-byte Ed25519 secret seed.

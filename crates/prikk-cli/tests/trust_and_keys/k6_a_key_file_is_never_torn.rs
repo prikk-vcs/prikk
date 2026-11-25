@@ -34,7 +34,7 @@ fn prikk_with_keys_of(repo: &Path, home_of: &Path) -> Command {
 /// The two paths a sentence tells the user to remove: ``remove `a` and `b` ``.
 fn removals(sentence: &str) -> Vec<PathBuf> {
     let after = sentence
-        .split("; remove ")
+        .split("(a new install), remove ")
         .nth(1)
         .unwrap_or_else(|| panic!("the sentence says nothing to remove: {sentence}"));
     let mut paths = Vec::new();
@@ -107,8 +107,11 @@ fn a_torn_seed_in_the_key_directory_is_said_to_be_that_by_every_reader_and_remov
             panic!("{command:?} did not say the seed is torn: {text}");
         }
         assert!(
-            text.contains("nothing was signed with it")
-                && text.contains("prikk never deletes a key file"),
+            text.contains("as an interrupted setup or key generate leaves it")
+                && text.contains("if this key never signed anything (a new install), remove")
+                && text.contains("prikk never deletes a key file")
+                && text.contains("if it did sign, the seed is damaged: restore it from your backup (key id ed25519-")
+                && text.contains("removing these files loses that key's name"),
             "{text}"
         );
         if !format!("{command:?}").contains("\"status\"") {
@@ -116,6 +119,10 @@ fn a_torn_seed_in_the_key_directory_is_said_to_be_that_by_every_reader_and_remov
         }
         sentences.push(text);
     }
+    assert!(
+        seed.exists() && key_id.exists(),
+        "no reader deleted a key file"
+    );
     let paths = removals(&sentences[0]);
     assert_eq!(
         paths,
@@ -170,7 +177,9 @@ fn a_torn_or_orphaned_key_id_is_said_to_be_that_too() {
     let (code, text) = run(support::prikk(&repo).args(["commit", "--from-worktree", "-m", "b"]));
     assert_ne!(code, Some(0));
     assert!(
-        text.contains("is here and") && text.contains("is not: a key creation was interrupted"),
+        text.contains("is here and")
+            && text.contains("is not: no key exists here")
+            && text.contains("if it did sign, the seed was lost"),
         "{text}"
     );
     assert_eq!(removals(&text), vec![dir.join("author.key-id")], "{text}");
@@ -229,7 +238,7 @@ fn setup_finishes_a_repository_nothing_was_adopted_in_and_spells_out_the_adoptio
     let (code, text) = run(support::prikk(&repo).arg("setup"));
     assert_eq!(code, Some(0), "{text}");
     assert!(
-        text.contains("finishing the repository an interrupted"),
+        text.contains("this repository holds nothing yet (no key adopted, nothing committed or sealed): setup finishes it"),
         "{text}"
     );
     assert!(text.contains("trusted maintainer key:"), "{text}");
@@ -289,4 +298,32 @@ fn a_key_file_is_published_whole_and_never_over_one_that_is_there() {
             .collect();
         assert_eq!(names.len(), 2, "{names:?}");
     }
+}
+
+/// 0.59.0 K7 (c): a seed that is not hex (damaged by hand) says what it is, names the backup, and deletes nothing.
+#[test]
+fn a_seed_that_is_not_hex_names_the_backup_restore_and_nothing_is_deleted() {
+    let repo = good_repository("k6-non-hex");
+    let dir = support::isolated_key_dir(&repo);
+    let seed = dir.join("author.seed");
+    std::fs::write(&seed, format!("{}\n", "z".repeat(64))).unwrap();
+    std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+    let (code, text) = run(support::prikk(&repo).args(["commit", "--from-worktree", "-m", "b"]));
+    assert_ne!(code, Some(0));
+    assert!(text.contains("non-hex"), "{text}");
+    assert!(
+        text.contains("restore it from your backup") && text.contains("author.key-id"),
+        "the sentence names the backup and the file that holds the key's name: {text}"
+    );
+    assert!(
+        !text.contains("remove `"),
+        "no instruction to delete: {text}"
+    );
+    assert!(seed.exists() && dir.join("author.key-id").exists());
+    // `key public --seed-file` says the same for a file it is pointed at.
+    let (code, text) = run(support::prikk(&repo)
+        .args(["key", "public", "--seed-file"])
+        .arg(&seed));
+    assert_ne!(code, Some(0));
+    assert!(text.contains("restore it from your backup"), "{text}");
 }

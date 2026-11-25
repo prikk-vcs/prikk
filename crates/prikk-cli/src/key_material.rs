@@ -370,44 +370,76 @@ fn pair_to_remove(seed_path: &Path) -> String {
     paths.join(" and ")
 }
 
-/// The sentence for a key creation that was interrupted, when the files beside `seed_path` show one; `None` for a whole pair or anything else.
-/// **One sentence for every reader of a seed** (`commit`, `seal`, `setup`, `key generate`, `key public`, `key status`): the file holds N bytes, not a
-/// whole seed (or key id); no key was made from it, so nothing was signed with it; remove the pair's files, then run the command again.
+/// The sentence for a key file that is not whole, or a key-id with no seed, when the files beside `seed_path` show one; `None` for a whole pair or anything
+/// else. **One sentence for every reader of a seed** (`commit`, `seal`, `setup`, `key generate`, `key public`, `key status`).
+///
+/// **It says what was checked, not who did it (0.59.0 K7).** No mechanism tells a seed a kill left short from a seed that signed and was damaged later (K6
+/// makes the first impossible from now on, so on a machine running this version the second is the likelier), so the sentence has **both branches**: if this
+/// key never signed anything (a new install), remove the pair's files and run the command again; if it did, the file is damaged, restore it from your
+/// backup, and removing the files would lose that key's name (the key id, which the key-id file holds, says which backup). `prikk` deletes nothing.
 pub(crate) fn interrupted_key_sentence(seed_path: &Path) -> Option<String> {
     let key_id_file = key_id_path(seed_path);
     let seed_len = std::fs::metadata(seed_path).ok().map(|meta| meta.len());
     let seed_text = std::fs::read_to_string(seed_path).ok();
     let id_len = std::fs::metadata(&key_id_file).ok().map(|meta| meta.len());
     let id_text = std::fs::read_to_string(&key_id_file).ok();
-    let left = "left by a setup or key generate that was interrupted while it wrote the key; no key was ever made from it, so nothing was signed with it";
-    let how = format!(
-        "remove {} (prikk never deletes a key file), then run the command again",
-        pair_to_remove(seed_path)
-    );
+    // The key id, when its file is whole: the name of the key the backup holds.
+    let known_id = id_text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty() && !is_part_of_a_key_id(text))
+        .map(|text| text.trim().to_owned());
+    let two_branches = |damaged: &str| {
+        let name = known_id.as_ref().map_or_else(String::new, |id| {
+            format!(" (key id {id}, in `{}`)", key_id_file.display())
+        });
+        format!(
+            "if this key never signed anything (a new install), remove {} (prikk never deletes a key file), then run the command again; \
+             if it did sign, {damaged}: restore it from your backup{name}, and removing these files loses that key's name",
+            pair_to_remove(seed_path)
+        )
+    };
+    let leaves = "as an interrupted setup or key generate leaves it";
     if let (Some(len), Some(text)) = (seed_len, &seed_text) {
         if is_part_of_a_seed(text) {
             return Some(format!(
-                "{} holds {len} bytes, not a whole seed (64 hex characters and a newline), {left}; {how}",
-                seed_path.display()
+                "{} holds {len} bytes, not a whole seed (64 hex characters and a newline), {leaves}; {}",
+                seed_path.display(),
+                two_branches("the seed is damaged")
             ));
         }
     }
     if let (Some(len), Some(text)) = (id_len, &id_text) {
         if is_part_of_a_key_id(text) {
             return Some(format!(
-                "{} holds {len} bytes, not a whole key id, {left}; {how}",
-                key_id_file.display()
+                "{} holds {len} bytes, not a whole key id, {leaves}; {}",
+                key_id_file.display(),
+                two_branches("the key id file is damaged")
             ));
         }
     }
     if seed_len.is_none() && id_len.is_some() {
         return Some(format!(
-            "{} is here and {} is not: a key creation was interrupted after the key id was written, so no key exists and nothing was signed; {how}",
+            "{} is here and {} is not: no key exists here, {leaves} (the key id is written first); {}",
             key_id_file.display(),
-            seed_path.display()
+            seed_path.display(),
+            two_branches("the seed was lost")
         ));
     }
     None
+}
+
+/// What a seed that is not hex, or not 64 characters, says beyond what is wrong with it (0.59.0 K7): `prikk` cannot repair it and never deletes it, so the
+/// way out is the backup. `key_id_file` is named when it is there: it holds the key's name.
+pub(crate) fn unreadable_seed_sentence(detail: &str, seed_path: &Path) -> String {
+    let key_id_file = key_id_path(seed_path);
+    let name = if key_id_file.exists() {
+        format!(" (its key id is in `{}`)", key_id_file.display())
+    } else {
+        String::new()
+    };
+    format!(
+        "{detail}; this is not a seed prikk can read: if the file was damaged, restore it from your backup{name}; prikk never deletes a key file"
+    )
 }
 
 /// Create a new key on disk: the key-id file **first**, then the seed (distinct default key ids, addendum
@@ -625,8 +657,11 @@ fn read_seed_at(
             return Err(Unusable::Undecodable { detail });
         }
     }
-    crate::decode_seed_hex(contents.trim(), &path.display().to_string())
-        .map_err(|detail| Unusable::Undecodable { detail })
+    crate::decode_seed_hex(contents.trim(), &path.display().to_string()).map_err(|detail| {
+        Unusable::Undecodable {
+            detail: unreadable_seed_sentence(&detail, path),
+        }
+    })
 }
 
 /// The mode, when group or other can read this file. Unix only: there is a mode to check.
