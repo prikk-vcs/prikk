@@ -92,7 +92,26 @@ pub(crate) fn require_retained_evidence(
             // prints only `issue.code` and `issue.message`, never a separate recommendation the way
             // `doctor`'s own issues do, so the command has to be in the message itself.
             Ok(_plan) => {
-                issue.message = format!("{}; run `prikk ref complete {ref_name}`", issue.message)
+                // 0.59.0 G3: the queue sealed into the lead is the active queue's, so it is asked of the records and the metadata this stage holds.
+                let owner = match metadata {
+                    ActiveWalMetadataStatus::ValidForNonEmptyWal { ref_name } => {
+                        Some(ref_name.as_str())
+                    }
+                    _ => None,
+                };
+                if crate::ref_completion::queue_sealed_into_lead(layout, ref_name, owner, records)?
+                    .is_some()
+                {
+                    issue.seal_due = true;
+                    issue.message = format!(
+                        "{}; {}",
+                        issue.message,
+                        crate::ref_completion::seal_then_complete_steps(ref_name)
+                    );
+                } else {
+                    issue.message =
+                        format!("{}; run `prikk ref complete {ref_name}`", issue.message);
+                }
             }
             Err(crate::ref_completion::CompletionRefusal::PublicationInFlight(pid)) => {
                 issue.code = crate::refs::in_flight::IN_FLIGHT_CODE;
@@ -121,6 +140,7 @@ pub(super) fn in_flight_issue(ref_name: &str, pid: u32) -> RefPublicationIssue {
         blocking: false,
         log_leads: false,
         unproved_lead: false,
+        seal_due: false,
     }
 }
 
@@ -133,6 +153,7 @@ pub(super) fn in_flight_issue_for(ref_name: &str, pid: Option<u32>) -> RefPublic
         blocking: false,
         log_leads: false,
         unproved_lead: false,
+        seal_due: false,
     }
 }
 
@@ -184,6 +205,7 @@ fn add_incomplete_cleanup_issue(
                 blocking: false,
                 log_leads: false,
                 unproved_lead: false,
+                seal_due: false,
             });
             return Ok(());
         }
@@ -195,6 +217,7 @@ fn add_incomplete_cleanup_issue(
             blocking: true,
             log_leads: false,
             unproved_lead: false,
+            seal_due: false,
         });
     }
     Ok(())

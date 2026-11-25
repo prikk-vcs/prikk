@@ -193,6 +193,54 @@ pub fn plan_ref_completion(
     )
 }
 
+/// **The one classifier of a completable lead whose queue is already sealed into it** (0.59.0 step G3): a `seal` stopped between its pointer and
+/// its ref-log record leaves the pointer one transition ahead of the log **and** an active queue that is exactly the patches of the Block the
+/// pointer names. `prikk seal --allow-no-audit` finishes both (and needs the maintainer key); `prikk ref complete` finishes the publication
+/// alone, leaving the queue for the `seal` (measured: `verify` is then at `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING` until it runs). Every surface that
+/// names a first step for a lead asks this: `verify`'s message, `doctor`'s way out ([`crate::way_out`]), the writers' refusal, and `merge`'s.
+/// `owner` is the ref the active queue belongs to (the active metadata's), `records` the queue; the Block is the lead's.
+pub(crate) fn queue_sealed_into_lead(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+    owner: Option<&str>,
+    records: &[crate::wal::WalRecord],
+) -> Result<Option<ObjectId>> {
+    if owner != Some(ref_name) {
+        return Ok(None);
+    }
+    Ok(
+        crate::refs::publication::queue_already_sealed(layout, ref_name, records)?
+            .map(|sealed| sealed.block),
+    )
+}
+
+/// [`queue_sealed_into_lead`] for the repository as it is now (the active queue and its owner read here).
+pub(crate) fn queue_sealed_into_lead_now(
+    layout: &RepositoryLayout,
+    ref_name: &str,
+) -> Result<Option<ObjectId>> {
+    let owner = match crate::commit_boundary::active::read_active_ref_metadata(layout)? {
+        ActiveRefMetadata::Valid(owner) => Some(owner),
+        _ => None,
+    };
+    if owner.is_none() {
+        return Ok(None);
+    }
+    let replay = Wal::for_layout(layout, DEFAULT_ACTIVE_NAME).replay()?;
+    queue_sealed_into_lead(layout, ref_name, owner.as_deref(), &replay.records)
+}
+
+/// The step for a lead whose queue is sealed into it, as every surface says it: the `seal` first, because it finishes the publication **and** the
+/// queue; `ref complete` only as what it is, the publication alone, with the `seal` still due after it. **Both need a maintainer key adopted
+/// here** (measured: `ref complete` refuses without the maintainer seed, even with `--plan-only`, as `seal` does), so the sentence offers no keyless
+/// way and says what the `seal` needs. One text, for every surface.
+pub(crate) fn seal_then_complete_steps(ref_name: &str) -> String {
+    format!(
+        "run `prikk seal --allow-no-audit`: it finishes the publication and the queue, and needs a maintainer key adopted here; \
+         `prikk ref complete {ref_name}` would finish the publication alone, needs the same key, and leaves the `seal` still due"
+    )
+}
+
 /// 019 §5.2: the message a caller gives when [`crate::refs::ensure_may_publish`] or
 /// [`crate::refs::ensure_no_incomplete_publication_except`] refuses -- names `prikk ref complete
 /// <ref>` only when the refusal is a genuine N3 lead (one coherent transition, every RFC 165 R4
@@ -235,6 +283,14 @@ pub fn incomplete_publication_refusal_naming_any_lead(
             let lock_note = crate::refs::in_flight::holder_note(layout, &ref_name)?
                 .map(|note| format!(" (the lock it took is still on disk: its holder {note})"))
                 .unwrap_or_default();
+            // 0.59.0 G3: a lead whose queue is already sealed into it names the `seal` first (it finishes both), then `ref complete`.
+            if let Some(block) = queue_sealed_into_lead_now(layout, &ref_name)? {
+                return Ok(PrikkError::Precondition(format!(
+                    "repository mutation is blocked by an interrupted publication for {ref_name}: its \
+                     pointer leads the ref log by one sound transition, and the queued patches are already sealed in block {block}; {}{lock_note}",
+                    seal_then_complete_steps(&ref_name)
+                )));
+            }
             Ok(PrikkError::Precondition(format!(
                 "repository mutation is blocked by an interrupted publication for {ref_name}: its \
                  pointer leads the ref log by one sound transition; run `prikk ref complete {ref_name}`{lock_note}"

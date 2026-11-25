@@ -865,7 +865,7 @@ ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer lead
 ref-publication [PRIKK-VERIFY-REF-POINTER-LEADS-LOG]: authoritative pointer leads ref log by one transition with <N> incomplete trailing byte(s); run `prikk ref complete <ref>`
 ```
 
-`doctor` recommends the same thing, `prikk ref complete <ref>`. Retrying the same command does not finish it:
+`doctor` recommends the same thing, `prikk ref complete <ref>`. **One state names the `seal` first (0.59.0):** a `seal` stopped between its pointer and its ref-log record leaves the pointer one transition ahead **and** a queue that is exactly the patches of the Block the pointer names. `verify`, `doctor`, the writers' refusal (`commit`, `branch create`, `tag create`, `merge --into` and the rest) and `status --format json`'s `already_sealed.route` then all say the same first step, `prikk seal --allow-no-audit`: it finishes the publication and the queue, and needs a maintainer key adopted here. `prikk ref complete <ref>` would finish the publication alone, needs the same key (it refuses without the maintainer seed, with `--plan-only` too), and leaves the `seal` still due (`verify` then reports `PRIKK-VERIFY-REF-ACTIVE-CLEANUP-PENDING` until it runs); both orders end at the same tip. A lead with no queue sealed into it keeps naming `ref complete`. Retrying the same command does not finish it:
 `branch create`/`tag create` still answer "already exists" (the ref *was* durably created — unless
 the pointer itself also reports a completable lead, in which case the refusal itself now names
 `ref complete`), and `merge` refuses before gathering evidence rather than building on a pointer its
@@ -1255,6 +1255,7 @@ A command that publishes (or `trust maintainer add`/`remove`, `rollback-draft`, 
 | the sentence says | what it is | the command |
 |---|---|---|
 | `run \`prikk ref complete <ref>\`` | an interrupted publication: the pointer leads the ref log by one sound transition | `prikk ref complete <ref>` |
+| `… and the queued patches are already sealed in block <id>; run \`prikk seal --allow-no-audit\`: it finishes the publication and the queue, and needs a maintainer key adopted here; \`prikk ref complete <ref>\` would finish the publication alone …` (0.59.0) | the same lead, and the queue is exactly the patches of the Block the pointer names: a `seal` stopped between its pointer and its ref-log record | `prikk seal --allow-no-audit` (it finishes both; `ref complete` first leaves the `seal` still due) |
 | `the ref pointer index has a damaged record; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then …` | a pointer-index record failed | `prikk doctor --rebuild-pointer-index --plan-only`, then without `--plan-only` |
 | `a seal stopped after it published … run \`prikk seal --allow-no-audit\`` | the queue is exactly the patches of a block its ref already points at | `prikk seal --allow-no-audit` |
 | `the ref log is ahead of the pointer index for <ref>; run \`prikk doctor --rebuild-pointer-index --plan-only\`, then …` | the pointer index is older than the log, or lost its record of the ref | `prikk doctor --rebuild-pointer-index --plan-only`, then without `--plan-only`. It refuses a pointer the log does not hold (a fork) or one more than one transition ahead, and says so |

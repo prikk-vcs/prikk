@@ -14,6 +14,8 @@
     clippy::unwrap_used
 )]
 
+#[path = "real_kill_sweep/g3.rs"]
+mod g3;
 #[path = "real_kill_sweep/harness.rs"]
 mod harness;
 #[path = "real_kill_sweep/inventory.rs"]

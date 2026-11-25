@@ -39,6 +39,9 @@ pub struct RefPublicationIssue {
     /// 0.59.0 step G2d: the pointer leads the log by one transition, and the retained evidence (the active queue, the trust of the signer) does not prove
     /// it: `ref complete` refuses, and `doctor --rebuild-pointer-index` drops the lead (measured). Typed; never read from the message.
     pub(crate) unproved_lead: bool,
+    /// 0.59.0 step G3: the pointer leads the log by one transition **and** the active queue is already sealed into that lead (a `seal` stopped between
+    /// its pointer and its log record): `prikk seal --allow-no-audit` finishes both, and is named first. Typed; never read from the message.
+    pub(crate) seal_due: bool,
 }
 
 impl RefPublicationIssue {
@@ -457,6 +460,7 @@ pub(in crate::refs) fn candidate_issues(
                 blocking: false,
                 log_leads: false,
                 unproved_lead: false,
+                seal_due: false,
             });
         } else {
             return Err(PrikkError::Integrity(
@@ -475,5 +479,6 @@ fn blocking_issue(code: &'static str, ref_name: &str, message: String) -> RefPub
         blocking: true,
         log_leads: false,
         unproved_lead: false,
+        seal_due: false,
     }
 }

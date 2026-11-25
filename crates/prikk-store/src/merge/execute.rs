@@ -130,6 +130,14 @@ pub fn execute_merge(
     // evidence gathering or write.
     match crate::ref_completion::plan_ref_completion(layout, &into_ref)? {
         Ok(_) => {
+            // 0.59.0 G3: a lead whose queue is already sealed into it names the `seal` first, as every surface does.
+            if crate::ref_completion::queue_sealed_into_lead_now(layout, &into_ref)?.is_some() {
+                return Err(PrikkError::Precondition(format!(
+                    "ref {into_ref} has an interrupted publication and its queued patches are already sealed in it; {} \
+                     before merging into it",
+                    crate::ref_completion::seal_then_complete_steps(&into_ref)
+                )));
+            }
             return Err(PrikkError::Precondition(format!(
                 "ref {into_ref} has an interrupted publication; run `prikk ref complete {into_ref}` \
                  before merging into it"

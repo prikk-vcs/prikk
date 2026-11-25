@@ -82,6 +82,9 @@ pub enum WayOut {
     },
     /// 0.59.0 step G2d: a lead of one transition that retained evidence does not prove: `ref complete` refuses it and the rebuild drops it.
     RefLeadUnproved,
+    /// 0.59.0 step G3: a pointer one transition ahead of the log **and** an active queue already sealed into that lead (a `seal` stopped between its
+    /// pointer and its log record). Chosen by the issue's typed `seal_due`, never by its words.
+    RefLeadWithSealedQueue(String),
     /// A ref's pointer and log disagree, by the code `verify` gives that state.
     RefPublication {
         /// The `PRIKK-VERIFY-REF-*` code.
@@ -160,6 +163,10 @@ impl WayOut {
             ),
             Self::CommitIndex => crate::COMMIT_INDEX_DIVERGENCE_ADVICE.to_string(),
             Self::LifecycleCache => crate::lifecycle_cache_divergence_advice(),
+            Self::RefLeadWithSealedQueue(ref_name) => format!(
+                "{}; doctor does not sign or append",
+                crate::ref_completion::seal_then_complete_steps(ref_name)
+            ),
             Self::RefPublication { code, ref_name } => match code.as_str() {
                 "PRIKK-VERIFY-REF-POINTER-LEADS-LOG" => match ref_name.as_deref() {
                     Some(ref_name) => format!(
@@ -245,6 +252,8 @@ pub(crate) fn for_ref_issue(issue: &crate::refs::RefPublicationIssue) -> WayOut 
         WayOut::RefLogLeadsPointer
     } else if issue.unproved_lead {
         WayOut::RefLeadUnproved
+    } else if let (true, Some(ref_name)) = (issue.seal_due, issue.ref_name.as_ref()) {
+        WayOut::RefLeadWithSealedQueue(ref_name.clone())
     } else {
         WayOut::RefPublication {
             code: issue.code.to_string(),
