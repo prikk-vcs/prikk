@@ -378,9 +378,17 @@ fn seal_from_accepted_claim_impl(
     }
     let selected_patch_ids: Vec<ObjectId> = {
         let walked;
+        // 0.59.0 P5a4: the plan's own history only grows (each Block it publishes adds its patches and itself), so what the parent check proved
+        // reached against it stays reached. The history is the plan's only while the ref is where the plan left it; any other tip is a history walked
+        // here, which says nothing about what the plan proved, so the plan forgets it (fail closed: today's walk).
+        let mut plan_history = true;
         let history = match plan.as_deref().and_then(|plan| plan.history_at(parent)) {
             Some(history) => history,
             None => {
+                plan_history = false;
+                if let Some(plan) = plan.as_deref() {
+                    plan.forget_proven();
+                }
                 walked = ref_history(&fresh, parent)?;
                 &walked
             }
@@ -412,8 +420,19 @@ fn seal_from_accepted_claim_impl(
                     claims_by_block(&enumerated)
                 }
             };
+            let mut proven = plan
+                .as_deref()
+                .filter(|_| plan_history)
+                .and_then(SealBatchPlan::proven_blocks)
+                .map(std::cell::RefCell::borrow_mut);
             for &parent_id in &claim.parent_block_ids {
-                if !parent_reached(&fresh, &by_block, history, parent_id)? {
+                if !parent_reached_proving(
+                    &fresh,
+                    &by_block,
+                    history,
+                    parent_id,
+                    proven.as_deref_mut(),
+                )? {
                     return Err(parent_not_reached_refusal(
                         layout,
                         &fresh,
@@ -461,8 +480,13 @@ fn seal_from_accepted_claim_impl(
         )?,
         None => None,
     };
-    #[cfg(any(test, feature = "test-support"))]
     let sealed_from_the_plan = folded_block.is_some();
+    // 0.59.0 P5a4: a claim sealed from disk is a plan that did not hold: what it proved is dropped, whatever the history says.
+    if !sealed_from_the_plan {
+        if let Some(plan) = plan.as_deref() {
+            plan.forget_proven();
+        }
+    }
     let block_id = match folded_block {
         Some(block_id) => block_id,
         None => seal_block_classified(
@@ -861,13 +885,42 @@ fn parent_reached(
     history: &RefHistory,
     parent: ObjectId,
 ) -> Result<bool> {
+    parent_reached_proving(object_store, by_block, history, parent, None)
+}
+
+/// [`parent_reached`], remembering what it proves (0.59.0 P5a4). **`proven` holds blocks already proven reached, and only those:** a block is added when
+/// the walk returned `true` for it and never otherwise (a claim sealed later can make an unreached block reached, so "not reached" is never kept).
+/// A block proven reached stays reached for as long as the history only grows -- the proof is "its patches are all in the history, and so are its
+/// parents'" -- which holds within one batch's own history (each sealed Block adds its patches and itself) and within `require_parents_reached`'s
+/// growing copy. **The caller owns that condition** and drops the set whenever it could fail ([`SealBatchPlan::forget_proven`]); with `None` this is
+/// the walk it always was. Without it, the walk of a chain batch visits every claim's whole ancestry again for each claim: n²/2 steps.
+fn parent_reached_proving(
+    object_store: &impl ObjectReader,
+    by_block: &ClaimsByBlock<'_>,
+    history: &RefHistory,
+    parent: ObjectId,
+    mut proven: Option<&mut BTreeSet<ObjectId>>,
+) -> Result<bool> {
     parent_reached_visiting(
         object_store,
         by_block,
         history,
         parent,
         &mut BTreeSet::new(),
+        &mut proven,
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many blocks `parent_reached_visiting` looked at on this thread (`cfg(test)`): the pin that a chain batch's parent check is linear.
+    static PARENT_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The parent-check steps taken on this thread so far (`cfg(test)`).
+#[cfg(test)]
+pub(crate) fn parent_steps_for_test() -> usize {
+    PARENT_STEPS.with(std::cell::Cell::get)
 }
 
 fn parent_reached_visiting(
@@ -876,18 +929,33 @@ fn parent_reached_visiting(
     history: &RefHistory,
     parent: ObjectId,
     visiting: &mut BTreeSet<ObjectId>,
+    proven: &mut Option<&mut BTreeSet<ObjectId>>,
 ) -> Result<bool> {
+    #[cfg(test)]
+    PARENT_STEPS.with(|steps| steps.set(steps.get() + 1));
     if history.blocks.contains(&parent) {
+        return Ok(true);
+    }
+    if proven
+        .as_ref()
+        .is_some_and(|proven| proven.contains(&parent))
+    {
         return Ok(true);
     }
     if object_store.has_object(parent, ObjectType::Block)? {
         let ancestry = ancestors_inclusive(object_store, parent)?;
-        return Ok(ancestry.values().all(|block| {
+        let reached = ancestry.values().all(|block| {
             block
                 .patch_ids
                 .iter()
                 .all(|id| history.patches.contains(id))
-        }));
+        });
+        if reached {
+            if let Some(proven) = proven.as_deref_mut() {
+                proven.insert(parent);
+            }
+        }
+        return Ok(reached);
     }
     let Some((_, claim)) = by_block.get(&parent)? else {
         return Ok(false);
@@ -901,13 +969,25 @@ fn parent_reached_visiting(
         .all(|id| history.patches.contains(id));
     if reached {
         for &grandparent in &claim.parent_block_ids {
-            if !parent_reached_visiting(object_store, by_block, history, grandparent, visiting)? {
+            if !parent_reached_visiting(
+                object_store,
+                by_block,
+                history,
+                grandparent,
+                visiting,
+                proven,
+            )? {
                 reached = false;
                 break;
             }
         }
     }
     visiting.remove(&parent);
+    if reached {
+        if let Some(proven) = proven.as_deref_mut() {
+            proven.insert(parent);
+        }
+    }
     Ok(reached)
 }
 

@@ -23,7 +23,7 @@ use crate::seal_from_accepted::tests::{
 };
 use crate::seal_from_accepted::{
     ClaimsByBlock, RefHistory, claims_by_block, enumerate_stored_claims, parent_reached,
-    refuse_if_order_ambiguous_indexed,
+    parent_reached_proving, refuse_if_order_ambiguous_indexed,
 };
 use crate::{FileObjectStore, RepositoryLayout};
 
@@ -99,7 +99,8 @@ fn refusal(result: Result<()>) -> String {
 #[test]
 fn the_subset_decides_as_the_full_read_does() -> Result<()> {
     // Coverage: the cases the equality is over (refusals, reached and unreached parents, claims fetched by offset, duplicate records).
-    let (mut refused, mut reached, mut unreached, mut fetched, mut duplicates) = (0, 0, 0, 0, 0);
+    let (mut refused, mut reached, mut unreached, mut fetched, mut duplicates, mut remembered) =
+        (0, 0, 0, 0, 0, 0);
     for seed in 0..120_u64 {
         let fixture = base_fixture(&format!("p5a3-diff-{seed}"))?;
         let layout = &fixture.layout;
@@ -173,6 +174,41 @@ fn the_subset_decides_as_the_full_read_does() -> Result<()> {
             }
         }
 
+        // The memory (0.59.0 P5a4): a parent check that remembers what it proved reached, over a history that only grows, decides as the check that
+        // remembers nothing, at every step of the growth, for every parent of every claim.
+        let mut grown = RefHistory {
+            blocks: history.blocks.clone(),
+            patches: history.patches.clone(),
+        };
+        let mut proven = BTreeSet::new();
+        for step in 0..6 {
+            for _ in 0..2 {
+                grown.patches.insert(id("patch", rng.next(6)));
+            }
+            if rng.next(3) == 0 {
+                grown.blocks.insert(id("block", rng.next(30)));
+            }
+            for (_, claim) in &all {
+                for parent in &claim.parent_block_ids {
+                    let plain = parent_reached(&snapshot, &by_block_subset, &grown, *parent)
+                        .map_err(|e| e.to_string());
+                    let remembering = parent_reached_proving(
+                        &snapshot,
+                        &by_block_subset,
+                        &grown,
+                        *parent,
+                        Some(&mut proven),
+                    )
+                    .map_err(|e| e.to_string());
+                    assert_eq!(
+                        remembering, plain,
+                        "seed {seed} step {step}: parent {parent} with the memory"
+                    );
+                }
+            }
+            remembered += proven.len();
+        }
+
         // The claim a block resolves to, and its payload: the first claim for it, whatever the subset holds.
         for block_n in 0..30 {
             let block = id("block", block_n);
@@ -191,8 +227,13 @@ fn the_subset_decides_as_the_full_read_does() -> Result<()> {
         cleanup(layout);
     }
     assert!(
-        refused >= 30 && reached >= 100 && unreached >= 100 && fetched >= 200 && duplicates >= 20,
-        "coverage: {refused} refusals, {reached} reached, {unreached} unreached, {fetched} blocks resolved outside the subset, {duplicates} duplicate-id writes"
+        refused >= 30
+            && reached >= 100
+            && unreached >= 100
+            && fetched >= 200
+            && duplicates >= 20
+            && remembered >= 500,
+        "coverage: {refused} refusals, {reached} reached, {unreached} unreached, {fetched} blocks resolved outside the subset, {duplicates} duplicate-id writes, {remembered} blocks remembered"
     );
     Ok(())
 }

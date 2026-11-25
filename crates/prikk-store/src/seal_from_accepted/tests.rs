@@ -2289,3 +2289,116 @@ fn p5a1b_the_judged_state_is_the_0_58_0_fold_collision_by_collision() -> Result<
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 P5a4: the parent check remembers what it proved reached.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+
+/// A chain batch's parent check is **linear**: each claim's parent is the previous claim's block, which the receiver does not hold, so the walk goes
+/// through the claim to its parent and on to the root. Without the memory that is n²/2 steps for each of the two passes (the pre-pass and the loop);
+/// with it each block is walked once. The counts are of blocks the walk looked at, on this thread.
+#[test]
+fn p5a4_a_chain_batch_checks_its_parents_in_linear_steps() -> Result<()> {
+    let mut steps = Vec::new();
+    for n in [30_usize, 60, 90] {
+        let (fixture, claims) = chained_batch_fixture(&format!("p5a4-linear-{n}"), n)?;
+        let before = super::parent_steps_for_test();
+        let run = run_batch(&fixture, &claims, TARGET_REF, Some(true))?;
+        assert_eq!(run.sealed, n);
+        assert_eq!(run.counts, (n, 0), "every claim sealed from the plan");
+        steps.push(super::parent_steps_for_test() - before);
+        cleanup(&fixture.layout);
+    }
+    assert!(
+        (steps[2] - steps[1]).abs_diff(steps[1] - steps[0]) <= 10,
+        "the steps grow by the same amount for each 30 claims added (linear): {steps:?}"
+    );
+    assert!(
+        steps[2] <= 5 * 90,
+        "90 claims take {} steps; the walk without the memory takes about {}",
+        steps[2],
+        90 * 90
+    );
+    Ok(())
+}
+
+/// The ref **moves under the plan** to a tip whose history lacks what the plan proved (here: back to the first claim's Block, so the second claim's
+/// patches are no longer in it): the next claim's parent check meets a history that is not the plan's, the plan forgets what it proved, and the claim
+/// is refused as the walk refuses it -- not passed on a proof made against a history the ref no longer has.
+#[test]
+fn p5a4_a_ref_moved_under_the_plan_drops_what_it_proved() -> Result<()> {
+    use crate::test_gates::test_support::{signed_ref_state_envelope, signed_ref_update_envelope};
+    let (fixture, claims) = chained_batch_fixture("p5a4-moved", 4)?;
+    let lock = crate::lock::ActiveLock::acquire(&fixture.layout, DEFAULT_ACTIVE_NAME)?;
+    let mut plan = super::SealBatchPlan::open(&fixture.layout, TARGET_REF, &claims)?;
+    plan.require_parents_reached(&fixture.layout, &claims)?;
+    plan.fold(&fixture.layout, &claims, true);
+    let mut tips = Vec::new();
+    for claim in &claims[..2] {
+        let outcome = super::seal_from_accepted_claim_in_batch(
+            &fixture.layout,
+            &lock,
+            TARGET_REF,
+            *claim,
+            &fixture.signer,
+            &mut plan,
+        )?;
+        assert!(matches!(outcome, SealFromAcceptedOutcome::Sealed { .. }));
+        tips.push(current_tip(&fixture.layout)?.expect("a tip"));
+    }
+    assert!(
+        plan.proven_len() > 0,
+        "the second claim's parent check proved the first's block reached"
+    );
+    // The ref moves back to the first claim's Block (a publication of an older target, as a rollback or another writer's would be).
+    let store = RefStore::new(fixture.layout.clone());
+    let previous = store.read_current_ref_state_id(TARGET_REF)?;
+    let state = {
+        let object_store = FileObjectStore::new(fixture.layout.clone());
+        let envelope = crate::ObjectReader::read_typed(
+            &object_store,
+            previous.expect("a ref state"),
+            ObjectType::RefState,
+        )?
+        .expect("exists");
+        prikk_object::RefStatePayload::decode_canonical(
+            &envelope.canonical_payload,
+            envelope.schema_version,
+        )?
+    };
+    let seq = state.update_seq + 1;
+    let ref_state = signed_ref_state_envelope(TARGET_REF, previous, tips[0], seq);
+    let ref_update =
+        signed_ref_update_envelope(TARGET_REF, previous, ref_state.object_id(), tips[0], seq);
+    store.publish(&crate::RefPublication {
+        ref_name: TARGET_REF.to_string(),
+        expected_previous_ref_state_id: previous,
+        ref_state,
+        ref_update,
+    })?;
+    let refused = super::seal_from_accepted_claim_in_batch(
+        &fixture.layout,
+        &lock,
+        TARGET_REF,
+        claims[2],
+        &fixture.signer,
+        &mut plan,
+    )
+    .err()
+    .ok_or_else(|| {
+        PrikkError::Integrity(
+            "a claim whose parent the moved ref does not reach was sealed on a stale proof"
+                .to_string(),
+        )
+    })?;
+    assert!(
+        refused
+            .to_string()
+            .contains("which heads/main does not reach"),
+        "{refused}"
+    );
+    assert_eq!(plan.proven_len(), 0, "the plan forgot what it proved");
+    drop(lock);
+    cleanup(&fixture.layout);
+    Ok(())
+}

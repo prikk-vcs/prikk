@@ -8,8 +8,8 @@ use prikk_object::{ObjectId, ObjectType, RecognitionClaimPayload};
 
 use super::stored_claims::{BatchScope, StoredClaims};
 use super::{
-    ClaimsByBlock, RefHistory, parent_not_reached_refusal, parent_reached, read_current_tip,
-    ref_history, refuse_if_order_ambiguous, refuse_if_order_ambiguous_indexed,
+    ClaimsByBlock, RefHistory, parent_not_reached_refusal, parent_reached_proving,
+    read_current_tip, ref_history, refuse_if_order_ambiguous, refuse_if_order_ambiguous_indexed,
 };
 use crate::anchor_trust::AnchorSite;
 use crate::block_state::StateAnchoring;
@@ -90,6 +90,9 @@ pub(super) struct BatchReads {
     /// The batch the claims were read for, kept for the re-read.
     scope: BatchScope,
     claims_version: Option<ClaimContainerVersion>,
+    /// Blocks the parent check proved reached against `history` (0.59.0 P5a4): valid while the history only grows. Dropped when the plan is
+    /// abandoned, when a claim is sealed from disk, when the history is walked afresh (the ref moved), and when the claims are read again.
+    proven: std::cell::RefCell<std::collections::BTreeSet<ObjectId>>,
     /// The ref's history as of `tip`, extended by each block this batch publishes ([`SealBatchPlan::note_published`]).
     history: RefHistory,
     pub(super) tip: Option<ObjectId>,
@@ -237,6 +240,7 @@ impl SealBatchPlan {
                 stored,
                 scope,
                 claims_version,
+                proven: std::cell::RefCell::new(std::collections::BTreeSet::new()),
                 history,
                 tip,
             }),
@@ -262,6 +266,8 @@ impl SealBatchPlan {
         if version != reads.claims_version {
             reads.stored = StoredClaims::read(layout, Some(&reads.scope))?;
             reads.claims_version = version;
+            // A claim stored mid-batch could change what a block resolves to for the parent check: nothing proved before it is kept.
+            reads.proven.borrow_mut().clear();
         }
         Ok(())
     }
@@ -331,6 +337,8 @@ impl SealBatchPlan {
             patches: reads.history.patches.clone(),
         };
         let by_block = ClaimsByBlock::subset(&reads.stored, layout);
+        // The history above only grows (each claim's patches join it), so what the walk proves reached stays reached for the rest of this pass.
+        let mut proven = std::collections::BTreeSet::new();
         for claim_id in ordered_claim_ids {
             let Some(claim) = reads.stored.kept_claim(claim_id) else {
                 return Ok(());
@@ -352,7 +360,13 @@ impl SealBatchPlan {
                 continue;
             }
             for &parent_id in &claim.parent_block_ids {
-                if !parent_reached(&object_store, &by_block, &history, parent_id)? {
+                if !parent_reached_proving(
+                    &object_store,
+                    &by_block,
+                    &history,
+                    parent_id,
+                    Some(&mut proven),
+                )? {
                     return Err(parent_not_reached_refusal(
                         layout,
                         &object_store,
@@ -406,6 +420,29 @@ impl SealBatchPlan {
     fn abandon(&mut self) {
         self.steps = std::collections::VecDeque::new();
         self.running = None;
+        self.forget_proven();
+    }
+
+    /// The blocks the parent check has proved reached against this plan's history, to read and add to.
+    pub(super) fn proven_blocks(
+        &self,
+    ) -> Option<&std::cell::RefCell<std::collections::BTreeSet<ObjectId>>> {
+        self.reads.as_ref().map(|reads| &reads.proven)
+    }
+
+    /// Drop what the parent check proved (see [`BatchReads::proven`]): any doubt that the history only grew.
+    pub(super) fn forget_proven(&self) {
+        if let Some(reads) = self.reads.as_ref() {
+            reads.proven.borrow_mut().clear();
+        }
+    }
+
+    /// How many blocks the plan holds as proved reached (`cfg(test)`).
+    #[cfg(test)]
+    pub(super) fn proven_len(&self) -> usize {
+        self.reads
+            .as_ref()
+            .map_or(0, |reads| reads.proven.borrow().len())
     }
 
     /// How many claims are still planned (for the controls).
