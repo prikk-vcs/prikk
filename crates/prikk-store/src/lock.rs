@@ -6,8 +6,8 @@ use std::time::Duration;
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{
-    DirectoryHold, MutationRoot, create_new_file_required, inspect_entry,
-    remove_file_cleanup_best_effort,
+    DirectoryHold, MutationRoot, create_lock_file_required, inspect_entry,
+    remove_lock_file_best_effort,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 
@@ -134,7 +134,7 @@ impl ActiveLock {
 
 impl Drop for ActiveLock {
     fn drop(&mut self) {
-        remove_file_cleanup_best_effort(&self.mutation_root, &self.relative);
+        remove_lock_file_best_effort(&self.mutation_root, &self.relative);
     }
 }
 
@@ -172,7 +172,7 @@ impl RefLock {
 
 impl Drop for RefLock {
     fn drop(&mut self) {
-        remove_file_cleanup_best_effort(&self.mutation_root, &self.relative);
+        remove_lock_file_best_effort(&self.mutation_root, &self.relative);
     }
 }
 
@@ -193,7 +193,7 @@ struct ContainerLockHandle {
 
 impl Drop for ContainerLockHandle {
     fn drop(&mut self) {
-        remove_file_cleanup_best_effort(&self.mutation_root, &self.relative);
+        remove_lock_file_best_effort(&self.mutation_root, &self.relative);
     }
 }
 
@@ -330,7 +330,7 @@ fn acquire_lock_file(
                 path.display()
             )))
         }
-        // `create_new_file_required` puts the file's path into every failure but "already exists".
+        // `create_lock_file_required` puts the file's path into every failure but "already exists".
         Err(err) => Err(PrikkError::Io {
             kind: Some(err.kind()),
             context: format!("{kind} lock: {err}"),
@@ -350,7 +350,7 @@ fn create_lock_file(
     relative: &Path,
     bytes: &[u8],
 ) -> std::io::Result<()> {
-    let create = || create_new_file_required(mutation_root, relative, bytes);
+    let create = || create_lock_file_required(mutation_root, relative, bytes);
     if cfg!(windows) {
         retry_denied_create(
             create,

@@ -8,22 +8,33 @@ use crate::{
     ActiveLock, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryLayout, acquire_container_locks,
 };
 
-/// Injects `RequiredDirectorySync`, which exists only where a directory can be fsynced (Linux, macOS), not on Windows.
+/// **A lock makes no directory sync** (0.59.0 P5b3a, option C; it was `failed_lock_directory_sync_retains_stale_lock`, whose premise, a lock
+/// create that syncs its directory, is gone). `RequiredDirectorySync` is armed, a lock is acquired and released, and **it is not consumed**: the next
+/// durable create, which does sync its directory, takes the injected failure.
+/// **Perturb:** the lock's create through the durable `create_exclusive` again: the acquisition takes the injected failure and this goes red. (The
+/// *removal's* absence of a sync is pinned by `sync_count`'s counts, which also catch the body's sync removed: this failpoint is only in the create.)
+/// Exists only where a directory can be fsynced (Linux, macOS).
 #[cfg(not(windows))]
 #[test]
-fn failed_lock_directory_sync_retains_stale_lock() {
-    let root = unique_temp_dir("lock-directory-sync-failure");
-    let layout = RepositoryLayout::init(root.clone());
-    assert!(layout.is_ok());
-    if let Ok(layout) = layout {
-        let path = layout.default_active_lock_path();
-        fail_once_for_test(TestFailPoint::RequiredDirectorySync);
-        assert!(ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).is_err());
-        assert!(path.is_file());
-        assert!(ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).is_err());
-        let _ = fs::remove_file(path);
+fn a_lock_acquired_and_released_makes_no_directory_sync() -> prikk_error::Result<()> {
+    let root = unique_temp_dir("lock-no-directory-sync");
+    let layout = RepositoryLayout::init(root.clone())?;
+    fail_once_for_test(TestFailPoint::RequiredDirectorySync);
+    {
+        let _lock = ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)?;
     }
+    assert!(!layout.default_active_lock_path().exists(), "released");
+    let probe = crate::foundation::fsutil::create_new_file_required(
+        layout.repository_mutation_root(),
+        std::path::Path::new(".prikk/probe-directory-sync"),
+        b"x",
+    );
+    assert!(
+        probe.is_err(),
+        "the armed directory-sync failure was still there for a durable create: the lock took none"
+    );
     let _ = fs::remove_dir_all(root);
+    Ok(())
 }
 
 #[test]

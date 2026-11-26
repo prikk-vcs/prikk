@@ -71,9 +71,10 @@ pub(crate) use anchored::append_pieces;
 pub(crate) use anchored::{
     DirectoryHold, EntryKind, FileIdentity, MutationRoot, RootDirEntry, RootFileStat,
     append_file_pair_reporting_offset_required, append_file_reporting_offset_required,
-    append_file_required, create_new_file_required, ensure_directory_required, inspect_entry,
-    list_directory, overwrite_in_place_required, read_file_if_exists, read_file_range_if_exists,
-    read_file_required, remove_file_cleanup_best_effort, remove_worktree_file_required,
+    append_file_required, create_lock_file_required, create_new_file_required,
+    ensure_directory_required, inspect_entry, list_directory, overwrite_in_place_required,
+    read_file_if_exists, read_file_range_if_exists, read_file_required,
+    remove_lock_file_best_effort, remove_worktree_file_required,
     rewrite_in_place_or_create_required, set_regular_file_mode_required,
     stat_file_identity_if_exists, stat_file_state_if_exists, sync_directory_required,
     truncate_existing_file_required, truncate_file_empty_required, write_file_atomically,
@@ -103,7 +104,7 @@ pub(in crate::foundation::fsutil) use anchored::NoDurability;
 // `remove_file_required` itself carries no platform gate at its own definition (it dispatches
 // through `ACTIVE_DURABILITY`, which resolves per-platform internally). Unconditional since RFC 102
 // Stage 6 Step 2's `unlock.rs` (design-v1.md §15.7 decision 3) is a genuine production caller, not
-// just tests -- `prikk unlock` needs a real `Result`, not `remove_file_cleanup_best_effort`'s
+// just tests -- `prikk unlock` needs a real `Result`, not `remove_lock_file_best_effort`'s
 // swallowed-error shape, since an operator-initiated removal that silently failed would be worse than
 // an error surfaced.
 pub(crate) use anchored::remove_file_required;

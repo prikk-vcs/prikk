@@ -30,7 +30,7 @@ Release-transaction durability, artifact identity, and evidence limits are docum
 - `doctor` repairs are opt-in and narrow; they do not synthesize missing objects, signatures, trust
   policy, or key material.
 - A lock left behind by a crash is cleared by an operator with `prikk unlock`; prikk never steals or
-  expires a lock on its own, and `prikk doctor` names every held lock. The lock/CAS boundary is covered
+  expires a lock on its own, and `prikk doctor` names every held lock. A lock file's body is synced, its directory entry and its removal are not (what a power loss can leave, and why that is safe: [what a lock is](./concurrency-locking.md#what-a-lock-is-and-what-a-power-loss-leaves)). The lock/CAS boundary is covered
   by the [concurrency and locking](./concurrency-locking.md) reference.
 
 ## Commit Persistence Boundary
@@ -658,6 +658,9 @@ reading of the test.
 | Archive import killed (real SIGKILL) mid-objects, recovered through `doctor` and `unlock` | `a_real_sigkill_mid_objects_is_recovered_through_doctor_and_unlock` (`crates/prikk-cli/tests/rfc155_part_ib2_real_kill.rs`) | real-kill | Linux, macOS |  |
 | `sync accept`: failpoint between passes | `a_write_error_exits_1_and_a_rerun_finishes_from_the_state_it_left` (`crates/prikk-cli/tests/sync_and_exchange/p3b_streaming_accept.rs`) | failpoint | Linux, macOS, Windows |  |
 | Lock left by a crashed holder: verdict by liveness | `an_exited_but_unreaped_child_does_not_appear_running` (`crates/prikk-store/src/lock_holder/tests.rs`) | unit | Linux, macOS |  |
+| A lock's create and release make no directory sync (0.59.0) | `a_lock_acquired_and_released_makes_no_directory_sync` (`crates/prikk-store/src/lock/tests.rs`) | failpoint | Linux, macOS |  |
+| A lock costs one file sync (its body) and no directory sync of its own (0.59.0) | `a_lock_costs_one_file_sync_and_no_directory_sync_of_its_own` (`crates/prikk-store/src/foundation/fsutil/caller_tests/sync_count.rs`) | unit | Linux, macOS |  |
+| A lock whose body sync fails is retained until `prikk unlock` | `failed_lock_file_sync_retains_stale_lock` (`crates/prikk-store/src/lock/tests.rs`) | failpoint | Linux, macOS, Windows |  |
 | A pointer lead whose holder's liveness is unknown reads as interrupted, with its reason | `an_unknown_holder_is_interrupted_and_says_why` (`crates/prikk-store/src/refs/in_flight/tests.rs`) | unit | Linux, macOS, Windows | [os-varies] |
 | `commit` killed (SIGKILL) at every mutating syscall, then recovered | `commit` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |
 | `seal` killed at every mutating syscall, then recovered | `seal` (`crates/prikk-cli/tests/real_kill_sweep.rs`) | real-kill | Linux (x86_64) | every ordinal, at syscall entry; x86_64 only (the driver reads `orig_rax`) |

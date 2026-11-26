@@ -7,10 +7,7 @@ use crate::foundation::fsutil::{
 };
 use crate::test_gates::test_support::{dummy_signature, text_replay_manifest, unique_temp_dir};
 use crate::worktree::materialize_replay_manifest_entries;
-use crate::{
-    ActiveLock, DEFAULT_ACTIVE_NAME, FileObjectStore, ObjectWriter, RepositoryLayout,
-    write_active_ref_metadata,
-};
+use crate::{FileObjectStore, ObjectWriter, RepositoryLayout, write_active_ref_metadata};
 
 /// 0.59.0 step K4: `FORMAT` goes through `write_file_atomically` again (a temporary file and a rename, written last), because `create_exclusive`
 /// (RFC 102 Stage 5, design-v1.md §14.10: create, then write) left an empty marker when a kill landed between the two. `MutableParentSync`
@@ -137,21 +134,10 @@ fn active_metadata_file_sync_failure_retains_and_retries() -> prikk_error::Resul
 // an injection point. The identical property for the file-sync case is unchanged and covered by
 // `refs::tests::first_publication_retries_completed_log_sync_without_duplicate`.
 
-#[test]
-fn lock_parent_sync_failure_retains_stale_state_until_explicit_cleanup() -> prikk_error::Result<()>
-{
-    let root = unique_temp_dir("lock-sync-matrix");
-    let layout = RepositoryLayout::init(root.clone())?;
-    let lock_path = layout.default_active_lock_path();
-    fail_once_for_test(TestFailPoint::RequiredDirectorySync);
-    assert!(ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).is_err());
-    assert!(lock_path.is_file());
-    assert!(ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).is_err());
-    std::fs::remove_file(&lock_path)?;
-    assert!(ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME).is_ok());
-    let _ = std::fs::remove_dir_all(root);
-    Ok(())
-}
+// `lock_parent_sync_failure_retains_stale_state_until_explicit_cleanup` removed, 0.59.0 P5b3a (option C): a lock's create no longer syncs its
+// directory, so there is no `RequiredDirectorySync` point on a lock acquisition. Its sibling for the one sync a lock keeps, its body's,
+// is `lock::tests::failed_lock_file_sync_retains_stale_lock` (a stale lock is retained until `prikk unlock`), and the absence of the directory
+// sync is pinned by `lock::tests::a_lock_acquired_and_released_makes_no_directory_sync` and by `sync_count`'s pins.
 
 #[test]
 fn worktree_parent_sync_failure_is_repaired_before_unchanged_success() -> prikk_error::Result<()> {

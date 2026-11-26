@@ -364,15 +364,17 @@ const DIRECTORY_SYNC_EXISTS: bool = cfg!(any(target_os = "linux", target_os = "m
 /// `(operation, file syncs, directory syncs where a directory has a sync)` on this file's fixtures. 0.58.0 P2a moved the directory
 /// column (a directory is opened once per hold) and left the file column alone: the durability promise is the same. Before P2a, in
 /// the same order: commit 58, seal 134, status/verify/log 1, bundle import 90, archive import 109, sync accept 76, sync seal 65. P2's baseline: each of these is what a directory opened once per held lock
-/// is measured against.
+/// is measured against. **0.59.0 P5b3a (option C) moved the directory column again and left the file column alone:** a lock's creation and
+/// removal no longer sync a directory (the body's file sync stays), so each acquisition took two directory syncs off. Before it, in the same order:
+/// directories commit 16, seal 51, status/verify/log 1, bundle import 18, archive import 26, sync accept 13, sync seal 39.
 const PINNED: &[(&str, usize, usize)] = &[
-    ("commit", 31, 16),
-    ("seal", 52, 51),
+    ("commit", 31, 12),
+    ("seal", 52, 17),
     ("status", 0, 1),
     ("verify", 0, 1),
     ("log", 0, 1),
-    ("bundle import", 51, 18),
-    ("archive import", 55, 26),
-    ("sync accept", 45, 13),
-    ("sync seal", 30, 39),
+    ("bundle import", 51, 12),
+    ("archive import", 55, 16),
+    ("sync accept", 45, 9),
+    ("sync seal", 30, 25),
 ];

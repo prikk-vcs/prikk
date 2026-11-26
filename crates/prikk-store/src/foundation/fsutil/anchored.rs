@@ -220,6 +220,24 @@ pub(crate) fn truncate_file_empty_required(root: &MutationRoot, relative: &Path)
     ACTIVE_DURABILITY.durable_truncate_to_empty(root, relative)
 }
 
+/// Create a **lock file** exclusively: the body written and the file synced, **no directory sync** (0.59.0 P5b3a, option C; the contract method's doc says
+/// why). The error shape is [`create_new_file_required`]'s: "already exists" as it is, every other failure naming the file.
+pub(crate) fn create_lock_file_required(
+    root: &MutationRoot,
+    relative: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    ACTIVE_DURABILITY
+        .create_exclusive_without_directory_sync(root, relative, bytes)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                error
+            } else {
+                std::io::Error::new(error.kind(), format!("{}: {error}", relative.display()))
+            }
+        })
+}
+
 /// Create, write, and durably publish an exclusive regular file.
 pub(crate) fn create_new_file_required(
     root: &MutationRoot,
@@ -261,9 +279,9 @@ pub(crate) fn remove_empty_directory_if_present_required(
     ACTIVE_DURABILITY.remove_empty_directory_if_present(root, relative)
 }
 
-/// Attempt fallible removal where a destructor cannot report the result.
-pub(crate) fn remove_file_cleanup_best_effort(root: &MutationRoot, relative: &Path) {
-    let _ = remove_file_required(root, relative);
+/// Release a **lock file** where a destructor cannot report the result: the unlink, **no sync** (0.59.0 P5b3a, option C).
+pub(crate) fn remove_lock_file_best_effort(root: &MutationRoot, relative: &Path) {
+    let _ = ACTIVE_DURABILITY.remove_if_present_without_sync(root, relative);
 }
 
 /// Remove a worktree file through its retained worktree-root authority.

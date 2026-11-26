@@ -55,13 +55,46 @@ The lock primitive is the same for every lock kind above. The store creates the 
 exclusive file creation. If the file already exists, acquisition fails with `LockConflict`. When
 acquisition succeeds, the file body records the current process id, lock kind, and a note that stale
 lock stealing is not implemented — see [Stale Locks and Manual Cleanup](#stale-locks-and-manual-cleanup)
-below for what that note no longer fully describes. The lock file and parent directory are
-required-synced before acquisition succeeds. A post-create sync failure returns failure and
-deliberately retains the lock as an actionable stale-lock state.
+below for what that note no longer fully describes. **The lock file's body is synced before acquisition
+succeeds (0.59.0), and nothing else is:** neither the directory that holds the lock (the name) nor the
+removal at release. A post-create sync failure returns failure and deliberately retains the lock as an
+actionable stale-lock state.
 
-Lock release is best-effort file removal when the lock guard is dropped. If a process exits normally,
-that usually removes the lock. If a process dies while holding the lock, the file can remain and later
+Lock release is best-effort file removal when the lock guard is dropped, **with no sync**. If a process exits
+normally, that usually removes the lock. If a process dies while holding the lock, the file can remain and later
 commands fail closed instead of guessing whether the repository is safe to mutate.
+
+### What a lock is, and what a power loss leaves
+
+**The exclusion between running commands is the exclusive create, in the operating system's own directory,
+and it needs no disk.** A lock matters only while its holder runs; after a power loss no holder is alive, so
+what the disk kept of a lock cannot let two writers in. Nothing reads a lock left behind as evidence that an
+operation was interrupted: every recovery decision is made from the data (torn tails, pointer leads, the
+import journal, the markers) and is the same with the lock present or absent. A lock is read for four
+things only: to refuse (`LockConflict`), by `prikk unlock`, by `prikk doctor`'s held-lock finding, and by
+the in-flight judge, which treats only a holder that *appears to be running* as in flight (a missing lock, a
+dead holder and a holder that cannot be judged are all "interrupted").
+
+So the lock file's directory entry and its removal are not made durable, and a power loss can leave exactly
+these, each of which a killed process already leaves and each of which ends in a command you can type:
+
+| after a power loss | `prikk unlock` says | the way out |
+|---|---|---|
+| no lock file (its name did not reach the disk) | no locks held | none needed |
+| a lock with its whole body (a lock the holder never removed, or whose removal did not reach the disk) | does not appear to be running: the machine has restarted since the lock was taken | `prikk unlock --lock <path> --yes` |
+| a lock with an empty or short body (the body did not reach the disk) | unknown: the lock body is incomplete | `prikk unlock --lock <path> --force`, after confirming no prikk process is running |
+
+The body is synced, so that a lock whose name did reach the disk keeps its whole body in the common case and
+`--yes` is the way out. The directory entry's reaching the disk with the file's sync is the behaviour of the
+journalling file systems prikk is run on (ext4, XFS, btrfs); nothing depends on it, because the first row is a
+state too.
+
+**On a shared drive** (a repository on a network file system, whose locks other machines also hold), the
+exclusion relies on the file server's own exclusive create and on its own namespace durability: whether a
+created or removed *name* survives the server's crash is the server protocol's commit, not a directory
+`fsync` made by a client, and a client's `fsync` of the lock file is what reaches the server's stable
+storage. This is reasoned from the protocols, not measured, and it is where the lock was before 0.59.0: a lock
+from another machine is read as *unknown*, never as running or as not running from here.
 
 The container locks are acquired by whichever operation is touching that container — the writer
 (ref publication, trust add/remove, bundle import, and any object append) or `prikk compact`/`prikk
@@ -410,7 +443,7 @@ every lock it clears.
 
 | Claim | Source anchors |
 |---|---|
-| Active and ref locks use exclusive anchored file creation, required-sync the lock file and parent directory, retain a stale lock on acquisition-sync failure, and attempt best-effort removal on drop. | [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
+| Active and ref locks use exclusive anchored file creation, required-sync the lock file (not its directory), retain a stale lock on acquisition-sync failure, and attempt best-effort removal on drop, with no sync. | [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs), [DC-37](https://github.com/prikk-vcs/prikk/blob/main/rfcs/accepted/DC-37-REQUIRED-FILESYSTEM-DURABILITY.md) |
 | Existing lock files fail closed as `LockConflict`, and current locks have no stale-lock stealing. | [`lock.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/lock.rs), [durability and crash recovery](./durability-recovery.md) |
 | Active-session append holds `active.lock` before appending to the active WAL. | [`active.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/active.rs), [`wal.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/wal.rs) |
 | Worktree patch authoring holds `active.lock` across the active-WAL guard and final WAL append, enforcing the current seal-before-second-commit behavior. | [`node_authoring.rs`](https://github.com/prikk-vcs/prikk/blob/main/crates/prikk-store/src/commit_boundary/worktree_patch/node_authoring.rs), [DC-15](https://github.com/prikk-vcs/prikk/blob/main/rfcs/done/DC-15-ACTIVE-SESSION-INTEGRITY-HARDENING.md) |

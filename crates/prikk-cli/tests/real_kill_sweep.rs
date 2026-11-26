@@ -387,7 +387,10 @@ fn the_driver_refuses_a_created_task_and_an_unclassified_syscall() {
 /// **The reference (K3 item 8): the reviewer's kit's seven commands, counted by the Rust driver.** The kit (`sctrace.c`, a hand list of mutating
 /// syscalls) counts 708 ordinals: 67, 105, 94, 187, 37, 91 and 127 (the 94 is a seal of the 64th Block, which the kit calls a checkpoint seal and is not one: see `seal_the_64th_block_as_the_kit_has_it`). The driver's closed table counts the same, **plus one**: `sync seal` issues one
 /// `fchmod` (it materialises a file's mode), which the kit's list does not contain. Seven commands, 709 ordinals; the one extra is a chmod, and it is
-/// why the table is closed. **Perturb:** take `fchmod` out of the mutating list and `sync seal` is 187 again.
+/// why the table is closed. **Perturb:** take `fchmod` out of the mutating list and `sync seal` loses one ordinal (the kit counted 187 without it).
+/// **0.59.0 P5b3a (option C) moved every count down by the lock syncs it removed** (a lock's creation and removal no longer sync a directory, and `fsync` is
+/// one of the driver's mutating syscalls): the kit's 67, 105, 94, 188, 37, 91, 127 (709 with the chmod) are 63, 89, 80, 154, 35, 89, 117 (627). The classes
+/// are the control, not the totals: every sweep's X is 0, and the F class (a lock whose body was not written) is unchanged in every sweep.
 #[test]
 fn the_driver_counts_what_the_kit_counted_and_the_chmod_the_kit_missed() {
     let ctx = Ctx::new("kit-reference");
@@ -395,39 +398,41 @@ fn the_driver_counts_what_the_kit_counted_and_the_chmod_the_kit_missed() {
         (
             "commit",
             harness::dry_count(&ctx, &shapes::commit(&ctx)),
-            67,
+            63,
         ),
-        ("seal", harness::dry_count(&ctx, &shapes::seal(&ctx)), 105),
+        ("seal", harness::dry_count(&ctx, &shapes::seal(&ctx)), 89),
         (
             "seal of the 64th block (the kit's \"checkpoint seal\": it is not one, checkpoints are the 1st and the 65th)",
             harness::dry_count(&ctx, &shapes::seal_the_64th_block_as_the_kit_has_it(&ctx)),
-            94,
+            80,
         ),
         (
-            "sync seal (the kit: 187; plus one fchmod)",
+            "sync seal (the kit: 187; plus one fchmod; less the lock syncs)",
             harness::dry_count(&ctx, &shapes::sync_seal(&ctx)),
-            188,
+            154,
         ),
         (
             "uncommit",
             harness::dry_count(&ctx, &shapes::uncommit(&ctx)),
-            37,
+            35,
         ),
         (
             "--repair-wal-tail",
             harness::dry_count(&ctx, &shapes::repair_wal_tail(&ctx)),
-            91,
+            89,
         ),
         (
             "--repair-tails",
             harness::dry_count(&ctx, &shapes::repair_tails(&ctx)),
-            127,
+            117,
         ),
     ];
-    for (name, got, want) in &counts {
+    for (name, got, _) in &counts {
         eprintln!("KIT {name}: {got}");
+    }
+    for (name, got, want) in &counts {
         assert_eq!(got, want, "{name}");
     }
-    assert_eq!(counts.iter().map(|c| c.1).sum::<u64>(), 709);
+    assert_eq!(counts.iter().map(|c| c.1).sum::<u64>(), 627);
     let _ = std::fs::remove_dir_all(&ctx.root);
 }

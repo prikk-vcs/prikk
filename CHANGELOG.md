@@ -118,6 +118,12 @@ An object's container record is a 50-byte header and its body. The writer built 
 
 **Measured** (one 100 MiB object, peak RSS, three runs each, a release binary built from this tree against the previous commit's): **`sync accept` 4.06 → 3.06 and `bundle import` 4.06 → 3.06 times the object** (one object less, as the change is; the two writers of a received record and the one of a local record share the append). **`commit` stays 5.06 times, and `seal` 2.07:** their peaks did not move: nothing the append added was what set them, and what does is not touched here.
 
+### Changed — a lock file keeps its body's sync and no longer syncs its directory
+
+A lock file was created with three syncs (its body, the directory at the create, the directory at the removal), 5.7 acquisitions a claim of a `sync seal`. **It now makes one: the body's.** The exclusion between running commands is the exclusive create itself, in the operating system's own directory, and it needs no disk: after a power loss no holder is alive, so what the disk kept of a lock cannot let two writers in, and nothing reads a lock left behind as evidence that an operation was interrupted (`concurrency-locking.md`, "What a lock is, and what a power loss leaves", has every reader and the table). A power loss can leave a lock absent, with its whole body (`prikk unlock --yes`), or, rarely, with an empty one (`--force`): each is a state a killed process already leaves. The body's sync stays so that a lock whose name reached the disk keeps its whole body and `--yes` stays the way out. Windows already ran this way. **The format of a lock, and every sentence, exit code and finding, are unchanged:** the same session on the old and the new binary (24 commands, a stale lock, an empty one, a refusal and their clearing) prints byte-identical output once the ids, which carry a time, are masked.
+
+**Measured:** `sync seal` of planeter's fixed shape, 2,000 claims, on a disk (btrfs on LUKS): **50,054 → 26,878 syncs (25.0 → 13.4 a claim; file syncs 26,813 both, directory syncs 23,241 → 65), 333.7 s and 349.5 s → 177.8 s and 163.7 s** (the disk's latency moved between runs, 6.5 to 7.8 ms a sync, so the counts and the times are given together). `commit` of five files 37 → 33 syncs, `seal` 58 → 42. On tmpfs the time does not move. The real-kill sweeps' totals fall by the syncs removed (`seal` 105 → 89, `sync seal` 188 → 154), because `fsync` is one of the syscalls the driver kills at; every sweep's classes still hold and `X` is 0.
+
 ## 0.58.0 — 2026-11-18
 
 ### Security

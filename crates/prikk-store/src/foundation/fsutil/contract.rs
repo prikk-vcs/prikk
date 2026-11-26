@@ -159,6 +159,27 @@ pub(crate) trait DurabilityContract {
         bytes: &[u8],
     ) -> std::io::Result<()>;
 
+    /// [`Self::create_exclusive`] **for a lock file** (0.59.0 P5b3a, ruled P5b2a): the exclusive create, the body written and **the file synced, but no
+    /// directory sync.** What a lock needs from the disk is a body that names its holder if the name survives a power loss; the *name's* durability
+    /// is not needed (an absent lock after a power loss is a state an error exit already leaves, and the exclusion between live processes is the
+    /// create itself, in the page cache). The default is [`Self::create_exclusive`]: a platform whose create never synced a directory (Windows) is
+    /// already this.
+    fn create_exclusive_without_directory_sync(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        self.create_exclusive(root, relative, bytes)
+    }
+
+    /// [`Self::remove_if_present`] **for a lock file** (0.59.0 P5b3a): the unlink and **no sync at all**. A removal that does not persist leaves a stale
+    /// lock with its whole body, which `unlock --yes` clears; it is the state a `kill -9` just before the removal already leaves. The default is
+    /// [`Self::remove_if_present`]: Windows' removal never synced.
+    fn remove_if_present_without_sync(&self, root: &MutationRoot, relative: &Path) -> Result<bool> {
+        self.remove_if_present(root, relative)
+    }
+
     /// Set `relative`'s permission bits on an existing regular file, accepting a "recorded mode"
     /// that carries file-type bits (e.g. `0o100_755`, matching a sealed `CreateFile`/`ChangePerm`
     /// operation's own `mode` field) without letting them influence what gets applied. **Not

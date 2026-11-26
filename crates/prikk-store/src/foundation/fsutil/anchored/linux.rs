@@ -157,6 +157,26 @@ impl DurabilityContract for LinuxDurability {
         directory.sync().map_err(prikk_to_io)
     }
 
+    fn create_exclusive_without_directory_sync(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        bytes: &[u8],
+    ) -> std::io::Result<()> {
+        let parent = required_parent(relative).map_err(prikk_to_io)?;
+        let directory = prepare_directory_required(root, parent).map_err(prikk_to_io)?;
+        let fd = open_new_regular(
+            &directory.fd,
+            required_file_name(relative).map_err(prikk_to_io)?,
+        )
+        .map_err(std::io::Error::from)?;
+        let mut file = File::from(fd);
+        file.write_all(bytes)?;
+        // The one sync a lock keeps: its body. `create_exclusive`'s directory sync is not made (P5b3a, option C).
+        failpoints::required_file_sync().map_err(prikk_to_io)?;
+        super::sync_file(&file)
+    }
+
     fn set_permission_bits(&self, root: &MutationRoot, relative: &Path, mode: u32) -> Result<()> {
         let directory = open_existing_directory_required(root, required_parent(relative)?)?;
         let fd =
@@ -181,6 +201,20 @@ impl DurabilityContract for LinuxDurability {
         failpoints::cleanup_directory_sync()?;
         directory.sync()?;
         Ok(removed)
+    }
+
+    fn remove_if_present_without_sync(&self, root: &MutationRoot, relative: &Path) -> Result<bool> {
+        let directory = open_existing_directory_required(root, required_parent(relative)?)?;
+        failpoints::unlink()?;
+        match fs::unlinkat(
+            &directory.fd,
+            required_file_name(relative)?,
+            fs::AtFlags::empty(),
+        ) {
+            Ok(()) => Ok(true),
+            Err(rustix::io::Errno::NOENT) => Ok(false),
+            Err(error) => Err(io_error(error)),
+        }
     }
 
     fn remove_empty_directory_if_present(
