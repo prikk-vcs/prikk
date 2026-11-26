@@ -537,9 +537,75 @@ pub(crate) fn lock_wait_bound() -> Duration {
     }
 }
 
-/// How often a waiter looks again, and how long a body that is still being written is given before it is called incomplete.
+/// How often a waiter looks again.
 const POLL: Duration = Duration::from_millis(2);
-const INCOMPLETE_GRACE: Duration = Duration::from_millis(30);
+/// How long a body that is still empty or short is given before it is called incomplete (0.59.0 P5b3c: 250 ms; P5b3b had 30). It is spent only on a
+/// lock whose body is not there yet: a creator between its create and its write, or one killed there. A live creator writes it within a few
+/// milliseconds on an idle machine; the grace is wide enough for a loaded one, and a killed creator's lock is refused this much later.
+const INCOMPLETE_GRACE: Duration = Duration::from_millis(250);
+
+/// The grace in force: [`INCOMPLETE_GRACE`], or, in a test that has set one, that.
+fn incomplete_grace() -> Duration {
+    #[cfg(test)]
+    if let Some(grace) = test_hooks::GRACE.with(std::cell::Cell::get) {
+        return grace;
+    }
+    INCOMPLETE_GRACE
+}
+
+/// What the tests of the grace see and set (`cfg(test)` only). No test of the grace depends on a thread meeting a deadline: a test sets the grace,
+/// and a writer thread waits for the waiter's look at the empty body (`looks`) instead of for the clock.
+#[cfg(test)]
+pub(crate) mod test_hooks {
+    use std::cell::{Cell, RefCell};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    thread_local! {
+        pub(super) static GRACE: Cell<Option<Duration>> = const { Cell::new(None) };
+        static LOOKS: RefCell<Option<Arc<AtomicUsize>>> = const { RefCell::new(None) };
+        static TRACE: RefCell<(Option<Instant>, Vec<String>)> = const { RefCell::new((None, Vec::new())) };
+    }
+
+    /// Run `body` with the grace set to `grace` on this thread; every look at an incomplete body is counted in `looks`.
+    pub(crate) fn with_incomplete_grace<T>(
+        grace: Duration,
+        looks: Arc<AtomicUsize>,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        let before = GRACE.with(|cell| cell.replace(Some(grace)));
+        LOOKS.with(|cell| *cell.borrow_mut() = Some(looks));
+        TRACE.with(|cell| *cell.borrow_mut() = (None, Vec::new()));
+        let out = body();
+        LOOKS.with(|cell| *cell.borrow_mut() = None);
+        GRACE.with(|cell| cell.set(before));
+        out
+    }
+
+    pub(super) fn look_at_an_incomplete_body() {
+        LOOKS.with(|cell| {
+            if let Some(looks) = cell.borrow().as_ref() {
+                looks.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+
+    /// Record what the judge said at a look (the failure message of a test prints these: what was read, and when).
+    pub(super) fn note(what: String) {
+        TRACE.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            let first = *cell.0.get_or_insert_with(Instant::now);
+            cell.1
+                .push(format!("+{} ms: {what}", first.elapsed().as_millis()));
+        });
+    }
+
+    /// The looks of this thread's last wait, for an assertion's message.
+    pub(crate) fn trace() -> String {
+        TRACE.with(|cell| cell.borrow().1.join("; "))
+    }
+}
 /// A waiter says so on stderr once it has waited this long.
 const ANNOUNCE_AFTER: Duration = Duration::from_secs(1);
 
@@ -635,6 +701,8 @@ fn wait_decision(
         Err(_) => return Decision::Refuse(waiting.suffix(bound, "the holder could not be read")),
     };
     let seen = crate::lock_holder::inspect(&bytes, &crate::lock_holder::SystemProbe);
+    #[cfg(test)]
+    test_hooks::note(format!("{:?}, {} bytes", seen.reason, bytes.len()));
     if seen.reason != crate::lock_holder::LivenessReason::IncompleteBody {
         // A body that was being written is written: the next holder's moment of an incomplete body is its own.
         waiting.incomplete_since = None;
@@ -661,9 +729,11 @@ fn wait_decision(
             Decision::Retry
         }
         crate::lock_holder::LivenessReason::IncompleteBody => {
-            // A live creator writes the body right after the create (measured: 11 to 15 ms); a body that stays incomplete is not waited for.
+            // A live creator writes the body right after the create (measured: see `INCOMPLETE_GRACE`); a body that stays incomplete is not waited for.
+            #[cfg(test)]
+            test_hooks::look_at_an_incomplete_body();
             let since = *waiting.incomplete_since.get_or_insert_with(Instant::now);
-            if since.elapsed() < INCOMPLETE_GRACE {
+            if since.elapsed() < incomplete_grace() {
                 std::thread::sleep(Duration::from_millis(1));
                 Decision::Retry
             } else {

@@ -8,11 +8,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use super::test_hooks::with_incomplete_grace;
 use super::{
     DEFAULT_LOCK_WAIT_SECONDS, MAX_LOCK_WAIT_SECONDS, Rank, held_ranks_of_this_thread,
-    parse_lock_wait, with_lock_wait,
+    parse_lock_wait, test_hooks, with_lock_wait,
 };
 use crate::foundation::layout::LockableContainer;
 use crate::lock_holder::{body_naming_another_running_process, own_facts, render_body};
@@ -297,26 +300,54 @@ fn an_unknown_holder_is_never_waited_on() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// **A body that stays incomplete is never waited on past a moment:** an empty file (a command killed between its create and its body) is given
-/// 30 ms, in case a live creator is about to write it, and is then refused with today's sentence. Perturb: an incomplete body waited for to the
-/// bound: red; the grace removed (a live creator's lock refused at its first look): see the next test.
+/// Wait until `looks` has counted more than `seen` looks at an incomplete body (the waiter has looked at the empty file again), or fail after a
+/// minute. **Nothing here is a deadline the thread under test must meet:** a writer waits for the waiter's look, not for the clock.
+fn wait_for_a_look_after(looks: &AtomicUsize, seen: usize) {
+    let patience = Instant::now();
+    while looks.load(Ordering::SeqCst) <= seen {
+        assert!(
+            patience.elapsed() < Duration::from_secs(60),
+            "the waiter never looked at the body"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// **The production grace is 250 ms** (P5b3c; 30 ms in P5b3b flaked on a loaded macOS runner). Perturb: another number: red.
 #[test]
-fn an_incomplete_holder_is_refused_after_a_moment() {
+fn the_grace_a_body_still_being_written_is_given_is_250_ms() {
+    assert_eq!(super::INCOMPLETE_GRACE, Duration::from_millis(250));
+}
+
+/// **A body that stays incomplete is never waited on past the grace:** an empty file (a command killed between its create and its body) is given
+/// the grace, in case a live creator is about to write it, and is then refused with today's sentence. The grace is set to 50 ms here and the test
+/// asserts only lower bounds on what the grace gave and a generous upper one. Perturb: an incomplete body waited for far longer: red; no grace:
+/// red (the lower bound).
+#[test]
+fn an_incomplete_holder_is_refused_after_the_grace() {
     let (layout, root) = repository("p5b3b-incomplete");
     put(&active_path(&layout), "");
+    let looks = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
-    let refused = with_lock_wait(Duration::from_secs(5), || {
-        ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+    let refused = with_incomplete_grace(Duration::from_millis(50), looks.clone(), || {
+        with_lock_wait(Duration::from_secs(5), || {
+            ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+        })
     });
     let waited = started.elapsed();
+    let trace = test_hooks::trace();
     let text = conflict_text(refused);
     assert!(
-        waited >= Duration::from_millis(25),
-        "given a moment first: {waited:?}"
+        waited >= Duration::from_millis(50),
+        "given the grace first: {waited:?}; {trace}"
     );
     assert!(
-        waited < Duration::from_millis(500),
-        "and no more: {waited:?}"
+        waited < Duration::from_secs(5),
+        "and not the bound: {waited:?}; {trace}"
+    );
+    assert!(
+        looks.load(Ordering::SeqCst) >= 2,
+        "it looked more than once: {trace}"
     );
     assert!(
         text.ends_with("is confirmed gone"),
@@ -325,64 +356,82 @@ fn an_incomplete_holder_is_refused_after_a_moment() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// **A live creator's body is read after a moment:** the lock file is there, empty, and its creator writes the body 5 ms later (what a `create`
-/// then `write` does); the waiter does not refuse at its first look. Perturb: the grace removed: red.
+/// **A live creator's body is read after the grace's first moment:** the lock file is there, empty, and its creator writes the body **after the
+/// waiter has looked at the empty file** (the writer waits for that look, not for the clock; the grace is set to ten seconds so no thread has a
+/// deadline); the waiter does not refuse at its first look, and takes the lock when the creator lets go. Perturb: the grace removed: red.
 #[test]
 fn a_body_still_being_written_is_read_again() {
     let (layout, root) = repository("p5b3b-being-written");
     let path = active_path(&layout);
     let (child, body) = body_naming_another_running_process("active");
     put(&path, "");
+    let looks = Arc::new(AtomicUsize::new(0));
     let writer = {
-        let path = path.clone();
+        let (path, looks) = (path.clone(), looks.clone());
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(5));
+            wait_for_a_look_after(&looks, 0);
             fs::write(&path, body).expect("the body");
             std::thread::sleep(Duration::from_millis(200));
             fs::remove_file(&path).expect("released");
         })
     };
-    let lock = with_lock_wait(Duration::from_secs(5), || {
-        ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+    let lock = with_incomplete_grace(Duration::from_secs(10), looks, || {
+        let lock = with_lock_wait(Duration::from_secs(20), || {
+            ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+        });
+        (lock, test_hooks::trace())
     });
     writer.join().unwrap();
     stop(child);
     assert!(
-        lock.is_ok(),
-        "waited for the creator, then took the lock: {:?}",
-        lock.err()
+        lock.0.is_ok(),
+        "waited for the creator, then took the lock: {:?}; what it saw: {}",
+        lock.0.err(),
+        lock.1
     );
     let _ = fs::remove_dir_all(root);
 }
 
-/// **Each holder's moment of an incomplete body gets its own grace:** the waiter sees one holder's body being written, then the next holder's
-/// (the lock released and created again 200 ms later); the second is not judged against the first's clock. Perturb: the grace's clock not reset when
-/// a complete body is read: the waiter refuses at the second holder's empty body, red.
+/// **Each holder's moment of an incomplete body gets its own grace:** the waiter sees one holder's body being written, then (after more than the
+/// grace has passed) the next holder's: the lock released and created again. The second is not judged against the first's clock. The grace is two
+/// seconds; the writer lets **2.3 s** pass (a lower bound: sleeping longer is harmless) between the episodes and writes each body after the
+/// waiter's look at the empty file. Perturb: the grace's clock not reset when a complete body is read: the waiter refuses at the second
+/// holder's empty body, red.
 #[test]
 fn a_second_holders_moment_of_an_incomplete_body_gets_its_own_grace() {
     let (layout, root) = repository("p5b3b-two-incomplete-moments");
     let path = active_path(&layout);
     let (child, body) = body_naming_another_running_process("active");
     put(&path, "");
+    let looks = Arc::new(AtomicUsize::new(0));
     let holders = {
-        let path = path.clone();
+        let (path, looks) = (path.clone(), looks.clone());
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
+            wait_for_a_look_after(&looks, 0);
             fs::write(&path, &body).expect("the first holder's body");
-            std::thread::sleep(Duration::from_millis(190));
+            let after_the_first = looks.load(Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(2_300));
             fs::write(&path, "").expect("the second holder creates");
-            std::thread::sleep(Duration::from_millis(5));
+            wait_for_a_look_after(&looks, after_the_first);
             fs::write(&path, &body).expect("the second holder's body");
             std::thread::sleep(Duration::from_millis(200));
             fs::remove_file(&path).expect("released");
         })
     };
-    let lock = with_lock_wait(Duration::from_secs(5), || {
-        ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+    let lock = with_incomplete_grace(Duration::from_secs(2), looks, || {
+        let lock = with_lock_wait(Duration::from_secs(30), || {
+            ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+        });
+        (lock, test_hooks::trace())
     });
     holders.join().unwrap();
     stop(child);
-    assert!(lock.is_ok(), "{:?}", lock.err());
+    assert!(
+        lock.0.is_ok(),
+        "{:?}; what it saw: {}",
+        lock.0.err(),
+        lock.1
+    );
     let _ = fs::remove_dir_all(root);
 }
 

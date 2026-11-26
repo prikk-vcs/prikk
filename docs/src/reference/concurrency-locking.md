@@ -326,7 +326,7 @@ already held, as it always did.
   the publication ends.
 - **What is never waited for.** A holder that does **not** appear to be running (gone, its pid reused,
   the machine restarted), one that **cannot be judged** (another pid namespace, another machine, an
-  older prikk's body), a body that stays incomplete for more than about 30 ms, a lock this process
+  older prikk's body), a body that stays incomplete for more than 250 ms, a lock this process
   already holds, and any lock the rule below leaves out. Each is refused at once with the same sentence
   as before, naming `prikk unlock`. A holder that was running when the wait began and is gone when it
   ends is refused at that moment, not at the bound.
