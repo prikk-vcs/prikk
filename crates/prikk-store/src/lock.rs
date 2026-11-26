@@ -1,12 +1,15 @@
 //! Simple file locks for active-session and ref writers.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::thread::ThreadId;
+use std::time::{Duration, Instant};
 
 use prikk_error::{PrikkError, Result};
 
 use crate::foundation::fsutil::{
-    DirectoryHold, MutationRoot, create_lock_file_required, inspect_entry,
+    DirectoryHold, MutationRoot, create_lock_file_required, inspect_entry, read_file_if_exists,
     remove_lock_file_best_effort,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
@@ -17,8 +20,9 @@ pub struct ActiveLock {
     path: PathBuf,
     relative: PathBuf,
     mutation_root: MutationRoot,
-    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
-    _hold: DirectoryHold,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a), and
+    /// so the held record (0.59.0 P5b3b) names the lock until its file is gone.
+    _hold: LockHold,
 }
 
 impl ActiveLock {
@@ -77,7 +81,7 @@ impl ActiveLock {
         let path = layout.active_lock_path(name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
-        let hold = acquire_lock_file(&mutation_root, &relative, &path, "active")?;
+        let hold = acquire_lock_file(&mutation_root, &relative, &path, "active", Rank::Active)?;
         Ok(Self {
             path,
             relative,
@@ -144,8 +148,9 @@ pub struct RefLock {
     path: PathBuf,
     relative: PathBuf,
     mutation_root: MutationRoot,
-    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
-    _hold: DirectoryHold,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a), and
+    /// so the held record (0.59.0 P5b3b) names the lock until its file is gone.
+    _hold: LockHold,
 }
 
 impl RefLock {
@@ -154,7 +159,7 @@ impl RefLock {
         let path = layout.ref_lock_path(ref_name);
         let relative = layout.repository_relative(&path)?;
         let mutation_root = layout.repository_mutation_root().clone();
-        let hold = acquire_lock_file(&mutation_root, &relative, &path, "ref")?;
+        let hold = acquire_lock_file(&mutation_root, &relative, &path, "ref", Rank::Ref)?;
         Ok(Self {
             path,
             relative,
@@ -187,8 +192,9 @@ struct ContainerLockHandle {
     kind: LockableContainer,
     relative: PathBuf,
     mutation_root: MutationRoot,
-    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a).
-    _hold: DirectoryHold,
+    /// Declared last, so it is released after `Drop::drop` has removed the lock file through the held directories (0.58.0 P2a), and
+    /// so the held record (0.59.0 P5b3b) names the lock until its file is gone.
+    _hold: LockHold,
 }
 
 impl Drop for ContainerLockHandle {
@@ -288,6 +294,7 @@ fn acquire_container_locks_checked(
             &relative,
             &path,
             container_lock_kind(container),
+            Rank::Container(container),
         )?;
         handles.push(ContainerLockHandle {
             kind: container,
@@ -310,31 +317,369 @@ fn container_lock_kind(container: LockableContainer) -> &'static str {
 }
 
 /// The one function every lock guard takes its lock file through, so it is also the one place a guard registers its hold on the
-/// root's held directories (0.58.0 P2a): it returns the [`DirectoryHold`], and a guard cannot be built without storing one. The hold
-/// is registered before the file is created, so the creation's own walk is already kept; on a refusal it is released here.
+/// root's held directories (0.58.0 P2a) **and in the held record** (0.59.0 P5b3b): it returns the [`LockHold`], and a guard cannot be
+/// built without storing one. The hold is registered before the file is created, so the creation's own walk is already kept; on a
+/// refusal it is released here. The held record names the lock only once the file exists, and until the guard has removed it.
+///
+/// A create that finds the name taken waits for it when, and only when, [`wait_decision`] says to (a holder that appears to be running,
+/// a lock that ranks after everything this thread holds, the bound not reached); every other answer is today's refusal, at once.
 fn acquire_lock_file(
     mutation_root: &MutationRoot,
     relative: &Path,
     path: &Path,
     kind: &str,
-) -> Result<DirectoryHold> {
+    rank: Rank,
+) -> Result<LockHold> {
     let hold = mutation_root.hold_directories();
     let body = lock_body(kind);
-    match create_lock_file(mutation_root, relative, body.as_bytes()) {
-        Ok(()) => Ok(hold),
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(PrikkError::LockConflict(format!(
-                "{kind} lock already exists: {} -- run `prikk unlock` to list held locks, or \
-                 `prikk unlock --lock <path>` to clear one once the process that held it is \
-                 confirmed gone",
-                path.display()
-            )))
+    let mut waiting = Waiting::new();
+    loop {
+        match create_lock_file(mutation_root, relative, body.as_bytes()) {
+            Ok(()) => {
+                return Ok(LockHold {
+                    _held: HeldToken::register(rank, path),
+                    _hold: hold,
+                });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                match wait_decision(mutation_root, relative, path, kind, rank, &mut waiting) {
+                    Decision::Retry => {}
+                    Decision::Refuse(suffix) => {
+                        return Err(PrikkError::LockConflict(format!(
+                            "{kind} lock already exists: {} -- run `prikk unlock` to list held locks, or \
+                             `prikk unlock --lock <path>` to clear one once the process that held it is \
+                             confirmed gone{suffix}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+            // `create_lock_file_required` puts the file's path into every failure but "already exists".
+            Err(err) => {
+                return Err(PrikkError::Io {
+                    kind: Some(err.kind()),
+                    context: format!("{kind} lock: {err}"),
+                });
+            }
         }
-        // `create_lock_file_required` puts the file's path into every failure but "already exists".
-        Err(err) => Err(PrikkError::Io {
-            kind: Some(err.kind()),
-            context: format!("{kind} lock: {err}"),
-        }),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 P5b3b: one waiting policy for a holder that is running.
+//
+// Every lock is taken by an exclusive create, and a create that finds the name taken used to refuse at once. It now waits, for a bounded
+// time, when the holder **appears to be running** (the liveness judge of `lock_holder`), and for nothing else: a holder that does not appear
+// to be running, one that cannot be judged, a body that stays incomplete, a lock this process itself holds, and a lock that does not rank after
+// everything this thread already holds are all refused at once, with today's sentence. Waiting writes nothing: no file, no state.
+//
+// **Why two waiters cannot wait on each other.** The locks have one fixed order: the active lock, then the ref lock, then the container locks
+// in `LockableContainer`'s declaration order (the object store last). A thread waits only for a lock that ranks **after every lock it
+// holds**, read from the held record below, so every wait-for edge goes up the order and there is no cycle. This is not decorative: `archive
+// import` takes its container locks and *then* the active lock, the one inversion in the code; without the rule a `sync seal` (holds the
+// active lock, wants the object store) and an import (holds the object store, wants the active lock) would wait for each other to the bound.
+// The rule holds because the record is complete: **every lock kind is registered here, in `acquire_lock_file`, and unregistered when its
+// guard drops**, and nothing else acquires one.
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+
+/// Where a lock stands in the one order. The derived order is the declaration order: active, ref, then the containers as
+/// [`LockableContainer`] orders them (the object store last).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Rank {
+    /// The active-session lock.
+    Active,
+    /// A ref lock (every ref's lock has this one rank: two are never waited for in turn).
+    Ref,
+    /// One container's lock.
+    Container(LockableContainer),
+}
+
+/// One lock this process holds, as the held record keeps it.
+#[derive(Debug)]
+struct Held {
+    id: u64,
+    thread: ThreadId,
+    rank: Rank,
+    path: PathBuf,
+}
+
+/// The locks held right now, by every thread of this process. A thread's rank rule reads its own; "this process holds it" reads all.
+static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
+static NEXT_HELD: AtomicU64 = AtomicU64::new(1);
+
+fn with_held<T>(read: impl FnOnce(&mut Vec<Held>) -> T) -> T {
+    let mut held = HELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    read(&mut held)
+}
+
+/// A lock's entry in the held record, removed when the guard that owns it drops (from any thread).
+#[derive(Debug)]
+struct HeldToken(u64);
+
+impl HeldToken {
+    fn register(rank: Rank, path: &Path) -> Self {
+        let id = NEXT_HELD.fetch_add(1, Ordering::Relaxed);
+        with_held(|held| {
+            held.push(Held {
+                id,
+                thread: std::thread::current().id(),
+                rank,
+                path: path.to_path_buf(),
+            });
+        });
+        Self(id)
+    }
+}
+
+impl Drop for HeldToken {
+    fn drop(&mut self) {
+        with_held(|held| held.retain(|entry| entry.id != self.0));
+    }
+}
+
+/// What a guard keeps of its acquisition: the held record's entry, then the held directories. Field order is drop order.
+#[derive(Debug)]
+struct LockHold {
+    _held: HeldToken,
+    _hold: DirectoryHold,
+}
+
+/// Whether this thread holds a lock that ranks at or after `rank` (so a wait for `rank` could meet a wait for what this thread holds).
+pub(crate) fn this_thread_holds_at_or_after(rank: Rank) -> bool {
+    let me = std::thread::current().id();
+    with_held(|held| {
+        held.iter()
+            .any(|entry| entry.thread == me && entry.rank >= rank)
+    })
+}
+
+fn this_process_holds(path: &Path) -> bool {
+    with_held(|held| held.iter().any(|entry| entry.path == path))
+}
+
+/// The ranks this thread holds, for the tests that read the record.
+#[cfg(test)]
+pub(crate) fn held_ranks_of_this_thread() -> Vec<Rank> {
+    let me = std::thread::current().id();
+    with_held(|held| {
+        let mut ranks: Vec<Rank> = held
+            .iter()
+            .filter(|entry| entry.thread == me)
+            .map(|entry| entry.rank)
+            .collect();
+        ranks.sort_unstable();
+        ranks
+    })
+}
+
+/// The wait's default, in seconds, and the ceiling `PRIKK_LOCK_WAIT_SECONDS` is held to.
+pub const DEFAULT_LOCK_WAIT_SECONDS: u64 = 5;
+/// The longest a command can be told to wait for one stop (five minutes).
+pub const MAX_LOCK_WAIT_SECONDS: u64 = 300;
+/// The environment variable that sets the bound, in whole seconds. `0` is the old behaviour: refuse at once.
+pub const LOCK_WAIT_ENV: &str = "PRIKK_LOCK_WAIT_SECONDS";
+
+/// How long a stop may wait, from the variable's text: absent or not a whole number of seconds is the default, `0` is off, and anything
+/// above the ceiling is the ceiling.
+#[must_use]
+pub fn parse_lock_wait(value: Option<&str>) -> Duration {
+    let seconds = match value.map(str::trim) {
+        None => DEFAULT_LOCK_WAIT_SECONDS,
+        Some(text) => text
+            .parse::<u64>()
+            .map_or(DEFAULT_LOCK_WAIT_SECONDS, |n| n.min(MAX_LOCK_WAIT_SECONDS)),
+    };
+    Duration::from_secs(seconds)
+}
+
+/// Whether this process may wait at all. A command that reports or repairs (`verify`, `status`, `doctor`, `unlock`, `compact`) turns it off
+/// for its whole run: such a command refuses at once, as it always did.
+static WAITING_ALLOWED: AtomicBool = AtomicBool::new(true);
+
+/// This process will never wait for a lock or for a publication in flight: every stop is refused at once, as before 0.59.0. Called once, by
+/// the commands that report or repair.
+pub fn refuse_without_waiting() {
+    WAITING_ALLOWED.store(false, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own bound. The unit tests of every other module hold locks and expect to be refused at once, so under `cfg(test)` the bound is
+    /// off unless the test sets one.
+    static TEST_BOUND: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `body` with the wait set to `bound` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn with_lock_wait<T>(bound: Duration, body: impl FnOnce() -> T) -> T {
+    let before = TEST_BOUND.with(|cell| cell.replace(Some(bound)));
+    let out = body();
+    TEST_BOUND.with(|cell| cell.set(before));
+    out
+}
+
+/// The bound of this stop.
+pub(crate) fn lock_wait_bound() -> Duration {
+    if !WAITING_ALLOWED.load(Ordering::Relaxed) {
+        return Duration::ZERO;
+    }
+    #[cfg(test)]
+    {
+        TEST_BOUND
+            .with(std::cell::Cell::get)
+            .unwrap_or(Duration::ZERO)
+    }
+    #[cfg(not(test))]
+    {
+        parse_lock_wait(std::env::var(LOCK_WAIT_ENV).ok().as_deref())
+    }
+}
+
+/// How often a waiter looks again, and how long a body that is still being written is given before it is called incomplete.
+const POLL: Duration = Duration::from_millis(2);
+const INCOMPLETE_GRACE: Duration = Duration::from_millis(30);
+/// A waiter says so on stderr once it has waited this long.
+const ANNOUNCE_AFTER: Duration = Duration::from_secs(1);
+
+/// What one stop has done so far.
+pub(crate) struct Waiting {
+    started: Option<Instant>,
+    announced: bool,
+    incomplete_since: Option<Instant>,
+    pid: Option<u32>,
+}
+
+impl Waiting {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: None,
+            announced: false,
+            incomplete_since: None,
+            pid: None,
+        }
+    }
+
+    /// Time spent waiting so far, `None` before the first wait.
+    fn waited(&self) -> Option<Duration> {
+        self.started.map(|started| started.elapsed())
+    }
+
+    /// The one stderr line, once, after a second: `what` names what is waited for.
+    pub(crate) fn announce_if_due(&mut self, bound: Duration, what: impl FnOnce() -> String) {
+        if self.announced {
+            return;
+        }
+        if self.waited().is_some_and(|waited| waited >= ANNOUNCE_AFTER) {
+            self.announced = true;
+            eprintln!("waiting for {}; giving up after {}", what(), seconds(bound));
+        }
+    }
+
+    /// Start the clock at the first wait.
+    pub(crate) fn begin(&mut self) {
+        self.started.get_or_insert_with(Instant::now);
+    }
+
+    /// Whether the bound has been reached.
+    pub(crate) fn expired(&self, bound: Duration) -> bool {
+        self.waited().is_some_and(|waited| waited >= bound)
+    }
+
+    /// The words added to a refusal after a wait (`""` when nothing was waited): how long, and why it ended.
+    pub(crate) fn suffix(&self, bound: Duration, why: &str) -> String {
+        match self.waited() {
+            None => String::new(),
+            Some(waited) => format!(" (waited {}: {why})", seconds(waited.min(bound))),
+        }
+    }
+}
+
+/// `5 s`, `0.5 s`, `1.3 s`: whole seconds without a fraction.
+pub(crate) fn seconds(duration: Duration) -> String {
+    let tenths = (duration.as_millis() + 50) / 100;
+    if tenths % 10 == 0 {
+        format!("{} s", tenths / 10)
+    } else {
+        format!("{}.{} s", tenths / 10, tenths % 10)
+    }
+}
+
+enum Decision {
+    /// Look again (after a pause when one was waited for).
+    Retry,
+    /// Refuse, with this suffix after today's sentence.
+    Refuse(String),
+}
+
+/// A create has found the name taken: wait, or refuse. **Refuse at once, with no suffix,** when waiting is off, when this process holds the
+/// lock or the file's pid is this process's own, when the lock does not rank after every lock this thread holds, and when the holder does
+/// not appear to be running (gone, reused, rebooted, another machine, an older prikk's body, a body still incomplete after a moment).
+fn wait_decision(
+    mutation_root: &MutationRoot,
+    relative: &Path,
+    path: &Path,
+    kind: &str,
+    rank: Rank,
+    waiting: &mut Waiting,
+) -> Decision {
+    let bound = lock_wait_bound();
+    if bound.is_zero() || this_process_holds(path) || this_thread_holds_at_or_after(rank) {
+        return Decision::Refuse(String::new());
+    }
+    let bytes = match read_file_if_exists(mutation_root, relative) {
+        // Released between the create and the read: try again at once.
+        Ok(None) => return Decision::Retry,
+        Ok(Some(bytes)) => bytes,
+        Err(_) => return Decision::Refuse(waiting.suffix(bound, "the holder could not be read")),
+    };
+    let seen = crate::lock_holder::inspect(&bytes, &crate::lock_holder::SystemProbe);
+    if seen.reason != crate::lock_holder::LivenessReason::IncompleteBody {
+        // A body that was being written is written: the next holder's moment of an incomplete body is its own.
+        waiting.incomplete_since = None;
+    }
+    match seen.reason {
+        crate::lock_holder::LivenessReason::SameProcess => {
+            let Some(pid) = seen.pid else {
+                return Decision::Refuse(String::new());
+            };
+            if pid == std::process::id() {
+                return Decision::Refuse(String::new());
+            }
+            waiting.begin();
+            waiting.pid = Some(pid);
+            if waiting.expired(bound) {
+                return Decision::Refuse(
+                    waiting.suffix(bound, &format!("pid {pid} still appears to be running")),
+                );
+            }
+            waiting.announce_if_due(bound, || {
+                format!("the {kind} lock held by pid {pid} (it appears to be running)")
+            });
+            std::thread::sleep(POLL);
+            Decision::Retry
+        }
+        crate::lock_holder::LivenessReason::IncompleteBody => {
+            // A live creator writes the body right after the create (measured: 11 to 15 ms); a body that stays incomplete is not waited for.
+            let since = *waiting.incomplete_since.get_or_insert_with(Instant::now);
+            if since.elapsed() < INCOMPLETE_GRACE {
+                std::thread::sleep(Duration::from_millis(1));
+                Decision::Retry
+            } else {
+                Decision::Refuse(waiting.suffix(bound, "the lock body stays incomplete"))
+            }
+        }
+        reason => {
+            // Not running (or never was, or cannot be judged): today's sentence; if this stop had been waiting, with what the judge now says.
+            Decision::Refuse(waiting.suffix(
+                bound,
+                &match waiting.pid {
+                    Some(pid) => format!("pid {pid}: {}", reason.sentence()),
+                    None => reason.sentence().to_string(),
+                },
+            ))
+        }
     }
 }
 
@@ -414,3 +759,5 @@ fn lock_body(kind: &str) -> String {
 // tests that need a Linux-only or directory-sync mechanism carry their own narrower gate.
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wait_tests;

@@ -175,9 +175,85 @@ fn holder_at(layout: &RepositoryLayout, lock_path: &std::path::Path) -> Result<H
 #[must_use]
 pub(crate) fn in_flight_sentence(ref_name: &str, pid: Option<u32>) -> String {
     match pid {
-        Some(pid) => format!("another command is publishing {ref_name} (pid {pid}, from its lock)"),
-        None => format!("another command is publishing {ref_name}"),
+        Some(pid) => format!("{IN_FLIGHT_PREFIX}{ref_name} (pid {pid}, from its lock)"),
+        None => format!("{IN_FLIGHT_PREFIX}{ref_name}"),
     }
+}
+
+/// The first words of every in-flight refusal: [`in_flight_sentence`] begins with them, and nothing else does.
+const IN_FLIGHT_PREFIX: &str = "another command is publishing ";
+
+/// The text of `error` when it is an in-flight refusal of the write-path precondition (a `Precondition` that begins as [`in_flight_sentence`] does).
+#[must_use]
+pub(crate) fn in_flight_text(error: &prikk_error::PrikkError) -> Option<&str> {
+    match error {
+        prikk_error::PrikkError::Precondition(text) if text.starts_with(IN_FLIGHT_PREFIX) => {
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
+/// What a waiting writer says it is waiting for, from an in-flight refusal's text: `another command to finish publishing tags/t1 (pid 1234, from its lock)`.
+#[must_use]
+pub(crate) fn waiting_for(text: &str) -> String {
+    let sentence = text.split(';').next().unwrap_or(text);
+    match sentence.strip_prefix(IN_FLIGHT_PREFIX) {
+        Some(rest) => format!("another command to finish publishing {rest}"),
+        None => sentence.to_string(),
+    }
+}
+
+/// Run the write-path precondition until it stops refusing for a publication in flight, for at most the wait's bound.
+/// Everything else it returns is returned at once, so is an in-flight refusal when the wait is off, when this thread holds a lock a publisher could be
+/// waiting for (`lock::Rank::Ref` and after: the one rule of `lock.rs`), and when the publisher is this very process. After the bound the refusal
+/// is returned with the words for the wait; after one second one line goes to stderr.
+pub(crate) fn wait_while_in_flight(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+    check_ref_log_tail: bool,
+    mut replay_out: Option<&mut Option<crate::wal::WalReplay>>,
+) -> Result<()> {
+    let bound = crate::lock::lock_wait_bound();
+    let mut waiting = crate::lock::Waiting::new();
+    let mut pause = std::time::Duration::from_millis(5);
+    loop {
+        let attempt = super::ensure_publication_precondition_once(
+            layout,
+            exclude_ref_name,
+            check_ref_log_tail,
+            replay_out.as_deref_mut(),
+        );
+        let error = match attempt {
+            Err(error) => error,
+            done => return done,
+        };
+        let Some(text) = in_flight_text(&error) else {
+            return Err(error);
+        };
+        if bound.is_zero()
+            || names_this_process(text)
+            || crate::lock::this_thread_holds_at_or_after(crate::lock::Rank::Ref)
+        {
+            return Err(error);
+        }
+        waiting.begin();
+        if waiting.expired(bound) {
+            let suffix = waiting.suffix(bound, "the other command is still publishing");
+            return Err(prikk_error::PrikkError::Precondition(format!(
+                "{text}{suffix}"
+            )));
+        }
+        waiting.announce_if_due(bound, || waiting_for(text));
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Whether an in-flight refusal names **this** process as the publisher (`(pid N, from its lock)`): a wait would be for itself.
+#[must_use]
+pub(crate) fn names_this_process(text: &str) -> bool {
+    text.contains(&format!("(pid {}, from its lock)", std::process::id()))
 }
 
 /// The precondition's answer for one ref whose newest pointer and newest log record disagree (`key` names it): `None` when the lead is gone

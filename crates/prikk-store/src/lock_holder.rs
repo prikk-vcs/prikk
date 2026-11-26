@@ -211,6 +211,19 @@ pub fn lock_body_naming_pid_for_test(kind: &str, pid: u32) -> String {
     render_body(kind, pid, own_facts())
 }
 
+/// A lock body naming `pid` -- a **running process other than this one** -- with **its own start time**, so the real judge reads it as "appears
+/// running" (0.59.0 P5b3b: the tests of the wait start a `sleep` and plant its lock). [`lock_body_naming_pid_for_test`] records this process's start
+/// time, which equals another process's only when both started in the same clock tick.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn lock_body_naming_running_process_for_test(kind: &str, pid: u32) -> String {
+    let mut facts = own_facts().clone();
+    if let ProcessRead::Alive(start) = SystemProbe.read(pid) {
+        facts.start = start;
+    }
+    render_body(kind, pid, &facts)
+}
+
 /// A process that is **not this one**, running, and a lock body of `kind` that the real judge reads as "appears running" (0.59.0 RS2c's tests of
 /// "another command is publishing"). `sleep` stands in for the publisher; the caller kills it.
 #[cfg(test)]

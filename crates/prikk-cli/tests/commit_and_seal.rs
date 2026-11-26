@@ -26,6 +26,8 @@ mod genesis_end_to_end;
 mod helper_uniqueness;
 #[path = "commit_and_seal/p1_sync_count_per_operation.rs"]
 mod p1_sync_count_per_operation;
+#[path = "commit_and_seal/p5b3b_a_live_holder_is_waited_for.rs"]
+mod p5b3b_a_live_holder_is_waited_for;
 // Linux and macOS only: a Windows write retains no directory handle (`WindowsAuthority` walks paths and has no directory sync), so there
 // is no held directory to outlive its path; the rename in that test would succeed and the seal would publish. The platform difference is
 // what produces the refusal, so the gate is derived here, not typed per test.

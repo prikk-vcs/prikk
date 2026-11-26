@@ -224,6 +224,14 @@ fn run() -> std::result::Result<(), CliError> {
                     print_command_help(command);
                     Ok(())
                 } else {
+                    // 0.59.0 P5b3b: a writer waits a bounded time for a lock whose holder is running; a command that reports or repairs
+                    // never does -- it says what it finds, or refuses, at once (`concurrency-locking.md`).
+                    if matches!(
+                        command.name,
+                        "verify" | "status" | "worktree-status" | "doctor" | "unlock" | "compact"
+                    ) {
+                        prikk_store::refuse_without_waiting();
+                    }
                     (command.run)(args)
                 }
             }

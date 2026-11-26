@@ -21,7 +21,10 @@ see the [trust and threat model](./trust-threat-model.md) and the
   have different causes and operator responses.
 - Stale lock cleanup after a crash is manual today, through `prikk unlock` — not automatic, not a
   doctor repair. `prikk unlock --lock` refuses a holder that appears running unless `--force`; every
-  other answer is advisory only. There is no lock timeout or automatic lock stealing.
+  other answer is advisory only. There is no lock expiry or automatic lock stealing. A writer that
+  finds a lock held by a process that **appears to be running** waits for it, for at most
+  5 seconds by default ([below](#waiting-for-a-holder-that-is-running)); it never waits for any other
+  holder.
 - The active-session model uses one default active WAL and active ref metadata. It is not a
   multi-active-session model.
 - Durability and recovery claims are supported by current unit and integration tests, not by a
@@ -241,10 +244,12 @@ line rather than a new pairwise rule:
 
 > The object-store lock is never held while acquiring any other lock.
 
-**It is fail-fast, like every other lock here, and that is a visible change.** Two commands that both
-append objects at the same moment no longer both proceed: one gets `lock conflict` and does nothing.
-Before, they both usually succeeded — and sometimes left the index wrong instead. A refusal you can
-see and retry replaces a corruption you cannot.
+**It is refused, not shared, like every other lock here, and that is a visible change.** Two commands that
+both append objects at the same moment no longer both proceed: the second waits for the first if the
+first appears to be running ([below](#waiting-for-a-holder-that-is-running)), and otherwise gets
+`lock conflict` and does nothing. Before, they both usually succeeded — and sometimes left the index
+wrong instead. A refusal you can see and retry replaces a corruption you cannot. (Through 0.58.0 the
+second was refused at once, always.)
 
 On Windows a lock file that another writer has just released can be impossible to open for a moment
 while its removal finishes, and the system answers that with "access denied" instead of "already
@@ -305,6 +310,51 @@ A ref publication writes the ref's pointer, then its log record, while holding t
 **The order a reader reads in (0.59.0).** A publication makes three stores durable in a fixed order: the `RefState` object, then the ref's pointer, then its log record. A reader that takes no lock therefore reads them **in the reverse order: the ref log, then the pointer index, then the object index.** Each read is then at least as new as the one before it: a log record that the reader saw has its pointer in the pointer read that follows, and a pointer it saw names an object that is in the object index it opens after. A publication that lands in the middle of a read shows as a pointer one step ahead of the log, which is the lead above and is judged the same way; it can no longer show as a log record without a pointer, or as a pointer whose object the reader cannot see. `verify` and `doctor` take this view once at the start of a run, and every stage judges that one moment (a publication that starts after it is not in the run, and the next run sees it whole). The write-path precondition, the commit's baseline, and the refusal that names `prikk ref complete` read in the same order. A log record whose pointer the first pointer read did not see is read again before it is judged, and a lead that was running when the command looked is named as in flight (`another command is publishing <ref> …`), not as interrupted. An object handle a command opened before it read a pointer is a point in time; where the command opens its own handle it now opens it after the pointer, and where a caller opened it first, an id the pointer named is looked up once more in a view taken after the pointer read before it is called missing (a hit costs nothing, and none of this takes a lock). **The queue and the active lock.** A `commit` writes the active session's ref-name metadata, then the WAL record, then the witness; a `seal`'s drain empties the WAL, clears the witness, then removes the metadata. No reading order is right for both, so `verify` and `doctor` read the three together until a read leaves them unchanged, and a queue that still holds a settled publication (a `seal` between its publish and its drain) is asked of the active lock: a holder that appears to be running is a publication in flight (`another command is publishing <ref> (pid N, from its lock); run this command again when it finishes`, and the existing `PRIKK-VERIFY-REF-PUBLICATION-IN-FLIGHT` finding), anything else is the interrupted-seal answer. A lead is judged by its RefState id: a lead that changes between two reads is a publisher running. Genuine damage, a missing object, a torn tail and an interrupted publication are reported exactly as before.
 
 **What is made permanent by a writer stepping onto an interrupted publication** (the reason the block is repository-wide): not the lead itself — another ref's publication leaves a pure lead completable — but a **torn ref-log tail**: an append for any ref lands behind it and turns it into interior damage that `prikk ref complete` can no longer remove. That half is Rule D's tail check, and it is unchanged.
+
+## Waiting for a Holder That Is Running
+
+*0.59.0.* Every lock is taken by an exclusive create, and a create that found the name taken used to
+refuse at once. A **writer** now waits for it, for a bounded time, when — and only when — the process that
+took it **appears to be running** (the same judge `prikk unlock` uses; see
+[what the three liveness words mean](#what-the-three-liveness-words-mean)). Waiting writes nothing: no
+file, no state, nothing for a kill to leave. A waiter that is killed while it waits leaves the locks it
+already held, as it always did.
+
+- **What is waited for.** A lock whose holder appears to be running, and a ref publication in flight
+  (the pointer ahead of the log, a holder that appears to be running; see
+  [A Publication in Flight](#a-publication-in-flight)), which the writers' precondition re-reads until
+  the publication ends.
+- **What is never waited for.** A holder that does **not** appear to be running (gone, its pid reused,
+  the machine restarted), one that **cannot be judged** (another pid namespace, another machine, an
+  older prikk's body), a body that stays incomplete for more than about 30 ms, a lock this process
+  already holds, and any lock the rule below leaves out. Each is refused at once with the same sentence
+  as before, naming `prikk unlock`. A holder that was running when the wait began and is gone when it
+  ends is refused at that moment, not at the bound.
+- **The bound: 5 seconds a stop**, one lock or one in-flight publication at a time, set by the
+  environment variable `PRIKK_LOCK_WAIT_SECONDS` (whole seconds). `0` is the old behaviour, refusing at once. The
+  longest value taken is **300** (five minutes); a larger number is 300. A value that is not a whole
+  number of seconds is the default, 5. There is no flag.
+- **What is printed.** Nothing to stdout. After one second of waiting, **one line to stderr**:
+  `waiting for the active lock held by pid 1234 (it appears to be running); giving up after 5 s` (or,
+  for a publication, `waiting for another command to finish publishing tags/t1 (pid 1234, from its lock);
+  giving up after 5 s`). When the wait ends in a refusal, today's sentence stands and has a suffix:
+  `(waited 5 s: pid 1234 still appears to be running)`. Exit codes, finding ids and stdout do not
+  change.
+- **Who never waits.** `verify`, `status`, `doctor` (including its repair verbs), `unlock` and `compact`
+  refuse at once, as they always did: a command that reports or repairs says what it finds.
+- **Why two waiters cannot wait for each other.** The locks have one fixed order: the active lock, then
+  the ref lock, then the container locks in `LockableContainer`'s order (pointer index, ref log,
+  received index, trust policy), the object store last. **A command waits only for a lock that ranks
+  after every lock it already holds**, read from a record of what it holds that `lock.rs` keeps (every
+  acquisition and every release goes through it). Every wait then goes up the order, so there is no
+  cycle. The rule is needed, not decorative: `archive import` takes its container locks *and then* the
+  active lock, the one place the order is inverted, so a `sync seal` (the active lock, wanting the
+  object store) and an import (the object store, wanting the active lock) would otherwise wait for each
+  other until the bound. With the rule the import's wait for the active lock is refused at once, as
+  before, and the `sync seal` gets the object store when the import lets go. A command that holds
+  nothing waits for anything.
+- **A script that chains commands** against a long-running holder now waits up to 5 seconds before the
+  same refusal. Set `PRIKK_LOCK_WAIT_SECONDS=0` for the old behaviour.
 
 ## Stale Locks and Manual Cleanup
 
@@ -413,7 +463,9 @@ The current model is conservative:
 - one writer or one `prikk compact` run can hold each of the four compaction-related container
   locks;
 - the object-store lock serializes two commands that both write objects against each other: the
-  second is refused with `lock conflict` rather than queued. A command that writes many objects in
+  second waits for the first for a few seconds when the first appears to be running, and is refused
+  with `lock conflict` when it does not or the wait runs out; it is never queued behind a holder that
+  is not running. A command that writes many objects in
   one call (`commit`, `bundle import`, `sync accept`) holds it once across that whole write, not
   once per object — a concurrent writer meets the refusal for that whole span rather than only in
   the gaps between objects;

@@ -119,6 +119,9 @@ pub fn prikk(repo: &Path) -> Command {
     let mut cmd = Command::new(prikk_bin_path());
     cmd.current_dir(repo);
     isolate_key_environment_for(&mut cmd, Some(repo));
+    // 0.59.0 P5b3b: a writer waits up to 5 s for a lock whose holder is running. A test that holds a lock to see a refusal expects the refusal at
+    // once, as it was written to; the harness says so, and a test of the wait sets `PRIKK_LOCK_WAIT_SECONDS` itself, after this call.
+    cmd.env("PRIKK_LOCK_WAIT_SECONDS", "0");
     cmd
 }
 

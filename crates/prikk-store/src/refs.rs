@@ -265,6 +265,17 @@ pub(crate) fn ensure_publication_precondition_with_replay(
     check_ref_log_tail: bool,
     replay_out: Option<&mut Option<crate::wal::WalReplay>>,
 ) -> Result<()> {
+    // 0.59.0 P5b3b: a writer that meets a publication in flight waits for it, for a bounded time.
+    in_flight::wait_while_in_flight(layout, exclude_ref_name, check_ref_log_tail, replay_out)
+}
+
+/// One pass of the precondition: the whole of it, with no waiting.
+pub(crate) fn ensure_publication_precondition_once(
+    layout: &RepositoryLayout,
+    exclude_ref_name: Option<&str>,
+    check_ref_log_tail: bool,
+    replay_out: Option<&mut Option<crate::wal::WalReplay>>,
+) -> Result<()> {
     use std::collections::{BTreeMap, BTreeSet};
 
     let excluded_key = exclude_ref_name.map(crate::foundation::layout::ref_name_key_bytes);

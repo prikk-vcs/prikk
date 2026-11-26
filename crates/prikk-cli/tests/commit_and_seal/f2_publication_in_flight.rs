@@ -15,19 +15,19 @@ use std::time::{Duration, Instant};
 
 use crate::support;
 
-struct InFlight {
+pub(crate) struct InFlight {
     child: Child,
     go: PathBuf,
     waiting: PathBuf,
 }
 
 impl InFlight {
-    fn pid(&self) -> u32 {
+    pub(crate) fn pid(&self) -> u32 {
         self.child.id()
     }
 
     /// Let it finish and return its output.
-    fn release(self) -> Output {
+    pub(crate) fn release(self) -> Output {
         std::fs::write(&self.go, b"go").unwrap();
         let output = self.child.wait_with_output().unwrap();
         let _ = std::fs::remove_file(&self.go);
@@ -36,7 +36,7 @@ impl InFlight {
     }
 
     /// `SIGKILL` it: its locks stay, its pointer leads the log.
-    fn kill(mut self) {
+    pub(crate) fn kill(mut self) {
         self.child.kill().unwrap();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.waiting);
@@ -45,7 +45,7 @@ impl InFlight {
 
 /// A repository with two sealed generations and `extra` queued commits, and a `tag create tags/t1 --target heads/main` stopped between its
 /// pointer write and its log append.
-fn in_flight_tag(tag: &str, queued: bool) -> (PathBuf, InFlight) {
+pub(crate) fn in_flight_tag(tag: &str, queued: bool) -> (PathBuf, InFlight) {
     let repo = support::unique_repo(tag);
     support::init(&repo);
     support::generation(&repo, "heads/main", "a.txt", b"a\n", "c1");

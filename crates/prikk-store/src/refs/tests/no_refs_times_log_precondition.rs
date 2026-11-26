@@ -604,6 +604,161 @@ fn a_pending_active_cleanup_refuses() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// 0.59.0 P5b3b: the queue holds a settled publication, and the active lock is held by a running process (a `seal` between its publish and its
+/// drain). Returns the layout, the root, and the live holder.
+fn queue_beside_a_running_publisher(
+    name: &str,
+) -> (RepositoryLayout, std::path::PathBuf, std::process::Child) {
+    let root = unique_temp_dir(name);
+    let layout = setup(&root);
+    let signer = maintainer();
+    queue_one_patch(&layout, "heads/main", "p");
+    crate::simulate_one_seal_for_test_support(&layout, "heads/main", &signer).unwrap();
+    queue_one_patch(&layout, "heads/main", "p");
+    let (child, body) = crate::lock_holder::body_naming_another_running_process("active");
+    std::fs::write(
+        layout.active_lock_path(crate::foundation::layout::DEFAULT_ACTIVE_NAME),
+        body,
+    )
+    .unwrap();
+    (layout, root, child)
+}
+
+/// **A writer waits for a publication in flight, and goes on when it finishes** (the publisher drains the queue, as a `seal` does at its end):
+/// refused at once without the wait, through after about the publisher's time with it. Perturb: no loop in the precondition: red.
+#[test]
+fn a_writer_waits_for_a_publication_in_flight_and_goes_on_when_it_finishes() {
+    use std::time::{Duration, Instant};
+    let (layout, root, mut child) = queue_beside_a_running_publisher("p5b3b-in-flight-finishes");
+    let drain = {
+        let layout = layout.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            Wal::for_layout(&layout, DEFAULT_ACTIVE_NAME)
+                .truncate_empty()
+                .unwrap();
+        })
+    };
+    let started = Instant::now();
+    let result = crate::lock::with_lock_wait(Duration::from_secs(5), || {
+        ensure_no_incomplete_publication(&layout)
+    });
+    let waited = started.elapsed();
+    drain.join().unwrap();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(result.is_ok(), "{:?}", result.err());
+    assert!(
+        waited >= Duration::from_millis(250),
+        "it waited for the publisher: {waited:?}"
+    );
+    assert!(
+        waited < Duration::from_secs(2),
+        "and not to the bound: {waited:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// **A publication that never ends is waited for to the bound**, then refused with today's sentence and the words for the wait. Perturb: the bound
+/// not applied: red (it would run on).
+#[test]
+fn a_writer_is_refused_at_the_bound_by_a_publication_that_does_not_end() {
+    use std::time::{Duration, Instant};
+    let (layout, root, mut child) = queue_beside_a_running_publisher("p5b3b-in-flight-never");
+    let started = Instant::now();
+    let refusal = crate::lock::with_lock_wait(Duration::from_millis(500), || {
+        ensure_no_incomplete_publication(&layout)
+    })
+    .unwrap_err()
+    .to_string();
+    let waited = started.elapsed();
+    let pid = child.id();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        waited >= Duration::from_millis(500) && waited < Duration::from_millis(1_800),
+        "{waited:?}"
+    );
+    assert!(
+        refusal.contains(&format!(
+            "another command is publishing heads/main (pid {pid}, from its lock); run this command again when it finishes (waited 0.5 s: the other command is still publishing)"
+        )),
+        "{refusal}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// **A publisher that dies is not waited for:** its lock is left, nothing is running it, and the answer is today's (an incomplete publication) at
+/// once. Perturb: the in-flight loop keyed on the queue and not on the refusal: red.
+#[test]
+fn a_publisher_that_is_gone_is_refused_at_once_as_an_incomplete_publication() {
+    use std::time::{Duration, Instant};
+    let (layout, root, mut child) = queue_beside_a_running_publisher("p5b3b-in-flight-gone");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let started = Instant::now();
+    let refusal = crate::lock::with_lock_wait(Duration::from_secs(5), || {
+        ensure_no_incomplete_publication(&layout)
+    })
+    .unwrap_err();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(
+        matches!(refusal, prikk_error::PrikkError::IncompletePublication(_)),
+        "{refusal:?}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// **The three reasons a publication in flight is not waited for:** the wait is off (`0`); the publisher is **this process** (the lock names it);
+/// and this thread holds a lock a publisher could be waiting for (a ref lock, or anything after). Each is refused at once, with today's sentence and
+/// no words for a wait. Perturb: each condition removed in turn: red.
+#[test]
+fn a_publication_in_flight_is_not_waited_for_when_waiting_is_off_or_would_wait_on_itself() {
+    use std::time::{Duration, Instant};
+    let (layout, root, mut child) = queue_beside_a_running_publisher("p5b3b-in-flight-not-waited");
+    let pid = child.id();
+    let at_once = |bound: Duration, what: &str| {
+        let started = Instant::now();
+        let refusal =
+            crate::lock::with_lock_wait(bound, || ensure_no_incomplete_publication(&layout))
+                .unwrap_err()
+                .to_string();
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "{what}: {:?}",
+            started.elapsed()
+        );
+        assert!(!refusal.contains("(waited"), "{what}: {refusal}");
+        assert!(
+            refusal.contains("another command is publishing heads/main"),
+            "{what}: {refusal}"
+        );
+    };
+    at_once(Duration::ZERO, "the wait is off");
+    {
+        let _reference = crate::RefLock::acquire(&layout, "heads/other").unwrap();
+        at_once(Duration::from_secs(5), "this thread holds a ref lock");
+    }
+    {
+        let _leaf =
+            crate::acquire_container_locks(&layout, &[crate::LockableContainer::ObjectStore])
+                .unwrap();
+        at_once(Duration::from_secs(5), "this thread holds the leaf");
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    // The publisher is this process: the refusal that names it is never waited for.
+    let text = crate::refs::in_flight::in_flight_sentence("heads/main", Some(std::process::id()));
+    assert!(crate::refs::in_flight::names_this_process(&text));
+    assert!(!crate::refs::in_flight::names_this_process(
+        &crate::refs::in_flight::in_flight_sentence("heads/main", Some(pid))
+    ));
+    assert!(!crate::refs::in_flight::names_this_process(
+        &crate::refs::in_flight::in_flight_sentence("heads/main", None)
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A queue that still holds a settled publication is also a `seal` that is running between its publish and its drain. With the active lock held by
 /// **another running process**, the precondition says so (the 0.58.0 sentence), `verify` reports the existing in-flight finding at `info`, and neither
 /// calls it an incomplete publication or a cleanup pending. With no lock, a dead holder, or **this process** as the holder (a command that holds the

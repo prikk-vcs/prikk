@@ -261,7 +261,10 @@ pub use lifecycle_cache::incremental::{
 };
 #[cfg(feature = "test-support")]
 pub use lifecycle_cache::replay::{IdOnlyHistory, ReplayTimeSplit};
-pub use lock::{ActiveLock, ContainerLockGuard, RefLock, acquire_container_locks};
+pub use lock::{
+    ActiveLock, ContainerLockGuard, DEFAULT_LOCK_WAIT_SECONDS, LOCK_WAIT_ENV,
+    MAX_LOCK_WAIT_SECONDS, RefLock, acquire_container_locks, refuse_without_waiting,
+};
 pub use maintainer_signing::{Ed25519MaintainerSigner, MaintainerSigner, maintainer_signature};
 pub use memory_store::MemoryObjectStore;
 pub use merge::evidence::{
@@ -389,7 +392,7 @@ pub use way_out::{SOUND_COPY, WayOut, ways_out};
 // materialize call) lives in `prikk-cli`'s `run_seal`, per this round's own ruling, so the CLI
 // needs both named here.
 #[cfg(feature = "test-support")]
-pub use lock_holder::lock_body_naming_pid_for_test;
+pub use lock_holder::{lock_body_naming_pid_for_test, lock_body_naming_running_process_for_test};
 pub use seal_from_accepted::{
     SealBatchPlan, SealFromAcceptedOutcome, plan_seal_batch,
     require_nothing_in_the_way_for_seal_batch, seal_from_accepted_claim,

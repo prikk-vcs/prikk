@@ -108,6 +108,13 @@ prikk received remove <remotes/…> [--plan-only]
 prikk --version
 ```
 
+**A command that writes waits a few seconds for a lock whose holder is running** (0.59.0). When it finds a lock held by a process that
+appears to be running, or a ref publication in flight, it waits for it, up to 5 seconds, and says on stderr after the first second what it
+waits for; a holder that does not appear to be running, or cannot be judged, is refused at once, as it always was. `PRIKK_LOCK_WAIT_SECONDS`
+sets the bound in whole seconds (`0` refuses at once; the longest value taken is 300; a value that is not a whole number of seconds is the
+default). `verify`, `status`, `doctor`, `unlock` and `compact` never wait. A refusal after a wait ends `(waited 5 s: pid N still appears to be
+running)`; exit codes, finding ids and stdout are unchanged. See [concurrency and locking](./concurrency-locking.md#waiting-for-a-holder-that-is-running).
+
 **`uncommit <patch-id>` takes back your newest unsealed commit.** It is the inverse of `commit` for work that has not been
 sealed, and nothing is wrong when you run it: it is not a repair, and it shares no verb with `doctor --discard-damaged-commits`.
 - **What it does.** The patch leaves the active WAL and is kept in the recovery log; the files in your worktree are not changed,

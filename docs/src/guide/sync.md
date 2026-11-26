@@ -116,7 +116,7 @@ ids. A sender's tag and the receiver's adopted tag are different objects: `adopt
 and `RefState` of its own, naming the same target block.
 
 **An `accept` interrupted partway never leaves a dangling reference.** `accept` takes its lock before it
-validates anything (so a second writer meets a lock conflict while it validates, not only while it writes)
+validates anything (so a second writer waits, and then meets a lock conflict if the wait runs out, while it validates, not only while it writes)
 and holds it continuously through the last write, which it makes in a fixed order: patches and blobs first
 (content-addressed and idempotent, so a replayed `accept` writes nothing new for anything already
 present), then AUTHOR key material, then claims and tags last. Claims and tags are what every other
