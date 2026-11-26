@@ -43,6 +43,8 @@ pub(crate) use read::{
     read_file_if_exists, read_file_range_if_exists, read_file_required,
     stat_file_identity_if_exists, stat_file_state_if_exists,
 };
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use regular::append_pieces;
 
 use crate::foundation::fsutil::contract::DurabilityContract;
 #[cfg(target_os = "linux")]
@@ -153,6 +155,17 @@ pub(crate) fn append_file_reporting_offset_required(
     bytes: &[u8],
 ) -> Result<u64> {
     ACTIVE_DURABILITY.durable_append_reporting_offset(root, relative, bytes)
+}
+
+/// [`append_file_reporting_offset_required`] of `head` then `body`, appended as one vectored write: the two pieces are never copied
+/// into one buffer where the platform can write them apart (`DurabilityContract::durable_append_pair_reporting_offset`).
+pub(crate) fn append_file_pair_reporting_offset_required(
+    root: &MutationRoot,
+    relative: &Path,
+    head: &[u8],
+    body: &[u8],
+) -> Result<u64> {
+    ACTIVE_DURABILITY.durable_append_pair_reporting_offset(root, relative, head, body)
 }
 
 /// RFC 168 §3.3, the pointer and `ref-name` writer (RFC 166 D1): empty the file, then append the bytes, both in place and both

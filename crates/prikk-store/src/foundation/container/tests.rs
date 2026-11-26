@@ -296,3 +296,163 @@ fn encode_for_test_bypasses_strict_validation_but_still_decodes() -> Result<()> 
     assert!(replay.records[0].envelope.signatures.is_empty());
     Ok(())
 }
+
+// ---- 0.59.0 P5b1a: a record is framed in two pieces, and the pieces are the bytes the single buffer was ---------------------------
+
+/// The framing as it was before the record was held in two pieces, written out here independently of `record_checksum` and
+/// `frame_pieces`: magic, version, body length, the sha256 of those three and the body concatenated, then the body.
+fn single_buffer_framing(object_type: ObjectType, body: &[u8]) -> Result<Vec<u8>> {
+    let magic = container_magic(object_type)?;
+    let mut preimage = magic.to_vec();
+    preimage.extend_from_slice(&super::CONTAINER_VERSION.to_be_bytes());
+    preimage.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(body);
+    let mut out = magic.to_vec();
+    out.extend_from_slice(&super::CONTAINER_VERSION.to_be_bytes());
+    out.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    out.extend_from_slice(&prikk_hash::sha256(&preimage));
+    out.extend_from_slice(body);
+    Ok(out)
+}
+
+/// **The pieces are the old bytes.** Every persisted type, bodies of every size around the hash's block boundaries and one large:
+/// the header and the body, concatenated, are the single-buffer framing; the record's own length and checksum are the file's.
+/// **Perturb:** a header with its checksum left zero, the body counted twice in the length, or the checksum taken over the body alone
+/// (not the header's first fields with it) goes red here.
+#[test]
+fn a_record_in_two_pieces_is_the_bytes_the_single_buffer_was() -> Result<()> {
+    let sizes = [
+        0_usize, 1, 31, 32, 33, 55, 56, 63, 64, 65, 119, 120, 1000, 100_000,
+    ];
+    for object_type in crate::foundation::layout::persisted_object_types() {
+        for size in sizes {
+            let body: Vec<u8> = (0..size).map(|n| (n * 7 + size) as u8).collect();
+            let record = super::frame_pieces(object_type, std::borrow::Cow::Borrowed(&body))?;
+            let reference = single_buffer_framing(object_type, &body)?;
+            assert_eq!(
+                record.header(),
+                &reference[..super::CONTAINER_HEADER_LEN],
+                "{object_type} {size}: the header"
+            );
+            assert_eq!(
+                record.body(),
+                body.as_slice(),
+                "{object_type} {size}: the body"
+            );
+            assert_eq!(
+                record.len(),
+                reference.len(),
+                "{object_type} {size}: the length"
+            );
+            assert_eq!(
+                record.checksum().as_slice(),
+                &reference[18..50],
+                "{object_type} {size}: the checksum"
+            );
+            assert_eq!(
+                record.to_vec(),
+                reference,
+                "{object_type} {size}: the whole"
+            );
+            // The reader's own checksum function agrees with the writer's, on the header's own fields.
+            let magic = container_magic(object_type)?;
+            assert_eq!(
+                super::record_checksum(magic, size as u64, &body),
+                record.checksum()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A record framed from bytes the caller already holds (a received body) is the record framed from its own encoding: the same two
+/// pieces. (The `cfg(test)` guard in the framing function also asserts the hint equals a fresh encode.)
+#[test]
+fn a_record_framed_from_a_known_body_is_the_record_framed_from_the_envelope() -> Result<()> {
+    let envelope = signed_patch_envelope();
+    let body = crate::foundation::file_codec::encode_envelope_file(&envelope)?;
+    let owned = super::frame_container_record_with_known_body(ObjectType::Patch, &envelope, None)?;
+    let known =
+        super::frame_container_record_with_known_body(ObjectType::Patch, &envelope, Some(&body))?;
+    assert_eq!(owned.header(), known.header());
+    assert_eq!(owned.body(), known.body());
+    assert_eq!(
+        owned.to_vec(),
+        encode_container_record(ObjectType::Patch, &envelope)?
+    );
+    Ok(())
+}
+
+/// **A record cut at every byte is a torn tail, as it was.** The third record of a container is appended through the real two-piece
+/// loop, stopped after `cut` bytes (a power loss part way through the one write), for every cut from nothing to the whole record,
+/// and with one-byte and larger writes: replay reads the two sound records before it, reports exactly `cut` bytes as the incomplete
+/// final record, names no damage; at the whole record, three records and no tail.
+/// **Perturb:** the loop writing the body before the header, or skipping a byte at the join, goes red here.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_two_piece_record_cut_at_every_byte_is_a_torn_tail() -> Result<()> {
+    let envelopes = [
+        signed_patch_blob_envelope(),
+        signed_patch_blob_envelope(),
+        signed_patch_blob_envelope(),
+    ];
+    let mut prior = Vec::new();
+    for envelope in &envelopes[..2] {
+        prior.extend(encode_container_record(ObjectType::Blob, envelope)?);
+    }
+    let record =
+        super::frame_container_record_with_known_body(ObjectType::Blob, &envelopes[2], None)?;
+    for most in [1_usize, 7, 50, 51, usize::MAX] {
+        for cut in 0..=record.len() {
+            let mut file = prior.clone();
+            let mut written = 0_usize;
+            let result = crate::foundation::fsutil::append_pieces(
+                record.header(),
+                record.body(),
+                |pieces| {
+                    let mut room = (cut - written).min(most);
+                    if room == 0 {
+                        return Err(rustix::io::Errno::IO);
+                    }
+                    let before = room;
+                    for piece in pieces {
+                        let n = piece.len().min(room);
+                        file.extend_from_slice(&piece[..n]);
+                        room -= n;
+                        if n < piece.len() {
+                            break;
+                        }
+                    }
+                    written += before - room;
+                    Ok(before - room)
+                },
+            );
+            assert_eq!(
+                result.is_ok(),
+                cut == record.len(),
+                "cut {cut}, {most} a call"
+            );
+            assert_eq!(file.len(), prior.len() + cut);
+            let replay = decode_container_records(ObjectType::Blob, &file)?;
+            assert!(
+                !replay.has_item_failure(),
+                "cut {cut}: a torn tail is not damage"
+            );
+            if cut == record.len() {
+                assert_eq!(replay.records.len(), 3);
+                assert_eq!(replay.trailing_partial_bytes, 0);
+            } else {
+                assert_eq!(
+                    replay.records.len(),
+                    2,
+                    "cut {cut}: the sound records before it"
+                );
+                assert_eq!(
+                    replay.trailing_partial_bytes, cut,
+                    "cut {cut}: the torn tail"
+                );
+            }
+        }
+    }
+    Ok(())
+}

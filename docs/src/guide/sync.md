@@ -131,8 +131,8 @@ checking it is the object the first pass validated (an artifact file changed bet
 before the changed object is written). So its memory follows the **largest object** the artifact carries,
 not the artifact, **plus about 650 bytes of memory for every object it carries** (measured: 13 MB of heap for
 the 20,052 objects of a 10,000-patch artifact). An artifact of many small objects therefore needs a few
-megabytes however large it is, and one file of N bytes costs about four times N while it is stored, the
-store's own write path, as with `bundle import`.
+megabytes however large it is, and one file of N bytes costs about three times N while it is stored (measured, one 100 MiB
+object: 3.06 times, four before 0.59.0), the store's own write path, as with `bundle import`.
 A named pipe cannot be read twice, so it is read once into memory (up to `PRIKK_EXCHANGE_MAX_BYTES`).
 
 **One id, several signers, in format 7 and later.** After the receiver has sealed the sender's patches as above,

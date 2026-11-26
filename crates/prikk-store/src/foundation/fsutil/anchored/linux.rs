@@ -13,8 +13,8 @@ use super::directory::{
     MutationRoot, open_existing_directory_required, prepare_directory_required,
 };
 use super::regular::{
-    open_append_regular, open_existing_regular, open_new_regular, required_file_name,
-    required_parent,
+    append_all_vectored, open_append_regular, open_existing_regular, open_new_regular,
+    required_file_name, required_parent,
 };
 use super::{failpoints, io_error, prikk_to_io};
 use crate::foundation::fsutil::contract::DurabilityContract;
@@ -66,6 +66,26 @@ impl DurabilityContract for LinuxDurability {
         let offset = file.metadata()?.len();
         failpoints::append_write()?;
         file.write_all(bytes)?;
+        failpoints::required_file_sync()?;
+        super::sync_file(&file)?;
+        Ok(offset)
+    }
+
+    fn durable_append_pair_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        head: &[u8],
+        body: &[u8],
+    ) -> Result<u64> {
+        let directory = open_existing_directory_required(root, required_parent(relative)?)?;
+        let name = required_file_name(relative)?;
+        // `durable_append_reporting_offset`'s open, length and sync, unchanged; only the write is one `writev` of the two pieces.
+        let fd = open_append_regular(&directory.fd, name)?;
+        let file = File::from(fd);
+        let offset = file.metadata()?.len();
+        failpoints::append_write()?;
+        append_all_vectored(&file, head, body)?;
         failpoints::required_file_sync()?;
         super::sync_file(&file)?;
         Ok(offset)

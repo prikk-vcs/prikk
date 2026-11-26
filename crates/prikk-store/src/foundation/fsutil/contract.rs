@@ -115,6 +115,22 @@ pub(crate) trait DurabilityContract {
         bytes: &[u8],
     ) -> Result<u64>;
 
+    /// [`Self::durable_append_reporting_offset`] of `head` followed by `body`, **appended as one write without copying the two into
+    /// one buffer** (0.59.0 P5b1a): `writev` on the `O_APPEND` descriptor on Linux and macOS. Every property of the single-buffer
+    /// append is unchanged -- the same open and validation, the same length read from the descriptor, the same failpoints, one file
+    /// sync -- and the bytes that reach the file are exactly `head` then `body`. **The default is the single buffer**: a platform
+    /// without the vectored append (Windows) concatenates the two and appends them as it always did.
+    fn durable_append_pair_reporting_offset(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        head: &[u8],
+        body: &[u8],
+    ) -> Result<u64> {
+        let bytes = [head, body].concat();
+        self.durable_append_reporting_offset(root, relative, &bytes)
+    }
+
     /// Durably truncate an existing regular file to `len`.
     fn durable_truncate(&self, root: &MutationRoot, relative: &Path, len: u64) -> Result<()>;
 

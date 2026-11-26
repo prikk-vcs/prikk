@@ -1160,3 +1160,77 @@ fn the_index_rebuild_indexes_the_sound_frames_behind_a_damaged_one() -> Result<(
     let _ = std::fs::remove_dir_all(root);
     Ok(())
 }
+
+// ---- 0.59.0 P5b1a: the record reaches the file in two pieces, and the store recovers from a cut at every byte --------------------
+
+/// **An object's record is appended in its two pieces and the file holds the single-buffer bytes; cut at any byte, the store's own
+/// index rebuild indexes the records before it and nothing of the cut.** Three blobs through the real append path (`writev` on Linux
+/// and macOS): the container is byte-for-byte the three single-buffer encodings, each index entry names the offset and length of its
+/// own record. Then the third record is cut at every byte (a power loss part way through its one write) and the rebuild is run over
+/// each: the two sound records and no more, never an error.
+/// **Perturb:** the body appended twice, or a header without its checksum, makes the container differ from the encodings.
+#[test]
+fn an_appended_record_is_the_single_buffer_bytes_and_a_cut_at_any_byte_is_recovered() -> Result<()>
+{
+    let root = crate::test_gates::test_support::unique_temp_dir("index-two-piece-append");
+    let layout = RepositoryLayout::init(root.clone())?;
+    let envelopes = [
+        blob_envelope("one", 300),
+        blob_envelope("two", 5),
+        blob_envelope("three", 70_000),
+    ];
+    let mut expected = Vec::new();
+    for envelope in &envelopes {
+        let entry = append_object_to_container(&layout, ObjectType::Blob, envelope)?;
+        let bytes = container::encode_container_record(ObjectType::Blob, envelope)?;
+        assert_eq!(
+            entry.offset,
+            expected.len() as u64,
+            "the offset is the length before the append"
+        );
+        assert_eq!(
+            entry.length,
+            bytes.len() as u64,
+            "the length is the whole record"
+        );
+        expected.extend_from_slice(&bytes);
+    }
+    let path = layout.container_slot_path(ObjectType::Blob, ContainerSlot::A);
+    assert_eq!(
+        std::fs::read(&path)?,
+        expected,
+        "the container is the three single-buffer encodings"
+    );
+
+    let third = container::encode_container_record(ObjectType::Blob, &envelopes[2])?;
+    let prior = &expected[..expected.len() - third.len()];
+    let sound: std::collections::BTreeSet<_> = envelopes[..2]
+        .iter()
+        .map(ObjectEnvelope::object_id)
+        .collect();
+    // Every cut of a small record; every 997th byte of the large one would prove no more than its first and last 300 do.
+    let cuts: Vec<usize> = (0..third.len())
+        .filter(|cut| *cut < 300 || *cut + 300 >= third.len() || cut % 997 == 0)
+        .collect();
+    for cut in cuts {
+        let mut torn = prior.to_vec();
+        torn.extend_from_slice(&third[..cut]);
+        std::fs::write(&path, &torn)?;
+        let ids: std::collections::BTreeSet<_> = rebuild_index_from_containers(&layout)?
+            .iter()
+            .map(|entry| entry.object_id)
+            .collect();
+        assert_eq!(
+            ids, sound,
+            "cut {cut}: the sound records and nothing of the cut"
+        );
+    }
+    std::fs::write(&path, &expected)?;
+    assert_eq!(
+        rebuild_index_from_containers(&layout)?.len(),
+        3,
+        "the whole record is indexed"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    Ok(())
+}

@@ -24,15 +24,15 @@ use prikk_error::{PrikkError, Result};
 use prikk_object::{ObjectEnvelope, ObjectId, ObjectType};
 
 use crate::foundation::byte_cursor::ByteCursor;
-use crate::foundation::container::{self, ContainerRecordStatus, container_magic};
+use crate::foundation::container::{self, ContainerRecordStatus};
 use crate::foundation::file_codec::push_u16;
 use crate::foundation::frame_resync::{
     partial_before_sound_frame_message, require_progress, resync_to_next_magic,
     sound_frame_after_partial, tallied_sha256,
 };
 use crate::foundation::fsutil::{
-    append_file_reporting_offset_required, append_file_required, len_to_u64, read_file_if_exists,
-    read_file_range_if_exists, write_file_atomically,
+    append_file_pair_reporting_offset_required, append_file_required, len_to_u64,
+    read_file_if_exists, read_file_range_if_exists, write_file_atomically,
 };
 use crate::foundation::kept_file;
 use crate::foundation::layout::{
@@ -641,8 +641,8 @@ pub(crate) fn append_object_to_container(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<IndexEntry> {
-    let record_bytes = container::encode_container_record(object_type, envelope)?;
-    append_encoded_object_record(layout, object_type, envelope.object_id(), record_bytes)
+    let record = container::frame_container_record_with_known_body(object_type, envelope, None)?;
+    append_framed_object_record(layout, object_type, envelope.object_id(), &record)
 }
 
 /// As [`append_object_to_container`], but threading an optional known-raw-encoding hint through to
@@ -655,19 +655,20 @@ pub(crate) fn append_object_to_container_with_known_body(
     envelope: &ObjectEnvelope,
     known_body: Option<&[u8]>,
 ) -> Result<IndexEntry> {
-    let record_bytes =
-        container::encode_container_record_with_known_body(object_type, envelope, known_body)?;
-    append_encoded_object_record(layout, object_type, envelope.object_id(), record_bytes)
+    let record =
+        container::frame_container_record_with_known_body(object_type, envelope, known_body)?;
+    append_framed_object_record(layout, object_type, envelope.object_id(), &record)
 }
 
 /// The durable-append tail shared by [`append_object_to_container`] and
-/// [`append_object_to_container_with_known_body`], once each has its own `record_bytes` in hand --
-/// everything below is unchanged from before 0.55.0 step 3 Part 3b-ii split the encode step out.
-fn append_encoded_object_record(
+/// [`append_object_to_container_with_known_body`], once each has its own framed `record` in hand --
+/// everything below is unchanged from before 0.55.0 step 3 Part 3b-ii split the encode step out, except that the record is
+/// appended in its two pieces (header, body) and not copied into one buffer first (0.59.0 P5b1a).
+fn append_framed_object_record(
     layout: &RepositoryLayout,
     object_type: ObjectType,
     object_id: ObjectId,
-    record_bytes: Vec<u8>,
+    record: &container::FramedRecord<'_>,
 ) -> Result<IndexEntry> {
     let container_relative =
         layout.repository_relative(&layout.container_slot_path(object_type, ContainerSlot::A))?;
@@ -690,15 +691,15 @@ fn append_encoded_object_record(
     // this placement on the first attempt). `append_object_under_lock` is the single chokepoint that
     // enforces it, and `every_object_append_goes_through_the_locked_wrapper` is the test that keeps
     // it the only one.
-    let length = len_to_u64(record_bytes.len())?;
-    let container_checksum = frame_checksum(object_type, &record_bytes)?;
+    let length = len_to_u64(record.len())?;
+    let container_checksum = record.checksum();
 
     // Step 1: append the object record to its container. Must be durable before step 2 -- a crash
     // here leaves nothing indexed yet, which is not a problem: nothing durable claims this object
     // exists, so there is nothing for a reader to find prematurely.
     //
     // **The offset is the container's length immediately before this append, read from the descriptor
-    // the record is appended to** (`append_file_reporting_offset_required`: one open, one `fstat`, one
+    // the record is appended to** (`append_file_pair_reporting_offset_required`: one open, one `fstat`, one
     // write, both syncs) -- not from reading the container. This used to be
     // `read_file_if_exists(container)?.map_or(0, |bytes| bytes.len())`: the whole container read into
     // memory on every object append, only to learn its length, so a commit's memory followed everything
@@ -707,10 +708,11 @@ fn append_encoded_object_record(
     // (see above), a torn tail from an interrupted append counted in it exactly as the read counted it, a
     // missing container refused by the append, a symlink at the final component never followed, and a
     // non-regular file refused.
-    let offset = append_file_reporting_offset_required(
+    let offset = append_file_pair_reporting_offset_required(
         layout.repository_mutation_root(),
         &container_relative,
-        &record_bytes,
+        record.header(),
+        record.body(),
     )?;
 
     // Step 2: only now append the index entry. A crash between step 1 and here leaves the object
@@ -733,23 +735,6 @@ fn append_encoded_object_record(
     )?;
 
     Ok(entry)
-}
-
-/// Extract a just-encoded container record's own frame checksum (the 32 bytes immediately following
-/// magic + version + body_len), without re-parsing the whole frame -- `record_bytes` was built by
-/// `container::encode_container_record` moments ago, so its shape is already known.
-fn frame_checksum(object_type: ObjectType, record_bytes: &[u8]) -> Result<[u8; 32]> {
-    let magic = container_magic(object_type)?;
-    let checksum_start = magic.len() + 2 + 8;
-    let checksum_end = checksum_start + 32;
-    let checksum_bytes = record_bytes
-        .get(checksum_start..checksum_end)
-        .ok_or_else(|| {
-            PrikkError::Integrity("just-encoded container record is too short".to_string())
-        })?;
-    let mut checksum = [0_u8; 32];
-    checksum.copy_from_slice(checksum_bytes);
-    Ok(checksum)
 }
 
 /// Rebuild the index by scanning every container. Not a new operation (design §4): the same

@@ -29,7 +29,7 @@ use crate::foundation::file_codec::{
 };
 use crate::foundation::frame_resync::{
     BoundedScan, ScanBudget, interrupted_append_before_sound_frame_message, require_progress,
-    scan_budget_exceeded_message, tallied_sha256,
+    scan_budget_exceeded_message, tallied_sha256_parts,
 };
 use crate::foundation::frame_source::{FrameSource, SliceFrameSource};
 use crate::foundation::fsutil::len_to_u64;
@@ -129,26 +129,68 @@ impl ContainerReplay {
     }
 }
 
-/// Encode one object envelope as a durable container record for `object_type`'s container.
+/// One container record in the two pieces it is appended in: its 50-byte header and its body, **the body not copied into a buffer
+/// with the header** (0.59.0 P5b1a). The body is the encoder's own bytes, or, for a received record, the bytes already read from the
+/// carried bundle. The two pieces are, concatenated, exactly the bytes the single-buffer framing built before this type existed: the file's
+/// format is unchanged. A writer that can append both pieces in one `writev` does; any other takes [`Self::to_vec`], the single buffer.
+pub(crate) struct FramedRecord<'a> {
+    header: [u8; CONTAINER_HEADER_LEN],
+    checksum: [u8; 32],
+    body: std::borrow::Cow<'a, [u8]>,
+}
+
+impl FramedRecord<'_> {
+    /// The record's header: magic, version, body length, checksum.
+    pub(crate) fn header(&self) -> &[u8] {
+        &self.header
+    }
+
+    /// The record's body.
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    /// The record's whole length, header and body.
+    pub(crate) fn len(&self) -> usize {
+        self.header.len().saturating_add(self.body.len())
+    }
+
+    /// The record's own frame checksum: the 32 bytes after magic, version and body length.
+    pub(crate) fn checksum(&self) -> [u8; 32] {
+        self.checksum
+    }
+
+    /// The record as one buffer: the bytes of the two pieces, in order. A platform without the vectored append concatenates the two
+    /// itself (`DurabilityContract::durable_append_pair_reporting_offset`'s default); this is for tests.
+    #[cfg(test)]
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.len());
+        out.extend_from_slice(&self.header);
+        out.extend_from_slice(&self.body);
+        out
+    }
+}
+
+/// Encode one object envelope as a durable container record for `object_type`'s container, as one buffer. Tests and any caller that
+/// wants the bytes whole; the writer takes [`frame_container_record_with_known_body`].
+#[cfg(test)]
 pub(crate) fn encode_container_record(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
-    encode_container_record_with_known_body(object_type, envelope, None)
+    Ok(frame_container_record_with_known_body(object_type, envelope, None)?.to_vec())
 }
 
-/// As [`encode_container_record`], but when the caller already holds bytes it can prove equal
-/// `envelope`'s own canonical encoding (`known_body`), skips the `encode_envelope_file` call and
-/// frames those bytes directly -- 0.55.0 step 3 Part 3b-ii, for `bundle import`'s own `New`
-/// outcome, where `known_body` is the frame body already read and digest-verified from the
-/// carried bundle. `None` here is exactly [`encode_container_record`]'s own body, so every
-/// existing caller of that function is unaffected by this one's existence.
-pub(crate) fn encode_container_record_with_known_body(
+/// Frame `envelope` as a container record in two pieces. When the caller already holds bytes it can prove equal `envelope`'s own
+/// canonical encoding (`known_body`), skips the `encode_envelope_file` call and frames those bytes directly -- 0.55.0 step 3 Part 3b-ii,
+/// for `bundle import`'s own `New` outcome, where `known_body` is the frame body already read and digest-verified from the carried
+/// bundle. `None` here is the encoder's own body, so every caller without a hint is unaffected by the hint's existence.
+pub(crate) fn frame_container_record_with_known_body<'a>(
     object_type: ObjectType,
     envelope: &ObjectEnvelope,
-    known_body: Option<&[u8]>,
-) -> Result<Vec<u8>> {
-    let body: std::borrow::Cow<'_, [u8]> = match known_body {
+    known_body: Option<&'a [u8]>,
+) -> Result<FramedRecord<'a>> {
+    let body: std::borrow::Cow<'a, [u8]> = match known_body {
         Some(known) => {
             // Test-only parity guard: `known_body` must be provably what a fresh encode would
             // produce (the caller's own argument for this), checked here rather than trusted
@@ -167,7 +209,7 @@ pub(crate) fn encode_container_record_with_known_body(
         }
         None => std::borrow::Cow::Owned(encode_envelope_file(envelope)?),
     };
-    frame_record(object_type, &body)
+    frame_pieces(object_type, body)
 }
 
 /// Encode one container record exactly as the writer would, for a test that needs the bytes without
@@ -178,20 +220,30 @@ pub(crate) fn encode_container_record_for_test(
     envelope: &ObjectEnvelope,
 ) -> Result<Vec<u8>> {
     let body = crate::foundation::file_codec::encode_envelope_file_structural(envelope)?;
-    frame_record(object_type, &body)
+    Ok(frame_pieces(object_type, std::borrow::Cow::Owned(body))?.to_vec())
 }
 
-fn frame_record(object_type: ObjectType, body: &[u8]) -> Result<Vec<u8>> {
+/// The header of a record whose body is `body`: the checksum is computed over the body where it lies.
+fn frame_pieces(
+    object_type: ObjectType,
+    body: std::borrow::Cow<'_, [u8]>,
+) -> Result<FramedRecord<'_>> {
     let magic = container_magic(object_type)?;
     let body_len = len_to_u64(body.len())?;
-    let checksum = record_checksum(magic, body_len, body);
-    let mut out = Vec::with_capacity(CONTAINER_HEADER_LEN + body.len());
-    out.extend_from_slice(magic);
-    push_u16(&mut out, CONTAINER_VERSION);
-    push_u64(&mut out, body_len);
-    out.extend_from_slice(&checksum);
-    out.extend_from_slice(body);
-    Ok(out)
+    let checksum = record_checksum(magic, body_len, &body);
+    let mut header = Vec::with_capacity(CONTAINER_HEADER_LEN);
+    header.extend_from_slice(magic);
+    push_u16(&mut header, CONTAINER_VERSION);
+    push_u64(&mut header, body_len);
+    header.extend_from_slice(&checksum);
+    let header: [u8; CONTAINER_HEADER_LEN] = header.try_into().map_err(|_| {
+        PrikkError::Integrity("a container header was not its fixed length".to_string())
+    })?;
+    Ok(FramedRecord {
+        header,
+        checksum,
+        body,
+    })
 }
 
 /// Result of attempting to parse one frame at a given offset, over any [`FrameSource`] (0.52.0 step
@@ -785,12 +837,13 @@ fn parse_header(magic: &[u8; 8], header: &[u8]) -> Result<ContainerHeader> {
 /// not re-derived, so a flipped byte is detected the identical way a local repository's own replay
 /// would detect it.
 pub(crate) fn record_checksum(magic: &[u8; 8], body_len: u64, body: &[u8]) -> [u8; 32] {
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(magic);
-    preimage.extend_from_slice(&CONTAINER_VERSION.to_be_bytes());
-    preimage.extend_from_slice(&body_len.to_be_bytes());
-    preimage.extend_from_slice(body);
-    tallied_sha256(&preimage)
+    // Hashed where the body lies: the preimage (magic, version, length, body) is four slices, not a fourth copy of the body.
+    tallied_sha256_parts(&[
+        magic,
+        &CONTAINER_VERSION.to_be_bytes(),
+        &body_len.to_be_bytes(),
+        body,
+    ])
 }
 
 #[cfg(test)]

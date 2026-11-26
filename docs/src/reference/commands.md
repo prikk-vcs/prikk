@@ -1105,8 +1105,8 @@ in memory while it works:
 
 - **`bundle import`** stays an open file the store reads and re-reads in place, deciding and
   writing one object at a time; its own memory follows roughly the size of the largest single
-  object the bundle carries, not the whole bundle (measured, one 16 MiB object: about four times
-  the object's own size).
+  object the bundle carries, not the whole bundle (measured, one 100 MiB object: about three times
+  the object's own size, 3.06; about four before 0.59.0).
 - **`bundle verify`** decodes one object at a time and keeps nothing past its own turn, the same
   shape as `bundle import` — its own memory also follows roughly the largest single object, a
   little lower than `import`'s own figure since it never writes (measured, one 16 MiB object:

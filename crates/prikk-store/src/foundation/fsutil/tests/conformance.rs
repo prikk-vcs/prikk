@@ -207,3 +207,70 @@ fn durable_directory_entry_accepts_the_named_files_own_path() {
 fn durable_directory_entry_accepts_the_named_files_own_path() {
     assert_durable_directory_entry_accepts_the_named_files_own_path(&WindowsDurability);
 }
+
+/// 0.59.0 P5b1a: appending a record as **two pieces** puts the bytes of the first and then the second at the end of the file, once
+/// each, and reports the file's length before them -- on every implementor, whether it writes them with one `writev` (Linux, macOS) or
+/// concatenates them (the trait's default, Windows). An empty first or second piece is the other piece alone. A missing file is
+/// refused, as the single-buffer append refuses it.
+/// **Perturb:** the second piece appended twice (or left out), or the offset read after the write, goes red here.
+fn assert_append_pair_appends_both_pieces_in_order_and_reports_the_offset(
+    durability: &impl DurabilityContract,
+) {
+    let path = unique_temp_dir("conformance-append-pair");
+    let root = mutation_root(&path);
+    let relative = Path::new("container");
+    assert!(
+        durability
+            .durable_append_pair_reporting_offset(&root, relative, b"head", b"body")
+            .is_err(),
+        "a missing file is refused, not created"
+    );
+    assert!(
+        durability
+            .create_exclusive(&root, relative, b"seed")
+            .is_ok()
+    );
+    let big: Vec<u8> = (0..300_000_u32).map(|n| (n % 251) as u8).collect();
+    let mut expected = b"seed".to_vec();
+    for (head, body) in [
+        (b"head".as_slice(), b"body".as_slice()),
+        (b"".as_slice(), b"only a body".as_slice()),
+        (b"only a head".as_slice(), b"".as_slice()),
+        (b"H".as_slice(), big.as_slice()),
+    ] {
+        let offset = durability
+            .durable_append_pair_reporting_offset(&root, relative, head, body)
+            .unwrap_or(u64::MAX);
+        assert_eq!(
+            offset,
+            expected.len() as u64,
+            "the length before the append"
+        );
+        expected.extend_from_slice(head);
+        expected.extend_from_slice(body);
+        assert_eq!(
+            std::fs::read(path.join("container")).unwrap_or_default(),
+            expected,
+            "the file holds the pieces, once, in order"
+        );
+    }
+    let _ = std::fs::remove_dir_all(path);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn append_pair_appends_both_pieces_in_order_and_reports_the_offset() {
+    assert_append_pair_appends_both_pieces_in_order_and_reports_the_offset(&LinuxDurability);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn append_pair_appends_both_pieces_in_order_and_reports_the_offset() {
+    assert_append_pair_appends_both_pieces_in_order_and_reports_the_offset(&MacosDurability);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn append_pair_appends_both_pieces_in_order_and_reports_the_offset() {
+    assert_append_pair_appends_both_pieces_in_order_and_reports_the_offset(&WindowsDurability);
+}

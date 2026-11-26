@@ -75,11 +75,31 @@ fn two_generations(tag: &str) -> (PathBuf, PathBuf) {
     (repo, g1)
 }
 
+/// Damage the file by flipping every bit of one byte near its end, so the byte **always changes**. (A fixed value written there left the file as it
+/// was whenever the byte already held it: that byte is part of a hash, so about one run in 256 damaged nothing and the sound file let `branch create`
+/// through. Found by CI on 0.59.0's P5a4 push.) The file differs afterwards, asserted.
 fn flip_near_end(path: &Path) {
-    let mut bytes = std::fs::read(path).unwrap();
+    let before = std::fs::read(path).unwrap();
+    let mut bytes = before.clone();
+    let at = bytes.len() - 5;
+    bytes[at] ^= 0xff;
+    assert_ne!(bytes, before, "the damage changed nothing");
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// The control: a byte that already holds `0xff` is changed, not left as it was (the fixed-value write it replaced left it).
+#[test]
+fn the_flip_changes_a_byte_that_already_holds_ff() {
+    let path = std::env::temp_dir().join(format!("prikk-g2a-flip-{}", std::process::id()));
+    let mut bytes = vec![7_u8; 16];
     let at = bytes.len() - 5;
     bytes[at] = 0xff;
-    std::fs::write(path, bytes).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    flip_near_end(&path);
+    let after = std::fs::read(&path).unwrap();
+    assert_eq!(after[at], 0x00, "every bit of the byte flipped");
+    assert_eq!(after.len(), bytes.len());
+    let _ = std::fs::remove_file(&path);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
