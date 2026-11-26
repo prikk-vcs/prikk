@@ -80,6 +80,13 @@ somewhere else is not found automatically, so `setup` prints the `PRIKK_AUTHOR_S
 beside the seed, and is found from there. It is printed, not exported: an exported
 `PRIKK_*_KEY_ID` would override the file.
 
+**The directory you name must already exist.** `setup` and `key generate --out` do not create it (where a
+secret lives is your choice), and they check it **before anything is written**: with the directory missing,
+or a file where a directory should be, the command refuses (`cannot write the seed to <path>: the directory
+<dir> does not exist; create it first (`mkdir -p <dir>`)`) and leaves no repository and no file behind
+(0.59.0; before, `setup` printed `initialized Prikk repository` and then failed, leaving a repository with
+no key adopted). A path inside prikk's own key directory is the one place prikk creates for you.
+
 **The seeds are not recoverable.** There is no copy in the repository, no keyring, no escrow. Lose
 the AUTHOR seed and you can no longer sign patches with that identity; lose the MAINTAINER seed and
 you can no longer seal to a repository that already trusts it. Back up the key directory the way you

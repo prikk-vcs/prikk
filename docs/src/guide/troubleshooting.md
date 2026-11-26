@@ -173,6 +173,10 @@ as repository damage rather than as a correctable argument.
   stored changes, and prikk before 0.57.0 does not open format 8. If it refuses, `prikk verify` cannot say why (it needs the marker too):
   restore a sound copy, as the sentence says. If a `format upgrade` was killed and left its lock, `prikk unlock` clears it.
 
+## `error: cannot write the seed to <path>: the directory <dir> does not exist; create it first`
+
+`prikk setup --author-seed-out/--maintainer-seed-out <path>` and `prikk key generate --out <path>` write the seed (and its `<path>.key-id`) into a directory **you** name, and prikk does not create it. Run the `mkdir -p <dir>` the message names, then the command again. The check comes before anything is written, so nothing was left behind: no repository, no seed file. A directory that is a *file* reads `<dir> is not a directory`. (Through 0.58.0 `setup` printed `initialized Prikk repository at …` first and then failed on the key-id file, leaving a `.prikk` with no maintainer key adopted; run `prikk setup` again on that directory and it finishes it.)
+
 ## `error: precondition not met: <path> already holds a repository`
 
 You ran `prikk setup` on a directory that already has a `.prikk` in it. `setup` is the first-run

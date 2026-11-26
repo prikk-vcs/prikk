@@ -381,7 +381,11 @@ fn require_new_role_paths(
     role: crate::key_material::Role,
 ) -> std::result::Result<(), CliError> {
     let seed_path = match user_named {
-        Some(path) => path.clone(),
+        Some(path) => {
+            // 0.59.0 H2c: the directory the user named must exist, checked here, before `init` writes anything.
+            crate::key::require_seed_directory(path)?;
+            path.clone()
+        }
         None => crate::key_material::default_key_dir()?.join(role.seed_file_name()),
     };
     crate::key_material::require_new_key_paths(&seed_path)

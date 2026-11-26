@@ -150,8 +150,11 @@ fn a_command_waiting_for_a_lock_that_is_never_released_is_refused_at_the_bound()
     let (holder, body) = live_holder("active");
     let pid = holder.id();
     std::fs::write(active_lock(&repo), body).unwrap();
+    let started = Instant::now();
     let waiter = commit_waiting(&repo, "1", "d");
-    let (output, waited) = finish(waiter);
+    let (output, _) = finish(waiter);
+    // From before the spawn: the clock `finish` keeps starts after the process did, and read 997 ms against a 1 s bound (0.59.0 H2c's gate run).
+    let waited = started.elapsed();
     stop(holder);
     let text = stderr(&output);
     assert_eq!(output.status.code(), Some(1), "{text}");

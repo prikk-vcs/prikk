@@ -9,6 +9,8 @@ mod dc78_seal_provenance;
 mod dc78_trust_adoption;
 #[path = "trust_and_keys/distinct_default_key_ids.rs"]
 mod distinct_default_key_ids;
+#[path = "trust_and_keys/h2c_seed_out_needs_its_directory.rs"]
+mod h2c_seed_out_needs_its_directory;
 #[path = "trust_and_keys/k6_a_key_file_is_never_torn.rs"]
 mod k6_a_key_file_is_never_torn;
 #[path = "trust_and_keys/rfc132_trust_precondition_sites.rs"]

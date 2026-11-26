@@ -216,6 +216,44 @@ pub(crate) fn write_seed_to_path(
 /// Every refusal [`write_seed_to_path`] can make before it writes: a `.prikk` component, and on Windows the
 /// outright refusal. Also creates the key directory when `path` is inside it. Run first by
 /// `key_material::write_new_key`, so that a refused seed never leaves its key-id file behind.
+/// The directory a seed named by the user is written into must **exist and be a directory** (0.59.0 H2c). prikk never creates it: where a secret lives, and with
+/// what mode, is the user's choice (the one directory it does create is its own key directory, [`prepare_seed_path`]). Checked **before anything is written**
+/// (`setup` before it initialises the repository, `key generate` before the key-id file), so a refusal leaves nothing behind. A path inside prikk's own key
+/// directory is not refused here: the key directory is created when the seed is written.
+pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), CliError> {
+    let directory = match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    if let Ok(key_dir) = crate::key_material::default_key_dir() {
+        if directory == key_dir.as_path() {
+            return Ok(());
+        }
+    }
+    match std::fs::metadata(directory) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(CliError::Failure(format!(
+            "cannot write the seed to {}: {} is not a directory; name a seed path inside a directory",
+            path.display(),
+            directory.display()
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(CliError::Failure(format!(
+                "cannot write the seed to {}: the directory {} does not exist; create it first (`mkdir -p {}`), \
+                 because prikk does not choose where a secret lives",
+                path.display(),
+                directory.display(),
+                directory.display()
+            )))
+        }
+        Err(error) => Err(CliError::Failure(format!(
+            "cannot write the seed to {}: {}: {error}",
+            path.display(),
+            directory.display()
+        ))),
+    }
+}
+
 pub(crate) fn prepare_seed_path(path: &Path) -> std::result::Result<(), CliError> {
     if path.components().any(|c| c.as_os_str() == ".prikk") {
         return Err(CliError::Usage(
@@ -234,6 +272,7 @@ pub(crate) fn prepare_seed_path(path: &Path) -> std::result::Result<(), CliError
             crate::key_material::ensure_key_dir()?;
         }
     }
+    require_seed_directory(path)?;
     windows_seed_path_refusal()
 }
 
