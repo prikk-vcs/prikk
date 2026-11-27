@@ -268,17 +268,23 @@ fn an_existing_directory_still_works() {
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // 0.59.0 H2d: a seed directory that exists but cannot be written is refused the same way.
 
-/// A directory at `mode` (0500: no write; 0600: write but no search, so nothing can be created in it either) under `cwd`, or `None` when this process is root (root passes `access(2)` whatever the mode, so the refusal cannot be seen: the
-/// tests skip rather than pass for the wrong reason).
+/// A directory at `mode` (0500: no write; 0600: write but no search, so nothing can be created in it either) under `cwd`, or `None` when this process can create a
+/// file in it anyway (root: the refusal cannot be seen, so the tests skip rather than pass for the wrong reason).
 fn unwritable_directory(cwd: &Path, mode: u32) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
-    if rustix::process::geteuid().is_root() {
-        eprintln!("skipped: running as root, which `access` always passes");
-        return None;
-    }
     let dir = cwd.join("ro");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    // Root creates files whatever the mode (`access` passes it too), so the refusal could not be seen: skip, saying why. Asked of the directory itself, not of
+    // the user id, so no dependency is needed to ask.
+    let probe = dir.join("probe");
+    if std::fs::write(&probe, b"x").is_ok() {
+        let _ = std::fs::remove_file(&probe);
+        eprintln!(
+            "skipped: this process can create files in a mode {mode:o} directory (it is root)"
+        );
+        return None;
+    }
     Some(dir)
 }
 

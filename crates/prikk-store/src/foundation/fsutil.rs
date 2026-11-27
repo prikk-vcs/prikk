@@ -39,6 +39,33 @@ mod caller_tests;
 ))]
 mod tests;
 
+/// May this user **create an entry** in `directory`? (0.59.0 H2e.) The seed-directory check of `prikk setup` and `prikk key generate` asks it before anything is
+/// written, so a directory that exists but cannot be written is refused before `init` instead of after it. It answers only that: the caller builds the sentence.
+///
+/// On unix this is `access(directory, W_OK | X_OK)`: write permission to add the entry **and** search permission to reach it (a directory at mode `0600` can be
+/// written to by name and cannot be searched, so nothing can be created in it). `access` judges by the **real** user id, which is the one prikk runs as (prikk is
+/// never setuid). **Root passes it whatever the mode**, so a refusal cannot be seen, or tested, as root. **Off unix it is `Ok(())`:** Windows has no equivalent
+/// call here, and `prikk` refuses a seed-out path outright there. The error is the operating system's own (`Permission denied`, `Not a directory`, ...).
+///
+/// # Errors
+///
+/// The operating system's refusal, as an [`std::io::Error`].
+#[cfg(unix)]
+pub fn directory_accepts_new_entries(directory: &std::path::Path) -> std::io::Result<()> {
+    use rustix::fs::{Access, access};
+    access(directory, Access::WRITE_OK | Access::EXEC_OK).map_err(std::io::Error::from)
+}
+
+/// Off unix: always `Ok(())` (see the unix form).
+///
+/// # Errors
+///
+/// Never.
+#[cfg(not(unix))]
+pub fn directory_accepts_new_entries(_directory: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// 0.58.0 P1. With `prikk-store`'s `test-support` feature (which no shipped build enables) and `PRIKK_TEST_REPORT_SYNC_CALLS` set, print
 /// `sync-calls: N (files F, directories D)` to stderr: how many times this process reached the platform's sync (`fsync` on Linux, `F_FULLFSYNC` on macOS,
 /// `FlushFileBuffers` on Windows), counted at the two primitives (`anchored::sync_file`, `AnchoredDirectory::sync`). A test sets it

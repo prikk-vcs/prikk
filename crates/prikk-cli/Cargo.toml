@@ -23,11 +23,6 @@ prikk-hash                  = { workspace = true }
 prikk-object                = { workspace = true }
 prikk-store                 = { workspace = true }
 
-# 0.59.0 H2d: `rustix::fs::access` for the seed-directory check (`key.rs::require_seed_directory`). The same `rustix` the workspace already resolves for
-# `prikk-store` (`Cargo.lock` gains this one dependency line on the `prikk` package and no package), unix only: Windows refuses a seed-out path outright.
-[target.'cfg(unix)'.dependencies]
-rustix                      = { workspace = true }
-
 # `test-support` is a non-default feature on `prikk-store` (design-v1.md §13.9): it is compiled only
 # because these integration tests need it, never in the shipped binary above -- Cargo unifies the
 # feature into the `prikk-store` build used by `tests/`, not into `src/`'s own build.

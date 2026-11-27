@@ -218,9 +218,9 @@ pub(crate) fn write_seed_to_path(
 /// (`setup` before it initialises the repository, `key generate` before the key-id file), so a refusal leaves nothing behind. A path inside prikk's own key
 /// directory is not refused here: the key directory is created when the seed is written.
 ///
-/// **On unix the directory must also be writable and searchable** (0.59.0 H2d: `access(dir, W_OK | X_OK)`): a directory that exists but cannot be written gave the
-/// same half-run as a missing one (`initialized …`, then `Permission denied` on the key-id file). `access` judges by the **real** user id, which is the one
-/// prikk runs as (prikk is never setuid). **Root passes it whatever the mode.** Windows is unchanged: it refuses a seed-out path outright.
+/// **On unix the directory must also be writable and searchable** (0.59.0 H2d): a directory that exists but cannot be written gave the same half-run as a
+/// missing one (`initialized …`, then `Permission denied` on the key-id file). The question is `prikk_store::directory_accepts_new_entries`'s (the real user id,
+/// root passes, Windows unchanged: it refuses a seed-out path outright).
 pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), CliError> {
     let directory = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -255,24 +255,17 @@ pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), Cli
     }
 }
 
-/// `access(directory, W_OK | X_OK)`: refuse, with the operating system's words, a directory the seed cannot be created in.
-#[cfg(unix)]
+/// May a seed be created in `directory`? `prikk_store::directory_accepts_new_entries` answers (`access(W_OK | X_OK)` by the real user id on unix; `Ok` off unix);
+/// this builds the sentence, with the operating system's words.
 fn directory_is_writable(path: &Path, directory: &Path) -> std::result::Result<(), CliError> {
-    use rustix::fs::{Access, access};
-    access(directory, Access::WRITE_OK | Access::EXEC_OK).map_err(|errno| {
+    prikk_store::directory_accepts_new_entries(directory).map_err(|error| {
         CliError::Failure(format!(
-            "cannot write the seed to {}: the directory {} is not writable: {}; fix its permissions (`chmod u+wx {}`) or name another directory",
+            "cannot write the seed to {}: the directory {} is not writable: {error}; fix its permissions (`chmod u+wx {}`) or name another directory",
             path.display(),
             directory.display(),
-            std::io::Error::from(errno),
             directory.display()
         ))
     })
-}
-
-#[cfg(not(unix))]
-fn directory_is_writable(_path: &Path, _directory: &Path) -> std::result::Result<(), CliError> {
-    Ok(())
 }
 
 /// Every refusal [`write_seed_to_path`] can make before it writes: a `.prikk` component, the seed's directory ([`require_seed_directory`]), and on Windows the

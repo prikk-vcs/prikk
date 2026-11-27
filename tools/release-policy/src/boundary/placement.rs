@@ -15,9 +15,7 @@ const ALLOWED_THIRD_PARTY: [(&str, &[&str]); 8] = [
     ("prikk-object", &["unicase", "unicode-normalization"]),
     ("prikk-replay", &[]),
     ("prikk-store", &["getrandom", "rustix"]),
-    // 0.59.0 H2d: `rustix::fs::access` for the seed-directory check (`crates/prikk-cli/src/key.rs`), unix only
-    // (`[target.'cfg(unix)'.dependencies]`). The same `rustix` `prikk-store` already uses; no new package in `Cargo.lock`.
-    ("prikk", &["rustix"]),
+    ("prikk", &[]),
 ];
 
 pub(super) fn check(root: &Path, errors: &mut Vec<BoundaryError>) {

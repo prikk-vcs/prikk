@@ -242,7 +242,7 @@ pub use extract_refusal::{
 pub use format_upgrade::{
     FormatUpgradeOutcome, upgrade_repository_format, upgrade_repository_format_in,
 };
-pub use foundation::fsutil::report_sync_calls_if_requested;
+pub use foundation::fsutil::{directory_accepts_new_entries, report_sync_calls_if_requested};
 pub use foundation::index::IndexRepairReport;
 pub use foundation::layout::{
     ContainerSlot, DEFAULT_ACTIVE_NAME, LockableContainer, RepositoryFormat, RepositoryLayout,

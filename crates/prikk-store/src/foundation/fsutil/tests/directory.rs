@@ -130,3 +130,44 @@ fn an_empty_directory_is_removed_and_nothing_else_is() -> std::io::Result<()> {
     let _ = fs::remove_dir_all(path);
     Ok(())
 }
+
+/// 0.59.0 H2e: `directory_accepts_new_entries` says yes for a directory the user can create in, and refuses (with the operating system's words) one at mode
+/// 0500 (no write) and one at mode 0600 (write, but no search: nothing can be created in it by name). **Skipped as root**, which passes `access` whatever the
+/// mode (each skip says so). Red control: the check returning `Ok` at once, or `X_OK` dropped (the 0600 case).
+#[cfg(unix)]
+#[test]
+fn a_directory_accepts_new_entries_only_when_the_user_can_create_in_it() -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = unique_temp_dir("accepts-new-entries");
+    let dir = root.join("d");
+    fs::create_dir_all(&dir)?;
+    assert!(
+        crate::directory_accepts_new_entries(&dir).is_ok(),
+        "a plain directory"
+    );
+    assert!(
+        crate::directory_accepts_new_entries(&root.join("missing")).is_err(),
+        "a missing directory"
+    );
+    for mode in [0o500, 0o600] {
+        fs::set_permissions(&dir, fs::Permissions::from_mode(mode))?;
+        let probe = dir.join("probe");
+        let creatable = fs::write(&probe, b"x").is_ok();
+        let _ = fs::remove_file(&probe);
+        if creatable {
+            eprintln!("skipped mode {mode:o}: this process can create in it (it is root)");
+            continue;
+        }
+        assert!(
+            matches!(
+                crate::directory_accepts_new_entries(&dir),
+                Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "mode {mode:o} is refused with the operating system's words"
+        );
+    }
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
