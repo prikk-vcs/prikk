@@ -150,6 +150,10 @@ A lock file was created with three syncs (its body, the directory at the create,
 
 `docs/src/guide/propose-work.md` takes one person's changes into another person's repository without lending a key: the author's repository seals under **its own** maintainer key (`setup --author-seed-out --maintainer-seed-out`, with `key status <repo>` reading `binding: matches` as the witness), the maintainer runs `sync have`, `sync accept`, reviews `sync pending`, `show` and `extract --claim`, and re-seals under their own key with `sync seal --claims`. Every command in it was run on a release build, with its output kept. Its rules: **never run a command that reads your maintainer seed in a repository someone else wrote or handed you**; never run `setup` for an author repository in the maintainer's key directory without both seed-out flags; the separation is an operating-system boundary, not a prikk check; the bundle route is not for proposals. It records that a design for how a repository's trust changes is proposed in RFC 172 (nothing in it is built). No code or output changes.
 
+### Added — `prikk doctor --remove-ref-candidates [--plan-only]`
+
+A new repair mode of `doctor`: it removes the files (and an empty directory) a ref publication of an earlier release left in `.prikk/refs/tmp`, saving each file's bytes in the recovery log first; `--plan-only` previews it and writes nothing; `prikk doctor --recovery-restore <run>` puts a removed file back. It is the way out of the defect described under **"Fixed — a file or a directory left in `.prikk/refs/tmp` blocked every writer for good"**, which has the cause; what it takes (the locks, in order), what it refuses, and the recovery log's new `remove` entry kind are under Output changes ("New: `prikk doctor --remove-ref-candidates`"), and the usage is in `commands.md`.
+
 ## 0.58.0 — 2026-11-18
 
 ### Security
