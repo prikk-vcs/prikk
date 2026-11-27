@@ -41,8 +41,10 @@ Prikk is not yet the right tool if you need:
   path prefixes, one per line, with no globbing, no negation, and no per-directory files, so
   patterns like `*.log` do not work; and a file swept into history by mistake still cannot be
   removed later;
-- a separation between an automated process's authority and the maintainer's — that is not yet a
-  supported pattern. Removing environment variables does not stop a seal: `prikk setup` keeps both seeds
+- a separation between an automated process's authority and the maintainer's that prikk itself
+  enforces: the separation is an operating-system boundary (another account, machine or container),
+  not a check prikk makes, and [An Author Proposes, the Receiving Maintainer Seals](../guide/propose-work.md)
+  shows the arrangement end to end. Removing environment variables does not stop a seal: `prikk setup` keeps both seeds
   in `~/.config/prikk/`, and prikk finds them with no environment variable set. Removing the process's
   access to `maintainer.seed` does stop it: `seal` refuses ("maintainer signing is required: no seed
   at …") and `prikk key status` reads `usable: false` for the maintainer role. But a process that can
@@ -50,8 +52,8 @@ Prikk is not yet the right tool if you need:
   and seal under it, so the authoring process needs a repository of its own, with the receiving one out
   of its reach. A copy that trusts only the owner's key reports such a seal: `verify` exits 1 with
   "publication trust issues" (the import into that copy exits 0, as an untrusted received pointer).
-  `ROADMAP.md` lists a proposed theme for 0.58.0, "who may author, who may seal, and what a consumer
-  may rely on", that takes this up.
+  How a repository's trust changes (who may adopt a key, retiring one from a point) is proposed in
+  RFC 172, and nothing in it is built.
 
 Other projects are built around prikk; see [Related projects](#related-projects).
 
