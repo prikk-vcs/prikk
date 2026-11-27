@@ -113,15 +113,16 @@
    ("whether anything was written"), `claims_file` (N).
 3. **`doctor-report-v1`:**
    - it **embeds a whole `verify-report-v1`** (N);
-   - `issues[]`: code (open; every `PRIKK-*` literal on the page, by test), severity (closed `info|warning|error`), prose, and
-     **`repair`**;
+   - `issues[]`: code, severity (closed `info|warning|error`), prose, and **`repair`**;
+   - **code is an open set, with every `PRIKK-*` literal on the page by test, except the `PRIKK-DOCTOR-UNREACHED-*` family, which is
+     closed** (planeter decides on it). **Whether inklkunn needs notice for other non-`info` codes is asked in its letter;**
    - `summary` counts that add up.
    - **`repair` is non-null for every issue whose recommendation names a command a user can type,** enforced by a test against the
      recommendation text. It is null only for genuinely manual advice.
    - Plain `doctor` only; the repair modes stay text.
 4. **`unlock-listing-v1`:**
-   - `locks[]`: a repository-relative path (relative to `.prikk`; `unlock --lock` accepts the form), kind, the recorded pid and start
-     (N);
+   - `locks[]`: a repository-relative path (relative to `.prikk`; `unlock --lock` accepts the form), **kind (closed: inklkunn stops on
+     an unknown lock kind)**, the recorded pid and start (N);
    - **`liveness` (closed, 3 values) and `liveness_reason` (closed, 12 values).**
    - Listing only.
 5. **`merge-plan-v1`:** baseline, sides, status and outcome (closed, kebab, with a text-to-JSON mapping table), a closed `action` id,
