@@ -80,17 +80,21 @@
   - *Architect's ruling over H3a2's "sign when an adopted seed is present".* A signed record is a portable authorization (B2). A one-step
     command that signs whenever a seed happens to be present would mint one in any copy the maintainer is handed.
   - **That is route 3 again, and worse:** handed a copy of a forge's `.prikk` and asked to "add my key", the maintainer's signed record
-    applies to the forge itself, because the two share a tip (B2).
+    applies to the forge itself, because the two share a trust tip (B2).
   - **So signatures come only from the explicit command for them, `trust statement` (B2).**
 - **The current set** = the root epoch (today's policy, read as written, unsigned) + the chain. **Once a chain exists, the policy
   snapshot is not rewritten.**
   - Every reader goes through one function that derives the set, so a transition is **one durable append**, and the snapshot is no second
     state to fall behind (§4).
   - *Ruling over H3a2's snapshot-as-cache.*
-- **`trust maintainer list`** shows the chain, each record marked `unsigned` or `signed by <id>`, and ends with **the chain tip hash.**
-  - The tip of a repository with no chain is the hash of its root epoch, so every repository has a tip.
+- **`trust maintainer list`** shows the chain, each record marked `unsigned` or `signed by <id>`, and ends with **`trust tip: <hash>`**,
+  the hash of the chain's last record.
+  - The trust tip of a repository with no chain is the hash of its root epoch, so every repository has one.
+  - **"Trust tip" is a deliberate name:** a ref's tip block (what `retire` snapshots, C) is a different thing, and one word for both
+    would confuse.
 - **`verify`:**
-  - **one info line,** `trust chain: N transitions (S signed, U unsigned), consistent with itself`;
+  - **one info line, printed only when a chain exists** (a repository with none prints nothing new), `trust chain: N transitions (S
+    signed, U unsigned)`. **It says nothing about trust.** The docs say that a chain is checked here only against itself;
   - **two blocking findings:** `PRIKK-TRUST-CHAIN-BROKEN` (a record that does not link) and `PRIKK-TRUST-TRANSITION-INVALID` (a claimed
     signature that does not verify against the key adopted at that point);
   - **an unsigned transition is never a warning:** nothing clears a past transition, so a warning for it would be unactionable.
@@ -101,21 +105,21 @@
 ### B. The only checks that mean something are relative to what the checker already holds
 
 - **B1, a prefix: "this copy's chain extends one I hold."**
-  - `archive verify <new> --extends <old.archive>`, or `--extends-tip <hash>` (the tip a reader kept from `trust maintainer list`), is
+  - `archive verify <new> --extends <old.archive>`, or `--extends-trust-tip <hash>` (the trust tip a reader kept from `trust maintainer list`), is
     read-only. It answers `extends yours by N transitions` or `diverges from yours at transition S` (exit 1).
   - **`archive import` runs it against the importing repository's own chain** and prints the result. With no chain of its own it says
     *"nothing to compare against; the carried chain is checked only against itself"*.
 - **B2, a key I already trust: a statement.**
-  - **`trust statement add|remove|retire|rotate … --tip <hash> --out <file>`** signs with the local maintainer seed. **It opens no
-    repository:** the tip is given explicitly, read beforehand by `trust maintainer list` (which reads no seed). The seed-holding process
+  - **`trust statement add|remove|retire|rotate … --trust-tip <hash> --out <file>`** signs with the local maintainer seed. **It opens no
+    repository:** the trust tip is given explicitly, read beforehand by `trust maintainer list` (which reads no seed). The seed-holding process
     reads no repository at all.
   - **`trust apply <file>` needs no seed.** It checks:
-    - that the signer is adopted at this repository's current tip (a retired or removed key cannot sign);
-    - that the statement's tip **equals** this repository's tip (no replay into a later state, no reordering).
+    - that the signer is adopted at this repository's current trust tip (a retired or removed key cannot sign);
+    - that the statement's trust tip **equals** this repository's (no replay into a later state, no reordering).
     It then appends the record, signed.
   - **What a statement means, stated plainly:** with no repository identity (settled), **a statement is valid in every repository whose
-    chain tip is `--tip`.** A copy shares its original's tip until either moves, so **a statement signed "for a copy" is also a statement
-    for the original.** That is why it is made only by this deliberate command, with the tip in the maintainer's own hands.
+    trust tip is `--trust-tip`.** A copy shares its original's trust tip until either moves, so **a statement signed "for a copy" is also a statement
+    for the original.** That is why it is made only by this deliberate command, with the trust tip in the maintainer's own hands.
   - **For planeter's forge:** apply only statements signed by a key the forge's repository already adopts. That stops a stolen web token
     adding a key. **It does not stop whoever can write the forge's `.prikk`.**
 - **What each copy can check:**
@@ -162,7 +166,7 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
 |---|---|---|
 | before the append | unchanged | repeat the command |
 | inside the append | a torn tail | **writers refuse and name `doctor --repair-tails`, which truncates it.** Nothing was applied |
-| after the append | done | a repeat finds the identical record at the tip and writes nothing (idempotent) |
+| after the append | done | a repeat finds the identical record at the trust tip and writes nothing (idempotent) |
 | a damaged record inside the chain | `PRIKK-TRUST-CHAIN-BROKEN` | **writers fail closed;** `doctor` names it. No automatic repair: it would change what is trusted |
 
 **The build's test is the real-kill sweep over the append,** as for every other writer.
@@ -188,6 +192,13 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
   - **the archive's chain section, a 14th section kind, written only when a chain exists.** An archive of a repository with no chain
     stays readable by older readers.
   - **No claim-format step.**
+- **Two stages, so time is spent only where a consumer needs it:**
+  - **Stage 1** is §2, C, D and E. It serves every case in §5 that lives inside one repository: planeter 1, 2, 3, Q2 and Q3, and
+    inklkunn 1 to 3 for a repository that keeps its own records. **C does not need A:** a retirement is one more kind of record in the
+    trust policy container. **That is Stage 1's one format step,** a policy-record kind an older prikk refuses by the format marker.
+  - **Stage 2** is A and B: the chain, statements and prefix checks. It serves what crosses repositories: planeter's forge accepting only
+    signed statements, and inklkunn's readers checking that a later archive continues an earlier one.
+  - **Stage 2 is built only if planeter or inklkunn, having read this, say they will use it.** The letter asks them.
 - **The price:** about 1,500 lines across `prikk-store`, `prikk-cli` and `verify` (H3a2 §7, less the snapshot rewrite and the one-step
   signing).
 - **Tests:**
@@ -196,22 +207,52 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
   - the legacy read (unchanged `verify` and `list`);
   - **the real-kill sweep;**
   - **the rollback case;**
-  - a statement for another tip, by an unadopted key, and replayed;
+  - a statement for another trust tip, by an unadopted key, and replayed;
   - **`trust statement` opening no repository;**
   - **the one-step verbs opening no seed.**
 - **`### Output changes`:**
   - new verbs and flags;
-  - `trust maintainer list`'s chain and tip;
+  - `trust maintainer list`'s chain and trust tip;
   - `verify`'s info line and three finding ids;
   - **D's exit code;**
   - `show`/`log`'s `recognized by`;
   - the §2 sentences and fields;
   - **`ref complete --plan-only`'s exit code.**
 
-## 7. For the owner
+## 7. For the owner: three decisions, each with the architect's recommendation
 
-1. **Read and accept, amend or refuse.** Nothing is built before that.
-2. **Whether a task key is ever bound to a person.** Today it is continuity only.
-3. **Whether an operator may freeze a repository deliberately:** a signed `trust lock` after which unsigned records are refused. **prikk
-   never does it by itself.** With it, a repository whose every seed is then lost cannot be reopened.
-4. **D's exit-code change** goes to planeter as a question in the letter.
+Each was reviewed against the owner's philosophy: clean, safe and secure, robust; nothing that confuses; less is more; time; no
+unactionable warning; no state that no command clears; no claim wider than the mechanism.
+
+1. **Is a per-task author key ever bound to a person? Recommended: no.** A key stays an artifact, as today: "continuity only, not a trust
+   decision".
+   - **Security, and the claim it would make:** prikk cannot establish who a person is. A binding would be a label typed by whoever writes
+     `.prikk`, and a receiver would read it as proof of authorship: a claim wider than the mechanism.
+   - **The settled rule:** repositories and keys carry no identity (*repositories are anonymous*). A person field would reopen that.
+   - **Less is more:** what a reviewer needs is the key id per patch (§2.5) and the message. Who stands behind a key is the consumer's own
+     record, outside prikk.
+   - **What the user sees:** nothing new; the key id in `show`, `status` and `sync pending`.
+2. **May an operator freeze a repository's trust deliberately (`trust lock`, after which unsigned records are refused)? Recommended: no.**
+   - **A state that no command clears:** a locked repository whose every seed is later lost can never adopt a key again, and nothing
+     prikk ships could reopen it. That is the one outcome the first fixed rule forbids.
+   - **It protects less than it appears to:** a process that can write `.prikk` can truncate the chain to before the lock, and the result
+     is consistent with itself (ack 043). The lock would stop only honest use of prikk's own unsigned verbs, which is the consumer's policy
+     to decide, not a repository state.
+   - **What serves the need instead:** a forge that wants "signed transitions only" applies only statements (B2), and checks with B1 that
+     what it holds extends what it held. B1 reports `extends yours by N transitions (S signed, U unsigned)`, so a consumer can refuse
+     unsigned ones by its own rule, with no state in the repository.
+   - **What the user sees:** no `trust lock` command, and no repository that can be stuck.
+3. **D: `verify` reports received-only history under an unadopted key as info (exit 0 where it exits 1 today). Recommended: yes, and put
+   to planeter before the build.**
+   - **Clearer:**
+     - the import already says the received pointer is not trusted;
+     - `received refs: N, 0 failed` already agrees;
+     - today's exit 1 tells a user their own repository failed verification over history they never adopted.
+   - **Actionable and clearable:** the finding names the key and the adopt line, and goes away on adoption or `received remove`.
+   - **Safe:** anything reachable from a local ref stays blocking. A consumer that must gate on "nothing unadopted is present" gates on the
+     finding id, which stays in `--format json`.
+   - **The cost:** an exit code changes, and planeter's delivery rule reads it. The letter asks them first; they may keep a stricter gate
+     on the id.
+
+**And the staging (§6): Stage 1 in 0.60.0, if the owner accepts this RFC; Stage 2 only on a consumer's word.** Release scheduling is the
+owner's.
