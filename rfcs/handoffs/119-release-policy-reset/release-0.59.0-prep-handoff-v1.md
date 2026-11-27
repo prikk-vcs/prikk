@@ -118,3 +118,18 @@ bound on the command.**
    is still `d299d133…`.
 5. **The 15 gates on the final commit,** tree clean. **One commit.** The architect pushes and reads CI by name; **the tag goes on this
    commit.**
+
+**P4 ACCEPTED 2026-11-28** (`5f8125f8`; review `release-0.59.0-prep-P4-review-v1`). Its binary finding stands: the plain hash moved
+`d299d133…` → `ae110a8d…` because `stable` became rustc 1.100.1 this morning, not because of the source (one hash for both trees under one
+toolchain with the release flags). The shipped asset is CI's, built by the workflow's own `stable`.
+
+## Part P4b: the Upgrading line reads in one pass (10 min, stop at 20; report `release-0.59.0-prep-P4b-report.md`)
+
+The P4 line reads "waits up to 5 seconds, for each lock or publication it meets, for a lock, or a ref publication in flight, whose holder
+appears to be running": **two "for" clauses in a row.**
+
+1. **Reorder it so it reads in one pass,** for example: "**A command that writes now waits for a lock, or a ref publication in flight,
+   whose holder appears to be running: up to 5 seconds for each one it meets,** where it refused at once (Output changes has the texts)."
+   Keep the rest of the line.
+2. **No other change.** The date stays `2026-11-28`.
+3. **The 15 gates on the commit, one commit.** The tag goes on it.
