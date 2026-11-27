@@ -264,3 +264,98 @@ fn an_existing_directory_still_works() {
     support::ok(&out, "key generate with a bare file name");
     assert!(cwd.join("bare.seed").is_file() && cwd.join("bare.seed.key-id").is_file());
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 H2d: a seed directory that exists but cannot be written is refused the same way.
+
+/// A directory at `mode` (0500: no write; 0600: write but no search, so nothing can be created in it either) under `cwd`, or `None` when this process is root (root passes `access(2)` whatever the mode, so the refusal cannot be seen: the
+/// tests skip rather than pass for the wrong reason).
+fn unwritable_directory(cwd: &Path, mode: u32) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        eprintln!("skipped: running as root, which `access` always passes");
+        return None;
+    }
+    let dir = cwd.join("ro");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+    Some(dir)
+}
+
+fn make_writable_again(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// **An unwritable parent, for each flag and both: exit 1, the directory and the OS's words, `chmod u+wx`, no `.prikk`, nothing written.** Red control: the
+/// `access` check removed: `.prikk` is left behind, `initialized` is printed.
+#[test]
+fn setup_refuses_an_unwritable_seed_directory_before_it_initialises_anything() {
+    for (label, mode) in flag_sets(Path::new("/x"))
+        .into_iter()
+        .flat_map(|(label, _)| [(label, 0o500), (label, 0o600)])
+    {
+        let cwd = work("setup-ro");
+        let Some(ro) = unwritable_directory(&cwd, mode) else {
+            return;
+        };
+        let project = cwd.join("project");
+        let sets = flag_sets(&ro);
+        let (_, flags) = sets.iter().find(|(name, _)| *name == label).unwrap();
+        let before = listing(&cwd);
+        let mut args = vec!["setup", project.to_str().unwrap()];
+        args.extend(flags.iter().map(String::as_str));
+        let out = run(&cwd, &args);
+        let text = stderr(&out);
+        make_writable_again(&ro);
+        assert_eq!(out.status.code(), Some(1), "{label}: {text}");
+        assert!(
+            text.contains(&format!(
+                "the directory {} is not writable: Permission denied",
+                ro.display()
+            )),
+            "{label}: names the directory and the OS's words: {text}"
+        );
+        assert!(
+            text.contains(&format!("chmod u+wx {}", ro.display())),
+            "{label}: and something typeable: {text}"
+        );
+        assert!(
+            !stdout(&out).contains("initialized"),
+            "{label}: {}",
+            stdout(&out)
+        );
+        assert!(
+            !project.exists(),
+            "{label}: no .prikk, no project directory"
+        );
+        assert_eq!(listing(&cwd), before, "{label}: nothing written");
+    }
+}
+
+/// **`key generate --out` into an unwritable directory:** the same sentence, nothing written.
+#[test]
+fn key_generate_refuses_an_unwritable_seed_directory() {
+    let cwd = work("keygen-ro");
+    let Some(ro) = unwritable_directory(&cwd, 0o500) else {
+        return;
+    };
+    let target = ro.join("x.seed");
+    let before = listing(&cwd);
+    let out = run(
+        &cwd,
+        &["key", "generate", "--out", target.to_str().unwrap()],
+    );
+    make_writable_again(&ro);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains(&format!(
+            "cannot write the seed to {}: the directory {} is not writable",
+            target.display(),
+            ro.display()
+        )),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(listing(&cwd), before, "nothing written");
+}

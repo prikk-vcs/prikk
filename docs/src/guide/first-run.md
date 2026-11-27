@@ -85,7 +85,7 @@ secret lives is your choice), and they check it **before anything is written**: 
 or a file where a directory should be, the command refuses (`cannot write the seed to <path>: the directory
 <dir> does not exist; create it first (`mkdir -p <dir>`)`) and leaves no repository and no file behind
 (0.59.0; before, `setup` printed `initialized Prikk repository` and then failed, leaving a repository with
-no key adopted). A path inside prikk's own key directory is the one place prikk creates for you.
+no key adopted). On unix it must also be writable by you (`access`, by your real user id): a directory at mode `500` or `600` is refused with the operating system's words and a `chmod u+wx <dir>`, before anything is written. A path inside prikk's own key directory is the one place prikk creates for you.
 
 **The seeds are not recoverable.** There is no copy in the repository, no keyring, no escrow. Lose
 the AUTHOR seed and you can no longer sign patches with that identity; lose the MAINTAINER seed and

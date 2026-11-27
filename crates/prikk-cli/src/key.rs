@@ -213,13 +213,14 @@ pub(crate) fn write_seed_to_path(
     write_seed_to_path_platform(seed, path)
 }
 
-/// Every refusal [`write_seed_to_path`] can make before it writes: a `.prikk` component, and on Windows the
-/// outright refusal. Also creates the key directory when `path` is inside it. Run first by
-/// `key_material::write_new_key`, so that a refused seed never leaves its key-id file behind.
 /// The directory a seed named by the user is written into must **exist and be a directory** (0.59.0 H2c). prikk never creates it: where a secret lives, and with
 /// what mode, is the user's choice (the one directory it does create is its own key directory, [`prepare_seed_path`]). Checked **before anything is written**
 /// (`setup` before it initialises the repository, `key generate` before the key-id file), so a refusal leaves nothing behind. A path inside prikk's own key
 /// directory is not refused here: the key directory is created when the seed is written.
+///
+/// **On unix the directory must also be writable and searchable** (0.59.0 H2d: `access(dir, W_OK | X_OK)`): a directory that exists but cannot be written gave the
+/// same half-run as a missing one (`initialized …`, then `Permission denied` on the key-id file). `access` judges by the **real** user id, which is the one
+/// prikk runs as (prikk is never setuid). **Root passes it whatever the mode.** Windows is unchanged: it refuses a seed-out path outright.
 pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), CliError> {
     let directory = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -231,7 +232,7 @@ pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), Cli
         }
     }
     match std::fs::metadata(directory) {
-        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(metadata) if metadata.is_dir() => directory_is_writable(path, directory),
         Ok(_) => Err(CliError::Failure(format!(
             "cannot write the seed to {}: {} is not a directory; name a seed path inside a directory",
             path.display(),
@@ -254,6 +255,29 @@ pub(crate) fn require_seed_directory(path: &Path) -> std::result::Result<(), Cli
     }
 }
 
+/// `access(directory, W_OK | X_OK)`: refuse, with the operating system's words, a directory the seed cannot be created in.
+#[cfg(unix)]
+fn directory_is_writable(path: &Path, directory: &Path) -> std::result::Result<(), CliError> {
+    use rustix::fs::{Access, access};
+    access(directory, Access::WRITE_OK | Access::EXEC_OK).map_err(|errno| {
+        CliError::Failure(format!(
+            "cannot write the seed to {}: the directory {} is not writable: {}; fix its permissions (`chmod u+wx {}`) or name another directory",
+            path.display(),
+            directory.display(),
+            std::io::Error::from(errno),
+            directory.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn directory_is_writable(_path: &Path, _directory: &Path) -> std::result::Result<(), CliError> {
+    Ok(())
+}
+
+/// Every refusal [`write_seed_to_path`] can make before it writes: a `.prikk` component, the seed's directory ([`require_seed_directory`]), and on Windows the
+/// outright refusal. Also creates the key directory when `path` is inside it. Run first by
+/// `key_material::write_new_key`, so that a refused seed never leaves its key-id file behind.
 pub(crate) fn prepare_seed_path(path: &Path) -> std::result::Result<(), CliError> {
     if path.components().any(|c| c.as_os_str() == ".prikk") {
         return Err(CliError::Usage(

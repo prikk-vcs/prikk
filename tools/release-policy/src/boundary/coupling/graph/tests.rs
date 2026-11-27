@@ -992,3 +992,21 @@ fn scc_control5_a_dag_of_subtrees_reports_nothing() {
         graph.subtree_cycles()
     );
 }
+
+/// 0.59.0 H2d: `mod` inside a longer word is not a module declaration. The text `chmod u+wx` (in a message) read as `mod u` and the walk went looking for `u.rs`.
+/// **Red control:** without the left-boundary check in `find_mod_declarations`, the walk fails on the missing `u.rs`.
+#[test]
+fn a_mod_inside_a_longer_word_is_not_a_declaration() {
+    let root = std::env::temp_dir().join(format!("graph-chmod-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    write_module(
+        &root,
+        "lib.rs",
+        "pub fn hint() -> &'static str { \"fix it with `chmod u+wx dir`\" }\npub mod real;\n",
+    );
+    write_module(&root, "real.rs", "pub fn x() {}\n");
+    let modules = walk_root_for_tests(&root).expect("the walk does not look for a module `u`");
+    assert!(modules.contains("real"), "{modules:?}");
+    assert!(!modules.contains("u"), "{modules:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}

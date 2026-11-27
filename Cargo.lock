@@ -996,6 +996,7 @@ dependencies = [
  "prikk-replay",
  "prikk-store",
  "prikk-test-support",
+ "rustix",
 ]
 
 [[package]]

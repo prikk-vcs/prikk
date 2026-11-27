@@ -302,7 +302,11 @@ fn find_mod_declarations(comment_blanked: &str) -> Vec<ModDecl> {
         // underlying `&str` at a non-boundary panics, e.g. when scanning has walked byte-by-byte
         // through a multi-byte character inside an ordinary, non-comment string literal such as
         // an em dash in an error message).
-        if bytes.get(i..).is_some_and(|rest| rest.starts_with(b"mod ")) {
+        // A `mod` keyword starts a token: the byte before it is not part of an identifier. Without this, the `mod u` inside the text `chmod u+wx` (a string, an
+        // identifier) read as a declaration of a module `u` and the walk failed on a file that does not exist (0.59.0 H2d).
+        let starts_a_token = i == 0
+            || !(byte_at(bytes, i - 1).is_ascii_alphanumeric() || byte_at(bytes, i - 1) == b'_');
+        if starts_a_token && bytes.get(i..).is_some_and(|rest| rest.starts_with(b"mod ")) {
             let name_start = i + 4;
             let mut name_end = name_start;
             while name_end < bytes.len()
