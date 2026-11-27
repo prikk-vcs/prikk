@@ -81,3 +81,18 @@ P1's: "crash points swept, a batch writer that follows the store, and a writer t
 **Then P2's items 1–3, on the commit that holds item 0.** Report both in `release-0.59.0-prep-P2-report.md`. **The binary for every P2
 measurement is built from that commit.**
 
+**P2 ACCEPTED 2026-11-27** (`93ec4624`, `f80c31a9`, `a4b34104`; review `release-0.59.0-prep-P2-review-v1`). **P3 as written, with these
+CHANGELOG edits first (the review's rulings 1, 3, 4, 7):**
+1. **`### Security` states the release:**
+   - growing 3/9/15/25/31 MiB; fixed 10k 23 MiB; fixed 10k CPU 60 → 6 s;
+   - one clause for what the memory fix alone did (181 → 41 MiB growing);
+   - one sentence at the head of the Changed entries: their figures are steps, each against the commit before it.
+2. **RH1: drop "checkout path"** from the CHANGELOG sentence and the comment at `release.yml:65`. The `rust-src` clause stays only as RH1's
+   measurement, said so.
+3. **`sync accept`: 4.04 → 3.06** (the published 0.58.0 binary).
+4. **The unreached bullet made exact:** the warning is replaced by the in-flight finding, and the count line can still show objects a
+   running writer had not reached.
+
+**The memory ratio is accepted as unmoved** (1.944 against the same-day 1.927). **The CHANGELOG date is given by the architect at the
+cut:** put `2026-11-27` if P3 lands today, and the architect re-dates in the last commit if the tag falls later.
+
