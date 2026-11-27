@@ -18,6 +18,8 @@ prikk sync tags
 prikk sync adopt-tag <name>
 ```
 
+**Taking another person's work into your own repository** (an author proposes, you review and seal it under your key) is its own guide, with every command run: [An Author Proposes, the Receiving Maintainer Seals](propose-work.md). **Never open someone else's repository with a command that reads your maintainer seed.**
+
 ## The loop, as a person actually runs it
 
 Two repositories, A (has content B wants) and B (wants it), moving files by whatever means the two

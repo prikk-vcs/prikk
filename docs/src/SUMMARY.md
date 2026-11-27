@@ -35,6 +35,7 @@
 - [Merge Plan](guide/merge-plan.md)
 - [Merge](guide/merge.md)
 - [Sync](guide/sync.md)
+- [An Author Proposes, the Receiving Maintainer Seals](guide/propose-work.md)
 - [Backup and Restore](guide/backup-restore.md)
 
 # Reference
