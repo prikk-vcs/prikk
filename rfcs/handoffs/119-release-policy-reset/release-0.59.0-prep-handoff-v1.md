@@ -60,3 +60,24 @@ As in 0.58.0's prep:
 - crates.io;
 - **the consumer release letters** (the owner sends them after the release; each claim is measured on the release binary first);
 - **the five held RFC 172 and RFC 174 letters:** they are not release letters, and they go on the owner's word.
+
+**P1 ACCEPTED 2026-11-27** (`0587df84`, `c17c60be`, `af419c9a`, `dd2e9628`; review `release-0.59.0-prep-P1-review-v1`). **The theme is
+P1's: "crash points swept, a batch writer that follows the store, and a writer that waits its turn".**
+
+## P2 item 0, FIRST: three small changes, one commit each, then the gates (60 min, stop at 90)
+
+1. **A mis-set `PRIKK_LOCK_WAIT_SECONDS` never makes prikk wait** (the review's defect section).
+   - A value that is not a whole number from 0 to 300 refuses at once, when a wait would begin. It keeps the lock-conflict sentence,
+     with the suffix `(not waited: PRIKK_LOCK_WAIT_SECONDS must be a whole number of seconds from 0 to 300, got "<value>")`.
+   - **The stderr line after 1 s names the variable:** `(PRIKK_LOCK_WAIT_SECONDS sets this)`.
+   - **Tests:** `off`, `0.5`, `-1`, empty and `301` refused at once with the suffix; `0` with no suffix; `7` waits; a command meeting no
+     holder is unaffected.
+   - **Red control:** the old fallback.
+   - **CHANGELOG:** fold into the lock-wait entries (the feature is unreleased, so not `### Fixed`); correct the Upgrading sentence.
+   - **Docs:** `concurrency-locking.md`, `commands.md`.
+2. **`RefPublicationIssue` becomes `#[non_exhaustive]`.** The Upgrading sentence says both the literal break and the attribute.
+3. **A short `### Added` entry for `doctor --remove-ref-candidates`,** pointing to its Fixed entry.
+
+**Then P2's items 1–3, on the commit that holds item 0.** Report both in `release-0.59.0-prep-P2-report.md`. **The binary for every P2
+measurement is built from that commit.**
+
