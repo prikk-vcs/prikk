@@ -1,4 +1,4 @@
-#![allow(clippy::indexing_slicing)]
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
 
 use super::{
     Body, HolderFacts, LivenessReason, PidLiveness, Probe, ProcessRead, Record, SystemProbe,
@@ -655,5 +655,193 @@ mod children {
         let _ = child.wait();
         assert_eq!(reason, LivenessReason::ProcessGone);
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 H2d: a holder reaped between the existence check and the reads is `Gone`, never "a field could not be read".
+
+mod holder_exiting_at_the_look {
+    use super::{
+        FakeMachine, LivenessReason, Probe, ProcessRead, Record, SystemProbe, judge, linux_facts,
+    };
+    use crate::lock_holder::settle;
+
+    #[test]
+    fn a_read_that_could_not_say_is_asked_again_whether_the_pid_exists() {
+        assert_eq!(
+            settle(ProcessRead::Alive(None), || Some(false)),
+            ProcessRead::Gone,
+            "gone now: gone"
+        );
+        assert_eq!(
+            settle(ProcessRead::Alive(None), || Some(true)),
+            ProcessRead::Alive(None),
+            "a live pid with an unreadable field stays so"
+        );
+        assert_eq!(
+            settle(ProcessRead::Alive(None), || None),
+            ProcessRead::Alive(None),
+            "the OS would not say: not called gone"
+        );
+        assert_eq!(
+            settle(ProcessRead::Alive(Some("5".into())), || Some(false)),
+            ProcessRead::Alive(Some("5".into())),
+            "a start time already read is not revisited"
+        );
+        assert_eq!(settle(ProcessRead::Gone, || Some(true)), ProcessRead::Gone);
+        assert_eq!(
+            settle(ProcessRead::Unreadable, || Some(false)),
+            ProcessRead::Unreadable
+        );
+    }
+
+    /// Through the judge: an `Alive(None)` whose pid is then gone reads `ProcessGone`, and one that is still there reads `FieldUnreadable`.
+    #[test]
+    fn the_judge_says_gone_for_a_holder_that_was_exiting_and_unreadable_for_one_that_is_not() {
+        let record = Record {
+            pid: 4242,
+            kind: "active".to_string(),
+            facts: linux_facts(),
+        };
+        let machine = |exists: Option<bool>| FakeMachine {
+            ours: linux_facts(),
+            process: settle_for(exists),
+        };
+        fn settle_for(exists: Option<bool>) -> ProcessRead {
+            crate::lock_holder::settle(ProcessRead::Alive(None), || exists)
+        }
+        assert_eq!(
+            judge(&record, &machine(Some(false))),
+            LivenessReason::ProcessGone
+        );
+        assert_eq!(
+            judge(&record, &machine(Some(true))),
+            LivenessReason::FieldUnreadable
+        );
+        let _ = (&SystemProbe as &dyn Probe).ours();
+    }
+
+    #[cfg(target_os = "linux")]
+    mod linux {
+        use std::io::{Error, ErrorKind, Result};
+
+        use super::ProcessRead;
+        use crate::lock_holder::platform::read_process_with;
+
+        fn esrch() -> Error {
+            Error::from_raw_os_error(rustix::io::Errno::SRCH.raw_os_error())
+        }
+        const LIVE: &str = "4242 (prikk) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 777 1000 100 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+        const ZOMBIE: &str = "4242 (prikk) Z 1 4242 4242 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 777 1000 100 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+        fn read(stat: Result<String>, status: Result<String>) -> ProcessRead {
+            read_process_with(
+                4242,
+                |_| Some(true),
+                move |_| match &stat {
+                    Ok(text) => Ok(text.clone()),
+                    Err(error) => Err(Error::from_raw_os_error(error.raw_os_error().unwrap_or(0))),
+                },
+                move |_| match &status {
+                    Ok(text) => Ok(text.clone()),
+                    Err(error) => Err(Error::from_raw_os_error(error.raw_os_error().unwrap_or(0))),
+                },
+            )
+        }
+
+        /// **Window 1: `stat` fails with `ESRCH`** (the holder is reaped as the file is read). It used to be `Alive(None)`.
+        #[test]
+        fn a_stat_read_that_fails_with_esrch_is_gone() {
+            assert_eq!(read(Err(esrch()), Ok(String::new())), ProcessRead::Gone);
+        }
+
+        #[test]
+        fn a_stat_file_that_is_gone_is_gone() {
+            let not_found = Error::from_raw_os_error(2);
+            assert_eq!(not_found.kind(), ErrorKind::NotFound);
+            assert_eq!(read(Err(not_found), Ok(String::new())), ProcessRead::Gone);
+        }
+
+        /// **Window 2: a zombie whose `status` is no longer there.** It used to be `Alive(None)` (the thread count unknown).
+        #[test]
+        fn a_zombie_whose_status_has_gone_is_gone() {
+            assert_eq!(
+                read(Ok(ZOMBIE.to_string()), Err(esrch())),
+                ProcessRead::Gone
+            );
+            assert_eq!(
+                read(Ok(ZOMBIE.to_string()), Err(Error::from_raw_os_error(2))),
+                ProcessRead::Gone
+            );
+        }
+
+        /// **A real unreadable field on a live pid stays unreadable:** a `stat` the process may not read, a `stat` that is not a stat, a zombie whose status
+        /// is unreadable for another reason (its thread count is then unknown, and a zombie with threads is alive).
+        #[test]
+        fn a_real_unreadable_field_on_a_live_pid_stays_unreadable() {
+            assert_eq!(
+                read(Err(Error::from_raw_os_error(13)), Ok(String::new())),
+                ProcessRead::Alive(None),
+                "EACCES"
+            );
+            assert_eq!(
+                read(Ok("not a stat line".to_string()), Ok(String::new())),
+                ProcessRead::Alive(None)
+            );
+            assert_eq!(
+                read(Ok(ZOMBIE.to_string()), Err(Error::from_raw_os_error(13))),
+                ProcessRead::Alive(None)
+            );
+            assert_eq!(
+                read(Ok(LIVE.to_string()), Err(Error::from_raw_os_error(13))),
+                ProcessRead::Alive(Some("777".to_string()))
+            );
+        }
+
+        /// **Against the real kernel** (as `proc-reap-race.py`): 300 children, each killed and reaped while another thread judges it in a loop. **The answer is
+        /// never `Alive(None)`** (a start time while it runs, `Gone` once it is reaped). Bounded by count, not time: each reader makes at most 200,000 reads.
+        /// Red when the `ESRCH` handling and the re-check are removed: the window is hit in about 290 of 400 children.
+        #[test]
+        fn a_child_killed_and_reaped_while_it_is_judged_is_never_unreadable() {
+            use std::process::Command;
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let mut unreadable = 0_usize;
+            for _ in 0..300 {
+                let mut child = Command::new("sleep")
+                    .arg("60")
+                    .spawn()
+                    .expect("spawn sleep");
+                let pid = child.id();
+                let stop = Arc::new(AtomicBool::new(false));
+                let reader = {
+                    let stop = Arc::clone(&stop);
+                    std::thread::spawn(move || {
+                        let mut bad = 0_usize;
+                        for _ in 0..200_000 {
+                            let seen = (&crate::lock_holder::SystemProbe
+                                as &dyn crate::lock_holder::Probe)
+                                .read(pid);
+                            if seen == ProcessRead::Alive(None) {
+                                bad += 1;
+                            }
+                            if seen == ProcessRead::Gone || stop.load(Ordering::Relaxed) {
+                                break;
+                            }
+                        }
+                        bad
+                    })
+                };
+                std::thread::yield_now();
+                child.kill().expect("kill");
+                child.wait().expect("reap");
+                stop.store(true, Ordering::Relaxed);
+                unreadable += reader.join().expect("reader");
+            }
+            assert_eq!(
+                unreadable, 0,
+                "a holder exiting at the moment of the look was judged unreadable {unreadable} times"
+            );
+        }
     }
 }

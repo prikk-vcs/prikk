@@ -404,7 +404,20 @@ impl Probe for SystemProbe {
         own_facts()
     }
     fn read(&self, pid: u32) -> ProcessRead {
-        platform::read_process(pid)
+        settle(platform::read_process(pid), || pid_exists(pid))
+    }
+}
+
+/// A read that could not say (`Alive(None)`: a field unreadable) is **asked again of the one thing that cannot be mistaken** (0.59.0 H2d): does the pid still
+/// exist? A holder that is exiting at the moment of the look is reaped between the existence check and the reads that follow (`/proc/<pid>/stat` fails with
+/// `ESRCH`; a zombie's `status` is gone), and every platform's reader can answer "cannot read it" for that process. If the pid is now gone, the holder is
+/// gone. Anything else is left as it was: a live pid whose field is really unreadable stays `Alive(None)`, and a start time already read is not revisited.
+/// Platform-neutral on purpose: Linux's reader also answers `Gone` for the two Linux windows itself, and macOS's and Windows' `Indeterminate` (an error that is
+/// neither "no such process" nor a zombie) reaches `Alive(None)` and is settled here.
+fn settle(read: ProcessRead, exists_now: impl FnOnce() -> Option<bool>) -> ProcessRead {
+    match read {
+        ProcessRead::Alive(None) if exists_now() == Some(false) => ProcessRead::Gone,
+        other => other,
     }
 }
 
@@ -603,19 +616,45 @@ mod platform {
     }
 
     pub(super) fn read_process(pid: u32) -> ProcessRead {
-        match super::pid_exists(pid) {
+        read_process_with(
+            pid,
+            super::pid_exists,
+            |pid| std::fs::read_to_string(format!("/proc/{pid}/stat")),
+            |pid| std::fs::read_to_string(format!("/proc/{pid}/status")),
+        )
+    }
+
+    /// The error a `/proc/<pid>/...` read gives for a process that no longer exists: the file is gone, or the kernel says `ESRCH` (a process reaped while the
+    /// file was open or being read).
+    fn process_is_gone(error: &std::io::Error) -> bool {
+        error.kind() == std::io::ErrorKind::NotFound
+            || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
+    }
+
+    /// [`read_process`] with its three reads injected, so each window of a process exiting between them is a test. **A read that fails because the process is
+    /// gone is `Gone`** (0.59.0 H2d: `stat` with `ESRCH`, or a zombie whose `status` is no longer there); a read that fails for any other reason is a field
+    /// that could not be read.
+    pub(super) fn read_process_with(
+        pid: u32,
+        exists: impl Fn(u32) -> Option<bool>,
+        stat: impl Fn(u32) -> std::io::Result<String>,
+        status: impl Fn(u32) -> std::io::Result<String>,
+    ) -> ProcessRead {
+        match exists(pid) {
             Some(false) => return ProcessRead::Gone,
             None => return ProcessRead::Unreadable,
             Some(true) => {}
         }
-        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        match stat(pid) {
             Ok(text) => {
-                let threads = std::fs::read_to_string(format!("/proc/{pid}/status"))
-                    .ok()
-                    .and_then(|status| parse_threads(&status));
+                let threads = match status(pid) {
+                    Ok(status) => parse_threads(&status),
+                    Err(error) if process_is_gone(&error) => return ProcessRead::Gone,
+                    Err(_) => None,
+                };
                 classify_stat(&text, threads)
             }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => ProcessRead::Gone,
+            Err(error) if process_is_gone(&error) => ProcessRead::Gone,
             Err(_) => ProcessRead::Alive(None),
         }
     }
