@@ -111,8 +111,8 @@ prikk --version
 **A command that writes waits a few seconds for a lock whose holder is running** (0.59.0). When it finds a lock held by a process that
 appears to be running, or a ref publication in flight, it waits for it, up to 5 seconds, and says on stderr after the first second what it
 waits for; a holder that does not appear to be running, or cannot be judged, is refused at once, as it always was. `PRIKK_LOCK_WAIT_SECONDS`
-sets the bound in whole seconds (`0` refuses at once; the longest value taken is 300; a value that is not a whole number of seconds is the
-default). `verify`, `status`, `doctor`, `unlock` and `compact` never wait. A refusal after a wait ends `(waited 5 s: pid N still appears to be
+sets the bound in whole seconds (`0` refuses at once; 300 is the longest; **a value that is not a whole number from 0 to 300 never makes prikk
+wait**: the refusal comes at once and ends `(not waited: PRIKK_LOCK_WAIT_SECONDS must be a whole number of seconds from 0 to 300, got "<value>")`). `verify`, `status`, `doctor`, `unlock` and `compact` never wait. A refusal after a wait ends `(waited 5 s: pid N still appears to be
 running)`; exit codes, finding ids and stdout are unchanged. See [concurrency and locking](./concurrency-locking.md#waiting-for-a-holder-that-is-running).
 
 **`uncommit <patch-id>` takes back your newest unsealed commit.** It is the inverse of `commit` for work that has not been

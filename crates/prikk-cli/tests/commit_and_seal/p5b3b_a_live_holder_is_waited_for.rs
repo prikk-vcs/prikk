@@ -89,7 +89,7 @@ fn a_command_waits_for_a_lock_whose_holder_finishes() {
     assert!(waited < Duration::from_secs(4), "{waited:?}");
     assert!(
         stderr(&output).contains(&format!(
-            "waiting for the active lock held by pid {pid} (it appears to be running); giving up after 5 s"
+            "waiting for the active lock held by pid {pid} (it appears to be running); giving up after 5 s (PRIKK_LOCK_WAIT_SECONDS sets this)"
         )),
         "the one line after a second: {}",
         stderr(&output)
@@ -311,7 +311,7 @@ fn a_writer_waits_for_a_publication_in_flight_and_goes_on_when_it_finishes() {
     support::ok(&output, "the writer that waited");
     assert!(
         stderr(&output).contains(&format!(
-            "waiting for another command to finish publishing tags/t1 (pid {pid}, from its lock); giving up after 10 s"
+            "waiting for another command to finish publishing tags/t1 (pid {pid}, from its lock); giving up after 10 s (PRIKK_LOCK_WAIT_SECONDS sets this)"
         )),
         "{}",
         stderr(&output)
@@ -417,4 +417,119 @@ fn verify_status_doctor_and_unlock_never_wait() {
     }
     stop(holder);
     publisher.kill();
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// 0.59.0 P2 item 0: a mis-set `PRIKK_LOCK_WAIT_SECONDS` never makes prikk wait.
+
+const MISSET: [&str; 5] = ["off", "0.5", "-1", "", "301"];
+
+fn suffix_for(value: &str) -> String {
+    format!(
+        "(not waited: PRIKK_LOCK_WAIT_SECONDS must be a whole number of seconds from 0 to 300, got {value:?})"
+    )
+}
+
+/// **A value that is not a whole number from 0 to 300 refuses at once, with today's sentence and a suffix that names the variable and the value;**
+/// `off`, `0.5`, `-1`, an empty value and `301`. Perturb: the old fallback (the value read as 5): each waits five seconds, and the elapsed time and
+/// the missing suffix are red.
+#[test]
+fn a_mis_set_wait_variable_refuses_at_once_and_names_the_variable() {
+    for value in MISSET {
+        let repo = repository("p2-misset-lock");
+        let (holder, body) = live_holder("active");
+        std::fs::write(active_lock(&repo), body).unwrap();
+        let started = Instant::now();
+        let waiter = commit_waiting(&repo, value, "d");
+        let (output, _) = finish(waiter);
+        let took = started.elapsed();
+        stop(holder);
+        let text = stderr(&output);
+        assert_eq!(output.status.code(), Some(1), "{value:?}: {text}");
+        assert!(
+            took < Duration::from_millis(2_500),
+            "{value:?}: refused at once, took {took:?}"
+        );
+        assert!(
+            text.contains("lock conflict: active lock already exists: "),
+            "{value:?}: today's sentence: {text}"
+        );
+        assert!(
+            text.trim_end().ends_with(&suffix_for(value)),
+            "{value:?}: the suffix: {text}"
+        );
+        assert!(
+            !text.contains("waiting for"),
+            "{value:?}: nothing was waited for: {text}"
+        );
+    }
+}
+
+/// **A mis-set value in front of a publication in flight** is refused at once the same way (the in-flight refusal, then the suffix).
+#[test]
+fn a_mis_set_wait_variable_refuses_a_publication_in_flight_at_once() {
+    let (repo, publisher) = in_flight_tag("p2-misset-in-flight", false);
+    let started = Instant::now();
+    let second = support::prikk(&repo)
+        .env("PRIKK_LOCK_WAIT_SECONDS", "off")
+        .env("PRIKK_MAINTAINER_KEY_ID", support::MAINTAINER_KEY_ID)
+        .env(
+            "PRIKK_MAINTAINER_SEED_FILE",
+            support::seed_file(&support::hex(&support::MAINTAINER_SEED)),
+        )
+        .args(["tag", "create", "tags/t2", "--target", "heads/main"])
+        .output()
+        .unwrap();
+    let took = started.elapsed();
+    let text = stderr(&second);
+    let first = publisher.release();
+    support::ok(&first, "the publisher");
+    assert_eq!(second.status.code(), Some(1), "{text}");
+    assert!(took < Duration::from_millis(2_500), "{took:?}");
+    assert!(
+        text.contains("another command is publishing tags/t1"),
+        "{text}"
+    );
+    assert!(
+        text.trim_end().ends_with(&suffix_for("off")),
+        "the suffix: {text}"
+    );
+}
+
+/// **`0` refuses at once with no suffix (today), and `7` waits.** Perturb: `0` given the suffix; `7` refused at once: red.
+#[test]
+fn zero_refuses_with_no_suffix_and_seven_waits() {
+    let repo = repository("p2-zero-seven");
+    let (holder, body) = live_holder("active");
+    let lock = active_lock(&repo);
+    std::fs::write(&lock, body).unwrap();
+    let (output, _) = finish(commit_waiting(&repo, "0", "d"));
+    let text = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(!text.contains("not waited"), "no suffix: {text}");
+    assert!(!text.contains("waited"), "no words at all: {text}");
+    let started = Instant::now();
+    let waiter = commit_waiting(&repo, "7", "e");
+    std::thread::sleep(Duration::from_millis(1_400));
+    std::fs::remove_file(&lock).unwrap();
+    let (output, _) = finish(waiter);
+    let waited = started.elapsed();
+    stop(holder);
+    support::ok(&output, "the commit that waited with 7");
+    assert!(waited >= Duration::from_millis(1_300), "{waited:?}");
+}
+
+/// **A command that meets no holder is unaffected by a mis-set value:** it succeeds and prints nothing about the variable.
+#[test]
+fn a_mis_set_wait_variable_costs_a_command_that_meets_no_holder_nothing() {
+    for value in MISSET {
+        let repo = repository("p2-misset-free");
+        let (output, _) = finish(commit_waiting(&repo, value, "d"));
+        support::ok(&output, &format!("a commit with the variable {value:?}"));
+        assert!(
+            !stderr(&output).contains("PRIKK_LOCK_WAIT_SECONDS"),
+            "{value:?}: {}",
+            stderr(&output)
+        );
+    }
 }

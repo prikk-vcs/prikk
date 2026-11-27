@@ -331,13 +331,18 @@ already held, as it always did.
   as before, naming `prikk unlock`. A holder that was running when the wait began and is gone when it
   ends is refused at that moment, not at the bound.
 - **The bound: 5 seconds a stop**, one lock or one in-flight publication at a time, set by the
-  environment variable `PRIKK_LOCK_WAIT_SECONDS` (whole seconds). `0` is the old behaviour, refusing at once. The
-  longest value taken is **300** (five minutes); a larger number is 300. A value that is not a whole
-  number of seconds is the default, 5. There is no flag.
+  environment variable `PRIKK_LOCK_WAIT_SECONDS` (whole seconds, 0 to 300). `0` is the old behaviour,
+  refusing at once; **300** (five minutes) is the longest. **A value that is not a whole number of seconds
+  from 0 to 300 never makes prikk wait** (`off`, `false`, `0.5`, `-1`, an empty value, `301`): a stop
+  that meets a holder that appears to be running refuses at once, with today's sentence and a suffix
+  that names the variable and the value, for example `(not waited: PRIKK_LOCK_WAIT_SECONDS must be a
+  whole number of seconds from 0 to 300, got "0.5")`. The variable is read only when a wait would begin,
+  so a stray value costs a command that meets no holder nothing. There is no flag.
 - **What is printed.** Nothing to stdout. After one second of waiting, **one line to stderr**:
-  `waiting for the active lock held by pid 1234 (it appears to be running); giving up after 5 s` (or,
-  for a publication, `waiting for another command to finish publishing tags/t1 (pid 1234, from its lock);
-  giving up after 5 s`). When the wait ends in a refusal, today's sentence stands and has a suffix:
+  `waiting for the active lock held by pid 1234 (it appears to be running); giving up after 5 s
+  (PRIKK_LOCK_WAIT_SECONDS sets this)` (or, for a publication, `waiting for another command to finish
+  publishing tags/t1 (pid 1234, from its lock); giving up after 5 s (PRIKK_LOCK_WAIT_SECONDS sets this)`).
+  The line names the variable because that is where a user meets the wait. When the wait ends in a refusal, today's sentence stands and has a suffix:
   `(waited 5 s: pid 1234 still appears to be running)`. Exit codes, finding ids and stdout do not
   change.
 - **Who never waits.** `verify`, `status`, `doctor` (including its repair verbs), `unlock` and `compact`

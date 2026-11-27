@@ -214,7 +214,8 @@ pub(crate) fn wait_while_in_flight(
     check_ref_log_tail: bool,
     mut replay_out: Option<&mut Option<crate::wal::WalReplay>>,
 ) -> Result<()> {
-    let bound = crate::lock::lock_wait_bound();
+    let setting = crate::lock::lock_wait_setting();
+    let bound = setting.bound();
     let mut waiting = crate::lock::Waiting::new();
     let mut pause = std::time::Duration::from_millis(5);
     loop {
@@ -231,11 +232,18 @@ pub(crate) fn wait_while_in_flight(
         let Some(text) = in_flight_text(&error) else {
             return Err(error);
         };
-        if bound.is_zero()
+        if setting == crate::lock::LockWait::Off
             || names_this_process(text)
             || crate::lock::this_thread_holds_at_or_after(crate::lock::Rank::Ref)
         {
             return Err(error);
+        }
+        // A wait would begin here: a mis-set variable refuses at once and says why.
+        if let crate::lock::LockWait::Misset(got) = &setting {
+            return Err(prikk_error::PrikkError::Precondition(format!(
+                "{text}{}",
+                crate::lock::not_waited_suffix(got)
+            )));
         }
         waiting.begin();
         if waiting.expired(bound) {

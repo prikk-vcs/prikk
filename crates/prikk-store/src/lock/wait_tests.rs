@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use super::test_hooks::with_incomplete_grace;
 use super::{
     DEFAULT_LOCK_WAIT_SECONDS, MAX_LOCK_WAIT_SECONDS, Rank, held_ranks_of_this_thread,
-    parse_lock_wait, test_hooks, with_lock_wait,
+    parse_lock_wait, test_hooks, with_lock_wait, with_lock_wait_text,
 };
 use crate::foundation::layout::LockableContainer;
 use crate::lock_holder::{body_naming_another_running_process, own_facts, render_body};
@@ -55,33 +55,34 @@ fn conflict_text<T>(result: prikk_error::Result<T>) -> String {
 // ---------------------------------------------------------------------------------------------------------------------------------------------
 // The bound, and who sets it.
 
-/// **The bound is 5 seconds a stop; `PRIKK_LOCK_WAIT_SECONDS` sets it; `0` is off; the ceiling holds; a value that is not a whole number of seconds
-/// is the default.** Perturb: the default 5 changed, the ceiling dropped, or `0` read as the default: each is red.
+/// **The bound is 5 seconds a stop; `PRIKK_LOCK_WAIT_SECONDS` sets it; `0` is off; a whole number from 0 to 300 is that many seconds; anything else
+/// is an error that carries the text as written, never the default.** Perturb: the default 5 changed, the ceiling dropped or clamped, `0` read as
+/// the default, or an unreadable value read as the default (the 0.59.0 P2 defect): each is red.
 #[test]
-fn the_bound_is_five_seconds_zero_is_off_and_the_ceiling_holds() {
+fn the_bound_is_five_seconds_zero_is_off_and_anything_else_is_refused() {
     assert_eq!(DEFAULT_LOCK_WAIT_SECONDS, 5);
-    assert_eq!(parse_lock_wait(None), Duration::from_secs(5));
-    assert_eq!(parse_lock_wait(Some("0")), Duration::ZERO);
-    assert_eq!(parse_lock_wait(Some("1")), Duration::from_secs(1));
-    assert_eq!(parse_lock_wait(Some(" 12 ")), Duration::from_secs(12));
+    assert_eq!(parse_lock_wait(None), Ok(Duration::from_secs(5)));
+    assert_eq!(parse_lock_wait(Some("0")), Ok(Duration::ZERO));
+    assert_eq!(parse_lock_wait(Some("1")), Ok(Duration::from_secs(1)));
+    assert_eq!(parse_lock_wait(Some(" 12 ")), Ok(Duration::from_secs(12)));
     assert_eq!(
         parse_lock_wait(Some("300")),
-        Duration::from_secs(MAX_LOCK_WAIT_SECONDS)
+        Ok(Duration::from_secs(MAX_LOCK_WAIT_SECONDS))
     );
-    assert_eq!(
-        parse_lock_wait(Some("301")),
-        Duration::from_secs(MAX_LOCK_WAIT_SECONDS)
-    );
-    assert_eq!(
-        parse_lock_wait(Some("99999999999999999999")),
-        Duration::from_secs(5),
-        "a number too large for the type is not a number of seconds"
-    );
-    for unreadable in ["", "five", "-1", "1.5", "1s"] {
+    for (text, quoted) in [
+        ("301", "\"301\""),
+        ("99999999999999999999", "\"99999999999999999999\""),
+        ("", "\"\""),
+        ("off", "\"off\""),
+        ("five", "\"five\""),
+        ("-1", "\"-1\""),
+        ("0.5", "\"0.5\""),
+        ("1s", "\"1s\""),
+    ] {
         assert_eq!(
-            parse_lock_wait(Some(unreadable)),
-            Duration::from_secs(5),
-            "{unreadable:?} is the default"
+            parse_lock_wait(Some(text)),
+            Err(quoted.to_string()),
+            "{text:?} is not a whole number of seconds from 0 to 300"
         );
     }
     assert_eq!(MAX_LOCK_WAIT_SECONDS, 300);
@@ -233,6 +234,93 @@ fn a_bound_of_zero_refuses_at_once_with_no_added_words() {
     let text = conflict_text(refused);
     assert!(waited < Duration::from_millis(200), "{waited:?}");
     assert!(text.ends_with("is confirmed gone"), "no suffix: {text}");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **A mis-set variable never makes a stop wait** (0.59.0 P2): a stop that meets a holder that appears to be running refuses at once, with today's
+/// sentence and `(not waited: PRIKK_LOCK_WAIT_SECONDS must be a whole number of seconds from 0 to 300, got "<value>")`. Perturb: the old fallback
+/// (an unreadable value is 5): each of these waits five seconds and is red.
+#[test]
+fn a_mis_set_variable_refuses_at_once_and_names_the_variable() {
+    for text in ["off", "0.5", "-1", "", "301"] {
+        let (layout, root) = repository("p2-misset");
+        let (child, body) = body_naming_another_running_process("active");
+        put(&active_path(&layout), &body);
+        let started = Instant::now();
+        let refused =
+            with_lock_wait_text(text, || ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME));
+        let waited = started.elapsed();
+        stop(child);
+        let refusal = conflict_text(refused);
+        assert!(
+            waited < Duration::from_millis(500),
+            "{text:?}: refused at once, took {waited:?}"
+        );
+        assert!(
+            refusal.contains("lock already exists: ") && refusal.contains("is confirmed gone"),
+            "{text:?}: today's sentence stands: {refusal}"
+        );
+        assert!(
+            refusal.ends_with(&format!(
+                " (not waited: PRIKK_LOCK_WAIT_SECONDS must be a whole number of seconds from 0 to 300, got {text:?})"
+            )),
+            "{text:?}: the suffix names the variable and the value: {refusal}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+/// **`0` is off with no suffix, and `7` waits.** Perturb: `0` given the suffix, or `7` refused at once: red.
+#[test]
+fn zero_has_no_suffix_and_seven_waits() {
+    let (layout, root) = repository("p2-zero-seven");
+    let (child, body) = body_naming_another_running_process("active");
+    put(&active_path(&layout), &body);
+    let started = Instant::now();
+    let zero = conflict_text(with_lock_wait_text("0", || {
+        ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+    }));
+    assert!(started.elapsed() < Duration::from_millis(200));
+    assert!(zero.ends_with("is confirmed gone"), "no suffix: {zero}");
+    // `7` waits: the holder's lock is removed after 300 ms and the acquire goes through.
+    let path = active_path(&layout);
+    let remover = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        fs::remove_file(path).expect("release");
+    });
+    let started = Instant::now();
+    let taken = with_lock_wait_text("7", || ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME));
+    let waited = started.elapsed();
+    remover.join().expect("remover");
+    stop(child);
+    assert!(taken.is_ok(), "7 waits for the holder to finish");
+    assert!(
+        waited >= Duration::from_millis(250),
+        "it waited: {waited:?}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **A mis-set variable costs a stop that meets no holder nothing**, and a holder that is not running is refused with no suffix (nothing would have
+/// waited). Perturb: the variable read before a holder is judged: the first is red.
+#[test]
+fn a_mis_set_variable_costs_nothing_when_no_wait_would_begin() {
+    let (layout, root) = repository("p2-misset-free");
+    let free = with_lock_wait_text("off", || ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME));
+    assert!(free.is_ok(), "no holder: the lock is taken");
+    drop(free);
+    // A holder whose process is gone: refused at once with today's sentence and no suffix, as with any value.
+    let (child, body) = body_naming_another_running_process("active");
+    let pid = child.id();
+    stop(child);
+    put(&active_path(&layout), &body);
+    let refused = conflict_text(with_lock_wait_text("off", || {
+        ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+    }));
+    assert!(
+        !refused.contains("not waited"),
+        "pid {pid} is gone, nothing would have waited: {refused}"
+    );
     let _ = fs::remove_dir_all(root);
 }
 

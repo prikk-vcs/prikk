@@ -481,17 +481,55 @@ pub const MAX_LOCK_WAIT_SECONDS: u64 = 300;
 /// The environment variable that sets the bound, in whole seconds. `0` is the old behaviour: refuse at once.
 pub const LOCK_WAIT_ENV: &str = "PRIKK_LOCK_WAIT_SECONDS";
 
-/// How long a stop may wait, from the variable's text: absent or not a whole number of seconds is the default, `0` is off, and anything
-/// above the ceiling is the ceiling.
-#[must_use]
-pub fn parse_lock_wait(value: Option<&str>) -> Duration {
-    let seconds = match value.map(str::trim) {
-        None => DEFAULT_LOCK_WAIT_SECONDS,
-        Some(text) => text
-            .parse::<u64>()
-            .map_or(DEFAULT_LOCK_WAIT_SECONDS, |n| n.min(MAX_LOCK_WAIT_SECONDS)),
+/// How long a stop may wait, from the variable's text: absent is the default, `0` is off, and a whole number of seconds up to the ceiling is that
+/// many. **Anything else is an error carrying the text as it was written** (quoted), because a value that means something other than what its writer
+/// meant (`off`, `0.5`, `-1`, an empty value, `301`) is not read as the default: a stop that would have waited refuses at once and says so
+/// ([`not_waited_suffix`]). The ceiling is a rule, not a clamp.
+pub fn parse_lock_wait(value: Option<&str>) -> std::result::Result<Duration, String> {
+    let Some(text) = value else {
+        return Ok(Duration::from_secs(DEFAULT_LOCK_WAIT_SECONDS));
     };
-    Duration::from_secs(seconds)
+    match text.trim().parse::<u64>() {
+        Ok(seconds) if seconds <= MAX_LOCK_WAIT_SECONDS => Ok(Duration::from_secs(seconds)),
+        _ => Err(format!("{text:?}")),
+    }
+}
+
+/// What `PRIKK_LOCK_WAIT_SECONDS` (and whether this process may wait at all) asks of a stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LockWait {
+    /// Refuse at once: the variable is `0`, or this process never waits (`refuse_without_waiting`).
+    Off,
+    /// Wait for a holder that appears to be running, up to this long.
+    For(Duration),
+    /// The variable is set to something that is not a whole number of seconds from 0 to 300 (the text as written, quoted). A stop that **would
+    /// have waited** refuses at once and names the variable; a stop that would not have waited is unaffected.
+    Misset(String),
+}
+
+impl LockWait {
+    /// The bound a wait runs to (`ZERO` for [`LockWait::Off`] and [`LockWait::Misset`], neither of which waits).
+    pub(crate) fn bound(&self) -> Duration {
+        match self {
+            Self::For(bound) => *bound,
+            Self::Off | Self::Misset(_) => Duration::ZERO,
+        }
+    }
+
+    fn from_text(value: Option<&str>) -> Self {
+        match parse_lock_wait(value) {
+            Ok(bound) if bound.is_zero() => Self::Off,
+            Ok(bound) => Self::For(bound),
+            Err(got) => Self::Misset(got),
+        }
+    }
+}
+
+/// The words added to the refusal of a stop that would have waited, when the variable is mis-set. `got` is the value as written, quoted.
+pub(crate) fn not_waited_suffix(got: &str) -> String {
+    format!(
+        " (not waited: {LOCK_WAIT_ENV} must be a whole number of seconds from 0 to {MAX_LOCK_WAIT_SECONDS}, got {got})"
+    )
 }
 
 /// Whether this process may wait at all. A command that reports or repairs (`verify`, `status`, `doctor`, `unlock`, `compact`) turns it off
@@ -506,34 +544,54 @@ pub fn refuse_without_waiting() {
 
 #[cfg(test)]
 thread_local! {
-    /// A test's own bound. The unit tests of every other module hold locks and expect to be refused at once, so under `cfg(test)` the bound is
+    /// A test's own setting. The unit tests of every other module hold locks and expect to be refused at once, so under `cfg(test)` the wait is
     /// off unless the test sets one.
-    static TEST_BOUND: std::cell::Cell<Option<Duration>> = const { std::cell::Cell::new(None) };
+    static TEST_SETTING: std::cell::RefCell<Option<LockWait>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Run `body` with the wait set to `bound` on this thread (tests only).
 #[cfg(test)]
 pub(crate) fn with_lock_wait<T>(bound: Duration, body: impl FnOnce() -> T) -> T {
-    let before = TEST_BOUND.with(|cell| cell.replace(Some(bound)));
+    let setting = if bound.is_zero() {
+        LockWait::Off
+    } else {
+        LockWait::For(bound)
+    };
+    with_setting(setting, body)
+}
+
+/// Run `body` with the variable holding `text` on this thread (tests only): read exactly as the real variable is.
+#[cfg(test)]
+pub(crate) fn with_lock_wait_text<T>(text: &str, body: impl FnOnce() -> T) -> T {
+    with_setting(LockWait::from_text(Some(text)), body)
+}
+
+#[cfg(test)]
+fn with_setting<T>(setting: LockWait, body: impl FnOnce() -> T) -> T {
+    let before = TEST_SETTING.with(|cell| cell.replace(Some(setting)));
     let out = body();
-    TEST_BOUND.with(|cell| cell.set(before));
+    TEST_SETTING.with(|cell| *cell.borrow_mut() = before);
     out
 }
 
-/// The bound of this stop.
-pub(crate) fn lock_wait_bound() -> Duration {
+/// What this stop is asked to do about waiting.
+pub(crate) fn lock_wait_setting() -> LockWait {
     if !WAITING_ALLOWED.load(Ordering::Relaxed) {
-        return Duration::ZERO;
+        return LockWait::Off;
     }
     #[cfg(test)]
     {
-        TEST_BOUND
-            .with(std::cell::Cell::get)
-            .unwrap_or(Duration::ZERO)
+        TEST_SETTING.with(|cell| cell.borrow().clone().unwrap_or(LockWait::Off))
     }
     #[cfg(not(test))]
     {
-        parse_lock_wait(std::env::var(LOCK_WAIT_ENV).ok().as_deref())
+        match std::env::var(LOCK_WAIT_ENV) {
+            Ok(text) => LockWait::from_text(Some(&text)),
+            Err(std::env::VarError::NotPresent) => LockWait::from_text(None),
+            Err(std::env::VarError::NotUnicode(raw)) => {
+                LockWait::Misset(format!("{:?}", raw.to_string_lossy()))
+            }
+        }
     }
 }
 
@@ -639,7 +697,11 @@ impl Waiting {
         }
         if self.waited().is_some_and(|waited| waited >= ANNOUNCE_AFTER) {
             self.announced = true;
-            eprintln!("waiting for {}; giving up after {}", what(), seconds(bound));
+            eprintln!(
+                "waiting for {}; giving up after {} ({LOCK_WAIT_ENV} sets this)",
+                what(),
+                seconds(bound)
+            );
         }
     }
 
@@ -690,10 +752,11 @@ fn wait_decision(
     rank: Rank,
     waiting: &mut Waiting,
 ) -> Decision {
-    let bound = lock_wait_bound();
-    if bound.is_zero() || this_process_holds(path) || this_thread_holds_at_or_after(rank) {
+    let setting = lock_wait_setting();
+    if setting == LockWait::Off || this_process_holds(path) || this_thread_holds_at_or_after(rank) {
         return Decision::Refuse(String::new());
     }
+    let bound = setting.bound();
     let bytes = match read_file_if_exists(mutation_root, relative) {
         // Released between the create and the read: try again at once.
         Ok(None) => return Decision::Retry,
@@ -714,6 +777,10 @@ fn wait_decision(
             };
             if pid == std::process::id() {
                 return Decision::Refuse(String::new());
+            }
+            // A wait would begin here: a mis-set variable refuses at once and says why (it is read only at this moment).
+            if let LockWait::Misset(got) = &setting {
+                return Decision::Refuse(not_waited_suffix(got));
             }
             waiting.begin();
             waiting.pid = Some(pid);
