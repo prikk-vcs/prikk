@@ -112,7 +112,8 @@ bound on the command.**
    does. The Changed heading ("a writer waits a few seconds …") is true as it stands.
 2. **Measure it before you write it:** on the release build, make a command meet a live holder at two stops, and quote both waits in the
    report. Or cite the existing test that holds it.
-3. **The date:** if the tag is not today (2026-11-27), re-date `## 0.59.0 — <date>` in this same commit (the architect gives the date).
+3. **The date: re-date the heading to `## 0.59.0 — 2026-11-28` in this same commit.** The owner, 2026-11-28 (JST): *"Today, we will
+   release it. The date will be 2026-11-28."* The tag goes on this commit today.
 4. **No product file changes.** Rebuild the release binary from this commit (`cargo build --release --locked -p prikk`) and say its sha256
    is still `d299d133…`.
 5. **The 15 gates on the final commit,** tree clean. **One commit.** The architect pushes and reads CI by name; **the tag goes on this
