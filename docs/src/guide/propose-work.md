@@ -10,7 +10,7 @@ The author repository **seals under its own maintainer key**, a key made for tha
 
 ## The rules
 
-1. **Never run a command that reads your maintainer seed in a repository someone else wrote or handed you.** `seal`, `merge`, `branch create`, `tag create`, `sync build`, `sync seal` and `bundle import --adopt` all read it, and what they write is signed by your key. A repository's trust policy is whatever its writer wrote: it can adopt your *public* key (a public key is public) and then your `seal` or `sync build` there lends your key to everything that repository holds. Receive another person's work by **`sync accept` into your own repository**, never by opening theirs.
+1. **Never run a command that reads your maintainer seed in a repository someone else wrote or handed you.** **Every command that seals or signs a publication reads it**, for example `seal`, `merge`, `branch create`, `branch close`, `tag create`, `sync build`, `sync seal`, `sync adopt-tag`, `bundle import --adopt` and `ref complete` (even with `--plan-only`); what they write is signed by your key. A repository's trust policy is whatever its writer wrote: it can adopt your *public* key (a public key is public) and then your `seal` or `sync build` there lends your key to everything that repository holds. Receive another person's work by **`sync accept` into your own repository**, never by opening theirs.
 2. **Never run `prikk setup` for an author repository in the receiving maintainer's key directory without both seed-out flags.** Without them `setup` reuses the keys already there (it says `using your keys in <dir>`) and adopts **the maintainer's own key** in the author repository: the author's seal is then the maintainer's. See [If the two must share an account](#if-the-two-must-share-an-account).
 3. **The separation between an author's machine and a maintainer's is an operating-system boundary, not a prikk check.** Another account, another machine or a container keeps the author's process from reading the maintainer's seed. **A process of the same account can read every seed of that account** (a seed file is mode `0600`: private to the account, not to the processes in it). `prikk key status` tells you which key is in effect; it does not make a boundary.
 4. **The bundle route is not for proposals.** `bundle import` lands what it receives under `remotes/` and never seals it; `bundle import --adopt` lands nothing for a key the receiver has not adopted. See [Why not a bundle](#why-not-a-bundle).
@@ -66,7 +66,7 @@ block id: 0cb9841a347ec690c485fe1757d1ed2edd154dc0075255db0f0459a8a46922c2
 
 ## 2. The exchange
 
-The maintainer says what they hold, the author builds what is missing, the maintainer accepts it. Three files move; none of them carries a secret (a sync artifact carries repository content **in the clear**: move it over a channel you trust).
+The maintainer says what they hold, the author builds what is missing, the maintainer accepts it. Two files cross between the machines (`have.bin` and `proposal.bin`); the third (`claims.txt`) is written and read on the maintainer's side. None of them carries a secret (a sync artifact carries repository content **in the clear**: move it over a channel you trust).
 
 ```
 maintainer$ prikk sync have heads/main --output ../exchange/have.bin
@@ -219,4 +219,4 @@ Same-account separation is the weakest the guidance allows: a process of the acc
 
 ## What is proposed, and not yet part of prikk
 
-How a repository's trust changes (who may adopt a key, retiring a key from a recorded point, keeping history verifying across a rotation) is **proposed in [RFC 172](https://github.com/prikk-vcs/prikk/blob/main/rfcs/proposed/172-who-may-author-who-may-seal.md)**. It is a proposal: nothing in it is built, and nothing on this page depends on it.
+How a repository's trust changes (who may adopt a key, retiring a key from a recorded point, keeping history verifying across a rotation) is **proposed in RFC 172**. It is a proposal: nothing in it is built, and nothing on this page depends on it.
