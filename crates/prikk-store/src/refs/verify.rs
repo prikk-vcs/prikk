@@ -23,7 +23,11 @@ pub use scan::{RefFileOutcome, RefFileStatus};
 use scan::read_pointers;
 
 /// One recognized interrupted-publication or local-debris condition.
+///
+/// `#[non_exhaustive]` since 0.59.0 (it gained crate-private fields in the same release, which already ended struct-literal construction outside
+/// this crate): a later field will not break a caller again.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RefPublicationIssue {
     /// Stable diagnostic code.
     pub code: &'static str,
