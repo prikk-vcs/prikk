@@ -1,10 +1,21 @@
 # RFC 172 — Who may author, who may seal, and how a repository's trust changes
 
-**Status.** **PROPOSED 2026-11-27 by the architect,** from the 0.59.0 H design round (H1 to H3a2, `rfcs/handoffs/171-who-may-author-who-may-seal/`).
-- **Nothing here is built.** Per the owner's ruling of 2026-11-18, H's builds are **0.60.0 at the earliest, after the owner reads the
-  round.**
-- **Two consumers asked to read the design before anything is built:** planeter (2026-11-21) and inklkunn (2026-11-25). The letter that
-  sends it to them is drafted in H3b and held for the owner.
+**Status.** **ACCEPTED 2026-11-28 by the owner.** Proposed 2026-11-27 by the architect, from the 0.59.0 H design round (H1 to H3a2,
+`rfcs/handoffs/171-who-may-author-who-may-seal/`).
+- **The owner's words, in order:**
+  - §7 items 1 to 3: *"Your recommendations are almost approved. However, verify carefully they match my fundamental philosophy."*;
+  - §7 item 4: *"Yes. However, just in case, verify they match my fundamental philosophy, and also prikk's goals, problems to solve,
+    and philosophy."*, then *"All approved."* on the verified version;
+  - the whole RFC: accepted when asked, 2026-11-28.
+- **The architect's reading:**
+  - the design is accepted as it stands here, with every verification change folded in:
+    - four places for items 1 to 3 (§7);
+    - five for item 4 (§7 item 4);
+  - **Stage 1 is §2, C, D and E; Stage 2 is A and B2. B1 is not built** (§6; ROADMAP row, on a consumer's word);
+  - **how much of it 0.60.0 carries is set in the 0.60.0 scope,** which the owner authorizes.
+- **Nothing here is built.** H's builds are **0.60.0 at the earliest.**
+- **Both consumers who asked to read the design before anything is built have answered** (inklkunn and planeter, 2026-11-28; §7). planeter
+  read the letter, not this RFC, and will say where it does not serve them.
 - **Already in 0.59.0, because each is a released defect or describes shipped behaviour** (not part of this proposal):
   - `setup --*-seed-out` and `key generate --out` refuse a missing or unwritable seed directory before anything is written (H2c, H2d,
     H2e);
