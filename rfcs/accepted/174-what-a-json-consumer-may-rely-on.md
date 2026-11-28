@@ -180,7 +180,38 @@ Proposed 2026-11-27 by the architect, from the 0.59.0 J design round (J1 to J2b,
 
 The 0.60.0 `show` fix (ROADMAP row) is built with step 2. It gives `log --paths` its bounded start state.
 
-## 7. Decided
+## 7. Amendment 1 (the architect, 2026-11-28): the consumers' answers
+
+From stikk 025 and inklkunn's letter of 2026-11-28 (planeter's answer is still to come). Both are additive and within §2's rules.
+**The owner is told, and may refuse either.**
+
+1. **The closed list is confirmed** by stikk and inklkunn for every set they read.
+   - **`doctor`'s `code` stays open** (inklkunn: the page listing every code, with a new one named in `### Output changes`, is enough).
+     The `PRIKK-DOCTOR-UNREACHED-*` family stays closed for planeter.
+   - **`merge-plan-v1`'s `outcome` is confirmed closed** (stikk decides on it).
+   - **Shipped spellings a consumer reads,** named so no one renames them:
+     - `log`'s `blocks[].kind` **`Root`, `Normal` and `Merge`** (the J1 runs saw only the first two; the code has three, and stikk reads
+       `Merge`);
+     - `status`'s queued `operations[].kind` `rename-path`;
+     - `trust maintainer add`'s key-id conflict ids.
+2. **`merge-plan-v1` gains `action_message`** (P, prose, not promised in its wording), beside the closed `action` id. stikk shows
+   prikk's own words for the next step and never writes its own paraphrase.
+3. **`log --after <block-id>`** (inklkunn): lists the blocks after the named one, up to the ref's tip, so an index that keeps its head adds
+   one increment at a time.
+   - **With `--paths`, the walk starts from the named block's state** (its nearest checkpoint, with the 0.60.0 `show` fix), not from the
+     root.
+   - **Refusals:**
+     - a block the repository lacks: `point-not-found`;
+     - a block that is not in the ref's history: `not-an-ancestor` (new), whose message names rebuilding the index from the root,
+       `prikk log --ref <ref> --paths`.
+   - Without `--after`, `log` is unchanged.
+4. **`refusal-v1` on `verify` and `worktree-status`:**
+   - inklkunn reads it now;
+   - stikk will read every `refusal-v1` before its own schema check in its next re-baseline, and will say when that has shipped.
+   **The notice is given.**
+5. **`bundle-verify-v1`'s sentence** that it verifies structure and no signature is kept on the page. stikk's screen will say the same.
+
+## 8. Decided
 
 1. **Accepted by the owner, 2026-11-28,** with the verification's five corrections folded in (Status).
 2. **The build order** is §6's. **How much of it 0.60.0 carries is the 0.60.0 scope's.**

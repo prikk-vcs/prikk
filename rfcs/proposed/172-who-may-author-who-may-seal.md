@@ -290,5 +290,13 @@ unactionable warning; no state that no command clears; no claim wider than the m
    - **The cost:** an exit code changes, and planeter's delivery rule reads it. The letter asks them first; they may keep a stricter gate
      on the id.
 
-**And the staging (§6): Stage 1 in 0.60.0, if the owner accepts this RFC; Stage 2 only on a consumer's word.** Release scheduling is the
+**And the staging (§6): Stage 1 in 0.60.0, if the owner accepts this RFC; Stage 2 only on a consumer's word.**
+
+**The consumers' answers so far (2026-11-28):**
+- **inklkunn: Stage 1 serves their three cases, and "Stage 2 we would not use":**
+  - their backups copy a repository whole;
+  - their permanent removal makes a new root;
+  - they keep no chain of archives.
+  They also say the unsigned-record rule is "what our operators need most".
+- **planeter's answer is still to come.** It decides Stage 2 (their forge's statements), and D's exit code. Release scheduling is the
 owner's.
