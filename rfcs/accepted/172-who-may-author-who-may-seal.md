@@ -230,7 +230,7 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
 - **Format steps:**
   - **the transitions container,** a repository-format step: an older prikk refuses by the format marker, and `format upgrade` writes
     nothing;
-  - **the archive's chain section, a 14th section kind, written only when a chain exists.** An archive of a repository with no chain
+  - **the archive's chain section, a 14th section kind, written only when a chain exists.** *Not built: its one reader was B1 (§8 item 2).* An archive of a repository with no chain
     stays readable by older readers.
   - **No claim-format step.**
 - **Two stages, so time is spent only where a consumer needs it:**
@@ -409,3 +409,44 @@ unactionable warning; no state that no command clears; no claim wider than the m
   - **one request: bind a statement to its repository** (item 4);
   - retire and rotate from a point: nothing of theirs depends on them today.
 - **So Stage 2 is A and B2, without B1** (§6). Release scheduling is the owner's.
+
+## 8. Amendment 1 (the architect, 2026-11-28): planeter's reading of this RFC
+
+From planeter's letter of 2026-11-28 (*"RFC 172, read: where it serves our RFC 013, and three questions"*). **It serves their RFC 013:**
+their forge runs `trust apply` with no seed, applies a statement only to the repository it was delivered for, and withdraws its own
+convention file. They asked three questions. **The owner is told, and may refuse items 2 and 3, which change the design.**
+
+1. **When the format marker moves: only by `prikk format upgrade`, never by itself.** This is the rule format 8 already follows
+   (`docs/src/reference/release-compatibility.md`, RFC 168): the upgrade is explicit, idempotent and one-way, and nothing prompts it except
+   a command that needs it.
+   - **A repository that is never upgraded keeps working exactly as today, trust changes included.** `trust maintainer add` and `remove`
+     write today's records, and no chain exists there.
+   - **A verb that needs the chain refuses there, naming `prikk format upgrade`, and writes nothing:** `retire`, `rotate`, `trust apply`,
+     and `--plan-only` where it reads the chain.
+   - **So a server's prikk can be rolled back until a repository is upgraded,** and hosted repositories are not all moved at once.
+   - **§6 is read so:** the transitions container is a format step, and `format upgrade` writes only the marker. The chain begins with
+     the first transition after the upgrade.
+2. **No chain section in archives.** §6's "14th section kind" had one reader, B1 (`archive verify --extends`), which is not built.
+   - **Without B1, the section would be bytes that nothing reads,** so it is not written. It returns with B1, if B1 is ever built, and is
+     then inert like sections 10 and 11.
+   - **`archive import`, `bundle import` and `sync accept` never adopt a key, a transition or a retirement from an artifact.** That is
+     today's rule for the archive's trust sections (`docs/src/reference/archive-format.md`: *"carried as an inert record, never adopted on
+     import"*). `--adopt` lands refs under the receiver's own adopted set, never a carried key. **The page says it for the chain too,
+     and a test pins it:** an import of an archive from a repository with retirements and a chain leaves the importer's adopted set and
+     trust tip unchanged.
+3. **The chain travels only in a copy of the repository.** planeter's delivery builds a fresh stage that trusts the live repository's
+   keys, then replaces the live repository by it. With a chain, the stage would start a chain of its own, and the live one would be lost
+   at the first delivery.
+   - **This is by design for every artifact (item 2).** An unsigned record cannot be replayed as a statement either: a statement is
+     signed.
+   - **What works with today's mechanisms:** make the stage **a copy of the live repository** (`.prikk` whole: "a copy is the
+     repository", §3B; the backup guide already names it the real backup). Then import the delivered archive into it. The stage then
+     holds the live chain, trust tip and retirements, and trusts exactly the live repository's keys, which is their RFC 008 D-2.
+     - **Two conditions, both theirs:** the copy is taken while no writer runs, and `verify` on the stage passes before it replaces the
+       live repository.
+   - **If their stage must be fresh,** a `trust export` / `trust import` pair is the shape: a trust-record artifact, imported only into a
+     repository with no trust record, keeping every record and so the trust tip. A repeat after a kill completes a prefix. **It is built
+     only on their word, after they say whether the copy serves.**
+
+**The 0.60.0 scope proposal's notice for 0.61.0 is corrected by item 1:** a trust change does not move a repository's format. Only
+`format upgrade` does.
