@@ -12,7 +12,8 @@
     - four places for items 1 to 3 (§7);
     - five for item 4 (§7 item 4);
   - **Stage 1 is §2, C, D and E; Stage 2 is A and B2. B1 is not built** (§6; ROADMAP row, on a consumer's word);
-  - **how much of it 0.60.0 carries is set in the 0.60.0 scope,** which the owner authorizes.
+  - **placed by the 0.60.0 scope (owner, 2026-11-28; §6 amended):** §2, D and E in 0.60.0; A, then C on A, then B2 in 0.61.0;
+  - **§8 (planeter's reading) accepted the same day.**
 - **Nothing here is built.** H's builds are **0.60.0 at the earliest.**
 - **Both consumers who asked to read the design before anything is built have answered** (inklkunn and planeter, 2026-11-28; §7). planeter
   read the letter, not this RFC, and will say where it does not serve them.
@@ -239,6 +240,13 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
     trust policy container. **That is Stage 1's one format step,** a policy-record kind an older prikk refuses by the format marker.
   - **Stage 2** is A and B: the chain, statements and prefix checks. It serves what crosses repositories: planeter's forge accepting only
     signed statements, and inklkunn's readers checking that a later archive continues an earlier one.
+  - **Amended by the owner, 2026-11-28, with the 0.60.0 scope** (*"Accepted."*, `.git-exclude/scratch/0.60.0-scope-proposal-v1.md`
+    §2):
+    - **the parts that write no trust record are built in 0.60.0, with RFC 174:** §2, D and E;
+    - **the parts that write trust are built together in 0.61.0, in the order A, then C on A, then B2.**
+    - **So C writes chain records** (`Retire`, `Rotate`, §3A), and the policy-record kind below is not built.
+    - **The reason:** C built first would give a retirement two encodings for good, and the repository format two steps in two
+      releases. Stage 2 is now certain to be built (planeter), so that cost has no return.
   - **Stage 2 is built only if planeter or inklkunn, having read this, say they will use it.** The letter asks them.
   - **Their answers (2026-11-28) split Stage 2:**
     - **A and B2 are built:** planeter's forge will apply statements, and their RFC 013 (a maintainer adds a key by a delivery) waits for
@@ -411,6 +419,8 @@ unactionable warning; no state that no command clears; no claim wider than the m
 - **So Stage 2 is A and B2, without B1** (§6). Release scheduling is the owner's.
 
 ## 8. Amendment 1 (the architect, 2026-11-28): planeter's reading of this RFC
+
+**ACCEPTED by the owner, 2026-11-28** (*"Accepted."*), items 1 to 3.
 
 From planeter's letter of 2026-11-28 (*"RFC 172, read: where it serves our RFC 013, and three questions"*). **It serves their RFC 013:**
 their forge runs `trust apply` with no seed, applies a statement only to the repository it was delivered for, and withdraws its own
