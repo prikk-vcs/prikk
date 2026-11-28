@@ -110,23 +110,28 @@
   - **`archive import` runs it against the importing repository's own chain** and prints the result. With no chain of its own it says
     *"nothing to compare against; the carried chain is checked only against itself"*.
 - **B2, a key I already trust: a statement.**
-  - **`trust statement add|remove|retire|rotate … --trust-tip <hash> --out <file>`** signs with the local maintainer seed. **It opens no
-    repository:** the trust tip is given explicitly, read beforehand by `trust maintainer list` (which reads no seed). The seed-holding process
+  - **`trust statement add|remove|retire|rotate … --trust-tip <hash> --in-history <block-id> --out <file>`** signs with the local
+    maintainer seed. **It opens no repository:** the trust tip and the block are given explicitly, read beforehand from one line of `trust
+    maintainer list` (which reads no seed; §7 item 4). The seed-holding process
     reads no repository at all.
   - **`trust apply <file>` needs no seed.** It checks:
     - that the signer is adopted at this repository's current trust tip (a retired or removed key cannot sign);
-    - that the statement's trust tip **equals** this repository's (no replay into a later state, no reordering).
+    - that the statement's trust tip **equals** this repository's (no replay into a later state, no reordering);
+    - **that a local ref's history holds the statement's block** (`block-not-in-history`; §7 item 4).
     It then appends the record, signed.
   - **What a statement means, stated plainly:** with no repository identity (settled), **a statement is valid in every repository whose
-    trust tip is `--trust-tip`.** A copy shares its original's trust tip until either moves, so **a statement signed "for a copy" is also a statement
+    trust tip is `--trust-tip` and whose local history holds the `--in-history` block.** A copy shares its original's trust tip until either moves, so **a statement signed "for a copy" is also a statement
     for the original.** That is why it is made only by this deliberate command, with the trust tip in the maintainer's own hands.
   - **And unrelated repositories can share a trust tip.** Two repositories whose trust records are the same have the same tip, for
     example two set up with the same maintainer key (the documented second-project flow) and no transition since. **A statement made for
-    one then applies to the other.** Repositories have no identity (settled), so nothing can tell them apart.
-    - **So `trust statement` prints what it covers:** the trust tip, the number of transitions under it, and the adopted keys at it,
-      with the words *"applies to every repository whose trust record is this one"*.
+    one would then apply to the other.** Repositories have no identity (settled), so the trust record alone cannot tell them apart. **Their
+    histories can:** the statement names a block a local ref holds (§7 item 4, approved 2026-11-28).
+    - **So `trust statement` prints what it covers:** the trust tip, the number of transitions under it, the adopted keys at it, and the
+      block, with the words *"applies where the trust record is this one and a local branch or tag holds block B: this repository and
+      its copies"*.
     - **`trust apply` prints what it adds** before it appends.
-    - The test: two repositories set up from one key directory, one statement, applied to both (architect's verification, 2026-11-28).
+    - The test: two repositories set up from one key directory, one statement. **It applies to the first and is refused by the second**
+      (architect's verification, 2026-11-28; changed by §7 item 4).
   - **For planeter's forge:** apply only statements signed by a key the forge's repository already adopts. That stops a stolen web token
     adding a key. **It does not stop whoever can write the forge's `.prikk`.**
 - **What each copy can check:**
@@ -251,11 +256,11 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
   - the §2 sentences and fields;
   - **`ref complete --plan-only`'s exit code.**
 
-## 7. For the owner: four decisions (1 to 3 approved, 4 open), each with the architect's recommendation
+## 7. For the owner: four decisions, all approved, each with the architect's recommendation
 
 **The owner, 2026-11-28:** *"Your recommendations are almost approved. However, verify carefully they match my fundamental philosophy."*
 **The architect's reading:**
-- recommendations 1 to 3 below are approved, subject to that verification (4 came later, from planeter, and is open);
+- recommendations 1 to 3 below are approved, subject to that verification (4 came later, from planeter, and was approved the same day under the same verification);
 - **the verification found four places in this RFC that did not hold, now corrected:**
   - the `verify` chain line (§3A);
   - unrelated repositories sharing a trust tip (§3B);
@@ -301,43 +306,82 @@ unactionable warning; no state that no command clears; no claim wider than the m
    - **The cost:** an exit code changes, and planeter's delivery rule reads it. The letter asks them first; they may keep a stricter gate
      on the id.
 
-4. **May a statement be bound to the repository it is for? (planeter, 2026-11-28; added after the owner's approval of 1 to 3, so it is
-   the owner's to rule.) Recommended: yes, by a block its local history holds, never by an identifier.**
+4. **May a statement be bound to the repository it is for? (planeter, 2026-11-28.) APPROVED by the owner, 2026-11-28** (*"Yes. However,
+   just in case, verify they match my fundamental philosophy, and also prikk's goals, problems to solve, and philosophy."*). **The
+   architect's reading:** approved, subject to that verification. **The verification changed five things, folded in below:**
+   - the flag's name;
+   - which block to name;
+   - what `verify` checks later;
+   - the coverage sentence;
+   - where the maintainer reads the two values.
+
+   **Binding is by a block the repository's history holds, never by an identifier.**
    - **The problem (§3B):** a statement is valid in every repository whose trust tip it names, and unrelated repositories with the same
      trust record share a tip. **On a forge that hosts many projects of the same maintainers, that is the common case.** A `remove` or
-     `retire` made for one project, applied to another, takes a key out where nobody meant it: recoverable (an unsigned record is always
-     possible), but wider than what the maintainer signed for.
-   - **The mechanism:** `trust statement … --trust-tip <hash> --holding <block-id> --out <file>`, **with `--holding` required.**
-     - **`trust apply` refuses unless the history of a local ref holds that block,** never counting `remotes/`, so a proposer cannot plant
-       it. The refusal is `statement-block-not-held`. Its message names the block, says the statement was made for a repository whose
-       history holds it, and gives two ways out: a statement naming a block of this repository (`prikk log` lists them), or the unsigned
-       verb.
-     - **What a statement then means, stated plainly:** it *"applies to every repository whose trust record is this one and whose
-       history holds block B: this repository, its copies and its forks"*. Unrelated repositories no longer share a statement. A fork
-       still does, because a fork is a copy of the history.
-   - **Not an identity, so the settled ruling stands:**
-     - a block id is content, and the ruling already places identity in patch ids and keys;
+     `retire` made for one project, applied to another, takes a key out where nobody meant it. That is recoverable (an unsigned record is
+     always possible), but wider than what the maintainer signed for.
+   - **The mechanism:** `trust statement … --trust-tip <hash> --in-history <block-id> --out <file>`, **with `--in-history` required**
+     (exit 2 without it).
+     - **The signature covers the block id,** like the trust tip, so neither can be swapped.
+     - **`trust apply` refuses unless the history of a local ref holds that block.** `remotes/` never counts, so a proposer cannot plant
+       it by sending a proposal; a received ref counts only after a person adopts it.
+       - The refusal is `block-not-in-history`. **Every check comes before the first write:** the signer adopted at the tip, the tip
+         equal, the block held.
+       - **Its message names the block, and the way out a person can type:** ask the statement's signer for one made with
+         `--in-history <block>`, where `prikk trust maintainer list` shows the block to give. Or use the unsigned verb.
+     - **The ancestry check is one function,** shared with `log --after`'s `not-an-ancestor` (RFC 174 §7), and it stops at the first
+       ref that holds the block. Its cost is one parent read per block walked, on a rare command, and the page says so.
+     - **`verify` checks the record's signature, block id included. It never re-checks that the block is still held.** That was
+       `apply`'s precondition at its moment. Re-checking it later would turn an `uncommit` of that block into a finding that no command
+       clears.
+   - **Which block (measured on 0.59.0, 2026-11-28):**
+     - **two repositories started independently with the same file, message and key get different root blocks,** because every
+       created node's id is a fresh 256-bit draw (`crates/prikk-store/src/node/node_id_gen.rs`);
+     - **but a root is shared by every repository started from the same history,** for example projects a forge makes from one template
+       by import. So the root is the wrong block to name.
+     - **The block to name is the current branch's tip.** Once a project has a commit of its own, its tip is its own, and the tip stays in
+       the history as the branch grows.
+     - If the tip later leaves the history (`uncommit`), the statement refuses, which is the safe direction.
+   - **Where the maker reads the two values:** `trust maintainer list` (which reads no seed) ends with one copyable line,
+     `for a statement: --trust-tip <hash> --in-history <tip block>`. The maker never chooses a block. A repository with no block yet prints
+     `--trust-tip` and says a statement cannot be made there yet.
+   - **What a statement then means, stated plainly (printed by `trust statement` and by `trust apply`):** *"applies where the trust record
+     is this one and a local branch or tag holds block B: this repository and its copies"*.
+     - Unrelated repositories no longer share a statement, nor do projects made from one template once each has a commit of its own.
+     - **What binding cannot separate is a copy,** which holds the same trust record and the same history (§3B, unchanged).
+     - The maker still reads both values from the repository they mean, so **a hostile repository can only show values it copied from
+       another one,** and a statement for those is a statement for that other repository. That is why `trust statement` prints what it
+       covers.
+   - **Not an identity, so the settled ruling stands** (`docs/src/reference/non-goals.md`, "Repository identity"; the trust model's
+     *"Repositories are anonymous"*):
+     - a block id is content, built from patch ids, and the ruling places identity in keys and patch ids;
      - the statement asserts nothing about which repository it is. It states a precondition, and the receiver checks it against what it
-       holds, which is §3B's own rule.
-   - **`trust statement` still opens no repository.** The block id is given, like the trust tip.
-     - The page recommends the current branch's root block, which never leaves the history.
-     - A tip block can leave it (`uncommit`), and the statement then refuses: the safe direction.
+       holds. That is §3B's own rule, and the model's: *"The receiver is the sole authority over its own store."*
+     - **`trust statement` still opens no repository and reads no ref:** both values are given.
    - **Two limits, stated plainly:**
      - a repository with no block yet cannot be named; its trust changes by the unsigned verbs, as at setup;
      - **a key lost across N repositories takes N statements,** one per repository. That is what binding means.
    - **The price:**
-     - one required flag, one check (a walk from the local refs, on a rare command) and one refusal id;
-     - **two hostile tests:** an unrelated repository with the same trust tip refuses, and a block held only under `remotes/` refuses.
-   - **If accepted, §3B changes:**
+     - one required flag, one check and one refusal id;
+     - one line in `trust maintainer list`;
+     - **three hostile tests:**
+       - an unrelated repository with the same trust tip refuses;
+       - a block held only under `remotes/` refuses;
+       - **`verify` stays clean after the bound block is uncommitted.**
+   - **§3B changes accordingly:**
      - the "unrelated repositories share a trust tip" paragraph names this remedy;
-     - `trust statement` and `trust apply` print the block beside the trust tip;
      - the two-repositories test expects a refusal in the second repository.
    - **The alternatives, and why not:**
      - **unchanged, with the coverage printed:** every forge must route statements by itself, and one that forgets is open. planeter:
        *"so that no forge has to remember to"*;
-     - **a random value in the root epoch, so tips never collide:** that is a repository identifier by another name, and would reopen the
-       settled ruling.
-   - **What the user sees:** one more flag on `trust statement`, and the block printed with the trust tip.
+     - **a random value in the root epoch, so tips never collide:** that is a repository identifier by another name, refused permanently on
+       the non-goals page.
+     - **`--holding` as the flag's name** (the first draft): prikk already says "holder" for a lock's holder (`lock-conflict`'s
+       `holder_pid`), so in a trust command it would read as the key's holder.
+   - **What the user sees:**
+     - one more flag on `trust statement`, its value copied from one line of `trust maintainer list`;
+     - the block printed with the trust tip;
+     - one refusal that names what to ask for.
 
 **And the staging (§6): Stage 1 in 0.60.0, if the owner accepts this RFC; Stage 2 only on a consumer's word.**
 
