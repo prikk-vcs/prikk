@@ -133,7 +133,7 @@ Proposed 2026-11-27 by the architect, from the 0.59.0 J design round (J1 to J2b,
    - it **embeds a whole `verify-report-v1`** (N);
    - `issues[]`: code, severity (closed `info|warning|error`), prose, and **`repair`**;
    - **code is an open set, with every `PRIKK-*` literal on the page by test, except the `PRIKK-DOCTOR-UNREACHED-*` family, which is
-     closed** (planeter decides on it). **Whether inklkunn needs notice for other non-`info` codes is asked in its letter;**
+     closed** (planeter decides on it). *Superseded by Amendment 2: planeter reads no such code, so `code` is open with no exception.* **Whether inklkunn needs notice for other non-`info` codes is asked in its letter;**
    - `summary` counts that add up.
    - **`repair` is non-null for every issue whose recommendation names a command a user can type,** enforced by a test against the
      recommendation text. It is null only for genuinely manual advice.
@@ -180,9 +180,11 @@ Proposed 2026-11-27 by the architect, from the 0.59.0 J design round (J1 to J2b,
 
 The 0.60.0 `show` fix (ROADMAP row) is built with step 2. It gives `log --paths` its bounded start state.
 
-## 7. Amendment 1 (the architect, 2026-11-28): the consumers' answers
+## 7. Amendments: the consumers' answers
 
-From stikk 025 and inklkunn's letter of 2026-11-28 (planeter's answer is still to come). Both are additive and within §2's rules.
+### Amendment 1 (the architect, 2026-11-28): stikk and inklkunn
+
+From stikk 025 and inklkunn's letter of 2026-11-28 (planeter's is Amendment 2). Both are additive and within §2's rules.
 **The owner is told, and may refuse either.**
 
 1. **The closed list is confirmed** by stikk and inklkunn for every set they read.
@@ -210,6 +212,53 @@ From stikk 025 and inklkunn's letter of 2026-11-28 (planeter's answer is still t
    - stikk will read every `refusal-v1` before its own schema check in its next re-baseline, and will say when that has shipped.
    **The notice is given.**
 5. **`bundle-verify-v1`'s sentence** that it verifies structure and no signature is kept on the page. stikk's screen will say the same.
+
+### Amendment 2 (the architect, 2026-11-28): planeter's answers
+
+From planeter's letter of 2026-11-28. All of it is additive or a narrowing, within §2's rules. **The owner is told, and may refuse any
+item.**
+
+1. **The closed list is confirmed by all three consumers.**
+   - **`doctor`'s `code` is open with no exception.** The `PRIKK-DOCTOR-UNREACHED-*` family was made closed because planeter was thought
+     to decide on it. planeter reads no such code, so the exception goes (it supersedes Amendment 1's sentence). Every new code is named in
+     `### Output changes`, as §4.3 already says.
+2. **`sync-accept-v1`: the page says in words a reader new to the store can follow:**
+   - **`written_object_count`:** objects this run wrote that the repository did not hold before;
+   - **`merged_object_count`:** objects the repository already held, to which the artifact added a signature. No new object was written
+     for them. The text form already says *"objects gaining signatures"*.
+   - **A refusal is `refusal-v1` and carries no count.** Whether the store changed is the refusal id's own row (§3.4). **`lock-conflict`
+     gets that row for `sync accept`, pinned by a test,** since planeter reads it after a lock conflict.
+3. **`doctor`'s `repair` for planeter's four repairs:** yes.
+   - **The shape:** `{"action": "command", "argv": ["doctor", "--repair-index"], …}`, likewise for `--repair-wal-tail`,
+     `--repair-pointer-index-tail` and `--repair-tails`. Plain `doctor`'s issues recommend all four today (`crates/prikk-store/src/doctor.rs`).
+   - **`plan_first` is true only for `--repair-tails`,** the one with a `--plan-only`.
+   - **`argv` names no repository:** it acts on the repository the report was read from, and the page says how to pass that path.
+   - **`repair` is typed at each site, never parsed from the prose.** `doctor`'s recommendations are prose strings today, so the build adds
+     a typed repair beside each one. **The test checks agreement both ways:**
+     - every `argv` appears in its prose;
+     - every prose that tells a user to run a command has one.
+     A sentence that names a command only to say it does not help is not a command repair. Two exist today, in `crates/prikk-store/src/way_out.rs`: one for interior damage and one for a missing RefState.
+   - *"The repair modes stay text"* (§4.3) means **the output of `doctor --repair-…` itself,** not plain `doctor`'s `repair` field.
+4. **Three more `details` objects.** Each value is already at the site (read 2026-11-28):
+
+   | id | `details` | presence | where the value comes from |
+   |---|---|---|---|
+   | `lock-conflict` | `{holder_pid}` | **A:** only when the lock judge read a pid | `crates/prikk-store/src/lock.rs` |
+   | `over-max-bytes` | `{size, max_bytes}` | P, both | `crates/prikk-store/src/point_reading.rs` |
+   | `interrupted-publication` | `{ref_name}` | P | `crates/prikk-store/src/ref_completion.rs` |
+
+   - **`holder_pid` is the pid the holder recorded.** It can name another process in another pid namespace. The page says it is for a
+     person to read and never something to decide on, which is how planeter uses it.
+   - **`size`, not planeter's `size_bytes`:** `tree`, `show` and `checkout --patch-plan` already call a file's byte count `size`, so one
+     meaning keeps one name. `max_bytes` is the flag's own name, and `ref_name` has its shipped meaning.
+5. **§3.5's notice is accepted by all three:**
+   - planeter reads `schema_version` first, so a `refusal-v1` from `verify` becomes a typed refusal for them, not an empty stdout;
+   - **`log`'s and `worktree-status`'s move to exit 2 is neutral for planeter,** who will run its suite on the release that makes it.
+
+**Noted, not ours to change:**
+- planeter matches the substring `lock conflict` in prikk's stderr today (`planeter-transport/src/propose.rs`). The prose is not
+  promised; **once §3's seam ships, the `lock-conflict` id is,** and the acknowledgement letter says so.
+- planeter builds nothing on this RFC until a release names it in `### Output changes`.
 
 ## 8. Decided
 

@@ -171,8 +171,12 @@
   - **In `--format json` it has its own array** (`received_unadopted[]`), **never an item of `publication_trust_issues[]`.** That array
     keeps its meaning, "every item blocks" (RFC 174 §4.1, no severity in `verify`), which planeter's delivery rule reads. (Architect's
     verification, 2026-11-28.)
+  - **`received_unadopted[]` is P: always present, empty when there is none,** from the release that changes the exit code, which
+    names the change in `### Output changes` (planeter's condition, 2026-11-28). A reader that does not know the array then meets it on
+    every report, never only when it holds an item.
 - Anything reachable from a local ref stays blocking.
-- **This changes an exit code planeter reads:** exit 1 becomes exit 0. **It is a question to them, not a decision.**
+- **This changes an exit code planeter reads:** exit 1 becomes exit 0. **planeter says change it, on the condition above** (their delivery
+  refuses any received ref before it reads `verify`, and will also treat any item of `received_unadopted[]` as blocking).
 
 ### E. Who first sealed a block
 
@@ -220,6 +224,13 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
   - **Stage 2** is A and B: the chain, statements and prefix checks. It serves what crosses repositories: planeter's forge accepting only
     signed statements, and inklkunn's readers checking that a later archive continues an earlier one.
   - **Stage 2 is built only if planeter or inklkunn, having read this, say they will use it.** The letter asks them.
+  - **Their answers (2026-11-28) split Stage 2:**
+    - **A and B2 are built:** planeter's forge will apply statements, and their RFC 013 (a maintainer adds a key by a delivery) waits for
+      them instead of a convention file in users' repositories. A is needed with B2: an applied statement is a signed record `verify`
+      checks.
+    - **B1 (`archive verify --extends`, and `archive import`'s comparison against the importer's chain) is not built:** neither consumer
+      would use it. planeter decides continuity from the live repository it holds; inklkunn keeps no chain of archives. It waits on a
+      consumer's word (ROADMAP row).
 - **The price:** about 1,500 lines across `prikk-store`, `prikk-cli` and `verify` (H3a2 §7, less the snapshot rewrite and the one-step
   signing).
 - **Tests:**
@@ -240,11 +251,11 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
   - the §2 sentences and fields;
   - **`ref complete --plan-only`'s exit code.**
 
-## 7. For the owner: three decisions, each with the architect's recommendation
+## 7. For the owner: four decisions (1 to 3 approved, 4 open), each with the architect's recommendation
 
 **The owner, 2026-11-28:** *"Your recommendations are almost approved. However, verify carefully they match my fundamental philosophy."*
 **The architect's reading:**
-- the three recommendations below are approved, subject to that verification;
+- recommendations 1 to 3 below are approved, subject to that verification (4 came later, from planeter, and is open);
 - **the verification found four places in this RFC that did not hold, now corrected:**
   - the `verify` chain line (§3A);
   - unrelated repositories sharing a trust tip (§3B);
@@ -270,9 +281,9 @@ unactionable warning; no state that no command clears; no claim wider than the m
    - **It protects less than it appears to:** a process that can write `.prikk` can truncate the chain to before the lock, and the result
      is consistent with itself (ack 043). The lock would stop only honest use of prikk's own unsigned verbs, which is the consumer's policy
      to decide, not a repository state.
-   - **What serves the need instead:** a forge that wants "signed transitions only" applies only statements (B2), and checks with B1 that
-     what it holds extends what it held. B1 reports `extends yours by N transitions (S signed, U unsigned)`, so a consumer can refuse
-     unsigned ones by its own rule, with no state in the repository.
+   - **What serves the need instead:** a forge that wants "signed transitions only" applies only statements (B2), and judges continuity
+     against what it holds, by its own rule, with no state in the repository. (B1 would have reported `extends yours by N transitions (S
+     signed, U unsigned)`; it is not built, since planeter checks continuity from its live repository: §6.)
    - **This rests on Stage 2** (statements and prefix checks), which is built only on a consumer's word (§6). **If it is not built, nothing
      in prikk serves "signed transitions only",** and the recommendation is still no lock: a forge then keeps that rule by not running the
      unsigned verbs, outside prikk.
@@ -290,6 +301,44 @@ unactionable warning; no state that no command clears; no claim wider than the m
    - **The cost:** an exit code changes, and planeter's delivery rule reads it. The letter asks them first; they may keep a stricter gate
      on the id.
 
+4. **May a statement be bound to the repository it is for? (planeter, 2026-11-28; added after the owner's approval of 1 to 3, so it is
+   the owner's to rule.) Recommended: yes, by a block its local history holds, never by an identifier.**
+   - **The problem (§3B):** a statement is valid in every repository whose trust tip it names, and unrelated repositories with the same
+     trust record share a tip. **On a forge that hosts many projects of the same maintainers, that is the common case.** A `remove` or
+     `retire` made for one project, applied to another, takes a key out where nobody meant it: recoverable (an unsigned record is always
+     possible), but wider than what the maintainer signed for.
+   - **The mechanism:** `trust statement … --trust-tip <hash> --holding <block-id> --out <file>`, **with `--holding` required.**
+     - **`trust apply` refuses unless the history of a local ref holds that block,** never counting `remotes/`, so a proposer cannot plant
+       it. The refusal is `statement-block-not-held`. Its message names the block, says the statement was made for a repository whose
+       history holds it, and gives two ways out: a statement naming a block of this repository (`prikk log` lists them), or the unsigned
+       verb.
+     - **What a statement then means, stated plainly:** it *"applies to every repository whose trust record is this one and whose
+       history holds block B: this repository, its copies and its forks"*. Unrelated repositories no longer share a statement. A fork
+       still does, because a fork is a copy of the history.
+   - **Not an identity, so the settled ruling stands:**
+     - a block id is content, and the ruling already places identity in patch ids and keys;
+     - the statement asserts nothing about which repository it is. It states a precondition, and the receiver checks it against what it
+       holds, which is §3B's own rule.
+   - **`trust statement` still opens no repository.** The block id is given, like the trust tip.
+     - The page recommends the current branch's root block, which never leaves the history.
+     - A tip block can leave it (`uncommit`), and the statement then refuses: the safe direction.
+   - **Two limits, stated plainly:**
+     - a repository with no block yet cannot be named; its trust changes by the unsigned verbs, as at setup;
+     - **a key lost across N repositories takes N statements,** one per repository. That is what binding means.
+   - **The price:**
+     - one required flag, one check (a walk from the local refs, on a rare command) and one refusal id;
+     - **two hostile tests:** an unrelated repository with the same trust tip refuses, and a block held only under `remotes/` refuses.
+   - **If accepted, §3B changes:**
+     - the "unrelated repositories share a trust tip" paragraph names this remedy;
+     - `trust statement` and `trust apply` print the block beside the trust tip;
+     - the two-repositories test expects a refusal in the second repository.
+   - **The alternatives, and why not:**
+     - **unchanged, with the coverage printed:** every forge must route statements by itself, and one that forgets is open. planeter:
+       *"so that no forge has to remember to"*;
+     - **a random value in the root epoch, so tips never collide:** that is a repository identifier by another name, and would reopen the
+       settled ruling.
+   - **What the user sees:** one more flag on `trust statement`, and the block printed with the trust tip.
+
 **And the staging (§6): Stage 1 in 0.60.0, if the owner accepts this RFC; Stage 2 only on a consumer's word.**
 
 **The consumers' answers so far (2026-11-28):**
@@ -298,5 +347,10 @@ unactionable warning; no state that no command clears; no claim wider than the m
   - their permanent removal makes a new root;
   - they keep no chain of archives.
   They also say the unsigned-record rule is "what our operators need most".
-- **planeter's answer is still to come.** It decides Stage 2 (their forge's statements), and D's exit code. Release scheduling is the
-owner's.
+- **planeter (2026-11-28, from the letter; they have not yet read this RFC itself and will say where it does not serve them):**
+  - **D: change the exit code,** on the condition that `received_unadopted[]` is always present (§3D, now written in);
+  - **B2: yes, their forge will apply statements,** and their RFC 013 waits for them;
+  - **B1: not now,** since they judge continuity from the live repository they hold;
+  - **one request: bind a statement to its repository** (item 4);
+  - retire and rotate from a point: nothing of theirs depends on them today.
+- **So Stage 2 is A and B2, without B1** (§6). Release scheduling is the owner's.
