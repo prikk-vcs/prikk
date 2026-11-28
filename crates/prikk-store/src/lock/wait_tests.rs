@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use super::test_hooks::with_incomplete_grace;
+use super::test_hooks::{with_incomplete_grace, with_unreadable_lock_files};
 use super::{
     DEFAULT_LOCK_WAIT_SECONDS, MAX_LOCK_WAIT_SECONDS, Rank, held_ranks_of_this_thread,
     parse_lock_wait, test_hooks, with_lock_wait, with_lock_wait_text,
@@ -477,6 +477,131 @@ fn a_body_still_being_written_is_read_again() {
         lock.0.err(),
         lock.1
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **A lock file that cannot be read is looked at again, and a file that is then gone is taken** (0.60.0 LW). On Windows a lock its holder is
+/// releasing keeps its name for a moment and cannot be opened; the test makes every read of an existing lock file fail, and its holder lets go
+/// **after the waiter has looked at the unreadable file** (the writer waits for that look, not for the clock; the grace is ten seconds so no thread
+/// has a deadline). The waiter takes the lock. Perturb: the grace removed (a failing read refuses at once, the code before LW): red.
+#[test]
+fn an_unreadable_lock_that_is_then_gone_is_taken() {
+    let (layout, root) = repository("lw-unreadable-then-gone");
+    let path = active_path(&layout);
+    let (child, body) = body_naming_another_running_process("active");
+    put(&path, &body);
+    let looks = Arc::new(AtomicUsize::new(0));
+    let releaser = {
+        let (path, looks) = (path.clone(), looks.clone());
+        std::thread::spawn(move || {
+            wait_for_a_look_after(&looks, 0);
+            fs::remove_file(&path).expect("released");
+        })
+    };
+    let lock = with_unreadable_lock_files(Duration::from_secs(10), looks, || {
+        let lock = with_lock_wait(Duration::from_secs(20), || {
+            ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+        });
+        (lock, test_hooks::trace())
+    });
+    releaser.join().unwrap();
+    stop(child);
+    assert!(
+        lock.0.is_ok(),
+        "looked again at the unreadable file, found it gone and took the lock: {:?}; what it saw: {}",
+        lock.0.err(),
+        lock.1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **A file that stays unreadable is refused after the grace, with today's sentence:** nothing about the reading is added to it when nothing was
+/// waited for first (the suffix is the wait's, and there was none). Perturb: the grace not given (red: the lower bound and the looks); an
+/// unreadable file waited for to the bound (red: the upper bound).
+#[test]
+fn a_lock_that_stays_unreadable_is_refused_after_the_grace() {
+    let (layout, root) = repository("lw-stays-unreadable");
+    let (child, body) = body_naming_another_running_process("active");
+    put(&active_path(&layout), &body);
+    let looks = Arc::new(AtomicUsize::new(0));
+    let started = Instant::now();
+    let refused = with_unreadable_lock_files(Duration::from_millis(50), looks.clone(), || {
+        with_lock_wait(Duration::from_secs(5), || {
+            ActiveLock::acquire(&layout, DEFAULT_ACTIVE_NAME)
+        })
+    });
+    let waited = started.elapsed();
+    stop(child);
+    let text = conflict_text(refused);
+    assert!(
+        waited >= Duration::from_millis(50),
+        "given the grace: {waited:?}"
+    );
+    assert!(waited < Duration::from_secs(5), "not the bound: {waited:?}");
+    assert!(
+        looks.load(Ordering::SeqCst) >= 2,
+        "it looked more than once"
+    );
+    assert!(
+        text.ends_with("is confirmed gone"),
+        "today's sentence, nothing added: {text}"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **The readers that only look settle a failing read too** (0.60.0 LW): `prikk unlock`'s listing and the in-flight judge, over a lock its holder is
+/// releasing (the test makes every read of it fail; the holder lets go after the first failing look). Neither reports an error or a lock that is gone:
+/// the listing holds no lock, the judge sees no publisher. Perturb: `read_lock_file_settled` reading once (the code before LW): both red.
+#[test]
+fn the_readers_that_only_look_find_a_lock_that_is_being_released_gone() {
+    let (layout, root) = repository("lw-readers");
+    let path = active_path(&layout);
+    let (child, body) = body_naming_another_running_process("active");
+    put(&path, &body);
+    let looks = Arc::new(AtomicUsize::new(0));
+    let releaser = {
+        let (path, looks) = (path.clone(), looks.clone());
+        std::thread::spawn(move || {
+            wait_for_a_look_after(&looks, 0);
+            fs::remove_file(&path).expect("released");
+        })
+    };
+    let (listing, publisher) = with_unreadable_lock_files(Duration::from_secs(10), looks, || {
+        (
+            crate::unlock::list_held_locks(&layout),
+            crate::refs::in_flight::active_publisher(&layout),
+        )
+    });
+    releaser.join().unwrap();
+    stop(child);
+    let listing = listing.expect("the listing is not an error");
+    assert!(
+        listing.iter().all(|lock| lock.path != path),
+        "the released lock is not listed: {listing:?}"
+    );
+    assert_eq!(publisher.expect("the judge is not an error"), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// **A lock that stays unreadable is still an error to a reader that only looks, after the grace** (what it was before LW).
+#[test]
+fn a_lock_that_stays_unreadable_is_still_an_error_to_the_readers() {
+    let (layout, root) = repository("lw-readers-stay");
+    let (child, body) = body_naming_another_running_process("active");
+    put(&active_path(&layout), &body);
+    let (listing, publisher) = with_unreadable_lock_files(
+        Duration::from_millis(50),
+        Arc::new(AtomicUsize::new(0)),
+        || {
+            (
+                crate::unlock::list_held_locks(&layout),
+                crate::refs::in_flight::active_publisher(&layout),
+            )
+        },
+    );
+    stop(child);
+    assert!(listing.is_err(), "the listing says it could not read it");
+    assert!(publisher.is_err(), "the judge says it could not read it");
     let _ = fs::remove_dir_all(root);
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — on Windows a wait for a lock could refuse at the moment its holder released it
+
+A defect in 0.59.0 (found in a CI run of the Windows suite, 1 of 6 runs of the lock-wait tests that day). A lock file whose holder is releasing it keeps its name for a moment on Windows and cannot be opened (`ERROR_ACCESS_DENIED`, the same state `retry_denied_create` already handles for a create), so a waiter's read of it failed and the waiter refused with `(waited 0.2 s: the holder could not be read)` and a sentence naming `prikk unlock`, for a lock that was gone a moment later. A read that fails while waiting is now looked at again for the 250 ms a body being written gets: a file then gone retries the create, one then readable is judged as any other, and one still unreadable after the 250 ms is refused as before, with the same words. `prikk unlock`'s listing and the in-flight judge (`verify`, `doctor`, the writers' precondition) read a lock file the same way and now settle a failing read for the same 250 ms instead of reporting an error. Linux and macOS are unchanged (an unlink removes the name at once there). Not measured on Windows here; the Windows CI run is the check.
+
 ## 0.59.0 — 2026-11-28
 
 ### Security

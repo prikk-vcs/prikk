@@ -21,7 +21,6 @@
 use prikk_error::Result;
 use prikk_object::{ObjectId, RefUpdatePayload};
 
-use crate::foundation::fsutil::read_file_if_exists;
 use crate::foundation::layout::RepositoryLayout;
 use crate::lock_holder::{self, PidLiveness, SystemProbe};
 
@@ -160,7 +159,10 @@ pub(crate) fn ref_publisher_running(layout: &RepositoryLayout, ref_name: &str) -
 
 fn holder_at(layout: &RepositoryLayout, lock_path: &std::path::Path) -> Result<Holder> {
     let relative = layout.repository_relative(lock_path)?;
-    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
+    // 0.60.0 LW: a lock its holder is releasing may be unreadable for a moment on Windows; looked at again, then no lock, not an error.
+    let Some(bytes) =
+        crate::lock::read_lock_file_settled(layout.repository_mutation_root(), &relative)?
+    else {
         return Ok(Holder::NoLock);
     };
     let seen = lock_holder::inspect(&bytes, &SystemProbe);

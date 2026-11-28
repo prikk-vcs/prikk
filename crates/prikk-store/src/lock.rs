@@ -622,6 +622,7 @@ pub(crate) mod test_hooks {
 
     thread_local! {
         pub(super) static GRACE: Cell<Option<Duration>> = const { Cell::new(None) };
+        static UNREADABLE: Cell<bool> = const { Cell::new(false) };
         static LOOKS: RefCell<Option<Arc<AtomicUsize>>> = const { RefCell::new(None) };
         static TRACE: RefCell<(Option<Instant>, Vec<String>)> = const { RefCell::new((None, Vec::new())) };
     }
@@ -639,6 +640,23 @@ pub(crate) mod test_hooks {
         LOOKS.with(|cell| *cell.borrow_mut() = None);
         GRACE.with(|cell| cell.set(before));
         out
+    }
+
+    /// Run `body` with every read of an existing lock file failing, as a Windows read of a file being deleted does (0.60.0 LW); a read of a file that
+    /// is gone answers as ever. The failing reads are counted in `looks` too, so a writer can wait for the waiter's look instead of for the clock.
+    pub(crate) fn with_unreadable_lock_files<T>(
+        grace: Duration,
+        looks: Arc<AtomicUsize>,
+        body: impl FnOnce() -> T,
+    ) -> T {
+        UNREADABLE.with(|cell| cell.set(true));
+        let out = with_incomplete_grace(grace, looks, body);
+        UNREADABLE.with(|cell| cell.set(false));
+        out
+    }
+
+    pub(super) fn unreadable_lock_files() -> bool {
+        UNREADABLE.with(Cell::get)
     }
 
     pub(super) fn look_at_an_incomplete_body() {
@@ -672,6 +690,8 @@ pub(crate) struct Waiting {
     started: Option<Instant>,
     announced: bool,
     incomplete_since: Option<Instant>,
+    /// When a read of the lock file first failed in the current run of failing reads (0.60.0 LW): the same grace as `incomplete_since`.
+    unreadable_since: Option<Instant>,
     pid: Option<u32>,
 }
 
@@ -681,6 +701,7 @@ impl Waiting {
             started: None,
             announced: false,
             incomplete_since: None,
+            unreadable_since: None,
             pid: None,
         }
     }
@@ -741,6 +762,44 @@ enum Decision {
     Refuse(String),
 }
 
+/// The read of a lock file the waiter has found. In a test it can be made to fail while the file exists ([`test_hooks::with_unreadable_lock_files`]).
+fn read_lock_body(mutation_root: &MutationRoot, relative: &Path) -> Result<Option<Vec<u8>>> {
+    #[cfg(test)]
+    if test_hooks::unreadable_lock_files()
+        && matches!(inspect_entry(mutation_root, relative), Ok(Some(_)))
+    {
+        return Err(PrikkError::Io {
+            kind: Some(std::io::ErrorKind::PermissionDenied),
+            context: "test: the lock file is being deleted and cannot be opened".to_string(),
+        });
+    }
+    read_file_if_exists(mutation_root, relative)
+}
+
+/// Read a lock file for a reader that only looks (`prikk unlock`'s listing, the in-flight judge), **settling a failing read the way a waiter does**
+/// (0.60.0 LW): a read that fails is looked at again for the grace a body being written gets, because on Windows a lock its holder is releasing keeps
+/// its name for a moment and cannot be opened. A file then gone is `None` (no lock); one then readable is read; one still unreadable after the grace
+/// returns the last error, as before.
+pub(crate) fn read_lock_file_settled(
+    mutation_root: &MutationRoot,
+    relative: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let started = Instant::now();
+    loop {
+        match read_lock_body(mutation_root, relative) {
+            Err(error) => {
+                #[cfg(test)]
+                test_hooks::look_at_an_incomplete_body();
+                if started.elapsed() >= incomplete_grace() {
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            read => return read,
+        }
+    }
+}
+
 /// A create has found the name taken: wait, or refuse. **Refuse at once, with no suffix,** when waiting is off, when this process holds the
 /// lock or the file's pid is this process's own, when the lock does not rank after every lock this thread holds, and when the holder does
 /// not appear to be running (gone, reused, rebooted, another machine, an older prikk's body, a body still incomplete after a moment).
@@ -757,12 +816,27 @@ fn wait_decision(
         return Decision::Refuse(String::new());
     }
     let bound = setting.bound();
-    let bytes = match read_file_if_exists(mutation_root, relative) {
+    let bytes = match read_lock_body(mutation_root, relative) {
         // Released between the create and the read: try again at once.
         Ok(None) => return Decision::Retry,
         Ok(Some(bytes)) => bytes,
-        Err(_) => return Decision::Refuse(waiting.suffix(bound, "the holder could not be read")),
+        // **A read that fails is looked at again for the grace a body being written gets** (0.60.0 LW). On Windows a file being deleted keeps
+        // its name for a moment and cannot be opened (`ERROR_ACCESS_DENIED`; see `retry_denied_create`), so the read of a lock its holder is
+        // releasing fails: refusing there names `prikk unlock` for a lock that is gone a moment later. A file then gone retries the create; a
+        // file then readable is judged as any other; one still unreadable after the grace is refused as before, with the same words.
+        Err(_) => {
+            #[cfg(test)]
+            test_hooks::look_at_an_incomplete_body();
+            let since = *waiting.unreadable_since.get_or_insert_with(Instant::now);
+            if since.elapsed() < incomplete_grace() {
+                std::thread::sleep(Duration::from_millis(1));
+                return Decision::Retry;
+            }
+            return Decision::Refuse(waiting.suffix(bound, "the holder could not be read"));
+        }
     };
+    // A read that works: the next unreadable moment is its own.
+    waiting.unreadable_since = None;
     let seen = crate::lock_holder::inspect(&bytes, &crate::lock_holder::SystemProbe);
     #[cfg(test)]
     test_hooks::note(format!("{:?}, {} bytes", seen.reason, bytes.len()));

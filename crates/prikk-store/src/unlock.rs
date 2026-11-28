@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use prikk_error::Result;
 
 use crate::foundation::fsutil::{
-    EntryKind, list_directory_tolerating_absence, read_file_if_exists, remove_file_required,
+    EntryKind, list_directory_tolerating_absence, remove_file_required,
 };
 use crate::foundation::layout::{LockableContainer, RepositoryLayout};
 use crate::lock_holder::{self, SystemProbe};
@@ -70,7 +70,10 @@ pub struct HeldLock {
 
 fn read_lock_if_present(layout: &RepositoryLayout, path: &Path) -> Result<Option<HeldLock>> {
     let relative = layout.repository_relative(path)?;
-    let Some(bytes) = read_file_if_exists(layout.repository_mutation_root(), &relative)? else {
+    // 0.60.0 LW: a lock its holder is releasing may be unreadable for a moment on Windows; looked at again, not reported as an error.
+    let Some(bytes) =
+        crate::lock::read_lock_file_settled(layout.repository_mutation_root(), &relative)?
+    else {
         return Ok(None);
     };
     let seen = lock_holder::inspect(&bytes, &SystemProbe);
