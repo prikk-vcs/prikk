@@ -201,11 +201,11 @@ same command). A block a local branch or tag reaches is unaffected, and so is `-
 
 **Which tip `tag create --target <ref>` names (0.60.0).** The ref's tip **as the command reads it, before it writes**; the `target block:` line it
 prints is that block, and it is what the tag is written at. A publication that completes while the command waits for a container lock to write its
-tag (the object store's, or the pointer index's) is **not reflected**: the tag then names a tip the ref really had, one publication behind. This is
+tag (the object store's, or the pointer index's) is **not reflected**: the tag then names a tip the ref really had when the command read it, older than what was published while it waited. This is
 the same with the wait off (`PRIKK_LOCK_WAIT_SECONDS=0`). `tag create` takes no active lock, on purpose: beside a long `sync seal` it
 interleaves instead of waiting for it. **`branch create --from <ref>` does take the active lock**, which a running `seal` holds for its whole run, so
-it waits for the seal as a whole and names the published tip. To tag the tip a running `seal` is publishing, wait for it (`prikk verify` reads clean
-when it has finished) and then run `tag create`.
+it waits for the seal as a whole and names the published tip. To tag the tip a running `seal` is publishing, run `tag create` after that `seal` has returned; `prikk unlock`, with no argument, lists
+the locks still held and changes nothing.
 
 **Key ids.**
 - `setup` (when it creates a seed) and `key generate --out` write the new key's id,
