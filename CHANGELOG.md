@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Output changes
+
+- **`prikk help tag`** gains one `note:` line stating which tip `tag create --target <ref>` names: the ref's tip as the command reads it, before it writes (the `target block:` line it prints), not a publication that completes while it waits for a lock; `branch create --from <ref>` waits for a running `seal` as a whole and names the published tip. **No output of `tag create` changes, and no behaviour:** the rule is what the command has always done, stated (and held by a test) after external review 058 §2.5 measured it (24 of 31 tag creates that waited through a `seal` ended at the old tip, every one waiting for the object-store or pointer-index lock).
+
 ### Fixed — on Windows a wait for a lock could refuse at the moment its holder released it
 
 A defect in 0.59.0 (found in a CI run of the Windows suite, 1 of 6 Windows CI runs that day). A lock file whose holder is releasing it keeps its name for a moment on Windows and cannot be opened (`ERROR_ACCESS_DENIED`, the same state `retry_denied_create` already handles for a create), so a waiter's read of it failed and the waiter refused with `(waited 0.2 s: the holder could not be read)` and a sentence naming `prikk unlock`, for a lock that was gone a moment later. A read that fails while waiting is now looked at again for the 250 ms a body being written gets: a file then gone retries the create, one then readable is judged as any other, and one still unreadable after the 250 ms is refused as before, with the same words. `prikk unlock`'s listing and the in-flight judge (`verify`, `doctor`, the writers' precondition) read a lock file the same way and now settle a failing read for the same 250 ms instead of reporting an error. On Linux and macOS a released lock reads as gone at once, so a release never met this; there, the only change is that a lock file that cannot be read is reported 250 ms later. Not yet measured on Windows outside CI.

@@ -343,6 +343,7 @@ pub(crate) const COMMANDS: &[Command] = &[
         help_lines: &[
             "  prikk tag [list] [--format json]          List tags deterministically (name, target block)",
             "  prikk tag create tags/<name> --target <ref|block> [-m|--message <message>]  Publish a tag at an existing target (a block id must be reached by a local branch or tag)",
+            "  note: --target <ref> names the ref's tip as the command reads it, before it writes, and `target block:` prints that block; a publication that completes while the tag waits for a lock to be written is not reflected (`branch create --from <ref>` waits for a running `seal` as a whole, so it names the published tip)",
         ],
     },
     Command {

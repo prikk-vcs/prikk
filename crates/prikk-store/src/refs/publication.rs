@@ -223,6 +223,8 @@ fn publish_body(
             // `PointerLeading` retry, which completes cleanly) -- confirming this is the one state
             // DC-38's design treats as unrecoverable, not merely diagnosed. The pointer-first order
             // below is what prevents a crash from ever producing it through normal publish.
+            #[cfg(feature = "test-support")]
+            pause_for_test("PRIKK_TEST_PAUSE_BEFORE_POINTER");
             store.ensure_current_matches(
                 &publication.ref_name,
                 publication.expected_previous_ref_state_id,
@@ -236,7 +238,7 @@ fn publish_body(
                 },
             )?;
             #[cfg(feature = "test-support")]
-            pause_after_pointer_for_test();
+            pause_for_test("PRIKK_TEST_PAUSE_AFTER_POINTER");
             container::append_ref_container_record_with_replay(
                 &store.layout,
                 ref_name_key,
@@ -566,12 +568,15 @@ pub(crate) fn queue_already_sealed(
     }))
 }
 
-/// 0.58.0 F2's test hook for a command run as a binary: with `PRIKK_TEST_PAUSE_AFTER_POINTER=<go file>` set (and `prikk-store`'s `test-support`
-/// feature, which no shipped build enables), a publication writes `<go file>.waiting` when its pointer is written and its log record is not, and
-/// waits until `<go file>` exists (at most 60 seconds): the window in which the ref's pointer leads its log while the publisher is running.
+/// The test hooks of a command run as a binary (`prikk-store`'s `test-support` feature, which no shipped build enables): with `<var>=<go file>` set, a
+/// publication writes `<go file>.waiting` at the hook's point and waits until `<go file>` exists (at most 60 seconds), holding whatever it holds.
+/// - **`PRIKK_TEST_PAUSE_AFTER_POINTER`** (0.58.0 F2): after the pointer is written and before the log record: the window in which the ref's pointer
+///   leads its log while the publisher is running.
+/// - **`PRIKK_TEST_PAUSE_BEFORE_POINTER`** (0.60.0 T): after the pointer-index and ref-log container locks are taken and before the pointer is
+///   written: the window in which a publisher holds those locks and the ref still names the old tip.
 #[cfg(feature = "test-support")]
-fn pause_after_pointer_for_test() {
-    let Some(go) = std::env::var_os("PRIKK_TEST_PAUSE_AFTER_POINTER") else {
+fn pause_for_test(var: &str) {
+    let Some(go) = std::env::var_os(var) else {
         return;
     };
     let go = std::path::PathBuf::from(go);
