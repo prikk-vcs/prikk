@@ -30,7 +30,8 @@
 //! 0.54.0 step 3 Part 3's `prikk extract --claim`** (`AnchorSite::ExtractClaim`, through
 //! `block_state::anchored_parent_state`, Stack A's own function, reused rather than re-implemented): a claim is read
 //! against its own declared parent, never this repository's own current ref tip (`SealFromAccepted`'s own choice),
-//! so it needs its own site name even though it shares Stack A's own function. 2c's anchored
+//! so it needs its own site name even though it shares Stack A's own function. **A sixth, 0.60.0 S1's `prikk show`**
+//! (`AnchorSite::Show`, the same function again): a read of the state a block's own patches fold onto, never a write. 2c's anchored
 //! *text* is not one of them: it is hash-checked against the content id the caller expects, so it certifies itself. A
 //! read-only report (`Anchoring::ReadOnlyReport`) shows state as its block signs it and is not one of them either
 //! (§10.3c ruling 1).
@@ -92,6 +93,9 @@ pub(crate) enum AnchorSite {
     /// per-site diagnostics (this module's own top-of-file doc) need the name kept separate, not
     /// folded into either of the other two.
     ExtractClaim,
+    /// `prikk show <block|patch>` (0.60.0 S1): the state a block's own patches fold onto, and the state at the anchor of a pending patch's
+    /// claim chain. A read; it never writes. A different site from every other, so its own control counts only `show`'s uses.
+    Show,
 }
 
 impl AnchorSite {
@@ -106,6 +110,7 @@ impl AnchorSite {
             Self::Baseline => "baseline",
             Self::Extract => "extract",
             Self::ExtractClaim => "extract-claim",
+            Self::Show => "show",
         }
     }
 }
@@ -233,8 +238,8 @@ fn count_use(site: AnchorSite) {
 fn count_use(_site: AnchorSite) {}
 
 /// How many times this thread's anchor-trust function admitted an anchor for `site` (`"seal"`, `"merge"`,
-/// `"seal-from-accepted"`, `"worktree-write"`, `"snapshot-materialize"`, `"baseline"`, `"extract"` or
-/// `"extract-claim"`), since the thread started or the last [`reset_anchor_uses_for_test_support`]. The
+/// `"seal-from-accepted"`, `"worktree-write"`, `"snapshot-materialize"`, `"baseline"`, `"extract"`,
+/// `"extract-claim"` or `"show"`), since the thread started or the last [`reset_anchor_uses_for_test_support`]. The
 /// per-call-site controls read it; nothing in a shipped build does.
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]

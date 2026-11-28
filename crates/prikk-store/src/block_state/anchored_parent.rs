@@ -51,6 +51,9 @@ pub(crate) struct AnchoredParent {
     pub(crate) folded: Vec<ObjectId>,
     /// Blocks the id-only walk read: the anchor and everything below it.
     pub(crate) id_only_blocks: usize,
+    /// The genesis block this walk reached (0.60.0 S1): what `lineage_horizon(parent)` returns, found on the way, so a reader that needs the horizon
+    /// (`show`'s materialize fallback) does not walk the lineage a second time. The walk reaching genesis is required for this to be `Some` at all.
+    pub(crate) horizon: ObjectId,
 }
 
 /// A block read as `validate_v2_lineage` reads one: present, a Block, schema 2, decodes, shape-valid.
@@ -81,14 +84,14 @@ pub(crate) fn anchored_parent_state(
     let mut after_anchor: Vec<(ObjectId, BlockPayload)> = Vec::new();
     let mut visited = BTreeSet::new();
     let mut current = parent;
-    let (anchor, manifest) = loop {
+    let (anchor_id, anchor, manifest) = loop {
         if !visited.insert(current) {
             return None;
         }
         let payload = read_checked_block(reader, current)?;
         if payload.snapshot_blob_ref.is_some() {
             match trust.admit(reader, current, after_anchor.len(), site) {
-                Admission::Usable(manifest) => break (payload, manifest),
+                Admission::Usable(manifest) => break (current, payload, manifest),
                 Admission::Signal(finding) => {
                     record_anchor_fallback(SnapshotAnchorFallback::for_state(current, finding));
                     return None;
@@ -108,8 +111,10 @@ pub(crate) fn anchored_parent_state(
     // 2. The blocks from genesis to the anchor, for the id-only walk. Reaching genesis is required: a lineage that
     //    ends anywhere else is the full walk's to report.
     let mut below: Vec<BlockPayload> = vec![anchor.clone()];
+    let mut horizon = anchor_id;
     let mut cursor = state_derivation_parent(&anchor);
     while let Some(block_id) = cursor {
+        horizon = block_id;
         if !visited.insert(block_id) {
             return None;
         }
@@ -159,6 +164,7 @@ pub(crate) fn anchored_parent_state(
         text_cache,
         folded,
         id_only_blocks: below.len(),
+        horizon,
     })
 }
 

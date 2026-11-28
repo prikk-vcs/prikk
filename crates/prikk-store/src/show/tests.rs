@@ -275,14 +275,15 @@ fn assert_fold_to_end_matches_lifecycle_state_at(layout: &RepositoryLayout, bloc
             .unwrap()
             .unwrap();
     let block = prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
-    let (mut state, parent_id) =
-        super::block_starting_state(&object_store, block_id, &block).unwrap();
-    let sealed_lineage = parent_id.map(|parent_id| {
-        (
-            parent_id,
-            crate::merge::evidence::lineage_horizon(&object_store, parent_id).unwrap(),
-        )
-    });
+    let (mut state, sealed_lineage) =
+        super::block_starting_state(layout, &object_store, block_id, &block).unwrap();
+    // The horizon the derivation returned is the one `lineage_horizon` walks to.
+    if let Some((parent_id, horizon)) = sealed_lineage {
+        assert_eq!(
+            horizon,
+            crate::merge::evidence::lineage_horizon(&object_store, parent_id).unwrap()
+        );
+    }
     let mut text_cache = crate::lifecycle_cache::replay::TextCache::new();
     for patch_id in &block.patch_ids {
         crate::lifecycle_cache::replay::apply_one_patch_with_materialize_fallback(
@@ -3128,4 +3129,79 @@ fn show_names_a_shared_block_collision_as_the_reason() {
     }
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+// ---- 0.60.0 S1: `show <block>` derives from the nearest authenticated checkpoint ---------------------------------
+
+/// **`show`'s own site of the anchor-trust function** (0.60.0 S1): a block's starting state is derived from the nearest checkpoint the function
+/// admits, and the answer is the one the full walk from the root gives, patch for patch. Adopted, recorded, near -> `show` admits an anchor (the per-site
+/// counter reads it); the same blocks with the record deleted -> no anchor, the full walk, the identical `ShowPatch`es; a checkpoint whose signer
+/// is not adopted -> the same, silently. **Perturb:** `AnchorSite::Show`'s use in `state_and_horizon_at_block` replaced by `lifecycle_state_at` alone: the
+/// counter stays 0 on the adopted history and the first assertion goes red.
+#[test]
+fn show_derives_a_blocks_state_from_the_nearest_admitted_checkpoint_and_gives_the_full_walks_answer()
+ {
+    use crate::anchor_trust::{anchor_uses_for_test_support, reset_anchor_uses_for_test_support};
+    use crate::test_gates::test_support::{AnchoredHistory, Signing};
+    use crate::verified_blocks::record_path;
+
+    // 70 blocks: the checkpoints are blocks 1 and 65; blocks 66..70 sit after the second, block 64 is 62 behind the first's reach.
+    let history = AnchoredHistory::standard_signed("s1-show-anchored", 70, Signing::Adopted);
+    let probes: Vec<ObjectId> = [1, 8, 40, 63, 64, 65, 66, 69]
+        .iter()
+        .map(|index| *history.blocks.get(*index).unwrap())
+        .collect();
+    reset_anchor_uses_for_test_support();
+    let anchored: Vec<_> = probes
+        .iter()
+        .map(|id| show(&history.layout, *id).unwrap())
+        .collect();
+    assert!(
+        anchor_uses_for_test_support("show") >= probes.len() - 2,
+        "show admitted an anchor for the blocks that have one in reach: {}",
+        anchor_uses_for_test_support("show")
+    );
+    for other in ["seal", "merge", "extract", "worktree-write", "baseline"] {
+        assert_eq!(
+            anchor_uses_for_test_support(other),
+            0,
+            "not the {other} site"
+        );
+    }
+
+    // The state and the horizon, at each probe, are the full walk's: the horizon the anchored walk found on its way is what `lineage_horizon` returns.
+    {
+        let store = crate::object_store::ObjectReadSnapshot::open(&history.layout).unwrap();
+        for id in &probes {
+            let (state, horizon) =
+                super::state_and_horizon_at_block(&history.layout, &store, *id).unwrap();
+            assert_eq!(
+                horizon,
+                crate::merge::evidence::lineage_horizon(&store, *id).unwrap()
+            );
+            assert_eq!(
+                &state,
+                crate::merge::evidence::lifecycle_state_at(&store, *id)
+                    .unwrap()
+                    .state()
+            );
+        }
+    }
+    // The same blocks, with the record gone: no anchor, the full walk from the root.
+    std::fs::remove_file(record_path(&history.layout)).unwrap();
+    reset_anchor_uses_for_test_support();
+    let from_the_root: Vec<_> = probes
+        .iter()
+        .map(|id| show(&history.layout, *id).unwrap())
+        .collect();
+    assert_eq!(anchor_uses_for_test_support("show"), 0);
+    assert_eq!(anchored, from_the_root, "patch for patch, the same");
+
+    // A checkpoint signed by a key this repository has not adopted is never an anchor, and says nothing.
+    let unadopted = AnchoredHistory::standard_signed("s1-show-unadopted", 70, Signing::Unadopted);
+    reset_anchor_uses_for_test_support();
+    for index in [8, 40, 66, 69] {
+        show(&unadopted.layout, *unadopted.blocks.get(index).unwrap()).unwrap();
+    }
+    assert_eq!(anchor_uses_for_test_support("show"), 0);
 }

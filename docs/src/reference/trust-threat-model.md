@@ -226,6 +226,12 @@ not merely one a reader happened to check. The residual is the same: a trusted m
 root, together with write access to `.prikk/cache/`. Below the checkpoint, a cold commit no longer re-reads the
 content of a file it does not itself touch; `prikk verify` still does.
 
+**`prikk show <block>`, since 0.60.0, uses the identical checkpoint and the identical admission rule.** The state
+a block's own patches fold onto (and, for a patch named through a recognition claim, the state at the claim's
+anchor) comes from the same function `seal` uses, with the same four conditions; where none holds, `show` replays
+the whole lineage as before, and nothing makes `show` answer where that replay would refuse. What `show` prints is
+byte-identical either way. The residual is the same one.
+
 Current seal does not run audit plugins, evaluate attestation policy, perform semantic merge, publish
 multi-parent merge Blocks, or provide remote trust distribution.
 

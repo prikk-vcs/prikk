@@ -28,7 +28,9 @@ use prikk_object::{
 };
 
 use crate::RepositoryLayout;
+use crate::anchor_trust::AnchorSite;
 use crate::author::author_signing::{author_key_ids, require_author_key_id};
+use crate::block_state::anchored_parent::anchored_parent_state;
 use crate::claim_chain::{ClaimChainAnchor, ClaimChainWalkError, walk_claim_chain};
 use crate::foundation::layout::DEFAULT_ACTIVE_NAME;
 use crate::lifecycle_cache::replay::{TextCache, apply_one_patch_with_materialize_fallback};
@@ -282,14 +284,11 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     match envelope.object_type {
         ObjectType::Block => {
             let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
-            let (mut state, parent_id) = block_starting_state(&object_store, id, &block)?;
             // 0.54.0 Part 5c: the block's own sealed lineage, for the materialize-and-retry
             // fallback below -- `None` for a root block (no parent, so no earlier sealed lineage
             // to materialize an unstored `EditText` result from at all).
-            let sealed_lineage = match parent_id {
-                Some(parent_id) => Some((parent_id, lineage_horizon(&object_store, parent_id)?)),
-                None => None,
-            };
+            let (mut state, sealed_lineage) =
+                block_starting_state(layout, &object_store, id, &block)?;
             let mut text_cache = TextCache::new();
             let mut patches = Vec::with_capacity(block.patch_ids.len());
             for patch_id in &block.patch_ids {
@@ -381,6 +380,27 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     }
 }
 
+/// The lifecycle state **at** `block_id` (its own patches applied) and its lineage's horizon, derived from the nearest authenticated snapshot when one is in reach, else by the
+/// full replay from the root (0.60.0 S1). **The mechanism is `seal`'s, as it is** (`anchored_parent_state`, RFC 159): an anchor must be in the
+/// replay-verified record, signed by an adopted maintainer key, pass `validate_snapshot_manifest`, and be at most 63 blocks behind; every doubt is `None`,
+/// and `None` is today's full replay, so a reader is never admitted on a weaker rule than a writer, and nothing here can make `show` answer where the
+/// replay would refuse. The state is the same either way (`rfc159_identity_probe` compares it with an independent forward replay at every block; the
+/// equality test of `show` compares the rendered output).
+fn state_and_horizon_at_block(
+    layout: &RepositoryLayout,
+    object_store: &impl ObjectReader,
+    block_id: ObjectId,
+) -> Result<(NodeLifecycleState, ObjectId)> {
+    if let Some(anchored) = anchored_parent_state(layout, object_store, block_id, AnchorSite::Show)
+    {
+        return Ok((anchored.state, anchored.horizon));
+    }
+    Ok((
+        lifecycle_state_at(object_store, block_id)?.state().clone(),
+        lineage_horizon(object_store, block_id)?,
+    ))
+}
+
 /// The starting state a block's own patches fold onto, not the fold itself -- `show()`'s own loop
 /// applies the block's patches afterward, one at a time, via
 /// `apply_one_patch_with_materialize_fallback` (RFC 142, stikk 020; 0.54.0 Part 5c). The mainline
@@ -391,22 +411,22 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
 /// over this same parent chain; calling it on the *parent* here gives everything up to but not
 /// including this block, a narrower call to the existing one, not a new one.
 ///
-/// Also returns the parent id itself (`None` for a `Root` block) -- `show()`'s own caller needs it
-/// to compute the block's own `sealed_lineage` (0.54.0 Part 5c: `(parent_id,
-/// lineage_horizon(parent_id))`), the materialize-and-retry fallback's own input. Returning it here
-/// rather than re-deriving it a second time keeps `mainline_or_sole_parent(block)` called exactly
-/// once for this block.
+/// Also returns the block's own `sealed_lineage` (`None` for a `Root` block): `(parent_id,
+/// lineage_horizon(parent_id))`, the materialize-and-retry fallback's own input (0.54.0 Part 5c).
+/// The horizon comes with the state ([`state_and_horizon_at_block`]): the anchored derivation reaches
+/// genesis on its way, so it is not walked a second time (0.60.0 S1).
 fn block_starting_state(
+    layout: &RepositoryLayout,
     object_store: &impl ObjectReader,
     block_id: ObjectId,
     block: &BlockPayload,
-) -> Result<(NodeLifecycleState, Option<ObjectId>)> {
+) -> Result<(NodeLifecycleState, Option<(ObjectId, ObjectId)>)> {
     match mainline_or_sole_parent(block) {
         Some(None) => Ok((NodeLifecycleState::new(), None)),
-        Some(Some(parent_id)) => Ok((
-            lifecycle_state_at(object_store, parent_id)?.state().clone(),
-            Some(parent_id),
-        )),
+        Some(Some(parent_id)) => {
+            let (state, horizon) = state_and_horizon_at_block(layout, object_store, parent_id)?;
+            Ok((state, Some((parent_id, horizon))))
+        }
         None => Err(PrikkError::UnsupportedObjectType(format!(
             "show requires a block whose state is its parent's state plus its own patches; \
              block {block_id} has {} parents",
@@ -976,13 +996,12 @@ fn resolve_pending_patch_lifecycle(
             ClaimChainAnchor::Genesis => None,
             ClaimChainAnchor::Block(block_id) => Some(block_id),
         };
-        let mut state = match anchor {
-            Some(anchor_id) => lifecycle_state_at(object_store, anchor_id)?.state().clone(),
-            None => NodeLifecycleState::new(),
-        };
-        let sealed_lineage = match anchor {
-            Some(anchor_id) => Some((anchor_id, lineage_horizon(object_store, anchor_id)?)),
-            None => None,
+        let (mut state, sealed_lineage) = match anchor {
+            Some(anchor_id) => {
+                let (state, horizon) = state_and_horizon_at_block(layout, object_store, anchor_id)?;
+                (state, Some((anchor_id, horizon)))
+            }
+            None => (NodeLifecycleState::new(), None),
         };
         let mut text_cache = TextCache::new();
         let mut fold_failed = false;

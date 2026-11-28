@@ -33,6 +33,8 @@ mod rfc156_show_every_signer;
 mod rfc157_cat;
 #[path = "extract_and_read/rfc157_tree.rs"]
 mod rfc157_tree;
+#[path = "extract_and_read/s1_show_from_a_checkpoint_equals_show_from_the_root.rs"]
+mod s1_show_from_a_checkpoint_equals_show_from_the_root;
 #[path = "extract_and_read/show_fix_block_reading_command_sweep.rs"]
 mod show_fix_block_reading_command_sweep;
 #[path = "extract_and_read/step3_s2_log_json_parents_and_sealers.rs"]

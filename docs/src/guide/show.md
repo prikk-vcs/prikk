@@ -37,6 +37,14 @@ still renders.
 
 A block's output is the union of its patches, in the block's own canonical order.
 
+**Cost (0.60.0).** A block's starting state is derived from the nearest checkpoint this repository has verified
+and an adopted maintainer signed, at most 63 blocks back — the same rule `seal` uses (see the [trust
+model](../reference/trust-threat-model.md)) — instead of replaying the lineage from the first block. On a 2,000-block
+history this halves the storage reads `show` makes (a read of every block and patch below the checkpoint remains, as
+in `seal`: the checks the checkpoint cannot vouch for). With no such checkpoint — a repository whose record is
+empty, a checkpoint signed by a key not adopted here, a received ref nothing has verified yet — `show` replays from the
+first block, as before, and prints the same output.
+
 **Truncation matters, for a block's own patches too, not only a queue.** Every patch resolves
 against the state *at that patch*, not its block's end: if a later patch in the same block renames a
 path an earlier one edited, or deletes the node an earlier one edited, the earlier patch's own
