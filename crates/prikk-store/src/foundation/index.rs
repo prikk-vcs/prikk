@@ -480,6 +480,28 @@ pub(crate) fn read_object_envelope_at(
     layout: &RepositoryLayout,
     entry: &IndexEntry,
 ) -> Result<ObjectEnvelope> {
+    read_object_envelope_at_with(layout, entry, |relative, offset, len| {
+        read_file_range_if_exists(layout.repository_mutation_root(), relative, offset, len)
+    })
+}
+
+/// [`read_object_envelope_at`] reading its two ranges through `kept`'s descriptors (0.60.0 S2): the same checks and the same errors, with the
+/// container opened once per `kept` instead of once per range.
+pub(crate) fn read_object_envelope_at_kept(
+    layout: &RepositoryLayout,
+    entry: &IndexEntry,
+    kept: &crate::foundation::fsutil::KeptRangeReader,
+) -> Result<ObjectEnvelope> {
+    read_object_envelope_at_with(layout, entry, |relative, offset, len| {
+        kept.read_file_range_if_exists(layout.repository_mutation_root(), relative, offset, len)
+    })
+}
+
+fn read_object_envelope_at_with(
+    layout: &RepositoryLayout,
+    entry: &IndexEntry,
+    read_range: impl Fn(&std::path::Path, u64, usize) -> Result<Option<Vec<u8>>>,
+) -> Result<ObjectEnvelope> {
     let container_relative =
         layout.repository_relative(&layout.container_slot_path(entry.object_type, entry.slot))?;
     let missing = || {
@@ -498,8 +520,7 @@ pub(crate) fn read_object_envelope_at(
     // memory to decode one record at a known offset, so an object read's memory followed the container's size. Now the frame's own
     // header is read first (it says how long the frame is, exactly as the full-buffer parse trusted it), then exactly that frame; the
     // frame is validated and decoded as before, and every error reads as it did.
-    let Some(header) = read_file_range_if_exists(
-        layout.repository_mutation_root(),
+    let Some(header) = read_range(
         &container_relative,
         entry.offset,
         container::FRAME_HEADER_LEN,
@@ -527,13 +548,7 @@ pub(crate) fn read_object_envelope_at(
             entry.object_id, entry.length
         )));
     }
-    let Some(window) = read_file_range_if_exists(
-        layout.repository_mutation_root(),
-        &container_relative,
-        entry.offset,
-        frame_len,
-    )?
-    else {
+    let Some(window) = read_range(&container_relative, entry.offset, frame_len)? else {
         return Err(missing());
     };
     let record = container::decode_container_record_in_window(entry.object_type, &window, offset)?

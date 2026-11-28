@@ -284,6 +284,9 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
     match envelope.object_type {
         ObjectType::Block => {
             let block = BlockPayload::decode_canonical(&envelope.canonical_payload)?;
+            // 0.60.0 S2: one open per container for this block's reads, not one per read. Made here, dropped at the end of this arm; `show` takes no
+            // lock, so no descriptor is held across a wait, and none outlives the command.
+            let object_store = object_store.with_kept_containers();
             // 0.54.0 Part 5c: the block's own sealed lineage, for the materialize-and-retry
             // fallback below -- `None` for a root block (no parent, so no earlier sealed lineage
             // to materialize an unstored `EditText` result from at all).
@@ -356,8 +359,10 @@ pub fn show(layout: &RepositoryLayout, id: ObjectId) -> Result<Vec<ShowPatch>> {
                         None,
                     )?])
                 } else {
+                    // 0.60.0 S2: the claim chain's anchor and its folds read through kept container descriptors, dropped when this block ends.
+                    let kept = object_store.with_kept_containers();
                     let (lifecycle, reason, resolved_through_claim_id) =
-                        match resolve_pending_patch_lifecycle(layout, &object_store, id, claims)? {
+                        match resolve_pending_patch_lifecycle(layout, &kept, id, claims)? {
                             PendingPathResolution::Resolved(claim_id, state) => {
                                 (Some(state), None, Some(claim_id))
                             }

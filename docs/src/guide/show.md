@@ -39,11 +39,26 @@ A block's output is the union of its patches, in the block's own canonical order
 
 **Cost (0.60.0).** A block's starting state is derived from the nearest checkpoint this repository has verified
 and an adopted maintainer signed, at most 63 blocks back — the same rule `seal` uses (see the [trust
-model](../reference/trust-threat-model.md)) — instead of replaying the lineage from the first block. On a 2,000-block
-history this halves the storage reads `show` makes (a read of every block and patch below the checkpoint remains, as
-in `seal`: the checks the checkpoint cannot vouch for). With no such checkpoint — a repository whose record is
-empty, a checkpoint signed by a key not adopted here, a received ref nothing has verified yet — `show` replays from the
-first block, as before, and prints the same output.
+model](../reference/trust-threat-model.md)) — instead of replaying the lineage from the first block, and each
+container file of the object store is opened once per `show`, not once per object read. What `show` prints is
+byte-identical either way.
+
+**What it still costs, to plan by.** `show <block>` still grows with the block's height, because the checks a
+checkpoint cannot vouch for remain: every block and patch below the checkpoint is read once (the history fields — which
+ids were ever deleted — are not in a checkpoint). Measured on a history of 2,000 one-line edits, release build:
+
+| `show` of the block at height | 0.59.0 | 0.60.0 |
+|---|---|---|
+| 1 | 2 ms | 2 ms |
+| 1,001 | 18 ms | 6 ms |
+| 2,000 | 36 ms | 9 ms |
+
+Plan by **about 4 µs per block of height, plus about 2 ms**, for one `show`. **A tool that calls `show` once per block
+to index a whole history pays the sum, which grows with the square of its length:** 2,000 blocks took 12 s in 0.60.0
+(41 s in 0.59.0); ten times as many blocks is a hundred times the work. Read the history once with `prikk log` and call
+`show` only for the blocks whose operations you need. With no verified checkpoint — a repository whose record is empty,
+a checkpoint signed by a key not adopted here, a received ref nothing has verified yet — `show` replays from the first
+block, as before, and costs what it did in 0.59.0.
 
 **Truncation matters, for a block's own patches too, not only a queue.** Every patch resolves
 against the state *at that patch*, not its block's end: if a later patch in the same block renames a

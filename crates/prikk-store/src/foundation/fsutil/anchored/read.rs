@@ -189,6 +189,127 @@ pub(crate) fn inspect_entry(root: &MutationRoot, relative: &Path) -> Result<Opti
     ACTIVE_READER.inspect_entry(root, relative)
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+std::thread_local! {
+    static OPENS_FOR_RANGE_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Regular files this thread has opened for a read of the posix reader's (`cfg(test)`): what 0.60.0 S2's controls count, in place of `openat`.
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn opens_for_range_read_for_test() -> usize {
+    OPENS_FOR_RANGE_READ.with(std::cell::Cell::get)
+}
+
+/// Open `relative` for a read, exactly as every posix read opens it (parent directories walked without following a link, the final component not
+/// followed, regular files only). `None` only when a path component is absent.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_regular_file_for_read(root: &MutationRoot, relative: &Path) -> Result<Option<(File, u64)>> {
+    let Some(directory) = open_existing_directory_for_read(root, required_parent(relative)?)?
+    else {
+        return Ok(None);
+    };
+    failpoints::required_open()?;
+    #[cfg(test)]
+    OPENS_FOR_RANGE_READ.with(|count| count.set(count.get() + 1));
+    let fd = match fs::openat(
+        &directory.fd,
+        required_file_name(relative)?,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => return Err(io_error(error)),
+    };
+    let stat = fs::fstat(&fd).map_err(io_error)?;
+    if !FileType::from_raw_mode(stat.st_mode).is_file() {
+        return Err(PrikkError::Integrity(
+            "read target is not a regular file".to_string(),
+        ));
+    }
+    let size = u64::try_from(stat.st_size).unwrap_or(0);
+    Ok(Some((File::from(fd), size)))
+}
+
+/// A positioned read of up to `len` bytes at `offset` from an open file. **Never allocates more than the file holds from `offset`**: `len` is often a
+/// length read from disk (an object read passes the frame length its own header claims), so it is clamped to `size` (the file's size from an `fstat` of this
+/// descriptor, taken for this read) *before* the buffer is made: a damaged header cannot ask for an allocation the file cannot fill.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn read_range_from_open_file(file: &File, size: u64, offset: u64, len: usize) -> Result<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let available = size.saturating_sub(offset);
+    let len = len.min(usize::try_from(available).unwrap_or(usize::MAX));
+    let mut bytes = vec![0_u8; len];
+    let mut filled = 0_usize;
+    while filled < len {
+        let at = offset
+            .checked_add(filled as u64)
+            .ok_or_else(|| PrikkError::Integrity("read range overflows u64".to_string()))?;
+        let slot = bytes.get_mut(filled..).unwrap_or_default();
+        match file.read_at(slot, at) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    bytes.truncate(filled);
+    Ok(bytes)
+}
+
+/// **Kept descriptors for one function's positioned reads** (0.60.0 S2): the first read of a file opens it (the checks of
+/// [`open_regular_file_for_read`], unchanged), every later read of it uses that descriptor, so a function that reads thousands of objects from a few
+/// containers opens each container once, not once per read. The descriptors are **the value's, and nothing else's**: the value is made inside the
+/// function that reads, borrowed by nothing that outlives it, and dropped when that function returns -- a descriptor is never held by a command's state,
+/// across a lock wait, or past the command. Each read sees the file's size as it is at that read (a positioned read of an appended file sees what was
+/// appended), and the reader above checks every record against the id it asked for, so a container that was replaced under a kept descriptor reads as
+/// the old file's bytes at the index's offset: an id mismatch, named, never a wrong answer. On a platform without positioned reads on a descriptor
+/// (Windows) it keeps nothing and reads exactly as [`read_file_range_if_exists`] does.
+#[derive(Default)]
+pub(crate) struct KeptRangeReader {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    files: std::cell::RefCell<std::collections::BTreeMap<PathBuf, File>>,
+}
+
+impl KeptRangeReader {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// [`read_file_range_if_exists`], through a kept descriptor where the platform has one.
+    pub(crate) fn read_file_range_if_exists(
+        &self,
+        root: &MutationRoot,
+        relative: &Path,
+        offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let mut files = self.files.borrow_mut();
+            if !files.contains_key(relative) {
+                let Some((file, _)) = open_regular_file_for_read(root, relative)? else {
+                    return Ok(None);
+                };
+                files.insert(relative.to_path_buf(), file);
+            }
+            let Some(file) = files.get(relative) else {
+                return Ok(None);
+            };
+            // The size as it is at this read: a kept descriptor of an appended file sees the appended bytes.
+            let bytes = read_range_from_open_file(file, file.metadata()?.len(), offset, len)?;
+            #[cfg(test)]
+            read_tally::record(relative, bytes.len());
+            Ok(Some(bytes))
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = self;
+            read_file_range_if_exists(root, relative, offset, len)
+        }
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 struct PosixReader;
 
@@ -228,52 +349,10 @@ impl AnchoredReader for PosixReader {
         offset: u64,
         len: usize,
     ) -> Result<Option<Vec<u8>>> {
-        use std::os::unix::fs::FileExt;
-        let Some(directory) = open_existing_directory_for_read(root, required_parent(relative)?)?
-        else {
+        let Some((file, size)) = open_regular_file_for_read(root, relative)? else {
             return Ok(None);
         };
-        failpoints::required_open()?;
-        let fd = match fs::openat(
-            &directory.fd,
-            required_file_name(relative)?,
-            OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(fd) => fd,
-            Err(rustix::io::Errno::NOENT) => return Ok(None),
-            Err(error) => return Err(io_error(error)),
-        };
-        let stat = fs::fstat(&fd).map_err(io_error)?;
-        if !FileType::from_raw_mode(stat.st_mode).is_file() {
-            return Err(PrikkError::Integrity(
-                "read target is not a regular file".to_string(),
-            ));
-        }
-        // **Never allocate more than the file holds from `offset`.** `len` is often a length read from disk (an object read passes
-        // the frame length its own header claims), so it is clamped to the file's size from this descriptor's `fstat` *before* the
-        // buffer is made: a damaged header cannot ask for an allocation the file cannot fill.
-        let available = u64::try_from(stat.st_size)
-            .unwrap_or(0)
-            .saturating_sub(offset);
-        let len = len.min(usize::try_from(available).unwrap_or(usize::MAX));
-        let file = File::from(fd);
-        let mut bytes = vec![0_u8; len];
-        let mut filled = 0_usize;
-        while filled < len {
-            let at = offset
-                .checked_add(filled as u64)
-                .ok_or_else(|| PrikkError::Integrity("read range overflows u64".to_string()))?;
-            let slot = bytes.get_mut(filled..).unwrap_or_default();
-            match file.read_at(slot, at) {
-                Ok(0) => break,
-                Ok(read) => filled += read,
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        bytes.truncate(filled);
-        Ok(Some(bytes))
+        read_range_from_open_file(&file, size, offset, len).map(Some)
     }
 
     fn stat_file_state_if_exists(

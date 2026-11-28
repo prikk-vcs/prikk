@@ -411,3 +411,79 @@ fn no_durability_every_method_fails_at_runtime_not_compile_time() {
 
     let _ = fs::remove_dir_all(path);
 }
+
+// ---- 0.60.0 S2: kept descriptors for a function's positioned reads --------------------------------------------------
+
+/// **A kept descriptor opens a file once, and each read still sees the file as it is.** Five ranges of one file are one open (the plain range read opens
+/// five times); a read after the file *grew* sees what was appended; a range past the end is clamped, never padded; a file that is absent is `None` and
+/// is not remembered (it can appear). **Perturb:** make `KeptRangeReader::read_file_range_if_exists` open on every read (skip the `contains_key`
+/// memo): the open count goes from 1 to 5 and the first assertion goes red.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+#[allow(clippy::unwrap_used)]
+fn a_kept_descriptor_opens_once_and_reads_the_file_as_it_is_at_each_read() {
+    use super::{KeptRangeReader, opens_for_range_read_for_test, read_file_range_if_exists};
+    use std::io::Write as _;
+
+    let path = unique_temp_dir("s2-kept-range");
+    let root = mutation_root(&path);
+    assert!(write_file_atomically(&root, Path::new("container"), b"abcdefgh").is_ok());
+
+    let before = opens_for_range_read_for_test();
+    let kept = KeptRangeReader::new();
+    let read = |offset, len| {
+        kept.read_file_range_if_exists(&root, Path::new("container"), offset, len)
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(read(0, 2), b"ab");
+    assert_eq!(read(2, 2), b"cd");
+    assert_eq!(
+        read(6, 100),
+        b"gh",
+        "clamped to what the file holds, not padded"
+    );
+    assert_eq!(read(8, 4), b"", "at the end: nothing");
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(path.join("container"))
+        .unwrap();
+    file.write_all(b"ijkl").unwrap();
+    assert_eq!(
+        read(8, 4),
+        b"ijkl",
+        "a read after the file grew sees the appended bytes"
+    );
+    assert_eq!(
+        opens_for_range_read_for_test() - before,
+        1,
+        "five reads, one open"
+    );
+
+    let plain_before = opens_for_range_read_for_test();
+    for offset in 0..5 {
+        let plain = read_file_range_if_exists(&root, Path::new("container"), offset, 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(plain, read(offset, 2), "the same bytes either way");
+    }
+    assert_eq!(
+        opens_for_range_read_for_test() - plain_before,
+        5,
+        "the plain read opens per read (the control the kept count is read against)"
+    );
+
+    let absent = kept
+        .read_file_range_if_exists(&root, Path::new("not-there"), 0, 4)
+        .unwrap();
+    assert!(absent.is_none());
+    assert!(write_file_atomically(&root, Path::new("not-there"), b"now").is_ok());
+    assert_eq!(
+        kept.read_file_range_if_exists(&root, Path::new("not-there"), 0, 4)
+            .unwrap()
+            .unwrap(),
+        b"now",
+        "an absent file was not remembered as absent"
+    );
+    let _ = fs::remove_dir_all(&path);
+}

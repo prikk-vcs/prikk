@@ -36,11 +36,13 @@ mod windows_authority;
 
 pub(crate) use directory::MutationRoot;
 pub(crate) use held_directories::DirectoryHold;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+pub(crate) use read::opens_for_range_read_for_test;
 #[cfg(test)]
 pub(crate) use read::read_tally;
 pub(crate) use read::{
-    EntryKind, FileIdentity, RootDirEntry, RootFileStat, inspect_entry, list_directory,
-    read_file_if_exists, read_file_range_if_exists, read_file_required,
+    EntryKind, FileIdentity, KeptRangeReader, RootDirEntry, RootFileStat, inspect_entry,
+    list_directory, read_file_if_exists, read_file_range_if_exists, read_file_required,
     stat_file_identity_if_exists, stat_file_state_if_exists,
 };
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]

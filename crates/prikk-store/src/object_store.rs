@@ -481,7 +481,20 @@ fn read_object_at_entry(
     entry: &IndexEntry,
     id: ObjectId,
 ) -> Result<Option<ObjectEnvelope>> {
-    let envelope = read_object_envelope_at(layout, entry)?;
+    read_object_at_entry_with(layout, entry, id, None)
+}
+
+/// [`read_object_at_entry`], through `kept`'s descriptors when given.
+fn read_object_at_entry_with(
+    layout: &RepositoryLayout,
+    entry: &IndexEntry,
+    id: ObjectId,
+    kept: Option<&crate::foundation::fsutil::KeptRangeReader>,
+) -> Result<Option<ObjectEnvelope>> {
+    let envelope = match kept {
+        Some(kept) => crate::foundation::index::read_object_envelope_at_kept(layout, entry, kept)?,
+        None => read_object_envelope_at(layout, entry)?,
+    };
     let computed = envelope.object_id();
     if computed != id {
         return Err(PrikkError::Integrity(format!(
@@ -565,6 +578,39 @@ impl ObjectReader for ObjectReadSnapshot {
 
     fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
         Ok(matches!(self.snapshot.lookup(id), Some(entry) if entry.object_type == object_type))
+    }
+}
+
+impl ObjectReadSnapshot {
+    /// This snapshot's objects, read through **kept container descriptors** (0.60.0 S2): the same index, the same checks, the same errors, with each
+    /// container opened once for the returned reader instead of once per range read. For one function that reads many objects and takes no lock
+    /// (`show`): the reader borrows the snapshot, so it cannot outlive it, and it closes every descriptor when it is dropped -- keep it in the
+    /// function that reads, never in a command's state, and never across a lock wait.
+    #[must_use]
+    pub fn with_kept_containers(&self) -> KeptContainerReader<'_> {
+        KeptContainerReader {
+            snapshot: self,
+            kept: crate::foundation::fsutil::KeptRangeReader::new(),
+        }
+    }
+}
+
+/// [`ObjectReadSnapshot`]'s objects through kept container descriptors; see [`ObjectReadSnapshot::with_kept_containers`].
+pub struct KeptContainerReader<'a> {
+    snapshot: &'a ObjectReadSnapshot,
+    kept: crate::foundation::fsutil::KeptRangeReader,
+}
+
+impl ObjectReader for KeptContainerReader<'_> {
+    fn read_object(&self, id: ObjectId) -> Result<Option<ObjectEnvelope>> {
+        let Some(entry) = self.snapshot.snapshot.lookup(id) else {
+            return Ok(None);
+        };
+        read_object_at_entry_with(&self.snapshot.layout, entry, id, Some(&self.kept))
+    }
+
+    fn has_object(&self, id: ObjectId, object_type: ObjectType) -> Result<bool> {
+        self.snapshot.has_object(id, object_type)
     }
 }
 

@@ -3205,3 +3205,53 @@ fn show_derives_a_blocks_state_from_the_nearest_admitted_checkpoint_and_gives_th
     }
     assert_eq!(anchor_uses_for_test_support("show"), 0);
 }
+
+/// **`show` opens each container once** (0.60.0 S2). Every object of a 70-block history is read through the kept reader and through the plain snapshot:
+/// the same envelopes, and the kept reader's opens are the number of containers (a handful), the plain reader's are one per range read (two per
+/// object). **Perturb:** `with_kept_containers` returning a fresh `KeptRangeReader` per read: the kept count equals the plain count and this goes red.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_kept_reader_gives_the_plain_readers_objects_with_one_open_per_container() {
+    use crate::foundation::fsutil::opens_for_range_read_for_test;
+    use crate::object_store::{ObjectReadSnapshot, ObjectReader};
+    use crate::test_gates::test_support::{AnchoredHistory, Signing};
+
+    let history = AnchoredHistory::standard_signed("s2-kept-reader", 70, Signing::Adopted);
+    let snapshot = ObjectReadSnapshot::open(&history.layout).unwrap();
+    // Every block and every patch it names.
+    let mut ids: Vec<ObjectId> = Vec::new();
+    for block_id in &history.blocks {
+        ids.push(*block_id);
+        let envelope = snapshot.read_object(*block_id).unwrap().unwrap();
+        let block =
+            prikk_object::BlockPayload::decode_canonical(&envelope.canonical_payload).unwrap();
+        ids.extend(block.patch_ids.iter().copied());
+    }
+    let start = opens_for_range_read_for_test();
+    let plain: Vec<_> = ids
+        .iter()
+        .map(|id| snapshot.read_object(*id).unwrap())
+        .collect();
+    let plain_opens = opens_for_range_read_for_test() - start;
+
+    let start = opens_for_range_read_for_test();
+    let kept_reads: Vec<_> = {
+        let kept = snapshot.with_kept_containers();
+        ids.iter()
+            .map(|id| kept.read_object(*id).unwrap())
+            .collect()
+    };
+    let kept_opens = opens_for_range_read_for_test() - start;
+
+    assert_eq!(plain, kept_reads, "the same envelopes, object for object");
+    assert_eq!(
+        plain_opens,
+        2 * ids.len(),
+        "the plain reader opens once per range"
+    );
+    assert!(
+        (1..=4).contains(&kept_opens),
+        "the kept reader opens each container once: {kept_opens} opens for {} reads",
+        ids.len()
+    );
+}
