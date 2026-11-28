@@ -93,8 +93,8 @@
   - **"Trust tip" is a deliberate name:** a ref's tip block (what `retire` snapshots, C) is a different thing, and one word for both
     would confuse.
 - **`verify`:**
-  - **one info line, printed only when a chain exists** (a repository with none prints nothing new), `trust chain: N transitions (S
-    signed, U unsigned)`. **It says nothing about trust.** The docs say that a chain is checked here only against itself;
+  - **prints nothing about the chain while it is whole.** A line that decides nothing is noise, and consumers parse `verify`'s text.
+    `trust maintainer list` shows the chain (architect's verification against the owner's philosophy, 2026-11-28);
   - **two blocking findings:** `PRIKK-TRUST-CHAIN-BROKEN` (a record that does not link) and `PRIKK-TRUST-TRANSITION-INVALID` (a claimed
     signature that does not verify against the key adopted at that point);
   - **an unsigned transition is never a warning:** nothing clears a past transition, so a warning for it would be unactionable.
@@ -120,6 +120,13 @@
   - **What a statement means, stated plainly:** with no repository identity (settled), **a statement is valid in every repository whose
     trust tip is `--trust-tip`.** A copy shares its original's trust tip until either moves, so **a statement signed "for a copy" is also a statement
     for the original.** That is why it is made only by this deliberate command, with the trust tip in the maintainer's own hands.
+  - **And unrelated repositories can share a trust tip.** Two repositories whose trust records are the same have the same tip, for
+    example two set up with the same maintainer key (the documented second-project flow) and no transition since. **A statement made for
+    one then applies to the other.** Repositories have no identity (settled), so nothing can tell them apart.
+    - **So `trust statement` prints what it covers:** the trust tip, the number of transitions under it, and the adopted keys at it,
+      with the words *"applies to every repository whose trust record is this one"*.
+    - **`trust apply` prints what it adds** before it appends.
+    - The test: two repositories set up from one key directory, one statement, applied to both (architect's verification, 2026-11-28).
   - **For planeter's forge:** apply only statements signed by a key the forge's repository already adopts. That stops a stolen web token
     adding a key. **It does not stop whoever can write the forge's `.prikk`.**
 - **What each copy can check:**
@@ -141,6 +148,15 @@
   after the point that moves a ref back to an old block is not counted, though the block it names is.
 - **`retire --key-id K [--at …] [--reason …]`:** an earlier point says that what K signed after it, legitimate work included, stops
   verifying.
+  - **The way out for such work, named before anything is written** (architect's verification, 2026-11-28: no state that no command
+    clears):
+    - after an earlier point, a ref whose history passes through an object K signed after it fails `verify` for good: the object stays in
+      that ref's history, and nothing re-signs history;
+    - **`retire --plan-only` names every such ref and object** first;
+    - **the refusal and `verify`'s way out name the sound-copy sequence from the point:** a new repository made from the history up to
+      the point, and the later work re-authored under a trusted key;
+    - **the build tests that sequence end to end,** to `verify` 0.
+  - **At the default point (the current tips) nothing fails,** and that is the form the help leads with.
 - **`rotate --from K1 --to K2 --public-key …`:** one record. A hand-over signed by K1 is `trust statement rotate` plus `trust apply`.
 - **`remove` keeps its meaning** ("this key's signatures never count"). It gains `--plan-only`, as does `retire`, printing by object kind
   what would stop verifying (stikk 023).
@@ -150,6 +166,11 @@
 
 - **An object reachable only from `remotes/` and signed by an unadopted key is `PRIKK-TRUST-RECEIVED-UNADOPTED`, info,** with the key id and
   the line that adopts it.
+  - **Its sentence says plainly that the history is not verified:** *"received history signed by <key>, which this repository has not
+    adopted, is not verified"*. So an exit 0 cannot read as "everything verified".
+  - **In `--format json` it has its own array** (`received_unadopted[]`), **never an item of `publication_trust_issues[]`.** That array
+    keeps its meaning, "every item blocks" (RFC 174 §4.1, no severity in `verify`), which planeter's delivery rule reads. (Architect's
+    verification, 2026-11-28.)
 - Anything reachable from a local ref stays blocking.
 - **This changes an exit code planeter reads:** exit 1 becomes exit 0. **It is a question to them, not a decision.**
 
@@ -213,13 +234,24 @@ claim-format change.** In route 1 the claim signer is the author repository's ke
 - **`### Output changes`:**
   - new verbs and flags;
   - `trust maintainer list`'s chain and trust tip;
-  - `verify`'s info line and three finding ids;
+  - `verify`'s three finding ids, and `received_unadopted[]` in its JSON;
   - **D's exit code;**
   - `show`/`log`'s `recognized by`;
   - the §2 sentences and fields;
   - **`ref complete --plan-only`'s exit code.**
 
 ## 7. For the owner: three decisions, each with the architect's recommendation
+
+**The owner, 2026-11-28:** *"Your recommendations are almost approved. However, verify carefully they match my fundamental philosophy."*
+**The architect's reading:**
+- the three recommendations below are approved, subject to that verification;
+- **the verification found four places in this RFC that did not hold, now corrected:**
+  - the `verify` chain line (§3A);
+  - unrelated repositories sharing a trust tip (§3B);
+  - the way out after `retire --at` (§3C);
+  - D's place in JSON and its sentence (§3D);
+- it also found one dependency in item 2 (below), now stated.
+- **The RFC as a whole stays proposed** until the owner accepts it.
 
 Each was reviewed against the owner's philosophy: clean, safe and secure, robust; nothing that confuses; less is more; time; no
 unactionable warning; no state that no command clears; no claim wider than the mechanism.
@@ -241,6 +273,9 @@ unactionable warning; no state that no command clears; no claim wider than the m
    - **What serves the need instead:** a forge that wants "signed transitions only" applies only statements (B2), and checks with B1 that
      what it holds extends what it held. B1 reports `extends yours by N transitions (S signed, U unsigned)`, so a consumer can refuse
      unsigned ones by its own rule, with no state in the repository.
+   - **This rests on Stage 2** (statements and prefix checks), which is built only on a consumer's word (§6). **If it is not built, nothing
+     in prikk serves "signed transitions only",** and the recommendation is still no lock: a forge then keeps that rule by not running the
+     unsigned verbs, outside prikk.
    - **What the user sees:** no `trust lock` command, and no repository that can be stuck.
 3. **D: `verify` reports received-only history under an unadopted key as info (exit 0 where it exits 1 today). Recommended: yes, and put
    to planeter before the build.**
@@ -249,8 +284,9 @@ unactionable warning; no state that no command clears; no claim wider than the m
      - `received refs: N, 0 failed` already agrees;
      - today's exit 1 tells a user their own repository failed verification over history they never adopted.
    - **Actionable and clearable:** the finding names the key and the adopt line, and goes away on adoption or `received remove`.
-   - **Safe:** anything reachable from a local ref stays blocking. A consumer that must gate on "nothing unadopted is present" gates on the
-     finding id, which stays in `--format json`.
+   - **Safe:** anything reachable from a local ref stays blocking. A consumer that must gate on "nothing unadopted is present" gates on
+     `received_unadopted[]` being empty in `--format json` (§3D).
+   - **Not misleading:** its sentence says the received history is not verified, so exit 0 does not read as "everything verified".
    - **The cost:** an exit code changes, and planeter's delivery rule reads it. The letter asks them first; they may keep a stricter gate
      on the id.
 

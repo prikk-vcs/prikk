@@ -1,8 +1,17 @@
 # RFC 174 — What a JSON consumer may rely on
 
-**Status.** **PROPOSED 2026-11-27 by the architect,** from the 0.59.0 J design round (J1 to J2b, `rfcs/handoffs/173-the-json-tier/`).
-- **Nothing here is built.** Per the owner's ruling of 2026-11-18, J's builds are **0.60.0 at the earliest, after the owner reads the
-  round.**
+**Status.** **ACCEPTED 2026-11-28 by the owner** (*"Accepted. Just in case, verify carefully they match my fundamental philosophy."*).
+Proposed 2026-11-27 by the architect, from the 0.59.0 J design round (J1 to J2b, `rfcs/handoffs/173-the-json-tier/`).
+- **The architect's reading:**
+  - the design is accepted, with §6's build order as the recommended order;
+  - **how much of it 0.60.0 carries is set in the 0.60.0 scope,** which the owner authorizes;
+  - the verification asked for found five places, corrected before acceptance was recorded:
+    - the `unlock` path form (§4.4);
+    - `repair.argv` safety (§4.1);
+    - `publication_trust_issues[]` keeps "every item blocks" (§4.1);
+    - the exit-code promise and signals (§3.6);
+    - `log --paths` on a received ref names what works (§4.7), with the page listing where `refused` can appear (§3.2).
+- **Nothing here is built.** J's builds are **0.60.0 at the earliest.**
 - **The three consumers** (stikk, inklkunn, planeter) answered what they read on 2026-11-19 (stikk 024). The letters that send this
   design to them are drafted in J3 and held for the owner.
 
@@ -76,7 +85,8 @@
    - `damaged-repository`;
    - **`input-not-found` and `input-undecodable`** (two actions, two ids);
    - the existing artifact ids;
-   - **`refused`, the fallback for an unclassified failure.**
+   - **`refused`, the fallback for an unclassified failure.** **The page lists the commands that can print it** (from the conformance
+     test's cases), so it never surprises a consumer, and a release that classifies one names the new id in `### Output changes`.
 3. **`details`, an N field on `refusal-v1`:** an object defined per id. The claim ids, and the parent block id for
    `claim-parent-not-sealed` (planeter's ask), come from payloads the store already has.
 4. **"The store did not change"** is written **per id, only for an id with a test that pins it.** `refused`, `io-failure` and
@@ -89,7 +99,7 @@
    - **1:** a refusal, or a report whose verdict is "no" (the schema name tells which);
    - **2:** a usage error, with **nothing on stdout.** A malformed point or path is exit 2 in every reader (`log` and `worktree-status`
      move).
-   - No other code.
+   - **No other code from prikk.** A process ended by a signal, or by a wrapper's timeout, is outside the promise, and the page says so.
 7. **The consumer rows:**
    - **M1a:** planeter's `received[].closed`/`current` never existed. Documented, and told.
    - **M1b:** `received[].signed_by` is added: a P array of key ids, empty if the tip carries no signature.
@@ -101,9 +111,17 @@
 1. **`verify-report-v1`, additive:**
    - `ref_publication_issues[]`: code, ref name, message, blocking. **An in-flight publication is `blocking: false`, and `verdict.ok`
      stays true.**
-   - `message` on `publication_trust_issues[]`;
+   - `message` on `publication_trust_issues[]`. **That array keeps its meaning: every item blocks** (`verdict.ok` is false while it holds
+     one). A finding that does not block never goes into it, but into its own array: for example RFC 172 §3D's `received_unadopted[]`, if
+     that is built;
    - `ways_out[]`: kind, prose and **`repair`**, an N object with `action` ∈ {`command`, `sound-copy`, `wait`, `manual`} and an `argv`
      for `command`. It comes from the typed `WayOut`, tested against the commands the step-1e test types.
+     - **`argv` is prikk's arguments only:** never a program name, a path to an executable, or a shell string. Every value in it that
+       comes from the repository (a ref name, a block id) is one prikk has already validated as such.
+     - **prikk never runs it.**
+     - **`plan_first: true` means run it with `--plan-only` first.** A consumer that runs `repair` without a person must honour that, and
+       the page says so.
+     - The same rules hold for `doctor`'s `repair` (§4.3).
    - `warning_counts`: P integer fields;
    - non-zero `trailing_partial_bytes[]`;
    - **`unreached_withheld`, a P boolean, true exactly when the text withholds the unreached list because a writer holds the lock.** The
@@ -121,8 +139,13 @@
      recommendation text. It is null only for genuinely manual advice.
    - Plain `doctor` only; the repair modes stay text.
 4. **`unlock-listing-v1`:**
-   - `locks[]`: a repository-relative path (relative to `.prikk`; `unlock --lock` accepts the form), **kind (closed: inklkunn stops on
-     an unknown lock kind)**, the recorded pid and start (N);
+   - `locks[]`: a **repository-relative path that starts with `.prikk/`** (for example `.prikk/refs/locks/<…>.lock`), **kind (closed:
+     inklkunn stops on an unknown lock kind)**, the recorded pid and start (N).
+     - **`unlock --lock` is unchanged:** it takes a path as the operating system reads it. The page says to join the listed path with the
+       repository's path.
+     - *Changed at the verification (2026-11-28):* the design had `unlock --lock` accept a `.prikk`-relative form. A relative path given to
+       `unlock --lock` today means relative to the working directory, so one text would name two locks, and a script could clear the wrong
+       one. The `.prikk/` prefix reads one way only, and needs no parser change;
    - **`liveness` (closed, 3 values) and `liveness_reason` (closed, 12 values).**
    - Listing only.
 5. **`merge-plan-v1`:** baseline, sides, status and outcome (closed, kebab, with a text-to-JSON mapping table), a closed `action` id,
@@ -133,7 +156,7 @@
    - each listed block gains `operations[]` (`patch_id`, `kind`, `paths[]` as in `show`, no content). It is **present iff `--paths`**,
      and `null` for a block with no single starting state. **Without the flag, `log`'s output is byte-identical.**
    - **One fold, shared with `show`, and a test that it equals `show` per block.**
-   - Refused on a received ref.
+   - Refused on a received ref, **naming what works there** (`prikk show <block>` per block).
    - The page states that `--paths` costs a replay. About 65 to 75 ms for 2,000 blocks, bounded from measured parts: one call instead of
      1,999 (41 s today; ≥ 5 s even after the `show` fix).
 8. **`log-report-v1` gains `truncated`:** a P boolean, true iff the ref holds more blocks than were listed (planeter ask 5).
@@ -157,7 +180,7 @@
 
 The 0.60.0 `show` fix (ROADMAP row) is built with step 2. It gives `log --paths` its bounded start state.
 
-## 7. For the owner
+## 7. Decided
 
-1. **Read and accept, amend or refuse.** Nothing is built before that.
-2. **The build order** (§6), and how much of it 0.60.0 carries.
+1. **Accepted by the owner, 2026-11-28,** with the verification's five corrections folded in (Status).
+2. **The build order** is §6's. **How much of it 0.60.0 carries is the 0.60.0 scope's.**
